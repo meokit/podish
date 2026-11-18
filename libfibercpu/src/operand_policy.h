@@ -41,4 +41,27 @@ struct RegisterOperandPolicy {
         }
     }
 };
+// Pure scalar encodings: opcode-register forms and LEA never call an observer.
+// They need destination classification without claiming a ModRM register form.
+template <PinWriteRole Role, PinWriteClass Class, bool Byte, bool OpcodeRegister>
+struct EncodedOperandPolicy {
+    static constexpr unsigned keep_mask = Role == PinWriteRole::None || Class == PinWriteClass::Other ? 3
+                                          : Class == PinWriteClass::Eax                               ? 2
+                                                                                                      : 1;
+    static FORCE_INLINE void Assume(const DecodedOp* op) {
+        if constexpr (OpcodeRegister)
+            __builtin_assume(!op->meta.flags.has_modrm);
+        else
+            __builtin_assume((op->modrm & 0xc0) != 0xc0);
+        if constexpr (Role != PinWriteRole::None) {
+            const unsigned field = Role == PinWriteRole::Reg ? op->modrm >> 3 : op->modrm;
+            const unsigned parent = field & (Byte ? 3 : 7);
+            if constexpr (Class == PinWriteClass::Other) {
+                __builtin_assume(parent != 0);
+                if constexpr (!Byte) __builtin_assume(parent != 4);
+            } else
+                __builtin_assume(parent == unsigned(Class));
+        }
+    }
+};
 }  // namespace fiberish

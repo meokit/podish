@@ -1,0 +1,224 @@
+{
+  "off": {
+    "OpJcc_AE_Rel8E": {
+      "address": 125108,
+      "bytes": 100,
+      "sp_refs": 0,
+      "pin_loads": []
+    },
+    "OpCmp_EvGv_32E": {
+      "address": 787612,
+      "bytes": 12,
+      "sp_refs": 0,
+      "pin_loads": []
+    },
+    "OpMov_Load_EaxE": {
+      "address": 525244,
+      "bytes": 348,
+      "sp_refs": 0,
+      "pin_loads": []
+    },
+    "SuperOpcode_4_039_": {
+      "address": 615444,
+      "bytes": 1312,
+      "sp_refs": 0,
+      "pin_loads": []
+    },
+    "SuperOpcode_4_043_": {
+      "address": 621832,
+      "bytes": 1744,
+      "sp_refs": 12,
+      "pin_loads": []
+    },
+    "SuperOpcode_4_162_": {
+      "address": 714876,
+      "bytes": 1140,
+      "sp_refs": 0,
+      "pin_loads": []
+    }
+  },
+  "abi": {
+    "OpJcc_AE_Rel8E": {
+      "address": 125340,
+      "bytes": 100,
+      "sp_refs": 0,
+      "pin_loads": []
+    },
+    "OpCmp_EvGv_32E": {
+      "address": 790148,
+      "bytes": 12,
+      "sp_refs": 0,
+      "pin_loads": []
+    },
+    "OpMov_Load_EaxE": {
+      "address": 527368,
+      "bytes": 348,
+      "sp_refs": 0,
+      "pin_loads": []
+    },
+    "SuperOpcode_4_039_": {
+      "address": 617824,
+      "bytes": 1312,
+      "sp_refs": 0,
+      "pin_loads": []
+    },
+    "SuperOpcode_4_043_": {
+      "address": 624288,
+      "bytes": 1764,
+      "sp_refs": 17,
+      "pin_loads": []
+    },
+    "SuperOpcode_4_162_": {
+      "address": 717368,
+      "bytes": 1140,
+      "sp_refs": 0,
+      "pin_loads": []
+    }
+  },
+  "reload": {
+    "OpJcc_AE_Rel8E": {
+      "address": 125144,
+      "bytes": 100,
+      "sp_refs": 0,
+      "pin_loads": []
+    },
+    "OpCmp_EvGv_32E": {
+      "address": 794304,
+      "bytes": 12,
+      "sp_refs": 0,
+      "pin_loads": []
+    },
+    "OpMov_Load_EaxE": {
+      "address": 529616,
+      "bytes": 352,
+      "sp_refs": 0,
+      "pin_loads": [
+        "   81534:      \tldr\tw27, [x24, w8, uxtw]",
+        "   81570:      \tldr\tw27, [x24, w8, uxtw]",
+        "   815dc:      \tldr\tw27, [x9, #0x120]"
+      ]
+    },
+    "SuperOpcode_4_039_": {
+      "address": 620428,
+      "bytes": 1352,
+      "sp_refs": 0,
+      "pin_loads": [
+        "   97888:      \tldr\tw27, [x20]",
+        "   9788c:      \tldr\tw28, [x20, #0x10]",
+        "   978c0:      \tldr\tw27, [x20]",
+        "   978c4:      \tldr\tw28, [x20, #0x10]",
+        "   97adc:      \tldr\tw27, [x20]",
+        "   97ae0:      \tldr\tw28, [x20, #0x10]",
+        "   97be0:      \tldr\tw27, [x20]",
+        "   97be4:      \tldr\tw28, [x20, #0x10]",
+        "   97cbc:      \tldr\tw27, [x20]",
+        "   97cc0:      \tldr\tw28, [x20, #0x10]"
+      ]
+    },
+    "SuperOpcode_4_043_": {
+      "address": 627000,
+      "bytes": 1740,
+      "sp_refs": 11,
+      "pin_loads": [
+        "   992f4:      \tldr\tw27, [x20]",
+        "   992f8:      \tldr\tw28, [x20, #0x10]",
+        "   997b8:      \tldr\tw27, [x20]",
+        "   997bc:      \tldr\tw28, [x20, #0x10]"
+      ]
+    },
+    "SuperOpcode_4_162_": {
+      "address": 721524,
+      "bytes": 1196,
+      "sp_refs": 0,
+      "pin_loads": [
+        "   b0388:      \tldr\tw27, [x20]",
+        "   b038c:      \tldr\tw28, [x20, #0x10]",
+        "   b0404:      \tldr\tw27, [x20]",
+        "   b0408:      \tldr\tw28, [x20, #0x10]",
+        "   b04dc:      \tldr\tw27, [x20]",
+        "   b04e0:      \tldr\tw28, [x20, #0x10]",
+        "   b0558:      \tldr\tw27, [x20]",
+        "   b055c:      \tldr\tw28, [x20, #0x10]",
+        "   b0610:      \tldr\tw27, [x20]",
+        "   b0614:      \tldr\tw28, [x20, #0x10]",
+        "   b06c4:      \tldr\tw27, [x20]",
+        "   b06c8:      \tldr\tw28, [x20, #0x10]",
+        "   b0708:      \tldr\tw27, [x20]",
+        "   b070c:      \tldr\tw28, [x20, #0x10]"
+      ]
+    }
+  },
+  "pin": {
+    "OpJcc_AE_Rel8E": {
+      "address": 125144,
+      "bytes": 100,
+      "sp_refs": 0,
+      "pin_loads": []
+    },
+    "OpCmp_EvGv_32E": {
+      "address": 794304,
+      "bytes": 12,
+      "sp_refs": 0,
+      "pin_loads": []
+    },
+    "OpMov_Load_EaxE": {
+      "address": 529616,
+      "bytes": 352,
+      "sp_refs": 0,
+      "pin_loads": [
+        "   81534:      \tldr\tw27, [x24, w8, uxtw]",
+        "   81570:      \tldr\tw27, [x24, w8, uxtw]",
+        "   815dc:      \tldr\tw27, [x9, #0x120]"
+      ]
+    },
+    "SuperOpcode_4_039_": {
+      "address": 620428,
+      "bytes": 1352,
+      "sp_refs": 0,
+      "pin_loads": [
+        "   97888:      \tldr\tw27, [x20]",
+        "   9788c:      \tldr\tw28, [x20, #0x10]",
+        "   978c0:      \tldr\tw27, [x20]",
+        "   978c4:      \tldr\tw28, [x20, #0x10]",
+        "   97adc:      \tldr\tw27, [x20]",
+        "   97ae0:      \tldr\tw28, [x20, #0x10]",
+        "   97be0:      \tldr\tw27, [x20]",
+        "   97be4:      \tldr\tw28, [x20, #0x10]",
+        "   97cbc:      \tldr\tw27, [x20]",
+        "   97cc0:      \tldr\tw28, [x20, #0x10]"
+      ]
+    },
+    "SuperOpcode_4_043_": {
+      "address": 627000,
+      "bytes": 1740,
+      "sp_refs": 11,
+      "pin_loads": [
+        "   992f4:      \tldr\tw27, [x20]",
+        "   992f8:      \tldr\tw28, [x20, #0x10]",
+        "   997b8:      \tldr\tw27, [x20]",
+        "   997bc:      \tldr\tw28, [x20, #0x10]"
+      ]
+    },
+    "SuperOpcode_4_162_": {
+      "address": 721524,
+      "bytes": 1196,
+      "sp_refs": 0,
+      "pin_loads": [
+        "   b0388:      \tldr\tw27, [x20]",
+        "   b038c:      \tldr\tw28, [x20, #0x10]",
+        "   b0404:      \tldr\tw27, [x20]",
+        "   b0408:      \tldr\tw28, [x20, #0x10]",
+        "   b04dc:      \tldr\tw27, [x20]",
+        "   b04e0:      \tldr\tw28, [x20, #0x10]",
+        "   b0558:      \tldr\tw27, [x20]",
+        "   b055c:      \tldr\tw28, [x20, #0x10]",
+        "   b0610:      \tldr\tw27, [x20]",
+        "   b0614:      \tldr\tw28, [x20, #0x10]",
+        "   b06c4:      \tldr\tw27, [x20]",
+        "   b06c8:      \tldr\tw28, [x20, #0x10]",
+        "   b0708:      \tldr\tw27, [x20]",
+        "   b070c:      \tldr\tw28, [x20, #0x10]"
+      ]
+    }
+  }
+}

@@ -107,3 +107,5 @@ CMake 默认（macOS ARM64 shared）：
 逐项原始样本、二进制身份、CRC 日志、采样摘要与测试日志在 results/20261118/。
 不同阶段重用过 variant 名称，归因以各 tag 的 metadata 哈希为准；identities.json
 是归档时本地各 artifact 的快照。探索阶段不能混入最终三轮的中位数。
+
+后续 GNU pin 回退 profile 与扩展特化见 pin-gnu-findings.txt；默认策略未更改。

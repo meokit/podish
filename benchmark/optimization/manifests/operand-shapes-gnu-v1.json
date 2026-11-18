@@ -1,0 +1,5826 @@
+[
+  {
+    "symbol": "fiberish::SuperOpcode_2_066_OpTest_EvGv_32_ModReg_Edx__OpJcc_NE_Rel8(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      210,
+      5,
+      0,
+      0
+    ],
+    "count": 29580128,
+    "original": "SuperOpcode_2_066_OpTest_EvGv_32_ModReg_Edx__OpJcc_NE_Rel8",
+    "width": 2,
+    "kind": "fused"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_4_130_OpMov_EvGv_Edx__OpMov_Load_Edx_EsiBaseNoIndexNoSegment__OpMov_Store_Ecx_EsiBaseNoIndexNoSegment__OpMov_EvGv_Esi(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      214,
+      34495528982,
+      34495528974,
+      241
+    ],
+    "count": 29580000,
+    "original": "SuperOpcode_4_130_OpMov_EvGv_Edx__OpMov_Load_Edx_EsiBaseNoIndexNoSegment__OpMov_Store_Ecx_EsiBaseNoIndexNoSegment__OpMov_EvGv_Esi",
+    "width": 4,
+    "kind": "fused"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_2_074_OpMov_Load_Eax_EaxBaseNoIndexNoSegment__OpTest_EvGv_32_ModReg_Eax(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34493956096,
+      192,
+      0,
+      0
+    ],
+    "count": 28325001,
+    "original": "SuperOpcode_2_074_OpMov_Load_Eax_EaxBaseNoIndexNoSegment__OpTest_EvGv_32_ModReg_Eax",
+    "width": 2,
+    "kind": "fused"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_2_076_OpGroup1_EbIb_Cmp_ModReg_Reg2_Flags__OpJcc_E_Rel32(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      250,
+      4,
+      0,
+      0
+    ],
+    "count": 16400003,
+    "original": "SuperOpcode_2_076_OpGroup1_EbIb_Cmp_ModReg_Reg2_Flags__OpJcc_E_Rel32",
+    "width": 2,
+    "kind": "fused"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_2_065_OpCmp_EvGv_32_ModReg__OpJcc_NE_Rel8(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      205,
+      5,
+      0,
+      0
+    ],
+    "count": 14580000,
+    "original": "SuperOpcode_2_065_OpCmp_EvGv_32_ModReg__OpJcc_NE_Rel8",
+    "width": 2,
+    "kind": "fused"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_4_131_OpImul_GvEv__OpAdd_EvGv_NF_32_ModReg__OpCmp_EvGv_32_ModReg__OpJcc_NE_Rel8(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      214,
+      211,
+      197,
+      5
+    ],
+    "count": 14580000,
+    "original": "SuperOpcode_4_131_OpImul_GvEv__OpAdd_EvGv_NF_32_ModReg__OpCmp_EvGv_32_ModReg__OpJcc_NE_Rel8",
+    "width": 4,
+    "kind": "fused"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_4_136_OpGroup1_EvIb_And_32_NoFlags_ModReg__OpGroup1_EvIb_And_32_NoFlags_ModReg__OpImul_GvEv__OpAdd_EvGv_NF_32_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      224,
+      226,
+      208,
+      214
+    ],
+    "count": 14580000,
+    "original": "SuperOpcode_4_136_OpGroup1_EvIb_And_32_NoFlags_ModReg__OpGroup1_EvIb_And_32_NoFlags_ModReg__OpImul_GvEv__OpAdd_EvGv_NF_32_ModReg",
+    "width": 4,
+    "kind": "fused"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_4_140_OpImul_GvEv__OpMov_EvGv_Eax__OpGroup2_EvIb_Sar_ModReg__OpGroup2_EvIb_Sar_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      194,
+      194,
+      248,
+      250
+    ],
+    "count": 14580000,
+    "original": "SuperOpcode_4_140_OpImul_GvEv__OpMov_EvGv_Eax__OpGroup2_EvIb_Sar_ModReg__OpGroup2_EvIb_Sar_ModReg",
+    "width": 4,
+    "kind": "fused"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_4_144_OpMovsx_Word_32_Edx__OpMovsx_Word__OpGroup1_EvIb_Add_32_NoFlags_Eax__OpAdd_EvGv_NF_32_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34493956112,
+      34494218289,
+      192,
+      249
+    ],
+    "count": 14580000,
+    "original": "SuperOpcode_4_144_OpMovsx_Word_32_Edx__OpMovsx_Word__OpGroup1_EvIb_Add_32_NoFlags_Eax__OpAdd_EvGv_NF_32_ModReg",
+    "width": 4,
+    "kind": "fused"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_4_145_OpMovsx_Word_32_Edx__OpMovsx_Word_32_Eax__OpGroup1_EvIb_Add_32_NoFlags_Ecx__OpAdd_EvGv_NF_32_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34494742547,
+      34494218241,
+      193,
+      251
+    ],
+    "count": 14580000,
+    "original": "SuperOpcode_4_145_OpMovsx_Word_32_Edx__OpMovsx_Word_32_Eax__OpGroup1_EvIb_Add_32_NoFlags_Ecx__OpAdd_EvGv_NF_32_ModReg",
+    "width": 4,
+    "kind": "fused"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_4_146_OpMov_Load_Ecx_EaxBaseNoIndexNoSegment__OpMovzx_Word__OpCmp_EvGv_16__OpJcc_NE_Rel8(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34493956168,
+      34494218329,
+      16595,
+      5
+    ],
+    "count": 14475000,
+    "original": "SuperOpcode_4_146_OpMov_Load_Ecx_EaxBaseNoIndexNoSegment__OpMovzx_Word__OpCmp_EvGv_16__OpJcc_NE_Rel8",
+    "width": 4,
+    "kind": "fused"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_4_147_OpMov_Load_Ecx_EaxBaseNoIndexNoSegment__OpMovzx_Byte__OpCmp_EvGv_16__OpJcc_NE_Rel8(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34493956168,
+      34494218297,
+      16599,
+      5
+    ],
+    "count": 13955000,
+    "original": "SuperOpcode_4_147_OpMov_Load_Ecx_EaxBaseNoIndexNoSegment__OpMovzx_Byte__OpCmp_EvGv_16__OpJcc_NE_Rel8",
+    "width": 4,
+    "kind": "fused"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_2_101_OpGroup1_EvIb_Sub_32_NoFlags_Edx__OpGroup1_EbIb_Cmp_ModReg_Reg2_Flags(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      234,
+      250,
+      0,
+      0
+    ],
+    "count": 11640000,
+    "original": "SuperOpcode_2_101_OpGroup1_EvIb_Sub_32_NoFlags_Edx__OpGroup1_EbIb_Cmp_ModReg_Reg2_Flags",
+    "width": 2,
+    "kind": "fused"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_2_102_OpGroup1_EbIb_Cmp_ModReg_Reg1_Flags__OpJcc_E_Rel32(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      249,
+      4,
+      0,
+      0
+    ],
+    "count": 10720000,
+    "original": "SuperOpcode_2_102_OpGroup1_EbIb_Cmp_ModReg_Reg1_Flags__OpJcc_E_Rel32",
+    "width": 2,
+    "kind": "fused"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMov_Load_Eax_EspBaseNoIndexNoSegment(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      25905070148,
+      0,
+      0,
+      0
+    ],
+    "count": 10692031,
+    "original": "DispatchWrapper<op::OpMov_Load_Eax_EspBaseNoIndexNoSegment>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMov_Load_Eax_EspBaseNoIndexNoSegment"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpCall_Rel(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "count": 9997014,
+    "original": "DispatchWrapper<op::OpCall_Rel>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpCall_Rel"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMov_Load_Esi_EspBaseNoIndexNoSegment(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      25905070196,
+      0,
+      0,
+      0
+    ],
+    "count": 9731018,
+    "original": "DispatchWrapper<op::OpMov_Load_Esi_EspBaseNoIndexNoSegment>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMov_Load_Esi_EspBaseNoIndexNoSegment"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpRet(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      3,
+      0,
+      0,
+      0
+    ],
+    "count": 9111893,
+    "original": "DispatchWrapper<op::OpRet>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpRet"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_4_154_OpMovzx_Byte_32_Edx__OpGroup1_EvIb_Add_32_NoFlags_Ecx__OpTest_EbGb__OpJcc_E_Rel32(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34494218321,
+      193,
+      210,
+      4
+    ],
+    "count": 7920000,
+    "original": "SuperOpcode_4_154_OpMovzx_Byte_32_Edx__OpGroup1_EvIb_Add_32_NoFlags_Ecx__OpTest_EbGb__OpJcc_E_Rel32",
+    "width": 4,
+    "kind": "fused"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpGroup1_EbIb_Cmp_ModReg_Reg3_Flags(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      251,
+      0,
+      0,
+      0
+    ],
+    "count": 7440015,
+    "original": "DispatchWrapper<op::OpGroup1_EbIb_Cmp_ModReg_Reg3_Flags>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpGroup1_EbIb_Cmp_ModReg_Reg3_Flags"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_4_155_OpMov_EvGv_Edx__OpGroup1_EvIb_And_32_NoFlags_ModReg__OpGroup1_EbIb_Cmp_ModReg_Reg3_Flags__OpJcc_NE_Rel32(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      211,
+      227,
+      251,
+      5
+    ],
+    "count": 7400000,
+    "original": "SuperOpcode_4_155_OpMov_EvGv_Edx__OpGroup1_EvIb_And_32_NoFlags_ModReg__OpGroup1_EbIb_Cmp_ModReg_Reg3_Flags__OpJcc_NE_Rel32",
+    "width": 4,
+    "kind": "fused"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_2_108_OpGroup1_EbIb_Cmp_ModReg_Reg2_Flags__OpJcc_E_Rel8(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      250,
+      4,
+      0,
+      0
+    ],
+    "count": 7060009,
+    "original": "SuperOpcode_2_108_OpGroup1_EbIb_Cmp_ModReg_Reg2_Flags__OpJcc_E_Rel8",
+    "width": 2,
+    "kind": "fused"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_4_156_OpMovzx_Byte_32_Edx__OpGroup1_EvIb_Add_32_NoFlags_Ecx__OpTest_EbGb__OpJcc_NE_Rel8(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34494218321,
+      193,
+      210,
+      5
+    ],
+    "count": 6520000,
+    "original": "SuperOpcode_4_156_OpMovzx_Byte_32_Edx__OpGroup1_EvIb_Add_32_NoFlags_Ecx__OpTest_EbGb__OpJcc_NE_Rel8",
+    "width": 4,
+    "kind": "fused"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_4_157_OpPush_Reg32_Ebp__OpPush_Reg32_Edi__OpPush_Reg32_Esi__OpPush_Reg32_Ebx(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      5,
+      7,
+      6,
+      3
+    ],
+    "count": 6335737,
+    "original": "SuperOpcode_4_157_OpPush_Reg32_Ebp__OpPush_Reg32_Edi__OpPush_Reg32_Esi__OpPush_Reg32_Ebx",
+    "width": 4,
+    "kind": "fused"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_2_010_OpTest_EbGb__OpJcc_E_Rel32(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      201,
+      4,
+      0,
+      0
+    ],
+    "count": 6040000,
+    "original": "SuperOpcode_2_010_OpTest_EbGb__OpJcc_E_Rel32",
+    "width": 2,
+    "kind": "fused"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMov_EvGv_Ecx(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      203,
+      0,
+      0,
+      0
+    ],
+    "count": 5980861,
+    "original": "DispatchWrapper<op::OpMov_EvGv_Ecx>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMov_EvGv_Ecx"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpGroup2_Ev1_Shr_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      16616,
+      0,
+      0,
+      0
+    ],
+    "count": 5840016,
+    "original": "DispatchWrapper<op::OpGroup2_Ev1_Shr_ModReg>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpGroup2_Ev1_Shr_ModReg"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpPop_Reg32_Eax(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "count": 5680360,
+    "original": "DispatchWrapper<op::OpPop_Reg32_Eax>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpPop_Reg32_Eax"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_2_118_OpPush_Reg32_Esi__OpPush_Reg32_Edi(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      6,
+      7,
+      0,
+      0
+    ],
+    "count": 5120108,
+    "original": "SuperOpcode_2_118_OpPush_Reg32_Esi__OpPush_Reg32_Edi",
+    "width": 2,
+    "kind": "fused"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpPop_Reg32_Ebp(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      5,
+      0,
+      0,
+      0
+    ],
+    "count": 5120002,
+    "original": "DispatchWrapper<op::OpPop_Reg32_Ebp>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpPop_Reg32_Ebp"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_2_109_OpPop_Reg32_Esi__OpPop_Reg32_Edi(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      6,
+      7,
+      0,
+      0
+    ],
+    "count": 5120001,
+    "original": "SuperOpcode_2_109_OpPop_Reg32_Esi__OpPop_Reg32_Edi",
+    "width": 2,
+    "kind": "fused"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_2_122_OpMov_Load_Eax_EspBaseNoIndexNoSegment__OpGroup1_EbIb_Cmp_Flags(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      25905070148,
+      34493956152,
+      0,
+      0
+    ],
+    "count": 5120000,
+    "original": "SuperOpcode_2_122_OpMov_Load_Eax_EspBaseNoIndexNoSegment__OpGroup1_EbIb_Cmp_Flags",
+    "width": 2,
+    "kind": "fused"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_2_124_OpMov_Load_Edi_EspBaseNoIndexNoSegment__OpMov_Load_Eax_EspBaseNoIndexNoSegment(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      25905070204,
+      25905070148,
+      0,
+      0
+    ],
+    "count": 5120000,
+    "original": "SuperOpcode_2_124_OpMov_Load_Edi_EspBaseNoIndexNoSegment__OpMov_Load_Eax_EspBaseNoIndexNoSegment",
+    "width": 2,
+    "kind": "fused"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_2_125_OpMov_Load_Edx__OpMovzx_Byte_32_Ecx(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34495791127,
+      34494480394,
+      0,
+      0
+    ],
+    "count": 5120000,
+    "original": "SuperOpcode_2_125_OpMov_Load_Edx__OpMovzx_Byte_32_Ecx",
+    "width": 2,
+    "kind": "fused"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_2_126_OpMov_Store_Edx_EsiBaseNoIndexNoSegment__OpPop_Reg32_Ebx(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34495528982,
+      3,
+      0,
+      0
+    ],
+    "count": 5120000,
+    "original": "SuperOpcode_2_126_OpMov_Store_Edx_EsiBaseNoIndexNoSegment__OpPop_Reg32_Ebx",
+    "width": 2,
+    "kind": "fused"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpGroup1_EvIb_Add_32_NoFlags(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      26307723332,
+      0,
+      0,
+      0
+    ],
+    "count": 5120000,
+    "original": "DispatchWrapper<op::OpGroup1_EvIb_Add_32_NoFlags>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpGroup1_EvIb_Add_32_NoFlags"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_2_112_OpMov_EvGv_Ebx__OpCmp_EvGv_32_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      223,
+      232,
+      0,
+      0
+    ],
+    "count": 4860000,
+    "original": "SuperOpcode_2_112_OpMov_EvGv_Ebx__OpCmp_EvGv_32_ModReg",
+    "width": 2,
+    "kind": "fused"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_2_127_OpMov_EvGv_Ecx__OpMov_Load_Ecx_EaxBaseNoIndexNoSegment(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      203,
+      34493956104,
+      0,
+      0
+    ],
+    "count": 4860000,
+    "original": "SuperOpcode_2_127_OpMov_EvGv_Ecx__OpMov_Load_Ecx_EaxBaseNoIndexNoSegment",
+    "width": 2,
+    "kind": "fused"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMov_RegImm(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "count": 4680289,
+    "original": "DispatchWrapper<op::OpMov_RegImm>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMov_RegImm"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpGroup1_EvIb_Add_32_Flags(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34493956096,
+      0,
+      0,
+      0
+    ],
+    "count": 4680000,
+    "original": "DispatchWrapper<op::OpGroup1_EvIb_Add_32_Flags>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpGroup1_EvIb_Add_32_Flags"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpJmp_Rel32(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      1,
+      0,
+      0,
+      0
+    ],
+    "count": 4653048,
+    "original": "DispatchWrapper<op::OpJmp_Rel32>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpJmp_Rel32"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpGroup1_EvIb_Sub_32_NoFlags_Ecx(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      233,
+      0,
+      0,
+      0
+    ],
+    "count": 4600001,
+    "original": "DispatchWrapper<op::OpGroup1_EvIb_Sub_32_NoFlags_Ecx>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpGroup1_EvIb_Sub_32_NoFlags_Ecx"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpGroup1_EvIb_Add_32_NoFlags_Eax(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      192,
+      0,
+      0,
+      0
+    ],
+    "count": 4401079,
+    "original": "DispatchWrapper<op::OpGroup1_EvIb_Add_32_NoFlags_Eax>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpGroup1_EvIb_Add_32_NoFlags_Eax"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMov_Load_Ebx_EspBaseNoIndexNoSegment(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      25905070172,
+      0,
+      0,
+      0
+    ],
+    "count": 4350289,
+    "original": "DispatchWrapper<op::OpMov_Load_Ebx_EspBaseNoIndexNoSegment>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMov_Load_Ebx_EspBaseNoIndexNoSegment"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpGroup1_EvIb_Sub_32_Flags(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      236,
+      0,
+      0,
+      0
+    ],
+    "count": 4241948,
+    "original": "DispatchWrapper<op::OpGroup1_EvIb_Sub_32_Flags>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpGroup1_EvIb_Sub_32_Flags"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpLea_32_Ecx(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34494480458,
+      0,
+      0,
+      0
+    ],
+    "count": 4120012,
+    "original": "DispatchWrapper<op::OpLea_32_Ecx>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpLea_32_Ecx"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpGroup1_EvIb_Add_32_Flags_Edx(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      194,
+      0,
+      0,
+      0
+    ],
+    "count": 4100071,
+    "original": "DispatchWrapper<op::OpGroup1_EvIb_Add_32_Flags_Edx>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpGroup1_EvIb_Add_32_Flags_Edx"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpGroup5_Ev_Push_32_Flags(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      25905070196,
+      0,
+      0,
+      0
+    ],
+    "count": 4062188,
+    "original": "DispatchWrapper<op::OpGroup5_Ev_Push_32_Flags>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpGroup5_Ev_Push_32_Flags"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_2_010_OpTest_EbGb__OpJcc_E_Rel32(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      219,
+      4,
+      0,
+      0
+    ],
+    "count": 3960000,
+    "original": "SuperOpcode_2_010_OpTest_EbGb__OpJcc_E_Rel32",
+    "width": 2,
+    "kind": "fused"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpGroup1_EvIb_Add_32_Flags_Eax(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      192,
+      0,
+      0,
+      0
+    ],
+    "count": 3520157,
+    "original": "DispatchWrapper<op::OpGroup1_EvIb_Add_32_Flags_Eax>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpGroup1_EvIb_Add_32_Flags_Eax"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpGroup1_EvIb_Add_32_NoFlags_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      196,
+      0,
+      0,
+      0
+    ],
+    "count": 3496588,
+    "original": "DispatchWrapper<op::OpGroup1_EvIb_Add_32_NoFlags_ModReg>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpGroup1_EvIb_Add_32_NoFlags_ModReg"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMovzx_Byte(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      219,
+      0,
+      0,
+      0
+    ],
+    "count": 3480024,
+    "original": "DispatchWrapper<op::OpMovzx_Byte>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMovzx_Byte"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpXor_EvGv_NF_32_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      210,
+      0,
+      0,
+      0
+    ],
+    "count": 3410115,
+    "original": "DispatchWrapper<op::OpXor_EvGv_NF_32_ModReg>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpXor_EvGv_NF_32_ModReg"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpLea_32(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34495791199,
+      0,
+      0,
+      0
+    ],
+    "count": 3320000,
+    "original": "DispatchWrapper<op::OpLea_32>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpLea_32"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpPop_Reg32_Edx(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      2,
+      0,
+      0,
+      0
+    ],
+    "count": 3290301,
+    "original": "DispatchWrapper<op::OpPop_Reg32_Edx>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpPop_Reg32_Edx"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_2_064_OpAdd_EvGv_NF_32_ModReg__OpCmp_EvGv_32_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      202,
+      214,
+      0,
+      0
+    ],
+    "count": 3240000,
+    "original": "SuperOpcode_2_064_OpAdd_EvGv_NF_32_ModReg__OpCmp_EvGv_32_ModReg",
+    "width": 2,
+    "kind": "fused"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpAdd_EvGv_NF_32_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      251,
+      0,
+      0,
+      0
+    ],
+    "count": 3160000,
+    "original": "DispatchWrapper<op::OpAdd_EvGv_NF_32_ModReg>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpAdd_EvGv_NF_32_ModReg"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMov_Load_Ecx_EspBaseNoIndexNoSegment(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      25905070156,
+      0,
+      0,
+      0
+    ],
+    "count": 3061503,
+    "original": "DispatchWrapper<op::OpMov_Load_Ecx_EspBaseNoIndexNoSegment>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMov_Load_Ecx_EspBaseNoIndexNoSegment"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMov_Load_Esi_EaxBaseNoIndexNoSegment(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34493956208,
+      0,
+      0,
+      0
+    ],
+    "count": 3010043,
+    "original": "DispatchWrapper<op::OpMov_Load_Esi_EaxBaseNoIndexNoSegment>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMov_Load_Esi_EaxBaseNoIndexNoSegment"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMov_EvGv_Esi(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      240,
+      0,
+      0,
+      0
+    ],
+    "count": 2988248,
+    "original": "DispatchWrapper<op::OpMov_EvGv_Esi>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMov_EvGv_Esi"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpGroup1_EvIb_Sub_32_NoFlags(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      235,
+      0,
+      0,
+      0
+    ],
+    "count": 2985113,
+    "original": "DispatchWrapper<op::OpGroup1_EvIb_Sub_32_NoFlags>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpGroup1_EvIb_Sub_32_NoFlags"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpTest_EvGv_32_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      237,
+      0,
+      0,
+      0
+    ],
+    "count": 2967841,
+    "original": "DispatchWrapper<op::OpTest_EvGv_32_ModReg>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpTest_EvGv_32_ModReg"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpGroup2_EvIb_Shl_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      224,
+      0,
+      0,
+      0
+    ],
+    "count": 2920043,
+    "original": "DispatchWrapper<op::OpGroup2_EvIb_Shl_ModReg>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpGroup2_EvIb_Shl_ModReg"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpGroup1_EvIb_Add_32_Flags(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34493956160,
+      0,
+      0,
+      0
+    ],
+    "count": 2920000,
+    "original": "DispatchWrapper<op::OpGroup1_EvIb_Add_32_Flags>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpGroup1_EvIb_Add_32_Flags"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMov_Load_Edx_EspBaseNoIndexNoSegment(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      25905070164,
+      0,
+      0,
+      0
+    ],
+    "count": 2885682,
+    "original": "DispatchWrapper<op::OpMov_Load_Edx_EspBaseNoIndexNoSegment>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMov_Load_Edx_EspBaseNoIndexNoSegment"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpTest_EvGv_32_ModReg_Edx(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      210,
+      0,
+      0,
+      0
+    ],
+    "count": 2765383,
+    "original": "DispatchWrapper<op::OpTest_EvGv_32_ModReg_Edx>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpTest_EvGv_32_ModReg_Edx"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpPop_Reg32_Ecx(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      1,
+      0,
+      0,
+      0
+    ],
+    "count": 2730005,
+    "original": "DispatchWrapper<op::OpPop_Reg32_Ecx>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpPop_Reg32_Ecx"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMov_EvGv_Ebx(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      223,
+      0,
+      0,
+      0
+    ],
+    "count": 2660023,
+    "original": "DispatchWrapper<op::OpMov_EvGv_Ebx>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMov_EvGv_Ebx"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpGroup1_EvIb_And_32_NoFlags_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      230,
+      0,
+      0,
+      0
+    ],
+    "count": 2600009,
+    "original": "DispatchWrapper<op::OpGroup1_EvIb_And_32_NoFlags_ModReg>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpGroup1_EvIb_And_32_NoFlags_ModReg"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpAdd_EvGv_NF_32_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      219,
+      0,
+      0,
+      0
+    ],
+    "count": 2600008,
+    "original": "DispatchWrapper<op::OpAdd_EvGv_NF_32_ModReg>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpAdd_EvGv_NF_32_ModReg"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpGroup1_EvIz_Add_32_NoFlags(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      195,
+      0,
+      0,
+      0
+    ],
+    "count": 2590712,
+    "original": "DispatchWrapper<op::OpGroup1_EvIz_Add_32_NoFlags>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpGroup1_EvIz_Add_32_NoFlags"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpTest_EvGv_32_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      219,
+      0,
+      0,
+      0
+    ],
+    "count": 2566586,
+    "original": "DispatchWrapper<op::OpTest_EvGv_32_ModReg>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpTest_EvGv_32_ModReg"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMov_EvGv_Ecx(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      202,
+      0,
+      0,
+      0
+    ],
+    "count": 2545200,
+    "original": "DispatchWrapper<op::OpMov_EvGv_Ecx>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMov_EvGv_Ecx"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMov_EvGv_Edi(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      248,
+      0,
+      0,
+      0
+    ],
+    "count": 2531355,
+    "original": "DispatchWrapper<op::OpMov_EvGv_Edi>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMov_EvGv_Edi"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMov_EvGv_Eax(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      198,
+      0,
+      0,
+      0
+    ],
+    "count": 2485187,
+    "original": "DispatchWrapper<op::OpMov_EvGv_Eax>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMov_EvGv_Eax"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpLea_32_Edx(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34494218321,
+      0,
+      0,
+      0
+    ],
+    "count": 2480178,
+    "original": "DispatchWrapper<op::OpLea_32_Edx>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpLea_32_Edx"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpGroup1_EbIb_Cmp_ModReg_Reg1_Flags(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      249,
+      0,
+      0,
+      0
+    ],
+    "count": 2440009,
+    "original": "DispatchWrapper<op::OpGroup1_EbIb_Cmp_ModReg_Reg1_Flags>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpGroup1_EbIb_Cmp_ModReg_Reg1_Flags"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpOr_EvGv(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      208,
+      0,
+      0,
+      0
+    ],
+    "count": 2280017,
+    "original": "DispatchWrapper<op::OpOr_EvGv>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpOr_EvGv"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpGroup2_EvIb_Shr_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      16619,
+      0,
+      0,
+      0
+    ],
+    "count": 2280009,
+    "original": "DispatchWrapper<op::OpGroup2_EvIb_Shr_ModReg>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpGroup2_EvIb_Shr_ModReg"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_2_075_OpGroup1_EvIb_And_32_NoFlags_ModReg__OpGroup1_EvIb_And_32_NoFlags_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      225,
+      227,
+      0,
+      0
+    ],
+    "count": 2280008,
+    "original": "SuperOpcode_2_075_OpGroup1_EvIb_And_32_NoFlags_ModReg__OpGroup1_EvIb_And_32_NoFlags_ModReg",
+    "width": 2,
+    "kind": "fused"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_2_103_OpMov_EvGv_Edx__OpGroup1_EvIb_And_32_NoFlags_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      214,
+      226,
+      0,
+      0
+    ],
+    "count": 2280008,
+    "original": "SuperOpcode_2_103_OpMov_EvGv_Edx__OpGroup1_EvIb_And_32_NoFlags_ModReg",
+    "width": 2,
+    "kind": "fused"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_4_148_OpGroup1_EvIz_And_16_NoFlags__OpGroup2_EvIb_Shr_ModReg__OpGroup2_EvIb_Shl_ModReg__OpOr_EvGv_NF_32_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      16610,
+      16616,
+      226,
+      208
+    ],
+    "count": 2280008,
+    "original": "SuperOpcode_4_148_OpGroup1_EvIz_And_16_NoFlags__OpGroup2_EvIb_Shr_ModReg__OpGroup2_EvIb_Shl_ModReg__OpOr_EvGv_NF_32_ModReg",
+    "width": 4,
+    "kind": "fused"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_4_151_OpMov_EvGv_Eax__OpAnd_EaxImm_NF__OpGroup1_EvIz_And_16_NoFlags__OpGroup2_EvIb_Shr_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      194,
+      16389,
+      16610,
+      16616
+    ],
+    "count": 2280008,
+    "original": "SuperOpcode_4_151_OpMov_EvGv_Eax__OpAnd_EaxImm_NF__OpGroup1_EvIz_And_16_NoFlags__OpGroup2_EvIb_Shr_ModReg",
+    "width": 4,
+    "kind": "fused"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_4_152_OpGroup2_EvIb_Shl_ModReg__OpOr_EvGv_NF_32_ModReg__OpMov_EvGv_Eax__OpAnd_EaxImm_NF(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      226,
+      208,
+      194,
+      16389
+    ],
+    "count": 2280008,
+    "original": "SuperOpcode_4_152_OpGroup2_EvIb_Shl_ModReg__OpOr_EvGv_NF_32_ModReg__OpMov_EvGv_Eax__OpAnd_EaxImm_NF",
+    "width": 4,
+    "kind": "fused"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpAdd_EvGv_NF_32_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      210,
+      0,
+      0,
+      0
+    ],
+    "count": 2280008,
+    "original": "DispatchWrapper<op::OpAdd_EvGv_NF_32_ModReg>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpAdd_EvGv_NF_32_ModReg"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpGroup1_EvIz_And_16_NoFlags(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      16610,
+      0,
+      0,
+      0
+    ],
+    "count": 2280008,
+    "original": "DispatchWrapper<op::OpGroup1_EvIz_And_16_NoFlags>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpGroup1_EvIz_And_16_NoFlags"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpTest_EvGv_32_ModReg_Eax(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      192,
+      0,
+      0,
+      0
+    ],
+    "count": 2253633,
+    "original": "DispatchWrapper<op::OpTest_EvGv_32_ModReg_Eax>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpTest_EvGv_32_ModReg_Eax"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_2_029_OpGroup1_EvIz_And_32_Flags__OpJcc_E_Rel32(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      225,
+      4,
+      0,
+      0
+    ],
+    "count": 2160000,
+    "original": "SuperOpcode_2_029_OpGroup1_EvIz_And_32_Flags__OpJcc_E_Rel32",
+    "width": 2,
+    "kind": "fused"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_2_116_OpLea_32__OpLea_32(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34495791199,
+      34495529070,
+      0,
+      0
+    ],
+    "count": 2160000,
+    "original": "SuperOpcode_2_116_OpLea_32__OpLea_32",
+    "width": 2,
+    "kind": "fused"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMov_Store_Ebp_EaxBaseNoIndexNoSegment(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34493956200,
+      0,
+      0,
+      0
+    ],
+    "count": 2160000,
+    "original": "DispatchWrapper<op::OpMov_Store_Ebp_EaxBaseNoIndexNoSegment>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMov_Store_Ebp_EaxBaseNoIndexNoSegment"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMovzx_Byte(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34494480474,
+      0,
+      0,
+      0
+    ],
+    "count": 2160000,
+    "original": "DispatchWrapper<op::OpMovzx_Byte>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMovzx_Byte"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpGroup2_EvIb_Shr_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      16622,
+      0,
+      0,
+      0
+    ],
+    "count": 2100004,
+    "original": "DispatchWrapper<op::OpGroup2_EvIb_Shr_ModReg>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpGroup2_EvIb_Shr_ModReg"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpGroup2_EvIb_Shr_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      16617,
+      0,
+      0,
+      0
+    ],
+    "count": 2080760,
+    "original": "DispatchWrapper<op::OpGroup2_EvIb_Shr_ModReg>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpGroup2_EvIb_Shr_ModReg"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpOr_EvGv(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      217,
+      0,
+      0,
+      0
+    ],
+    "count": 2080760,
+    "original": "DispatchWrapper<op::OpOr_EvGv>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpOr_EvGv"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpXor_EbGb_NF(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      219,
+      0,
+      0,
+      0
+    ],
+    "count": 2080760,
+    "original": "DispatchWrapper<op::OpXor_EbGb_NF>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpXor_EbGb_NF"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpXor_EvGv(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      219,
+      0,
+      0,
+      0
+    ],
+    "count": 2070030,
+    "original": "DispatchWrapper<op::OpXor_EvGv>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpXor_EvGv"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpPush_Reg32_Ebx(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      3,
+      0,
+      0,
+      0
+    ],
+    "count": 2015898,
+    "original": "DispatchWrapper<op::OpPush_Reg32_Ebx>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpPush_Reg32_Ebx"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMov_EvGv_Ebp(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      232,
+      0,
+      0,
+      0
+    ],
+    "count": 2007485,
+    "original": "DispatchWrapper<op::OpMov_EvGv_Ebp>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMov_EvGv_Ebp"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMovzx_Byte_32_Edx(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34494480466,
+      0,
+      0,
+      0
+    ],
+    "count": 1960000,
+    "original": "DispatchWrapper<op::OpMovzx_Byte_32_Edx>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMovzx_Byte_32_Edx"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMov_EvGv_Edx(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      208,
+      0,
+      0,
+      0
+    ],
+    "count": 1840050,
+    "original": "DispatchWrapper<op::OpMov_EvGv_Edx>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMov_EvGv_Edx"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMovzx_Byte(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34494218329,
+      0,
+      0,
+      0
+    ],
+    "count": 1800000,
+    "original": "DispatchWrapper<op::OpMovzx_Byte>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMovzx_Byte"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpPush_Reg32_Eax(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "count": 1785369,
+    "original": "DispatchWrapper<op::OpPush_Reg32_Eax>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpPush_Reg32_Eax"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpGroup1_EvIz_And_16_NoFlags(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      16611,
+      0,
+      0,
+      0
+    ],
+    "count": 1780085,
+    "original": "DispatchWrapper<op::OpGroup1_EvIz_And_16_NoFlags>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpGroup1_EvIz_And_16_NoFlags"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_2_077_OpMov_EvGv_Eax__OpAnd_EaxImm_NF(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      195,
+      16389,
+      0,
+      0
+    ],
+    "count": 1780004,
+    "original": "SuperOpcode_2_077_OpMov_EvGv_Eax__OpAnd_EaxImm_NF",
+    "width": 2,
+    "kind": "fused"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_4_148_OpGroup1_EvIz_And_16_NoFlags__OpGroup2_EvIb_Shr_ModReg__OpGroup2_EvIb_Shl_ModReg__OpOr_EvGv_NF_32_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      16609,
+      16616,
+      225,
+      200
+    ],
+    "count": 1780004,
+    "original": "SuperOpcode_4_148_OpGroup1_EvIz_And_16_NoFlags__OpGroup2_EvIb_Shr_ModReg__OpGroup2_EvIb_Shl_ModReg__OpOr_EvGv_NF_32_ModReg",
+    "width": 4,
+    "kind": "fused"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_4_148_OpGroup1_EvIz_And_16_NoFlags__OpGroup2_EvIb_Shr_ModReg__OpGroup2_EvIb_Shl_ModReg__OpOr_EvGv_NF_32_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      16611,
+      16616,
+      227,
+      216
+    ],
+    "count": 1780004,
+    "original": "SuperOpcode_4_148_OpGroup1_EvIz_And_16_NoFlags__OpGroup2_EvIb_Shr_ModReg__OpGroup2_EvIb_Shl_ModReg__OpOr_EvGv_NF_32_ModReg",
+    "width": 4,
+    "kind": "fused"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_4_151_OpMov_EvGv_Eax__OpAnd_EaxImm_NF__OpGroup1_EvIz_And_16_NoFlags__OpGroup2_EvIb_Shr_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      193,
+      16389,
+      16609,
+      16616
+    ],
+    "count": 1780004,
+    "original": "SuperOpcode_4_151_OpMov_EvGv_Eax__OpAnd_EaxImm_NF__OpGroup1_EvIz_And_16_NoFlags__OpGroup2_EvIb_Shr_ModReg",
+    "width": 4,
+    "kind": "fused"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_4_151_OpMov_EvGv_Eax__OpAnd_EaxImm_NF__OpGroup1_EvIz_And_16_NoFlags__OpGroup2_EvIb_Shr_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      195,
+      16389,
+      16611,
+      16616
+    ],
+    "count": 1780004,
+    "original": "SuperOpcode_4_151_OpMov_EvGv_Eax__OpAnd_EaxImm_NF__OpGroup1_EvIz_And_16_NoFlags__OpGroup2_EvIb_Shr_ModReg",
+    "width": 4,
+    "kind": "fused"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_4_152_OpGroup2_EvIb_Shl_ModReg__OpOr_EvGv_NF_32_ModReg__OpMov_EvGv_Eax__OpAnd_EaxImm_NF(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      225,
+      200,
+      193,
+      16389
+    ],
+    "count": 1780004,
+    "original": "SuperOpcode_4_152_OpGroup2_EvIb_Shl_ModReg__OpOr_EvGv_NF_32_ModReg__OpMov_EvGv_Eax__OpAnd_EaxImm_NF",
+    "width": 4,
+    "kind": "fused"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_4_152_OpGroup2_EvIb_Shl_ModReg__OpOr_EvGv_NF_32_ModReg__OpMov_EvGv_Eax__OpAnd_EaxImm_NF(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      227,
+      216,
+      195,
+      16389
+    ],
+    "count": 1780004,
+    "original": "SuperOpcode_4_152_OpGroup2_EvIb_Shl_ModReg__OpOr_EvGv_NF_32_ModReg__OpMov_EvGv_Eax__OpAnd_EaxImm_NF",
+    "width": 4,
+    "kind": "fused"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpAdd_EvGv_NF_32_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      201,
+      0,
+      0,
+      0
+    ],
+    "count": 1780004,
+    "original": "DispatchWrapper<op::OpAdd_EvGv_NF_32_ModReg>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpAdd_EvGv_NF_32_ModReg"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpAdd_EvGv_NF_32_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      246,
+      0,
+      0,
+      0
+    ],
+    "count": 1780004,
+    "original": "DispatchWrapper<op::OpAdd_EvGv_NF_32_ModReg>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpAdd_EvGv_NF_32_ModReg"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpGroup1_EvIz_And_16_NoFlags(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      16609,
+      0,
+      0,
+      0
+    ],
+    "count": 1780004,
+    "original": "DispatchWrapper<op::OpGroup1_EvIz_And_16_NoFlags>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpGroup1_EvIz_And_16_NoFlags"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpGroup2_EbIb(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      235,
+      0,
+      0,
+      0
+    ],
+    "count": 1780004,
+    "original": "DispatchWrapper<op::OpGroup2_EbIb>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpGroup2_EbIb"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMov_Store_Esi_EaxBaseNoIndexNoSegment(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34493956144,
+      0,
+      0,
+      0
+    ],
+    "count": 1767909,
+    "original": "DispatchWrapper<op::OpMov_Store_Esi_EaxBaseNoIndexNoSegment>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMov_Store_Esi_EaxBaseNoIndexNoSegment"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpGroup5_Ev_Push_32_Flags(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34495791223,
+      0,
+      0,
+      0
+    ],
+    "count": 1755674,
+    "original": "DispatchWrapper<op::OpGroup5_Ev_Push_32_Flags>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpGroup5_Ev_Push_32_Flags"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpTest_EvGv_32_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      246,
+      0,
+      0,
+      0
+    ],
+    "count": 1650169,
+    "original": "DispatchWrapper<op::OpTest_EvGv_32_ModReg>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpTest_EvGv_32_ModReg"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpJmp_Rel8(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      3,
+      0,
+      0,
+      0
+    ],
+    "count": 1645527,
+    "original": "DispatchWrapper<op::OpJmp_Rel8>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpJmp_Rel8"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMov_Store_Eax_EspBaseNoIndexNoSegment(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      25905070084,
+      0,
+      0,
+      0
+    ],
+    "count": 1640020,
+    "original": "DispatchWrapper<op::OpMov_Store_Eax_EspBaseNoIndexNoSegment>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMov_Store_Eax_EspBaseNoIndexNoSegment"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpLea_32_Eax(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34495529030,
+      0,
+      0,
+      0
+    ],
+    "count": 1640011,
+    "original": "DispatchWrapper<op::OpLea_32_Eax>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpLea_32_Eax"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMov_Load_Ebp(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      25905332333,
+      0,
+      0,
+      0
+    ],
+    "count": 1635123,
+    "original": "DispatchWrapper<op::OpMov_Load_Ebp>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMov_Load_Ebp"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpCmp_EvGv_32_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      218,
+      0,
+      0,
+      0
+    ],
+    "count": 1620108,
+    "original": "DispatchWrapper<op::OpCmp_EvGv_32_ModReg>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpCmp_EvGv_32_ModReg"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMov_Load_Esi_EspBaseNoIndexNoSegment(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      25905070132,
+      0,
+      0,
+      0
+    ],
+    "count": 1620100,
+    "original": "DispatchWrapper<op::OpMov_Load_Esi_EspBaseNoIndexNoSegment>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMov_Load_Esi_EspBaseNoIndexNoSegment"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpCmp_EvGv_32(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      25905070148,
+      0,
+      0,
+      0
+    ],
+    "count": 1620053,
+    "original": "DispatchWrapper<op::OpCmp_EvGv_32>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpCmp_EvGv_32"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpLea_32_Edx(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34493956176,
+      0,
+      0,
+      0
+    ],
+    "count": 1620034,
+    "original": "DispatchWrapper<op::OpLea_32_Edx>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpLea_32_Edx"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMov_Load_Eax_EspBaseNoIndexNoSegment(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      25905070084,
+      0,
+      0,
+      0
+    ],
+    "count": 1620026,
+    "original": "DispatchWrapper<op::OpMov_Load_Eax_EspBaseNoIndexNoSegment>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMov_Load_Eax_EspBaseNoIndexNoSegment"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpXor_EvGv(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      246,
+      0,
+      0,
+      0
+    ],
+    "count": 1620012,
+    "original": "DispatchWrapper<op::OpXor_EvGv>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpXor_EvGv"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMov_Store_Esi_EspBaseNoIndexNoSegment(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      25905070132,
+      0,
+      0,
+      0
+    ],
+    "count": 1620005,
+    "original": "DispatchWrapper<op::OpMov_Store_Esi_EspBaseNoIndexNoSegment>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMov_Store_Esi_EspBaseNoIndexNoSegment"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMov_Load_Ecx(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34898182156,
+      0,
+      0,
+      0
+    ],
+    "count": 1620001,
+    "original": "DispatchWrapper<op::OpMov_Load_Ecx>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMov_Load_Ecx"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMov_Store_Ebx(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34997272604,
+      0,
+      0,
+      0
+    ],
+    "count": 1620001,
+    "original": "DispatchWrapper<op::OpMov_Store_Ebx>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMov_Store_Ebx"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_2_064_OpAdd_EvGv_NF_32_ModReg__OpCmp_EvGv_32_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      202,
+      242,
+      0,
+      0
+    ],
+    "count": 1620000,
+    "original": "SuperOpcode_2_064_OpAdd_EvGv_NF_32_ModReg__OpCmp_EvGv_32_ModReg",
+    "width": 2,
+    "kind": "fused"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_2_112_OpMov_EvGv_Ebx__OpCmp_EvGv_32_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      223,
+      197,
+      0,
+      0
+    ],
+    "count": 1620000,
+    "original": "SuperOpcode_2_112_OpMov_EvGv_Ebx__OpCmp_EvGv_32_ModReg",
+    "width": 2,
+    "kind": "fused"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_2_116_OpLea_32__OpLea_32(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      19463147700,
+      19463147700,
+      0,
+      0
+    ],
+    "count": 1620000,
+    "original": "SuperOpcode_2_116_OpLea_32__OpLea_32",
+    "width": 2,
+    "kind": "fused"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpAdd_EvGv_NF_32_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      202,
+      0,
+      0,
+      0
+    ],
+    "count": 1620000,
+    "original": "DispatchWrapper<op::OpAdd_EvGv_NF_32_ModReg>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpAdd_EvGv_NF_32_ModReg"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpCmp_EvGv_32(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      25905070164,
+      0,
+      0,
+      0
+    ],
+    "count": 1620000,
+    "original": "DispatchWrapper<op::OpCmp_EvGv_32>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpCmp_EvGv_32"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpCmp_EvGv_32_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      203,
+      0,
+      0,
+      0
+    ],
+    "count": 1620000,
+    "original": "DispatchWrapper<op::OpCmp_EvGv_32_ModReg>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpCmp_EvGv_32_ModReg"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpCmp_GvEv_32(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      25905070164,
+      0,
+      0,
+      0
+    ],
+    "count": 1620000,
+    "original": "DispatchWrapper<op::OpCmp_GvEv_32>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpCmp_GvEv_32"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpLea_32(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34629746716,
+      0,
+      0,
+      0
+    ],
+    "count": 1620000,
+    "original": "DispatchWrapper<op::OpLea_32>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpLea_32"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpLea_32_Ecx(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34728837132,
+      0,
+      0,
+      0
+    ],
+    "count": 1620000,
+    "original": "DispatchWrapper<op::OpLea_32_Ecx>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpLea_32_Ecx"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMov_Store_Esi(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34897395764,
+      0,
+      0,
+      0
+    ],
+    "count": 1620000,
+    "original": "DispatchWrapper<op::OpMov_Store_Esi>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMov_Store_Esi"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpSetcc_12(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      195,
+      0,
+      0,
+      0
+    ],
+    "count": 1620000,
+    "original": "DispatchWrapper<op::OpSetcc_12>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpSetcc_12"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_2_079_OpTest_EvGv_32_ModReg_Eax__OpJcc_E_Rel8(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      192,
+      4,
+      0,
+      0
+    ],
+    "count": 1612797,
+    "original": "SuperOpcode_2_079_OpTest_EvGv_32_ModReg_Eax__OpJcc_E_Rel8",
+    "width": 2,
+    "kind": "fused"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpTest_EbGb(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      210,
+      0,
+      0,
+      0
+    ],
+    "count": 1600068,
+    "original": "DispatchWrapper<op::OpTest_EbGb>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpTest_EbGb"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpPop_Reg32_Ebx(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      3,
+      0,
+      0,
+      0
+    ],
+    "count": 1595742,
+    "original": "DispatchWrapper<op::OpPop_Reg32_Ebx>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpPop_Reg32_Ebx"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpGroup5_Ev_Push_32_Flags(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      25905332341,
+      0,
+      0,
+      0
+    ],
+    "count": 1595700,
+    "original": "DispatchWrapper<op::OpGroup5_Ev_Push_32_Flags>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpGroup5_Ev_Push_32_Flags"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpSub_EvGv(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      208,
+      0,
+      0,
+      0
+    ],
+    "count": 1595680,
+    "original": "DispatchWrapper<op::OpSub_EvGv>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpSub_EvGv"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpGroup5_Ev_Call_32_Flags(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      25905070164,
+      0,
+      0,
+      0
+    ],
+    "count": 1595675,
+    "original": "DispatchWrapper<op::OpGroup5_Ev_Call_32_Flags>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpGroup5_Ev_Call_32_Flags"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMov_Load_Edx_EspBaseNoIndexNoSegment(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      25905070100,
+      0,
+      0,
+      0
+    ],
+    "count": 1555503,
+    "original": "DispatchWrapper<op::OpMov_Load_Edx_EspBaseNoIndexNoSegment>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMov_Load_Edx_EspBaseNoIndexNoSegment"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMov_Store_Edx_EspBaseNoIndexNoSegment(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      25905070100,
+      0,
+      0,
+      0
+    ],
+    "count": 1555490,
+    "original": "DispatchWrapper<op::OpMov_Store_Edx_EspBaseNoIndexNoSegment>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMov_Store_Edx_EspBaseNoIndexNoSegment"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMov_EvGv_Ebx(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      217,
+      0,
+      0,
+      0
+    ],
+    "count": 1547266,
+    "original": "DispatchWrapper<op::OpMov_EvGv_Ebx>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMov_EvGv_Ebx"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpGroup1_EvIb_Add_32_NoFlags_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      197,
+      0,
+      0,
+      0
+    ],
+    "count": 1545107,
+    "original": "DispatchWrapper<op::OpGroup1_EvIb_Add_32_NoFlags_ModReg>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpGroup1_EvIb_Add_32_NoFlags_ModReg"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpCmp_EvGv_32_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      217,
+      0,
+      0,
+      0
+    ],
+    "count": 1540003,
+    "original": "DispatchWrapper<op::OpCmp_EvGv_32_ModReg>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpCmp_EvGv_32_ModReg"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpSetcc_15(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      195,
+      0,
+      0,
+      0
+    ],
+    "count": 1540000,
+    "original": "DispatchWrapper<op::OpSetcc_15>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpSetcc_15"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMov_EvGv_Edi(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      254,
+      0,
+      0,
+      0
+    ],
+    "count": 1505246,
+    "original": "DispatchWrapper<op::OpMov_EvGv_Edi>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMov_EvGv_Edi"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpGroup1_EvIb_Add_32_NoFlags_Edx(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      194,
+      0,
+      0,
+      0
+    ],
+    "count": 1481350,
+    "original": "DispatchWrapper<op::OpGroup1_EvIb_Add_32_NoFlags_Edx>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpGroup1_EvIb_Add_32_NoFlags_Edx"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_2_104_OpPop_Reg32_Ebx__OpPop_Reg32_Esi(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      3,
+      6,
+      0,
+      0
+    ],
+    "count": 1480023,
+    "original": "SuperOpcode_2_104_OpPop_Reg32_Ebx__OpPop_Reg32_Esi",
+    "width": 2,
+    "kind": "fused"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_2_077_OpMov_EvGv_Eax__OpAnd_EaxImm_NF(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      193,
+      16389,
+      0,
+      0
+    ],
+    "count": 1460004,
+    "original": "SuperOpcode_2_077_OpMov_EvGv_Eax__OpAnd_EaxImm_NF",
+    "width": 2,
+    "kind": "fused"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpAdd_EvGv(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      246,
+      0,
+      0,
+      0
+    ],
+    "count": 1460004,
+    "original": "DispatchWrapper<op::OpAdd_EvGv>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpAdd_EvGv"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpGroup2_Eb1(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      233,
+      0,
+      0,
+      0
+    ],
+    "count": 1460004,
+    "original": "DispatchWrapper<op::OpGroup2_Eb1>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpGroup2_Eb1"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpGroup2_EbIb(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      233,
+      0,
+      0,
+      0
+    ],
+    "count": 1460004,
+    "original": "DispatchWrapper<op::OpGroup2_EbIb>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpGroup2_EbIb"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMovzx_Byte_32_Ecx(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      201,
+      0,
+      0,
+      0
+    ],
+    "count": 1460004,
+    "original": "DispatchWrapper<op::OpMovzx_Byte_32_Ecx>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMovzx_Byte_32_Ecx"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMovzx_Word(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      246,
+      0,
+      0,
+      0
+    ],
+    "count": 1460004,
+    "original": "DispatchWrapper<op::OpMovzx_Word>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMovzx_Word"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpOr_EvGv_NF_32_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      200,
+      0,
+      0,
+      0
+    ],
+    "count": 1460004,
+    "original": "DispatchWrapper<op::OpOr_EvGv_NF_32_ModReg>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpOr_EvGv_NF_32_ModReg"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpXor_GvEv_NF(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34461204612,
+      0,
+      0,
+      0
+    ],
+    "count": 1460004,
+    "original": "DispatchWrapper<op::OpXor_GvEv_NF>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpXor_GvEv_NF"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMov_EvGv_Edx(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      211,
+      0,
+      0,
+      0
+    ],
+    "count": 1390672,
+    "original": "DispatchWrapper<op::OpMov_EvGv_Edx>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMov_EvGv_Edx"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMovzx_Word(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      192,
+      0,
+      0,
+      0
+    ],
+    "count": 1380086,
+    "original": "DispatchWrapper<op::OpMovzx_Word>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMovzx_Word"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpGroup1_EvIb_Add_32_NoFlags_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      195,
+      0,
+      0,
+      0
+    ],
+    "count": 1365142,
+    "original": "DispatchWrapper<op::OpGroup1_EvIb_Add_32_NoFlags_ModReg>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpGroup1_EvIb_Add_32_NoFlags_ModReg"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpGroup1_EvIb_And_32_Flags(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      224,
+      0,
+      0,
+      0
+    ],
+    "count": 1330620,
+    "original": "DispatchWrapper<op::OpGroup1_EvIb_And_32_Flags>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpGroup1_EvIb_And_32_Flags"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMov_Store_Eax_EspBaseNoIndexNoSegment(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      25905070148,
+      0,
+      0,
+      0
+    ],
+    "count": 1290697,
+    "original": "DispatchWrapper<op::OpMov_Store_Eax_EspBaseNoIndexNoSegment>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMov_Store_Eax_EspBaseNoIndexNoSegment"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMov_EvGv_Eax(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      194,
+      0,
+      0,
+      0
+    ],
+    "count": 1280030,
+    "original": "DispatchWrapper<op::OpMov_EvGv_Eax>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMov_EvGv_Eax"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_4_045_OpPop_Reg32_Ebx__OpPop_Reg32_Esi__OpPop_Reg32_Edi__OpPop_Reg32_Ebp(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      3,
+      6,
+      7,
+      5
+    ],
+    "count": 1235984,
+    "original": "SuperOpcode_4_045_OpPop_Reg32_Ebx__OpPop_Reg32_Esi__OpPop_Reg32_Edi__OpPop_Reg32_Ebp",
+    "width": 4,
+    "kind": "fused"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMov_Load_Eax_EaxBaseNoIndexNoSegment(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34493956096,
+      0,
+      0,
+      0
+    ],
+    "count": 1185129,
+    "original": "DispatchWrapper<op::OpMov_Load_Eax_EaxBaseNoIndexNoSegment>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMov_Load_Eax_EaxBaseNoIndexNoSegment"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpGroup1_EvIb_Add_32_NoFlags(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      25905070148,
+      0,
+      0,
+      0
+    ],
+    "count": 1170032,
+    "original": "DispatchWrapper<op::OpGroup1_EvIb_Add_32_NoFlags>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpGroup1_EvIb_Add_32_NoFlags"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_2_105_OpPush_Reg32_Esi__OpPush_Reg32_Ebx(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      6,
+      3,
+      0,
+      0
+    ],
+    "count": 1160155,
+    "original": "SuperOpcode_2_105_OpPush_Reg32_Esi__OpPush_Reg32_Ebx",
+    "width": 2,
+    "kind": "fused"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMovzx_Word(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      25905070172,
+      0,
+      0,
+      0
+    ],
+    "count": 1155004,
+    "original": "DispatchWrapper<op::OpMovzx_Word>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMovzx_Word"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMovzx_Word(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34494480394,
+      0,
+      0,
+      0
+    ],
+    "count": 1145380,
+    "original": "DispatchWrapper<op::OpMovzx_Word>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMovzx_Word"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMovzx_Byte_32_Edx(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      25905070164,
+      0,
+      0,
+      0
+    ],
+    "count": 1140083,
+    "original": "DispatchWrapper<op::OpMovzx_Byte_32_Edx>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMovzx_Byte_32_Edx"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpGroup2_EbIb(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      234,
+      0,
+      0,
+      0
+    ],
+    "count": 1140060,
+    "original": "DispatchWrapper<op::OpGroup2_EbIb>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpGroup2_EbIb"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpAnd_EaxImm_NF(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      16389,
+      0,
+      0,
+      0
+    ],
+    "count": 1140052,
+    "original": "DispatchWrapper<op::OpAnd_EaxImm_NF>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpAnd_EaxImm_NF"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpOr_EvGv(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      216,
+      0,
+      0,
+      0
+    ],
+    "count": 1140036,
+    "original": "DispatchWrapper<op::OpOr_EvGv>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpOr_EvGv"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpGroup1_EvIb_And_32_NoFlags_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      227,
+      0,
+      0,
+      0
+    ],
+    "count": 1140006,
+    "original": "DispatchWrapper<op::OpGroup1_EvIb_And_32_NoFlags_ModReg>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpGroup1_EvIb_And_32_NoFlags_ModReg"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpLea_32_Edx(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34494742675,
+      0,
+      0,
+      0
+    ],
+    "count": 1140006,
+    "original": "DispatchWrapper<op::OpLea_32_Edx>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpLea_32_Edx"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMovzx_Byte_32_Edx(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      210,
+      0,
+      0,
+      0
+    ],
+    "count": 1140005,
+    "original": "DispatchWrapper<op::OpMovzx_Byte_32_Edx>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMovzx_Byte_32_Edx"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMovzx_Word(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      201,
+      0,
+      0,
+      0
+    ],
+    "count": 1140005,
+    "original": "DispatchWrapper<op::OpMovzx_Word>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMovzx_Word"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_2_077_OpMov_EvGv_Eax__OpAnd_EaxImm_NF(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      194,
+      16389,
+      0,
+      0
+    ],
+    "count": 1140004,
+    "original": "SuperOpcode_2_077_OpMov_EvGv_Eax__OpAnd_EaxImm_NF",
+    "width": 2,
+    "kind": "fused"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_2_080_OpGroup2_EvIb_Shl_ModReg__OpOr_EvGv_NF_32_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      225,
+      217,
+      0,
+      0
+    ],
+    "count": 1140004,
+    "original": "SuperOpcode_2_080_OpGroup2_EvIb_Shl_ModReg__OpOr_EvGv_NF_32_ModReg",
+    "width": 2,
+    "kind": "fused"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_2_080_OpGroup2_EvIb_Shl_ModReg__OpOr_EvGv_NF_32_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      227,
+      217,
+      0,
+      0
+    ],
+    "count": 1140004,
+    "original": "SuperOpcode_2_080_OpGroup2_EvIb_Shl_ModReg__OpOr_EvGv_NF_32_ModReg",
+    "width": 2,
+    "kind": "fused"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_2_080_OpGroup2_EvIb_Shl_ModReg__OpOr_EvGv_NF_32_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      230,
+      242,
+      0,
+      0
+    ],
+    "count": 1140004,
+    "original": "SuperOpcode_2_080_OpGroup2_EvIb_Shl_ModReg__OpOr_EvGv_NF_32_ModReg",
+    "width": 2,
+    "kind": "fused"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_2_083_OpOr_EvGv_NF_32_ModReg__OpMov_EvGv_Eax(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      217,
+      195,
+      0,
+      0
+    ],
+    "count": 1140004,
+    "original": "SuperOpcode_2_083_OpOr_EvGv_NF_32_ModReg__OpMov_EvGv_Eax",
+    "width": 2,
+    "kind": "fused"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_2_083_OpOr_EvGv_NF_32_ModReg__OpMov_EvGv_Eax(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      242,
+      198,
+      0,
+      0
+    ],
+    "count": 1140004,
+    "original": "SuperOpcode_2_083_OpOr_EvGv_NF_32_ModReg__OpMov_EvGv_Eax",
+    "width": 2,
+    "kind": "fused"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpAdd_EvGv(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      201,
+      0,
+      0,
+      0
+    ],
+    "count": 1140004,
+    "original": "DispatchWrapper<op::OpAdd_EvGv>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpAdd_EvGv"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpGroup2_Eb1(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      234,
+      0,
+      0,
+      0
+    ],
+    "count": 1140004,
+    "original": "DispatchWrapper<op::OpGroup2_Eb1>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpGroup2_Eb1"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpGroup2_EbIb(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      194,
+      0,
+      0,
+      0
+    ],
+    "count": 1140004,
+    "original": "DispatchWrapper<op::OpGroup2_EbIb>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpGroup2_EbIb"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpXor_EvGv_NF_32_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      214,
+      0,
+      0,
+      0
+    ],
+    "count": 1140004,
+    "original": "DispatchWrapper<op::OpXor_EvGv_NF_32_ModReg>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpXor_EvGv_NF_32_ModReg"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpXor_EvGv_NF_32_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      217,
+      0,
+      0,
+      0
+    ],
+    "count": 1140004,
+    "original": "DispatchWrapper<op::OpXor_EvGv_NF_32_ModReg>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpXor_EvGv_NF_32_ModReg"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpXor_GvEv_NF(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34377056260,
+      0,
+      0,
+      0
+    ],
+    "count": 1140004,
+    "original": "DispatchWrapper<op::OpXor_GvEv_NF>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpXor_GvEv_NF"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpTest_EbGb(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      192,
+      0,
+      0,
+      0
+    ],
+    "count": 1111146,
+    "original": "DispatchWrapper<op::OpTest_EbGb>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpTest_EbGb"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMovzx_Word(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34493956152,
+      0,
+      0,
+      0
+    ],
+    "count": 1110588,
+    "original": "DispatchWrapper<op::OpMovzx_Word>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMovzx_Word"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpGroup1_EvIb_Sub_32_NoFlags_Edx(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      234,
+      0,
+      0,
+      0
+    ],
+    "count": 1065154,
+    "original": "DispatchWrapper<op::OpGroup1_EvIb_Sub_32_NoFlags_Edx>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpGroup1_EvIb_Sub_32_NoFlags_Edx"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_2_015_OpTest_EvGv_32_ModReg_Eax__OpJcc_E_Rel32(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      192,
+      4,
+      0,
+      0
+    ],
+    "count": 1060029,
+    "original": "SuperOpcode_2_015_OpTest_EvGv_32_ModReg_Eax__OpJcc_E_Rel32",
+    "width": 2,
+    "kind": "fused"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpTest_EvGv_32_ModReg_Ecx(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      201,
+      0,
+      0,
+      0
+    ],
+    "count": 1040814,
+    "original": "DispatchWrapper<op::OpTest_EvGv_32_ModReg_Ecx>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpTest_EvGv_32_ModReg_Ecx"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMov_EvGv(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34493972488,
+      0,
+      0,
+      0
+    ],
+    "count": 1040380,
+    "original": "DispatchWrapper<op::OpMov_EvGv>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMov_EvGv"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMov_EvGv(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34494496778,
+      0,
+      0,
+      0
+    ],
+    "count": 1040380,
+    "original": "DispatchWrapper<op::OpMov_EvGv>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMov_EvGv"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMovsx_Word_32_Eax(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34493956160,
+      0,
+      0,
+      0
+    ],
+    "count": 1040380,
+    "original": "DispatchWrapper<op::OpMovsx_Word_32_Eax>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMovsx_Word_32_Eax"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMovsx_Word_32_Edx(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34494480466,
+      0,
+      0,
+      0
+    ],
+    "count": 1040380,
+    "original": "DispatchWrapper<op::OpMovsx_Word_32_Edx>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMovsx_Word_32_Edx"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMovzx_Word(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34493956104,
+      0,
+      0,
+      0
+    ],
+    "count": 1040380,
+    "original": "DispatchWrapper<op::OpMovzx_Word>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMovzx_Word"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMov_Load_Eax_EsiBaseNoIndexNoSegment(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34495528966,
+      0,
+      0,
+      0
+    ],
+    "count": 1020045,
+    "original": "DispatchWrapper<op::OpMov_Load_Eax_EsiBaseNoIndexNoSegment>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMov_Load_Eax_EsiBaseNoIndexNoSegment"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpXor_EvGv(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      201,
+      0,
+      0,
+      0
+    ],
+    "count": 1020004,
+    "original": "DispatchWrapper<op::OpXor_EvGv>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpXor_EvGv"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_4_128_OpMov_Load_Edx_EsiBaseNoIndexNoSegment__OpMov_Store_Ecx_EsiBaseNoIndexNoSegment__OpMov_EvGv_Esi__OpTest_EvGv_32_ModReg_Edx(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34495528982,
+      34495528974,
+      241,
+      210
+    ],
+    "count": 1020000,
+    "original": "SuperOpcode_4_128_OpMov_Load_Edx_EsiBaseNoIndexNoSegment__OpMov_Store_Ecx_EsiBaseNoIndexNoSegment__OpMov_EvGv_Esi__OpTest_EvGv_32_ModReg_Edx",
+    "width": 4,
+    "kind": "fused"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpCmp_EvGv_16(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      25905086572,
+      0,
+      0,
+      0
+    ],
+    "count": 1020000,
+    "original": "DispatchWrapper<op::OpCmp_EvGv_16>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpCmp_EvGv_16"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpGroup1_EvIb_Add_16_Flags(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      25905086532,
+      0,
+      0,
+      0
+    ],
+    "count": 1020000,
+    "original": "DispatchWrapper<op::OpGroup1_EvIb_Add_16_Flags>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpGroup1_EvIb_Add_16_Flags"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpTest_EvGv_16(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      16603,
+      0,
+      0,
+      0
+    ],
+    "count": 1020000,
+    "original": "DispatchWrapper<op::OpTest_EvGv_16>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpTest_EvGv_16"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMov_Store_Edx_EaxBaseNoIndexNoSegment(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34493956176,
+      0,
+      0,
+      0
+    ],
+    "count": 970025,
+    "original": "DispatchWrapper<op::OpMov_Store_Edx_EaxBaseNoIndexNoSegment>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMov_Store_Edx_EaxBaseNoIndexNoSegment"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMov_Load_Edi_EaxBaseNoIndexNoSegment(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34493956216,
+      0,
+      0,
+      0
+    ],
+    "count": 960024,
+    "original": "DispatchWrapper<op::OpMov_Load_Edi_EaxBaseNoIndexNoSegment>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMov_Load_Edi_EaxBaseNoIndexNoSegment"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpGroup1_EvIz_And_32_Flags(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      227,
+      0,
+      0,
+      0
+    ],
+    "count": 960000,
+    "original": "DispatchWrapper<op::OpGroup1_EvIz_And_32_Flags>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpGroup1_EvIz_And_32_Flags"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpLea_32_Edx(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34495791191,
+      0,
+      0,
+      0
+    ],
+    "count": 960000,
+    "original": "DispatchWrapper<op::OpLea_32_Edx>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpLea_32_Edx"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpGroup1_EvIb_Add_32_Flags_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      196,
+      0,
+      0,
+      0
+    ],
+    "count": 940822,
+    "original": "DispatchWrapper<op::OpGroup1_EvIb_Add_32_Flags_ModReg>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpGroup1_EvIb_Add_32_Flags_ModReg"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMov_EvGv_Ecx(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      207,
+      0,
+      0,
+      0
+    ],
+    "count": 937848,
+    "original": "DispatchWrapper<op::OpMov_EvGv_Ecx>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMov_EvGv_Ecx"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMov_Load_Ecx(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34495791119,
+      0,
+      0,
+      0
+    ],
+    "count": 937839,
+    "original": "DispatchWrapper<op::OpMov_Load_Ecx>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMov_Load_Ecx"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMovzx_Byte_32_Ecx(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34494480458,
+      0,
+      0,
+      0
+    ],
+    "count": 920001,
+    "original": "DispatchWrapper<op::OpMovzx_Byte_32_Ecx>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMovzx_Byte_32_Ecx"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMov_Load_Eax_EaxBaseNoIndexNoSegment(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34493956160,
+      0,
+      0,
+      0
+    ],
+    "count": 915009,
+    "original": "DispatchWrapper<op::OpMov_Load_Eax_EaxBaseNoIndexNoSegment>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMov_Load_Eax_EaxBaseNoIndexNoSegment"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_2_078_OpGroup2_EvIb_Sar_ModReg__OpGroup1_EvIb_And_32_NoFlags_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      16632,
+      224,
+      0,
+      0
+    ],
+    "count": 915000,
+    "original": "SuperOpcode_2_078_OpGroup2_EvIb_Sar_ModReg__OpGroup1_EvIb_And_32_NoFlags_ModReg",
+    "width": 2,
+    "kind": "fused"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpAdd_EvGv(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      25905086532,
+      0,
+      0,
+      0
+    ],
+    "count": 915000,
+    "original": "DispatchWrapper<op::OpAdd_EvGv>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpAdd_EvGv"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMovzx_Word(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34493956096,
+      0,
+      0,
+      0
+    ],
+    "count": 915000,
+    "original": "DispatchWrapper<op::OpMovzx_Word>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMovzx_Word"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpGroup1_EvIb_Add_32_NoFlags_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      198,
+      0,
+      0,
+      0
+    ],
+    "count": 840115,
+    "original": "DispatchWrapper<op::OpGroup1_EvIb_Add_32_NoFlags_ModReg>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpGroup1_EvIb_Add_32_NoFlags_ModReg"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMov_Store_Esi_EaxBaseNoIndexNoSegment(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34493956208,
+      0,
+      0,
+      0
+    ],
+    "count": 840000,
+    "original": "DispatchWrapper<op::OpMov_Store_Esi_EaxBaseNoIndexNoSegment>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMov_Store_Esi_EaxBaseNoIndexNoSegment"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMov_EvGv_Ecx(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      206,
+      0,
+      0,
+      0
+    ],
+    "count": 820011,
+    "original": "DispatchWrapper<op::OpMov_EvGv_Ecx>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMov_EvGv_Ecx"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMov_Store_Edx_EspBaseNoIndexNoSegment(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      25905070164,
+      0,
+      0,
+      0
+    ],
+    "count": 805233,
+    "original": "DispatchWrapper<op::OpMov_Store_Edx_EspBaseNoIndexNoSegment>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMov_Store_Edx_EspBaseNoIndexNoSegment"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMov_EvGv_Edi(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      251,
+      0,
+      0,
+      0
+    ],
+    "count": 800015,
+    "original": "DispatchWrapper<op::OpMov_EvGv_Edi>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMov_EvGv_Edi"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMov_EvGv_Eax(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      193,
+      0,
+      0,
+      0
+    ],
+    "count": 770164,
+    "original": "DispatchWrapper<op::OpMov_EvGv_Eax>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMov_EvGv_Eax"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMov_EvGv(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      25905086556,
+      0,
+      0,
+      0
+    ],
+    "count": 720000,
+    "original": "DispatchWrapper<op::OpMov_EvGv>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMov_EvGv"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMovdqu_Load(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34493956608,
+      0,
+      0,
+      0
+    ],
+    "count": 720000,
+    "original": "DispatchWrapper<op::OpMovdqu_Load>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMovdqu_Load"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMov_EvGv_Ebp(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      238,
+      0,
+      0,
+      0
+    ],
+    "count": 657835,
+    "original": "DispatchWrapper<op::OpMov_EvGv_Ebp>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMov_EvGv_Ebp"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMov_EvGv_Eax(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      195,
+      0,
+      0,
+      0
+    ],
+    "count": 655350,
+    "original": "DispatchWrapper<op::OpMov_EvGv_Eax>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMov_EvGv_Eax"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpXor_EvGv_NF_32_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      192,
+      0,
+      0,
+      0
+    ],
+    "count": 645085,
+    "original": "DispatchWrapper<op::OpXor_EvGv_NF_32_ModReg>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpXor_EvGv_NF_32_ModReg"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpGroup1_EvIb_And_32_NoFlags_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      224,
+      0,
+      0,
+      0
+    ],
+    "count": 640123,
+    "original": "DispatchWrapper<op::OpGroup1_EvIb_And_32_NoFlags_ModReg>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpGroup1_EvIb_And_32_NoFlags_ModReg"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMov_EvGv_Esi(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      243,
+      0,
+      0,
+      0
+    ],
+    "count": 640001,
+    "original": "DispatchWrapper<op::OpMov_EvGv_Esi>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMov_EvGv_Esi"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_2_075_OpGroup1_EvIb_And_32_NoFlags_ModReg__OpGroup1_EvIb_And_32_NoFlags_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      225,
+      230,
+      0,
+      0
+    ],
+    "count": 640000,
+    "original": "SuperOpcode_2_075_OpGroup1_EvIb_And_32_NoFlags_ModReg__OpGroup1_EvIb_And_32_NoFlags_ModReg",
+    "width": 2,
+    "kind": "fused"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpAdd_EvGv(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      219,
+      0,
+      0,
+      0
+    ],
+    "count": 640000,
+    "original": "DispatchWrapper<op::OpAdd_EvGv>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpAdd_EvGv"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpOr_EvGv_NF_32_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      216,
+      0,
+      0,
+      0
+    ],
+    "count": 640000,
+    "original": "DispatchWrapper<op::OpOr_EvGv_NF_32_ModReg>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpOr_EvGv_NF_32_ModReg"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpLea_32_Edx(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34494742611,
+      0,
+      0,
+      0
+    ],
+    "count": 630583,
+    "original": "DispatchWrapper<op::OpLea_32_Edx>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpLea_32_Edx"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMovsx_Word_32_Eax(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34493956096,
+      0,
+      0,
+      0
+    ],
+    "count": 570000,
+    "original": "DispatchWrapper<op::OpMovsx_Word_32_Eax>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMovsx_Word_32_Eax"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpGroup1_EvIb_Add_32_NoFlags(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34493956160,
+      0,
+      0,
+      0
+    ],
+    "count": 560000,
+    "original": "DispatchWrapper<op::OpGroup1_EvIb_Add_32_NoFlags>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpGroup1_EvIb_Add_32_NoFlags"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_2_081_OpMovsx_Word_32_Edx__OpMovsx_Word_32_Eax(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      208,
+      195,
+      0,
+      0
+    ],
+    "count": 555294,
+    "original": "SuperOpcode_2_081_OpMovsx_Word_32_Edx__OpMovsx_Word_32_Eax",
+    "width": 2,
+    "kind": "fused"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMov_EvGv_Ecx(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      200,
+      0,
+      0,
+      0
+    ],
+    "count": 540142,
+    "original": "DispatchWrapper<op::OpMov_EvGv_Ecx>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMov_EvGv_Ecx"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMov_Store_Ebx_EspBaseNoIndexNoSegment(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      25905070172,
+      0,
+      0,
+      0
+    ],
+    "count": 540090,
+    "original": "DispatchWrapper<op::OpMov_Store_Ebx_EspBaseNoIndexNoSegment>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMov_Store_Ebx_EspBaseNoIndexNoSegment"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpLea_32(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34410070060,
+      0,
+      0,
+      0
+    ],
+    "count": 540001,
+    "original": "DispatchWrapper<op::OpLea_32>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpLea_32"
+  },
+  {
+    "symbol": "fiberish::SuperOpcode_2_031_OpGroup1_EvIb_Cmp_32_Flags__OpJcc_BE_Rel32(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      25905070204,
+      6,
+      0,
+      0
+    ],
+    "count": 540000,
+    "original": "SuperOpcode_2_031_OpGroup1_EvIb_Cmp_32_Flags__OpJcc_BE_Rel32",
+    "width": 2,
+    "kind": "fused"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpAdd_EvGv_NF(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      25905070172,
+      0,
+      0,
+      0
+    ],
+    "count": 540000,
+    "original": "DispatchWrapper<op::OpAdd_EvGv_NF>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpAdd_EvGv_NF"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpAdd_GvEv_NF(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      25905070164,
+      0,
+      0,
+      0
+    ],
+    "count": 540000,
+    "original": "DispatchWrapper<op::OpAdd_GvEv_NF>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpAdd_GvEv_NF"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpAdd_GvEv_NF(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      25905070196,
+      0,
+      0,
+      0
+    ],
+    "count": 540000,
+    "original": "DispatchWrapper<op::OpAdd_GvEv_NF>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpAdd_GvEv_NF"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpCmp_GvEv_32(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      25905070172,
+      0,
+      0,
+      0
+    ],
+    "count": 540000,
+    "original": "DispatchWrapper<op::OpCmp_GvEv_32>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpCmp_GvEv_32"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpLea_32_Eax(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      34946940932,
+      0,
+      0,
+      0
+    ],
+    "count": 540000,
+    "original": "DispatchWrapper<op::OpLea_32_Eax>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpLea_32_Eax"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpPaddd_Sse(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      16584,
+      0,
+      0,
+      0
+    ],
+    "count": 540000,
+    "original": "DispatchWrapper<op::OpPaddd_Sse>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpPaddd_Sse"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpMov_Store_Edi_EspBaseNoIndexNoSegment(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      25905070204,
+      0,
+      0,
+      0
+    ],
+    "count": 527841,
+    "original": "DispatchWrapper<op::OpMov_Store_Edi_EspBaseNoIndexNoSegment>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpMov_Store_Edi_EspBaseNoIndexNoSegment"
+  },
+  {
+    "symbol": "long long fiberish::DispatchWrapper<&fiberish::op::OpLea_32(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+    "shapes": [
+      19463147700,
+      0,
+      0,
+      0
+    ],
+    "count": 520004,
+    "original": "DispatchWrapper<op::OpLea_32>",
+    "width": 1,
+    "kind": "wrapper",
+    "logic": "op::OpLea_32"
+  },
+  {
+    "original": "SuperOpcode_4_043_OpMov_Load_Edx__OpMov_Load_Eax__OpGroup5_Ev_Inc_32_Flags__OpMovzx_Byte",
+    "kind": "fused",
+    "width": 4,
+    "shapes": [
+      25905332309,
+      25905332293,
+      25905332293,
+      34494480434
+    ],
+    "count": 33904
+  },
+  {
+    "original": "SuperOpcode_4_039_OpMov_EvGv_Esi__OpMovzx_Byte__OpMov_Load_Ecx__OpXor_GvEv_NF",
+    "kind": "fused",
+    "width": 4,
+    "shapes": [
+      241,
+      241,
+      25905332301,
+      34999107588
+    ],
+    "count": 2097204
+  },
+  {
+    "original": "SuperOpcode_4_162_OpMovzx_Byte__OpInc_Reg_NF__OpXor_EvGv_NF_32_ModReg__OpGroup2_EvIb_Shr_ModReg",
+    "kind": "fused",
+    "width": 4,
+    "shapes": [
+      34494480434,
+      2,
+      198,
+      232
+    ],
+    "count": 2097204
+  },
+  {
+    "original": "SuperOpcode_2_014_OpCmp_EbGb__OpJcc_NE_Rel32",
+    "kind": "fused",
+    "width": 2,
+    "shapes": [
+      34377039876,
+      5,
+      0,
+      0
+    ],
+    "count": 8529658
+  },
+  {
+    "original": "SuperOpcode_4_034_OpMov_Load_Edx_EaxBaseNoIndexNoSegment__OpLea_32_Ecx__OpGroup3_Ev_Not_32_Flags__OpAnd_EvGv_NF_32_ModReg",
+    "kind": "fused",
+    "width": 4,
+    "shapes": [
+      34493956112,
+      34494480522,
+      210,
+      202
+    ],
+    "count": 415
+  },
+  {
+    "original": "SuperOpcode_2_028_OpGroup5_Ev_Dec_32_Flags__OpJcc_NE_Rel32",
+    "kind": "fused",
+    "width": 2,
+    "shapes": [
+      25905332301,
+      5,
+      0,
+      0
+    ],
+    "count": 7793192
+  },
+  {
+    "original": "SuperOpcode_2_014_OpCmp_EbGb__OpJcc_NE_Rel32",
+    "kind": "fused",
+    "width": 2,
+    "shapes": [
+      34377039940,
+      5,
+      0,
+      0
+    ],
+    "count": 7737080
+  },
+  {
+    "original": "SuperOpcode_2_031_OpGroup1_EvIb_Cmp_32_Flags__OpJcc_BE_Rel32",
+    "kind": "fused",
+    "width": 2,
+    "shapes": [
+      254,
+      6,
+      0,
+      0
+    ],
+    "count": 104
+  },
+  {
+    "original": "SuperOpcode_2_005_OpGroup1_EvIz_Cmp_32_Flags__OpJcc_NE_Rel32",
+    "kind": "fused",
+    "width": 2,
+    "shapes": [
+      25905332349,
+      5,
+      0,
+      0
+    ],
+    "count": 1049878
+  },
+  {
+    "original": "SuperOpcode_4_059_OpMov_Load_Esi__OpMov_Load_Edi__OpMovzx_Byte__OpInc_Reg_NF",
+    "kind": "fused",
+    "width": 4,
+    "shapes": [
+      25905332405,
+      25905332413,
+      34361311260,
+      0
+    ],
+    "count": 1961588
+  },
+  {
+    "original": "SuperOpcode_4_060_OpMov_RegImm8__OpMov_Load_Edi__OpMov_EvGv_Eax__OpCmp_EvGv_32_ModReg",
+    "kind": "fused",
+    "width": 4,
+    "shapes": [
+      2,
+      25905332413,
+      193,
+      248
+    ],
+    "count": 1834721
+  },
+  {
+    "original": "SuperOpcode_4_050_OpMovzx_Byte__OpInc_Reg_NF__OpAdd_EvGv_NF_32_ModReg__OpGroup1_EvIz_Cmp_32_Flags_Ecx",
+    "kind": "fused",
+    "width": 4,
+    "shapes": [
+      34377302076,
+      1,
+      250,
+      249
+    ],
+    "count": 8704
+  },
+  {
+    "original": "SuperOpcode_4_063_OpMov_Load_Edx_EaxBaseNoIndexNoSegment__OpXor_EvGv_NF_32_ModReg__OpLea_32__OpGroup3_Ev_Not_32_Flags",
+    "kind": "fused",
+    "width": 4,
+    "shapes": [
+      34493956112,
+      202,
+      34494480562,
+      210
+    ],
+    "count": 266601
+  },
+  {
+    "original": "SuperOpcode_2_016_OpTest_EvGv_32_ModReg__OpJcc_E_Rel32",
+    "kind": "fused",
+    "width": 2,
+    "shapes": [
+      255,
+      4,
+      0,
+      0
+    ],
+    "count": 359
+  },
+  {
+    "original": "SuperOpcode_4_062_OpMov_EvGv_Eax__OpGroup1_EvIb_Sub_32_Flags_Eax__OpMovzx_Byte_32_Ecx__OpCmp_EvGv_32_ModReg",
+    "kind": "fused",
+    "width": 4,
+    "shapes": [
+      194,
+      232,
+      34494480394,
+      241
+    ],
+    "count": 18
+  },
+  {
+    "original": "SuperOpcode_2_026_OpCmp_EvGv_32_ModReg__OpJcc_LE_Rel32",
+    "kind": "fused",
+    "width": 2,
+    "shapes": [
+      240,
+      6,
+      0,
+      0
+    ],
+    "count": 67811
+  },
+  {
+    "original": "SuperOpcode_2_017_OpGroup1_EvIb_Cmp_32_Flags__OpJcc_E_Rel32",
+    "kind": "fused",
+    "width": 2,
+    "shapes": [
+      25905332349,
+      4,
+      0,
+      0
+    ],
+    "count": 21
+  },
+  {
+    "original": "SuperOpcode_2_008_OpGroup1_EbIb_Cmp_Flags__OpJcc_E_Rel32",
+    "kind": "fused",
+    "width": 2,
+    "shapes": [
+      25905332349,
+      4,
+      0,
+      0
+    ],
+    "count": 2
+  },
+  {
+    "original": "SuperOpcode_2_017_OpGroup1_EvIb_Cmp_32_Flags__OpJcc_E_Rel32",
+    "kind": "fused",
+    "width": 2,
+    "shapes": [
+      254,
+      4,
+      0,
+      0
+    ],
+    "count": 1
+  },
+  {
+    "original": "SuperOpcode_2_009_OpTest_EvGv_32_ModReg_Edx__OpJcc_E_Rel32",
+    "kind": "fused",
+    "width": 2,
+    "shapes": [
+      210,
+      4,
+      0,
+      0
+    ],
+    "count": 1238
+  },
+  {
+    "original": "SuperOpcode_4_048_OpXor_EvGv_NF_32_ModReg__OpLea_32__OpGroup3_Ev_Not_32_Flags__OpAnd_EvGv_NF_32_ModReg",
+    "kind": "fused",
+    "width": 4,
+    "shapes": [
+      238,
+      34495529150,
+      214,
+      247
+    ],
+    "count": 11
+  },
+  {
+    "original": "SuperOpcode_2_004_OpCmp_EvGv_32_ModReg__OpJcc_B_Rel32",
+    "kind": "fused",
+    "width": 2,
+    "shapes": [
+      250,
+      2,
+      0,
+      0
+    ],
+    "count": 1191228
+  },
+  {
+    "original": "SuperOpcode_2_020_OpCmp_EvGv_32_ModReg__OpJcc_AE_Rel32",
+    "kind": "fused",
+    "width": 2,
+    "shapes": [
+      199,
+      3,
+      0,
+      0
+    ],
+    "count": 23
+  },
+  {
+    "original": "SuperOpcode_2_011_OpGroup1_EvIb_Cmp_32_Flags__OpJcc_NE_Rel32",
+    "kind": "fused",
+    "width": 2,
+    "shapes": [
+      25905332349,
+      5,
+      0,
+      0
+    ],
+    "count": 17
+  },
+  {
+    "original": "SuperOpcode_2_011_OpGroup1_EvIb_Cmp_32_Flags__OpJcc_NE_Rel32",
+    "kind": "fused",
+    "width": 2,
+    "shapes": [
+      25905332413,
+      5,
+      0,
+      0
+    ],
+    "count": 3
+  },
+  {
+    "original": "SuperOpcode_2_006_OpCmp_EvGv_32__OpJcc_AE_Rel32",
+    "kind": "fused",
+    "width": 2,
+    "shapes": [
+      34494742659,
+      3,
+      0,
+      0
+    ],
+    "count": 16
+  },
+  {
+    "original": "SuperOpcode_2_017_OpGroup1_EvIb_Cmp_32_Flags__OpJcc_E_Rel32",
+    "kind": "fused",
+    "width": 2,
+    "shapes": [
+      25905332413,
+      4,
+      0,
+      0
+    ],
+    "count": 37
+  },
+  {
+    "original": "SuperOpcode_2_014_OpCmp_EbGb__OpJcc_NE_Rel32",
+    "kind": "fused",
+    "width": 2,
+    "shapes": [
+      34494480386,
+      5,
+      0,
+      0
+    ],
+    "count": 780230
+  },
+  {
+    "original": "SuperOpcode_2_014_OpCmp_EbGb__OpJcc_NE_Rel32",
+    "kind": "fused",
+    "width": 2,
+    "shapes": [
+      34494480450,
+      5,
+      0,
+      0
+    ],
+    "count": 780230
+  },
+  {
+    "original": "SuperOpcode_2_017_OpGroup1_EvIb_Cmp_32_Flags__OpJcc_E_Rel32",
+    "kind": "fused",
+    "width": 2,
+    "shapes": [
+      251,
+      4,
+      0,
+      0
+    ],
+    "count": 949
+  },
+  {
+    "original": "SuperOpcode_2_024_OpTest_EvGv_32_ModReg_Eax__OpJcc_NE_Rel32",
+    "kind": "fused",
+    "width": 2,
+    "shapes": [
+      192,
+      5,
+      0,
+      0
+    ],
+    "count": 64
+  },
+  {
+    "original": "SuperOpcode_2_019_OpTest_EvGv_32_ModReg_Ecx__OpJcc_E_Rel32",
+    "kind": "fused",
+    "width": 2,
+    "shapes": [
+      201,
+      4,
+      0,
+      0
+    ],
+    "count": 232
+  },
+  {
+    "original": "SuperOpcode_2_003_OpCmp_EvGv_32__OpJcc_NE_Rel32",
+    "kind": "fused",
+    "width": 2,
+    "shapes": [
+      25905332357,
+      5,
+      0,
+      0
+    ],
+    "count": 1
+  },
+  {
+    "original": "SuperOpcode_2_017_OpGroup1_EvIb_Cmp_32_Flags__OpJcc_E_Rel32",
+    "kind": "fused",
+    "width": 2,
+    "shapes": [
+      34493956216,
+      4,
+      0,
+      0
+    ],
+    "count": 5
+  },
+  {
+    "original": "SuperOpcode_2_004_OpCmp_EvGv_32_ModReg__OpJcc_B_Rel32",
+    "kind": "fused",
+    "width": 2,
+    "shapes": [
+      194,
+      2,
+      0,
+      0
+    ],
+    "count": 169519
+  },
+  {
+    "original": "SuperOpcode_2_025_OpTest_EbGb__OpJcc_NE_Rel32",
+    "kind": "fused",
+    "width": 2,
+    "shapes": [
+      192,
+      5,
+      0,
+      0
+    ],
+    "count": 115
+  },
+  {
+    "original": "SuperOpcode_2_027_OpCmp_EvGv_32__OpJcc_LE_Rel32",
+    "kind": "fused",
+    "width": 2,
+    "shapes": [
+      34495529054,
+      6,
+      0,
+      0
+    ],
+    "count": 126867
+  },
+  {
+    "original": "SuperOpcode_2_025_OpTest_EbGb__OpJcc_NE_Rel32",
+    "kind": "fused",
+    "width": 2,
+    "shapes": [
+      25905332357,
+      5,
+      0,
+      0
+    ],
+    "count": 125906
+  },
+  {
+    "original": "SuperOpcode_2_010_OpTest_EbGb__OpJcc_E_Rel32",
+    "kind": "fused",
+    "width": 2,
+    "shapes": [
+      192,
+      4,
+      0,
+      0
+    ],
+    "count": 88
+  },
+  {
+    "original": "SuperOpcode_2_008_OpGroup1_EbIb_Cmp_Flags__OpJcc_E_Rel32",
+    "kind": "fused",
+    "width": 2,
+    "shapes": [
+      34494742715,
+      4,
+      0,
+      0
+    ],
+    "count": 433
+  },
+  {
+    "original": "SuperOpcode_2_016_OpTest_EvGv_32_ModReg__OpJcc_E_Rel32",
+    "kind": "fused",
+    "width": 2,
+    "shapes": [
+      219,
+      4,
+      0,
+      0
+    ],
+    "count": 9
+  },
+  {
+    "original": "SuperOpcode_2_011_OpGroup1_EvIb_Cmp_32_Flags__OpJcc_NE_Rel32",
+    "kind": "fused",
+    "width": 2,
+    "shapes": [
+      34494742715,
+      5,
+      0,
+      0
+    ],
+    "count": 223
+  },
+  {
+    "original": "SuperOpcode_2_013_OpCmp_EvGv_32_ModReg__OpJcc_L_Rel32",
+    "kind": "fused",
+    "width": 2,
+    "shapes": [
+      217,
+      4,
+      0,
+      0
+    ],
+    "count": 17134
+  },
+  {
+    "original": "SuperOpcode_4_055_OpMovzx_Byte_32_Eax__OpMovzx_Byte_32_Eax__OpAdd_EvGv__OpMovzx_Byte_32_Eax",
+    "kind": "fused",
+    "width": 4,
+    "shapes": [
+      34494218305,
+      34361311236,
+      193,
+      34494218305
+    ],
+    "count": 17122
+  },
+  {
+    "original": "SuperOpcode_4_055_OpMovzx_Byte_32_Eax__OpMovzx_Byte_32_Eax__OpAdd_EvGv__OpMovzx_Byte_32_Eax",
+    "kind": "fused",
+    "width": 4,
+    "shapes": [
+      34494480450,
+      34361311236,
+      194,
+      34494480450
+    ],
+    "count": 17122
+  },
+  {
+    "original": "SuperOpcode_2_016_OpTest_EvGv_32_ModReg__OpJcc_E_Rel32",
+    "kind": "fused",
+    "width": 2,
+    "shapes": [
+      246,
+      4,
+      0,
+      0
+    ],
+    "count": 67
+  },
+  {
+    "original": "SuperOpcode_2_007_OpCmp_EvGv_32_ModReg__OpJcc_E_Rel32",
+    "kind": "fused",
+    "width": 2,
+    "shapes": [
+      199,
+      4,
+      0,
+      0
+    ],
+    "count": 12
+  },
+  {
+    "original": "SuperOpcode_2_007_OpCmp_EvGv_32_ModReg__OpJcc_E_Rel32",
+    "kind": "fused",
+    "width": 2,
+    "shapes": [
+      251,
+      4,
+      0,
+      0
+    ],
+    "count": 11
+  },
+  {
+    "original": "SuperOpcode_2_012_OpGroup1_EbIb_Cmp_Flags__OpJcc_NE_Rel32",
+    "kind": "fused",
+    "width": 2,
+    "shapes": [
+      34393292860,
+      5,
+      0,
+      0
+    ],
+    "count": 78
+  },
+  {
+    "original": "SuperOpcode_2_004_OpCmp_EvGv_32_ModReg__OpJcc_B_Rel32",
+    "kind": "fused",
+    "width": 2,
+    "shapes": [
+      208,
+      2,
+      0,
+      0
+    ],
+    "count": 3
+  },
+  {
+    "original": "SuperOpcode_2_006_OpCmp_EvGv_32__OpJcc_AE_Rel32",
+    "kind": "fused",
+    "width": 2,
+    "shapes": [
+      25905332405,
+      3,
+      0,
+      0
+    ],
+    "count": 67808
+  },
+  {
+    "original": "SuperOpcode_2_012_OpGroup1_EbIb_Cmp_Flags__OpJcc_NE_Rel32",
+    "kind": "fused",
+    "width": 2,
+    "shapes": [
+      34494742715,
+      5,
+      0,
+      0
+    ],
+    "count": 33
+  },
+  {
+    "original": "SuperOpcode_2_017_OpGroup1_EvIb_Cmp_32_Flags__OpJcc_E_Rel32",
+    "kind": "fused",
+    "width": 2,
+    "shapes": [
+      34997272636,
+      4,
+      0,
+      0
+    ],
+    "count": 33909
+  },
+  {
+    "original": "SuperOpcode_2_007_OpCmp_EvGv_32_ModReg__OpJcc_E_Rel32",
+    "kind": "fused",
+    "width": 2,
+    "shapes": [
+      194,
+      4,
+      0,
+      0
+    ],
+    "count": 6
+  },
+  {
+    "original": "SuperOpcode_2_007_OpCmp_EvGv_32_ModReg__OpJcc_E_Rel32",
+    "kind": "fused",
+    "width": 2,
+    "shapes": [
+      223,
+      4,
+      0,
+      0
+    ],
+    "count": 219
+  },
+  {
+    "original": "SuperOpcode_2_007_OpCmp_EvGv_32_ModReg__OpJcc_E_Rel32",
+    "kind": "fused",
+    "width": 2,
+    "shapes": [
+      198,
+      4,
+      0,
+      0
+    ],
+    "count": 211
+  },
+  {
+    "original": "SuperOpcode_2_023_OpCmp_GvEv_32__OpJcc_AE_Rel32",
+    "kind": "fused",
+    "width": 2,
+    "shapes": [
+      34493956136,
+      3,
+      0,
+      0
+    ],
+    "count": 2
+  },
+  {
+    "original": "SuperOpcode_2_012_OpGroup1_EbIb_Cmp_Flags__OpJcc_NE_Rel32",
+    "kind": "fused",
+    "width": 2,
+    "shapes": [
+      34493956216,
+      5,
+      0,
+      0
+    ],
+    "count": 33905
+  },
+  {
+    "original": "SuperOpcode_2_004_OpCmp_EvGv_32_ModReg__OpJcc_B_Rel32",
+    "kind": "fused",
+    "width": 2,
+    "shapes": [
+      202,
+      2,
+      0,
+      0
+    ],
+    "count": 33904
+  },
+  {
+    "original": "SuperOpcode_2_007_OpCmp_EvGv_32_ModReg__OpJcc_E_Rel32",
+    "kind": "fused",
+    "width": 2,
+    "shapes": [
+      208,
+      4,
+      0,
+      0
+    ],
+    "count": 33904
+  },
+  {
+    "original": "SuperOpcode_2_007_OpCmp_EvGv_32_ModReg__OpJcc_E_Rel32",
+    "kind": "fused",
+    "width": 2,
+    "shapes": [
+      233,
+      4,
+      0,
+      0
+    ],
+    "count": 88
+  },
+  {
+    "original": "SuperOpcode_2_008_OpGroup1_EbIb_Cmp_Flags__OpJcc_E_Rel32",
+    "kind": "fused",
+    "width": 2,
+    "shapes": [
+      34495791231,
+      4,
+      0,
+      0
+    ],
+    "count": 84
+  },
+  {
+    "original": "SuperOpcode_2_030_OpCmp_EvGv_32__OpJcc_B_Rel32",
+    "kind": "fused",
+    "width": 2,
+    "shapes": [
+      25905332357,
+      2,
+      0,
+      0
+    ],
+    "count": 43
+  },
+  {
+    "original": "SuperOpcode_2_004_OpCmp_EvGv_32_ModReg__OpJcc_B_Rel32",
+    "kind": "fused",
+    "width": 2,
+    "shapes": [
+      198,
+      2,
+      0,
+      0
+    ],
+    "count": 4606
+  },
+  {
+    "original": "DispatchWrapper<op::OpJcc_NE_Rel8>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      5,
+      0,
+      0,
+      0
+    ],
+    "count": 77137
+  },
+  {
+    "original": "DispatchWrapper<op::OpMov_Load_Eax>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      25905332293,
+      0,
+      0,
+      0
+    ],
+    "count": 21047
+  },
+  {
+    "original": "DispatchWrapper<op::OpJcc_E_Rel8>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      4,
+      0,
+      0,
+      0
+    ],
+    "count": 20600
+  },
+  {
+    "original": "DispatchWrapper<op::OpMov_Store_Eax>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      25905332293,
+      0,
+      0,
+      0
+    ],
+    "count": 5786
+  },
+  {
+    "original": "DispatchWrapper<op::OpMov_Load_Edi>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      25905332349,
+      0,
+      0,
+      0
+    ],
+    "count": 774
+  },
+  {
+    "original": "DispatchWrapper<op::OpJcc_AE_Rel8>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      3,
+      0,
+      0,
+      0
+    ],
+    "count": 2738
+  },
+  {
+    "original": "DispatchWrapper<op::OpRor_RegImm32_Dead>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      202,
+      0,
+      0,
+      0
+    ],
+    "count": 6258752
+  },
+  {
+    "original": "DispatchWrapper<op::OpRor_RegImm32_Dead>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      201,
+      0,
+      0,
+      0
+    ],
+    "count": 6160800
+  },
+  {
+    "original": "DispatchWrapper<op::OpRor_RegImm32_Dead>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      206,
+      0,
+      0,
+      0
+    ],
+    "count": 6127712
+  },
+  {
+    "original": "DispatchWrapper<op::OpMov_Store_Edx>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      25905332309,
+      0,
+      0,
+      0
+    ],
+    "count": 16246
+  },
+  {
+    "original": "DispatchWrapper<op::OpMov_Load_Edx>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      25905332309,
+      0,
+      0,
+      0
+    ],
+    "count": 15905
+  },
+  {
+    "original": "DispatchWrapper<op::OpMov_RegImm8>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      1,
+      0,
+      0,
+      0
+    ],
+    "count": 4133
+  },
+  {
+    "original": "DispatchWrapper<op::OpAdd_GvEv_NF>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      25905070172,
+      0,
+      0,
+      0
+    ],
+    "count": 4915312
+  },
+  {
+    "original": "DispatchWrapper<op::OpCmp_EvGv_32>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      34999107588,
+      0,
+      0,
+      0
+    ],
+    "count": 3
+  },
+  {
+    "original": "DispatchWrapper<op::OpPush_Reg32_Edx>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      2,
+      0,
+      0,
+      0
+    ],
+    "count": 29996
+  },
+  {
+    "original": "DispatchWrapper<op::OpMov_Load_Esi>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      25905332341,
+      0,
+      0,
+      0
+    ],
+    "count": 277
+  },
+  {
+    "original": "DispatchWrapper<op::OpMov_Load_Ecx>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      25905332301,
+      0,
+      0,
+      0
+    ],
+    "count": 15303
+  },
+  {
+    "original": "DispatchWrapper<op::OpMov_Load_Edi_EspBaseNoIndexNoSegment>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      25905070204,
+      0,
+      0,
+      0
+    ],
+    "count": 1094
+  },
+  {
+    "original": "DispatchWrapper<op::OpMov_Load_Ebx>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      25905332317,
+      0,
+      0,
+      0
+    ],
+    "count": 641
+  },
+  {
+    "original": "DispatchWrapper<op::OpMov_GbEb>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      25905332293,
+      0,
+      0,
+      0
+    ],
+    "count": 22
+  },
+  {
+    "original": "DispatchWrapper<op::OpMov_Load_Eax>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      34494480386,
+      0,
+      0,
+      0
+    ],
+    "count": 15025
+  },
+  {
+    "original": "DispatchWrapper<op::OpCmp_EvGv_32_ModReg>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      202,
+      0,
+      0,
+      0
+    ],
+    "count": 774
+  },
+  {
+    "original": "DispatchWrapper<op::OpMov_Store_Eax>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      34494742659,
+      0,
+      0,
+      0
+    ],
+    "count": 1181
+  },
+  {
+    "original": "DispatchWrapper<op::OpMov_Load_Eax>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      25905332357,
+      0,
+      0,
+      0
+    ],
+    "count": 828
+  },
+  {
+    "original": "DispatchWrapper<op::OpPush_Reg32_Esi>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      6,
+      0,
+      0,
+      0
+    ],
+    "count": 25554
+  },
+  {
+    "original": "DispatchWrapper<op::OpGroup1_EvIb_Sub_32_NoFlags>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      236,
+      0,
+      0,
+      0
+    ],
+    "count": 13665
+  },
+  {
+    "original": "DispatchWrapper<op::OpPush_Imm8>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      2,
+      0,
+      0,
+      0
+    ],
+    "count": 28705
+  },
+  {
+    "original": "DispatchWrapper<op::OpXor_EvGv>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      192,
+      0,
+      0,
+      0
+    ],
+    "count": 25292
+  },
+  {
+    "original": "DispatchWrapper<op::OpGroup3_Ev_Not_32_Flags>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      208,
+      0,
+      0,
+      0
+    ],
+    "count": 106
+  },
+  {
+    "original": "DispatchWrapper<op::OpPush_Reg32_Ebp>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      5,
+      0,
+      0,
+      0
+    ],
+    "count": 7449
+  },
+  {
+    "original": "DispatchWrapper<op::OpGroup1_EvIb_Cmp_32_Flags>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      254,
+      0,
+      0,
+      0
+    ],
+    "count": 197
+  },
+  {
+    "original": "DispatchWrapper<op::OpXor_EvGv_NF_32_ModReg>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      202,
+      0,
+      0,
+      0
+    ],
+    "count": 2097216
+  },
+  {
+    "original": "DispatchWrapper<op::OpGroup1_EvIz_And_32_Flags>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      226,
+      0,
+      0,
+      0
+    ],
+    "count": 426
+  },
+  {
+    "original": "DispatchWrapper<op::OpLea_32_Ecx>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      34494742667,
+      0,
+      0,
+      0
+    ],
+    "count": 24
+  },
+  {
+    "original": "DispatchWrapper<op::OpMov_EvGv_Edx>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      209,
+      0,
+      0,
+      0
+    ],
+    "count": 9003
+  },
+  {
+    "original": "DispatchWrapper<op::OpMov_Load_Eax>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      34494742659,
+      0,
+      0,
+      0
+    ],
+    "count": 2571
+  },
+  {
+    "original": "DispatchWrapper<op::OpLea_32_Eax>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      34494742659,
+      0,
+      0,
+      0
+    ],
+    "count": 871
+  },
+  {
+    "original": "DispatchWrapper<op::OpMov_Store_Esi>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      25905332341,
+      0,
+      0,
+      0
+    ],
+    "count": 69
+  },
+  {
+    "original": "DispatchWrapper<op::OpXor_EvGv_NF_32_ModReg>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      253,
+      0,
+      0,
+      0
+    ],
+    "count": 2129920
+  },
+  {
+    "original": "DispatchWrapper<op::OpMov_Store_Ecx>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      25905332301,
+      0,
+      0,
+      0
+    ],
+    "count": 15258
+  },
+  {
+    "original": "DispatchWrapper<op::OpMov_Store_Eax>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      25905332357,
+      0,
+      0,
+      0
+    ],
+    "count": 920
+  },
+  {
+    "original": "DispatchWrapper<op::OpCmp_GvEv_32>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      34494218241,
+      0,
+      0,
+      0
+    ],
+    "count": 1954459
+  },
+  {
+    "original": "DispatchWrapper<op::OpLea_32_Edx>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      34394079380,
+      0,
+      0,
+      0
+    ],
+    "count": 2097152
+  },
+  {
+    "original": "DispatchWrapper<op::OpXor_EvGv_NF_32_ModReg>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      242,
+      0,
+      0,
+      0
+    ],
+    "count": 2097152
+  },
+  {
+    "original": "DispatchWrapper<op::OpCmp_EvGv_32>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      25905332349,
+      0,
+      0,
+      0
+    ],
+    "count": 74
+  },
+  {
+    "original": "DispatchWrapper<op::OpPush_Reg32_Edi>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      7,
+      0,
+      0,
+      0
+    ],
+    "count": 4031
+  },
+  {
+    "original": "DispatchWrapper<op::OpMov_EvGv_Esp>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      229,
+      0,
+      0,
+      0
+    ],
+    "count": 3787
+  },
+  {
+    "original": "DispatchWrapper<op::OpXor_EvGv_NF_32_ModReg>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      248,
+      0,
+      0,
+      0
+    ],
+    "count": 1933442
+  },
+  {
+    "original": "DispatchWrapper<op::OpGroup5_Ev_Jmp_32_Flags>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      34494742691,
+      0,
+      0,
+      0
+    ],
+    "count": 16183
+  },
+  {
+    "original": "DispatchWrapper<op::OpMov_RegImm>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      2,
+      0,
+      0,
+      0
+    ],
+    "count": 1041
+  },
+  {
+    "original": "DispatchWrapper<op::OpXor_EvGv_NF_32_ModReg>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      207,
+      0,
+      0,
+      0
+    ],
+    "count": 71
+  },
+  {
+    "original": "DispatchWrapper<op::OpGroup2_EvCl_Shl_ModReg>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      224,
+      0,
+      0,
+      0
+    ],
+    "count": 3064
+  },
+  {
+    "original": "DispatchWrapper<op::OpXor_EvGv_NF_32_ModReg>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      254,
+      0,
+      0,
+      0
+    ],
+    "count": 1835184
+  },
+  {
+    "original": "DispatchWrapper<op::OpPush_Reg32_Ecx>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      1,
+      0,
+      0,
+      0
+    ],
+    "count": 15314
+  },
+  {
+    "original": "DispatchWrapper<op::OpCmp_EvGv_32>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      25905332293,
+      0,
+      0,
+      0
+    ],
+    "count": 18
+  },
+  {
+    "original": "DispatchWrapper<op::OpXor_EvGv_NF_32_ModReg>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      249,
+      0,
+      0,
+      0
+    ],
+    "count": 1769472
+  },
+  {
+    "original": "DispatchWrapper<op::OpGroup2_EvIb_Shr_ModReg>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      239,
+      0,
+      0,
+      0
+    ],
+    "count": 236
+  },
+  {
+    "original": "DispatchWrapper<op::OpXor_EvGv_NF_32_ModReg>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      247,
+      0,
+      0,
+      0
+    ],
+    "count": 1638448
+  },
+  {
+    "original": "DispatchWrapper<op::OpJcc_L_Rel8>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      4,
+      0,
+      0,
+      0
+    ],
+    "count": 106
+  },
+  {
+    "original": "DispatchWrapper<op::OpGroup2_EvIb_Shr_ModReg>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      235,
+      0,
+      0,
+      0
+    ],
+    "count": 17
+  },
+  {
+    "original": "DispatchWrapper<op::OpJcc_LE_Rel8>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      6,
+      0,
+      0,
+      0
+    ],
+    "count": 196
+  },
+  {
+    "original": "DispatchWrapper<op::OpLea_32_Edx>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      34360524820,
+      0,
+      0,
+      0
+    ],
+    "count": 8529658
+  },
+  {
+    "original": "DispatchWrapper<op::OpMovzx_Byte_32_Edx>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      34361311252,
+      0,
+      0,
+      0
+    ],
+    "count": 16858
+  },
+  {
+    "original": "DispatchWrapper<op::OpCmp_EbGb>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      209,
+      0,
+      0,
+      0
+    ],
+    "count": 16858
+  },
+  {
+    "original": "DispatchWrapper<op::OpMovzx_Byte_32_Ecx>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      34360524812,
+      0,
+      0,
+      0
+    ],
+    "count": 16858
+  },
+  {
+    "original": "DispatchWrapper<op::OpMovzx_Word>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      34678505476,
+      0,
+      0,
+      0
+    ],
+    "count": 7793192
+  },
+  {
+    "original": "DispatchWrapper<op::OpMov_Store_Ecx_EspBaseNoIndexNoSegment>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      25905070156,
+      0,
+      0,
+      0
+    ],
+    "count": 1800
+  },
+  {
+    "original": "DispatchWrapper<op::OpCmp_EvGv_32_ModReg>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      194,
+      0,
+      0,
+      0
+    ],
+    "count": 14996
+  },
+  {
+    "original": "DispatchWrapper<op::OpMov_Store_Esi_EspBaseNoIndexNoSegment>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      25905070196,
+      0,
+      0,
+      0
+    ],
+    "count": 462
+  },
+  {
+    "original": "DispatchWrapper<op::OpMov_Load_Ecx>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      34495791183,
+      0,
+      0,
+      0
+    ],
+    "count": 8
+  },
+  {
+    "original": "DispatchWrapper<op::OpAdd_EvGv_NF_32_ModReg>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      208,
+      0,
+      0,
+      0
+    ],
+    "count": 154
+  },
+  {
+    "original": "DispatchWrapper<op::OpMov_Store_Edi>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      25905332349,
+      0,
+      0,
+      0
+    ],
+    "count": 144
+  },
+  {
+    "original": "DispatchWrapper<op::OpMovzx_Byte_32_Eax>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      34495791175,
+      0,
+      0,
+      0
+    ],
+    "count": 23
+  },
+  {
+    "original": "DispatchWrapper<op::OpSub_EvGv_NF>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      25905332293,
+      0,
+      0,
+      0
+    ],
+    "count": 1190876
+  },
+  {
+    "original": "DispatchWrapper<op::OpAnd_EvGv>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      240,
+      0,
+      0,
+      0
+    ],
+    "count": 1190815
+  },
+  {
+    "original": "DispatchWrapper<op::OpMovzx_Byte>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      34495791159,
+      0,
+      0,
+      0
+    ],
+    "count": 1187427
+  },
+  {
+    "original": "DispatchWrapper<op::OpLea_32>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      35166879804,
+      0,
+      0,
+      0
+    ],
+    "count": 1186670
+  },
+  {
+    "original": "DispatchWrapper<op::OpMovzx_Byte_32_Eax>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      193,
+      0,
+      0,
+      0
+    ],
+    "count": 14715
+  },
+  {
+    "original": "DispatchWrapper<op::OpJcc_NS_Rel32>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      1,
+      0,
+      0,
+      0
+    ],
+    "count": 14726
+  },
+  {
+    "original": "DispatchWrapper<op::OpJcc_B_Rel8>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      2,
+      0,
+      0,
+      0
+    ],
+    "count": 5086
+  },
+  {
+    "original": "DispatchWrapper<op::OpMov_EvGv_Edx>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      214,
+      0,
+      0,
+      0
+    ],
+    "count": 373
+  },
+  {
+    "original": "DispatchWrapper<op::OpLea_32_Ecx>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      34493956168,
+      0,
+      0,
+      0
+    ],
+    "count": 453
+  },
+  {
+    "original": "DispatchWrapper<op::OpGroup2_EvCl_Shr>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      25905332333,
+      0,
+      0,
+      0
+    ],
+    "count": 1054023
+  },
+  {
+    "original": "DispatchWrapper<op::OpMov_EbGb>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      34477178892,
+      0,
+      0,
+      0
+    ],
+    "count": 57
+  },
+  {
+    "original": "DispatchWrapper<op::OpMov_EvGv_Ebp>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      233,
+      0,
+      0,
+      0
+    ],
+    "count": 107
+  },
+  {
+    "original": "DispatchWrapper<op::OpMov_Store_Ebp_EspBaseNoIndexNoSegment>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      25905070188,
+      0,
+      0,
+      0
+    ],
+    "count": 1
+  },
+  {
+    "original": "DispatchWrapper<op::OpAdd_EvGv_NF_32_ModReg>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      240,
+      0,
+      0,
+      0
+    ],
+    "count": 244
+  },
+  {
+    "original": "DispatchWrapper<op::OpCmp_EvGv_32_ModReg>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      240,
+      0,
+      0,
+      0
+    ],
+    "count": 87
+  },
+  {
+    "original": "DispatchWrapper<op::OpAnd_EvGv_NF_32_ModReg>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      232,
+      0,
+      0,
+      0
+    ],
+    "count": 71
+  },
+  {
+    "original": "DispatchWrapper<op::OpAnd_EvGv_NF_32_ModReg>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      241,
+      0,
+      0,
+      0
+    ],
+    "count": 1048576
+  },
+  {
+    "original": "DispatchWrapper<op::OpAdd_EvGv_NF_32_ModReg>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      213,
+      0,
+      0,
+      0
+    ],
+    "count": 1048576
+  },
+  {
+    "original": "DispatchWrapper<op::OpXor_EvGv_NF_32_ModReg>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      238,
+      0,
+      0,
+      0
+    ],
+    "count": 1048576
+  },
+  {
+    "original": "DispatchWrapper<op::OpMov_GbEb>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      25905332301,
+      0,
+      0,
+      0
+    ],
+    "count": 68
+  },
+  {
+    "original": "DispatchWrapper<op::OpGroup1_EvIb_Add_32_NoFlags>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      25905332293,
+      0,
+      0,
+      0
+    ],
+    "count": 13
+  },
+  {
+    "original": "DispatchWrapper<op::OpOr_EvGv>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      25905332293,
+      0,
+      0,
+      0
+    ],
+    "count": 952486
+  },
+  {
+    "original": "DispatchWrapper<op::OpXor_EvGv_NF_32_ModReg>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      193,
+      0,
+      0,
+      0
+    ],
+    "count": 18
+  },
+  {
+    "original": "DispatchWrapper<op::OpXor_EvGv_NF_32_ModReg>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      241,
+      0,
+      0,
+      0
+    ],
+    "count": 1015808
+  },
+  {
+    "original": "DispatchWrapper<op::OpAdd_EvGv_NF_32_ModReg>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      205,
+      0,
+      0,
+      0
+    ],
+    "count": 1015808
+  },
+  {
+    "original": "DispatchWrapper<op::OpAnd_EvGv_NF_32_ModReg>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      197,
+      0,
+      0,
+      0
+    ],
+    "count": 1015808
+  },
+  {
+    "original": "DispatchWrapper<op::OpJcc_A_Rel8>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      7,
+      0,
+      0,
+      0
+    ],
+    "count": 1707
+  },
+  {
+    "original": "DispatchWrapper<op::OpMov_Store_Ecx>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      34494480394,
+      0,
+      0,
+      0
+    ],
+    "count": 172
+  },
+  {
+    "original": "DispatchWrapper<op::OpGroup2_EvIb_Shl_ModReg>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      226,
+      0,
+      0,
+      0
+    ],
+    "count": 3150
+  },
+  {
+    "original": "DispatchWrapper<op::OpGroup1_EbIb_Cmp_Flags>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      34411905084,
+      0,
+      0,
+      0
+    ],
+    "count": 2
+  },
+  {
+    "original": "DispatchWrapper<op::OpLea_32_Eax>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      34494480450,
+      0,
+      0,
+      0
+    ],
+    "count": 1201
+  },
+  {
+    "original": "DispatchWrapper<op::OpJcc_E_Rel32>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      4,
+      0,
+      0,
+      0
+    ],
+    "count": 2125
+  },
+  {
+    "original": "DispatchWrapper<op::OpMov_EbGb>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      25905332293,
+      0,
+      0,
+      0
+    ],
+    "count": 228
+  },
+  {
+    "original": "DispatchWrapper<op::OpGroup1_EvIb_Cmp_32_Flags>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      25905332349,
+      0,
+      0,
+      0
+    ],
+    "count": 351
+  },
+  {
+    "original": "DispatchWrapper<op::OpGroup1_EbIb_Cmp_Flags>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      25905332349,
+      0,
+      0,
+      0
+    ],
+    "count": 3
+  },
+  {
+    "original": "DispatchWrapper<op::OpInc_Reg_NF>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      0,
+      0,
+      0,
+      0
+    ],
+    "count": 1047
+  },
+  {
+    "original": "DispatchWrapper<op::OpTest_EbGb>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      201,
+      0,
+      0,
+      0
+    ],
+    "count": 3666
+  },
+  {
+    "original": "DispatchWrapper<op::OpGroup1_EvIb_Add_32_NoFlags_Ecx>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      193,
+      0,
+      0,
+      0
+    ],
+    "count": 3222
+  },
+  {
+    "original": "DispatchWrapper<op::OpLea_32>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      25905332325,
+      0,
+      0,
+      0
+    ],
+    "count": 2492
+  },
+  {
+    "original": "DispatchWrapper<op::OpMovzx_Byte_32_Eax>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      34360262660,
+      0,
+      0,
+      0
+    ],
+    "count": 822499
+  },
+  {
+    "original": "DispatchWrapper<op::OpMov_EvGv_Esi>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      247,
+      0,
+      0,
+      0
+    ],
+    "count": 301
+  },
+  {
+    "original": "DispatchWrapper<op::OpXor_EvGv_NF_32_ModReg>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      206,
+      0,
+      0,
+      0
+    ],
+    "count": 819200
+  },
+  {
+    "original": "DispatchWrapper<op::OpMov_EvGv_Esi>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      241,
+      0,
+      0,
+      0
+    ],
+    "count": 3271
+  },
+  {
+    "original": "DispatchWrapper<op::OpCmp_EvGv_32>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      25905332309,
+      0,
+      0,
+      0
+    ],
+    "count": 4
+  },
+  {
+    "original": "DispatchWrapper<op::OpJcc_GE_Rel8>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      5,
+      0,
+      0,
+      0
+    ],
+    "count": 362
+  },
+  {
+    "original": "DispatchWrapper<op::OpLea_32>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      34494742707,
+      0,
+      0,
+      0
+    ],
+    "count": 21
+  },
+  {
+    "original": "DispatchWrapper<op::OpXor_EvGv_NF_32_ModReg>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      203,
+      0,
+      0,
+      0
+    ],
+    "count": 786480
+  },
+  {
+    "original": "DispatchWrapper<op::OpAnd_EvGv_NF_32_ModReg>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      206,
+      0,
+      0,
+      0
+    ],
+    "count": 786432
+  },
+  {
+    "original": "DispatchWrapper<op::OpGroup1_EvIb_Cmp_32_Flags>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      25905332413,
+      0,
+      0,
+      0
+    ],
+    "count": 74
+  },
+  {
+    "original": "DispatchWrapper<op::OpGroup2_EvIb_Sar_ModReg>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      249,
+      0,
+      0,
+      0
+    ],
+    "count": 8978
+  },
+  {
+    "original": "DispatchWrapper<op::OpCmov_B_ModReg>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      202,
+      0,
+      0,
+      0
+    ],
+    "count": 4128705
+  },
+  {
+    "original": "DispatchWrapper<op::OpCmp_EvGv_16>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      16593,
+      0,
+      0,
+      0
+    ],
+    "count": 4128705
+  },
+  {
+    "original": "DispatchWrapper<op::OpGroup1_EvIz_Add_16_NoFlags>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      16577,
+      0,
+      0,
+      0
+    ],
+    "count": 4128705
+  },
+  {
+    "original": "DispatchWrapper<op::OpMov_EvGv>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      34493972552,
+      0,
+      0,
+      0
+    ],
+    "count": 4128705
+  },
+  {
+    "original": "DispatchWrapper<op::OpMov_GvEv>",
+    "kind": "wrapper",
+    "width": 1,
+    "shapes": [
+      34493972488,
+      0,
+      0,
+      0
+    ],
+    "count": 4128705
+  }
+]

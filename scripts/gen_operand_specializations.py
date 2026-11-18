@@ -10,12 +10,13 @@ p.add_argument('--fallbacks', required=True)
 p.add_argument('--output', required=True)
 p.add_argument('--mode', type=int, default=0)
 p.add_argument('--budget', type=int, default=256)
+p.add_argument('--pin-specialization', type=int, default=0)
 p.add_argument('--fused-only', type=int, default=0)
 p.add_argument('--pin-mode', type=int, default=0)
 a = p.parse_args()
-if not 0 <= a.budget <= 256:
-    p.error("budget must be between 0 and the frozen 256-shape limit")
-if a.mode not in range(4) or a.pin_mode not in range(4):
+if not 0 <= a.budget <= 1024:
+    p.error("budget must be between 0 and the bounded 1024-shape limit")
+if a.mode not in range(4) or a.pin_mode not in range(4) or a.pin_specialization not in range(3):
     p.error("invalid lowering or pin mode")
 source = pathlib.Path(a.source).read_text()
 families = {name: int(op, 16) for name, op in re.findall(r'using\s+(\w+)\s*=\s*Encoding<0x([0-9A-Fa-f]+),', pathlib.Path(a.families).read_text())}
@@ -25,6 +26,13 @@ for op, name in re.findall(r'INSTRUCTION_FALLBACK\(0x([0-9A-Fa-f]+),\s*(\w+)\)',
 for name, fam in re.findall(r'INSTRUCTION_(?:FUSION_)?VARIANT\((\w+),\s*(\w+),', pathlib.Path(a.variants).read_text()):
     targets.setdefault(name, set()).add(families[fam])
 def traits(op):
+    if a.pin_specialization:
+        if 0x40 <= op <= 0x4f or 0xb8 <= op <= 0xbf or 0x1c8 <= op <= 0x1cf: return ('Rm', False, 'Opcode')
+        if 0xb0 <= op <= 0xb7: return ('Rm', True, 'Opcode')
+        if op == 0x8d: return ('Reg', False, 'Address')
+        if 0x70 <= op <= 0x7f or 0x180 <= op <= 0x18f: return ('None', False, 'Opcode')
+    if a.pin_specialization >= 2 and op in (0x201, 0x203):
+        return ('Rm' if op == 0x201 else 'Reg', False, 'Memory')
     if op in (0x200, 0x202): return ('Rm' if op == 0x200 else 'Reg', False, False)
     if op < 0x3c and op % 8 < 4:
         return ('None' if op >= 0x38 else ('Rm' if op % 8 < 2 else 'Reg'), op % 2 == 0, False)
@@ -40,9 +48,20 @@ for name, codes in targets.items():
     if len(choices) == 1 and None not in choices: safe[name] = choices.pop()
 def keep_for(name, shape):
     t = safe.get(name)
-    if t is None or (shape & 0xc0) != 0xc0: return 0
+    if t is None: return 0
     role, byte, group = t
-    if role == 'None' or group and ((shape >> 3) & 7) == 7: return 3
+    if group not in ('Opcode','Address') and (shape & 0xc0) != 0xc0:
+        # These integer kernels use nonblocking MMU access. A miss exits via
+        # Restart/Retry (which reload pins); normal completion has no observer.
+        # Guest memory is separate from EmuState. A memory Rm destination cannot
+        # write a guest GPR. Keep this opt-in and restricted to audited families.
+        codes = targets[name]
+        memory_safe = all((op < 0x3c and op % 8 < 4) or op in
+                          (0x201, 0x203, 0x84, 0x85, 0x88, 0x89, 0x8a, 0x8b,
+                           0x1b6, 0x1b7, 0x1be, 0x1bf) for op in codes)
+        if a.pin_specialization < 2 or not memory_safe: return 0
+        if role == 'Rm': return 3
+    if role == 'None' or group is True and ((shape >> 3) & 7) == 7: return 3
     field = (shape >> 3) if role == 'Reg' else shape
     idx = field & (3 if byte else 7)
     return 2 if idx == 0 else 1 if idx == 4 else 3
@@ -96,11 +115,15 @@ code += ['static const OperandShapeEntry shapes[] = {'] + (entries or ['    {},'
 registers = []
 if not a.fused_only and (a.mode in (2, 3) or a.pin_mode == 3):
     for name, (role, byte, group) in sorted(safe.items()):
-        registers.append(f'    {{DispatchWrapper<op::{name}>, SelectRegisterOperand<op::{name}, PinWriteRole::{role}, {str(byte).lower()}, {str(group).lower()}>}},')
+        if group == 'Memory': continue  # Exact shapes only; never claim a register form.
+        if group in ('Opcode', 'Address'):
+            registers.append(f'    {{DispatchWrapper<op::{name}>, SelectEncodedOperand<op::{name}, PinWriteRole::{role}, {str(byte).lower()}, {str(group == "Opcode").lower()}>, PinOperandForm::{group}}},')
+        else:
+            registers.append(f'    {{DispatchWrapper<op::{name}>, SelectRegisterOperand<op::{name}, PinWriteRole::{role}, {str(byte).lower()}, {str(group).lower()}>}},')
 code += ['static const RegisterOperandEntry registers[] = {'] + (registers or ['    {},']) + ['};',
          f'constexpr size_t register_count = {len(registers)};',
          'const auto& OperandLookup() {',
-         '    static const OperandIndex<(register_count != 0)> index(shapes, shape_count, registers, register_count);',
+         f'    static const OperandIndex<(register_count != 0), {str(bool(a.pin_specialization and not a.fused_only)).lower()}> index(shapes, shape_count, registers, register_count);',
          '    return index;', '}', '} // namespace',
          '''HandlerFunc CanonicalOperandHandler(HandlerFunc handler) {
     static const auto originals = [] {

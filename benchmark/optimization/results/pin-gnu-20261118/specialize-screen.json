@@ -1,0 +1,257 @@
+[
+  {
+    "case": "coremark_gcc",
+    "variant": "off",
+    "round": "specialize-screen-0",
+    "iterations": 60000,
+    "wall_seconds": 12.047805832931772,
+    "log": "specialize-screen-0-off-coremark_gcc.log",
+    "seconds": 11.804,
+    "score": 5083.022704,
+    "validated": true
+  },
+  {
+    "case": "coremark_gcc",
+    "variant": "pin",
+    "round": "specialize-screen-0",
+    "iterations": 60000,
+    "wall_seconds": 11.63597987499088,
+    "log": "specialize-screen-0-pin-coremark_gcc.log",
+    "seconds": 11.388,
+    "score": 5268.703899,
+    "validated": true
+  },
+  {
+    "case": "coremark_gcc",
+    "variant": "candidate",
+    "round": "specialize-screen-0",
+    "iterations": 60000,
+    "wall_seconds": 12.14682341599837,
+    "log": "specialize-screen-0-candidate-coremark_gcc.log",
+    "seconds": 11.44,
+    "score": 5244.755245,
+    "validated": true
+  },
+  {
+    "case": "coremark_gcc",
+    "variant": "gnu",
+    "round": "specialize-screen-0",
+    "iterations": 60000,
+    "wall_seconds": 11.881022250046954,
+    "log": "specialize-screen-0-gnu-coremark_gcc.log",
+    "seconds": 11.366,
+    "score": 5278.901988,
+    "validated": true
+  },
+  {
+    "case": "coremark_gcc",
+    "variant": "gnuoff",
+    "round": "specialize-screen-0",
+    "iterations": 60000,
+    "wall_seconds": 12.585173624800518,
+    "log": "specialize-screen-0-gnuoff-coremark_gcc.log",
+    "seconds": 11.901,
+    "score": 5041.593143,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "off",
+    "round": "specialize-screen-0",
+    "iterations": 66,
+    "wall_seconds": 6.6122011670377105,
+    "log": "specialize-screen-0-off-gunzip.log",
+    "seconds": 6.358245958108455,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "pin",
+    "round": "specialize-screen-0",
+    "iterations": 66,
+    "wall_seconds": 6.861899791052565,
+    "log": "specialize-screen-0-pin-gunzip.log",
+    "seconds": 6.605830834014341,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "candidate",
+    "round": "specialize-screen-0",
+    "iterations": 66,
+    "wall_seconds": 6.798097291961312,
+    "log": "specialize-screen-0-candidate-gunzip.log",
+    "seconds": 6.542914625024423,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "gnu",
+    "round": "specialize-screen-0",
+    "iterations": 66,
+    "wall_seconds": 5.3431417918764055,
+    "log": "specialize-screen-0-gnu-gunzip.log",
+    "seconds": 5.088025875156745,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "gnuoff",
+    "round": "specialize-screen-0",
+    "iterations": 66,
+    "wall_seconds": 5.4076281250454485,
+    "log": "specialize-screen-0-gnuoff-gunzip.log",
+    "seconds": 5.1482839160598814,
+    "validated": true
+  },
+  {
+    "case": "grep_regex",
+    "variant": "off",
+    "round": "specialize-screen-0",
+    "iterations": 102,
+    "wall_seconds": 5.330763624981046,
+    "log": "specialize-screen-0-off-grep_regex.log",
+    "seconds": 5.06231979187578,
+    "validated": true
+  },
+  {
+    "case": "grep_regex",
+    "variant": "pin",
+    "round": "specialize-screen-0",
+    "iterations": 102,
+    "wall_seconds": 5.361620625015348,
+    "log": "specialize-screen-0-pin-grep_regex.log",
+    "seconds": 5.105405749985948,
+    "validated": true
+  },
+  {
+    "case": "grep_regex",
+    "variant": "candidate",
+    "round": "specialize-screen-0",
+    "iterations": 102,
+    "wall_seconds": 5.295407332945615,
+    "log": "specialize-screen-0-candidate-grep_regex.log",
+    "seconds": 5.03629987500608,
+    "validated": true
+  },
+  {
+    "case": "grep_regex",
+    "variant": "gnu",
+    "round": "specialize-screen-0",
+    "iterations": 102,
+    "wall_seconds": 4.6894473331049085,
+    "log": "specialize-screen-0-gnu-grep_regex.log",
+    "seconds": 4.433367416029796,
+    "validated": true
+  },
+  {
+    "case": "grep_regex",
+    "variant": "gnuoff",
+    "round": "specialize-screen-0",
+    "iterations": 102,
+    "wall_seconds": 4.683097500121221,
+    "log": "specialize-screen-0-gnuoff-grep_regex.log",
+    "seconds": 4.425203333143145,
+    "validated": true
+  },
+  {
+    "case": "sha256",
+    "variant": "off",
+    "round": "specialize-screen-0",
+    "iterations": 72,
+    "wall_seconds": 5.037441374966875,
+    "log": "specialize-screen-0-off-sha256.log",
+    "seconds": 4.779452667105943,
+    "validated": true
+  },
+  {
+    "case": "sha256",
+    "variant": "pin",
+    "round": "specialize-screen-0",
+    "iterations": 72,
+    "wall_seconds": 4.9648463749326766,
+    "log": "specialize-screen-0-pin-sha256.log",
+    "seconds": 4.708040917059407,
+    "validated": true
+  },
+  {
+    "case": "sha256",
+    "variant": "candidate",
+    "round": "specialize-screen-0",
+    "iterations": 72,
+    "wall_seconds": 4.9556433339603245,
+    "log": "specialize-screen-0-candidate-sha256.log",
+    "seconds": 4.697551124962047,
+    "validated": true
+  },
+  {
+    "case": "sha256",
+    "variant": "gnu",
+    "round": "specialize-screen-0",
+    "iterations": 72,
+    "wall_seconds": 4.0940523750614375,
+    "log": "specialize-screen-0-gnu-sha256.log",
+    "seconds": 3.8344552079215646,
+    "validated": true
+  },
+  {
+    "case": "sha256",
+    "variant": "gnuoff",
+    "round": "specialize-screen-0",
+    "iterations": 72,
+    "wall_seconds": 3.928510250058025,
+    "log": "specialize-screen-0-gnuoff-sha256.log",
+    "seconds": 3.6696830419823527,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "off",
+    "round": "specialize-screen-0",
+    "iterations": 164,
+    "wall_seconds": 3.2437219170387834,
+    "log": "specialize-screen-0-off-tar.log",
+    "seconds": 2.9900627499446273,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "pin",
+    "round": "specialize-screen-0",
+    "iterations": 164,
+    "wall_seconds": 3.186547667020932,
+    "log": "specialize-screen-0-pin-tar.log",
+    "seconds": 2.9316897080279887,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "candidate",
+    "round": "specialize-screen-0",
+    "iterations": 164,
+    "wall_seconds": 3.2318066670559347,
+    "log": "specialize-screen-0-candidate-tar.log",
+    "seconds": 2.972770667169243,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "gnu",
+    "round": "specialize-screen-0",
+    "iterations": 164,
+    "wall_seconds": 3.2520910419989377,
+    "log": "specialize-screen-0-gnu-tar.log",
+    "seconds": 2.9971544998697937,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "gnuoff",
+    "round": "specialize-screen-0",
+    "iterations": 164,
+    "wall_seconds": 3.249690708005801,
+    "log": "specialize-screen-0-gnuoff-tar.log",
+    "seconds": 2.9912351658567786,
+    "validated": true
+  }
+]

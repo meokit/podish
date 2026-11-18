@@ -86,3 +86,23 @@ serial timing. Rotate variant order between rounds. Record individual changes;
 a geomean cannot establish the absence of regressions.
 A finite corpus cannot prove non-regression for all possible guests. Promotion
 requires no repeatable regression on the measured paths, with explicit bounds.
+
+GNU pin coverage experiment (opt-in; production AUTO is unchanged)
+  FIBERCPU_PIN_SPECIALIZATION=BASE|SCALAR|MEMORY (default BASE)
+  FIBERCPU_OPERAND_PLAN_FILE=<absolute frozen JSON path> (empty: GCC v1)
+  FIBERCPU_OPERAND_BUDGET=0..1024 (default 256)
+MSBuild equivalents: PinSpecialization, OperandPlanFile, OperandBudget.
+The reviewed operand-shapes-gnu-v1.json preserves all 256 GCC entries, then
+adds 64 GNU fused and 128 GNU scalar shapes. Use HYBRID/ALL, budget 512;
+compare pin OFF and EAX_ESP with identical remaining switches. SCALAR adds
+opcode-register MOV/INC/DEC/BSWAP, LEA and Jcc write classification. MEMORY
+additionally classifies exact integer ALU/test/cmp/MOV/MOVZX/MOVSX memory
+forms. Only normal Continue tails use their known write sets. Nonblocking
+MMU misses go through Restart/Retry with pin reloads; slow callbacks, branch
+exits, opaque/string/stack kernels keep their conservative behavior. Guest
+backing storage must be separate from the emulator's own architectural state.
+No guest addresses, immediates, displacements or data values enter this plan.
+The plan can be regenerated with extend_operand_plan.py from encoding-only
+per-workload dispatch estimates. Scores normalize each workload before ranking,
+so the longest workload does not consume the entire shape budget. Appending
+entries preserves the existing GCC priorities and bounded fusion admission.

@@ -1,0 +1,1094 @@
+[
+  {
+    "case": "coremark_gcc",
+    "variant": "off",
+    "round": "confirm-memory-0",
+    "iterations": 60000,
+    "wall_seconds": 11.931834999937564,
+    "log": "confirm-memory-0-off-coremark_gcc.log",
+    "seconds": 11.675,
+    "score": 5139.186296,
+    "validated": true
+  },
+  {
+    "case": "coremark_gcc",
+    "variant": "pin",
+    "round": "confirm-memory-0",
+    "iterations": 60000,
+    "wall_seconds": 11.514911083038896,
+    "log": "confirm-memory-0-pin-coremark_gcc.log",
+    "seconds": 11.267,
+    "score": 5325.286234,
+    "validated": true
+  },
+  {
+    "case": "coremark_gcc",
+    "variant": "memoff",
+    "round": "confirm-memory-0",
+    "iterations": 60000,
+    "wall_seconds": 12.491676457924768,
+    "log": "confirm-memory-0-memoff-coremark_gcc.log",
+    "seconds": 11.67,
+    "score": 5141.388175,
+    "validated": true
+  },
+  {
+    "case": "coremark_gcc",
+    "variant": "mem",
+    "round": "confirm-memory-0",
+    "iterations": 60000,
+    "wall_seconds": 11.990335040958598,
+    "log": "confirm-memory-0-mem-coremark_gcc.log",
+    "seconds": 11.183,
+    "score": 5365.286596,
+    "validated": true
+  },
+  {
+    "case": "gzip",
+    "variant": "off",
+    "round": "confirm-memory-0",
+    "iterations": 14,
+    "wall_seconds": 8.172657082788646,
+    "log": "confirm-memory-0-off-gzip.log",
+    "seconds": 7.907436334062368,
+    "validated": true
+  },
+  {
+    "case": "gzip",
+    "variant": "pin",
+    "round": "confirm-memory-0",
+    "iterations": 14,
+    "wall_seconds": 8.28986299992539,
+    "log": "confirm-memory-0-pin-gzip.log",
+    "seconds": 8.036142083117738,
+    "validated": true
+  },
+  {
+    "case": "gzip",
+    "variant": "memoff",
+    "round": "confirm-memory-0",
+    "iterations": 14,
+    "wall_seconds": 7.139214541995898,
+    "log": "confirm-memory-0-memoff-gzip.log",
+    "seconds": 6.886433332925662,
+    "validated": true
+  },
+  {
+    "case": "gzip",
+    "variant": "mem",
+    "round": "confirm-memory-0",
+    "iterations": 14,
+    "wall_seconds": 7.089290292002261,
+    "log": "confirm-memory-0-mem-gzip.log",
+    "seconds": 6.836433083051816,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "off",
+    "round": "confirm-memory-0",
+    "iterations": 66,
+    "wall_seconds": 6.585496417013928,
+    "log": "confirm-memory-0-off-gunzip.log",
+    "seconds": 6.334192791953683,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "pin",
+    "round": "confirm-memory-0",
+    "iterations": 66,
+    "wall_seconds": 6.812989540863782,
+    "log": "confirm-memory-0-pin-gunzip.log",
+    "seconds": 6.560003665974364,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "memoff",
+    "round": "confirm-memory-0",
+    "iterations": 66,
+    "wall_seconds": 5.386370000196621,
+    "log": "confirm-memory-0-memoff-gunzip.log",
+    "seconds": 5.130986458156258,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "mem",
+    "round": "confirm-memory-0",
+    "iterations": 66,
+    "wall_seconds": 5.303986374987289,
+    "log": "confirm-memory-0-mem-gunzip.log",
+    "seconds": 5.046491499990225,
+    "validated": true
+  },
+  {
+    "case": "sed",
+    "variant": "off",
+    "round": "confirm-memory-0",
+    "iterations": 14,
+    "wall_seconds": 9.4249084580224,
+    "log": "confirm-memory-0-off-sed.log",
+    "seconds": 9.168650083942339,
+    "validated": true
+  },
+  {
+    "case": "sed",
+    "variant": "pin",
+    "round": "confirm-memory-0",
+    "iterations": 14,
+    "wall_seconds": 9.305859083076939,
+    "log": "confirm-memory-0-pin-sed.log",
+    "seconds": 9.052051790989935,
+    "validated": true
+  },
+  {
+    "case": "sed",
+    "variant": "memoff",
+    "round": "confirm-memory-0",
+    "iterations": 14,
+    "wall_seconds": 8.804560750024393,
+    "log": "confirm-memory-0-memoff-sed.log",
+    "seconds": 8.548418750055134,
+    "validated": true
+  },
+  {
+    "case": "sed",
+    "variant": "mem",
+    "round": "confirm-memory-0",
+    "iterations": 14,
+    "wall_seconds": 8.780593458097428,
+    "log": "confirm-memory-0-mem-sed.log",
+    "seconds": 8.523715832969174,
+    "validated": true
+  },
+  {
+    "case": "grep_fixed",
+    "variant": "off",
+    "round": "confirm-memory-0",
+    "iterations": 158,
+    "wall_seconds": 3.1280564160551876,
+    "log": "confirm-memory-0-off-grep_fixed.log",
+    "seconds": 2.8723465830553323,
+    "validated": true
+  },
+  {
+    "case": "grep_fixed",
+    "variant": "pin",
+    "round": "confirm-memory-0",
+    "iterations": 158,
+    "wall_seconds": 3.153337833005935,
+    "log": "confirm-memory-0-pin-grep_fixed.log",
+    "seconds": 2.8993517919443548,
+    "validated": true
+  },
+  {
+    "case": "grep_fixed",
+    "variant": "memoff",
+    "round": "confirm-memory-0",
+    "iterations": 158,
+    "wall_seconds": 2.914464500034228,
+    "log": "confirm-memory-0-memoff-grep_fixed.log",
+    "seconds": 2.659137208946049,
+    "validated": true
+  },
+  {
+    "case": "grep_fixed",
+    "variant": "mem",
+    "round": "confirm-memory-0",
+    "iterations": 158,
+    "wall_seconds": 2.8793767078313977,
+    "log": "confirm-memory-0-mem-grep_fixed.log",
+    "seconds": 2.608665500069037,
+    "validated": true
+  },
+  {
+    "case": "grep_regex",
+    "variant": "off",
+    "round": "confirm-memory-0",
+    "iterations": 102,
+    "wall_seconds": 5.25184733280912,
+    "log": "confirm-memory-0-off-grep_regex.log",
+    "seconds": 4.996224833885208,
+    "validated": true
+  },
+  {
+    "case": "grep_regex",
+    "variant": "pin",
+    "round": "confirm-memory-0",
+    "iterations": 102,
+    "wall_seconds": 5.330613542115316,
+    "log": "confirm-memory-0-pin-grep_regex.log",
+    "seconds": 5.073357291985303,
+    "validated": true
+  },
+  {
+    "case": "grep_regex",
+    "variant": "memoff",
+    "round": "confirm-memory-0",
+    "iterations": 102,
+    "wall_seconds": 4.630345459096134,
+    "log": "confirm-memory-0-memoff-grep_regex.log",
+    "seconds": 4.375156124820933,
+    "validated": true
+  },
+  {
+    "case": "grep_regex",
+    "variant": "mem",
+    "round": "confirm-memory-0",
+    "iterations": 102,
+    "wall_seconds": 4.6739493331406265,
+    "log": "confirm-memory-0-mem-grep_regex.log",
+    "seconds": 4.4187290831469,
+    "validated": true
+  },
+  {
+    "case": "sort",
+    "variant": "off",
+    "round": "confirm-memory-0",
+    "iterations": 38,
+    "wall_seconds": 7.629121290985495,
+    "log": "confirm-memory-0-off-sort.log",
+    "seconds": 7.366362666012719,
+    "validated": true
+  },
+  {
+    "case": "sort",
+    "variant": "pin",
+    "round": "confirm-memory-0",
+    "iterations": 38,
+    "wall_seconds": 7.607399124884978,
+    "log": "confirm-memory-0-pin-sort.log",
+    "seconds": 7.353574583074078,
+    "validated": true
+  },
+  {
+    "case": "sort",
+    "variant": "memoff",
+    "round": "confirm-memory-0",
+    "iterations": 38,
+    "wall_seconds": 7.516617167042568,
+    "log": "confirm-memory-0-memoff-sort.log",
+    "seconds": 7.2605393750127405,
+    "validated": true
+  },
+  {
+    "case": "sort",
+    "variant": "mem",
+    "round": "confirm-memory-0",
+    "iterations": 38,
+    "wall_seconds": 7.383836624911055,
+    "log": "confirm-memory-0-mem-sort.log",
+    "seconds": 7.129849208984524,
+    "validated": true
+  },
+  {
+    "case": "sha256",
+    "variant": "off",
+    "round": "confirm-memory-0",
+    "iterations": 72,
+    "wall_seconds": 5.05512462509796,
+    "log": "confirm-memory-0-off-sha256.log",
+    "seconds": 4.797525292029604,
+    "validated": true
+  },
+  {
+    "case": "sha256",
+    "variant": "pin",
+    "round": "confirm-memory-0",
+    "iterations": 72,
+    "wall_seconds": 4.93187908292748,
+    "log": "confirm-memory-0-pin-sha256.log",
+    "seconds": 4.672615166055039,
+    "validated": true
+  },
+  {
+    "case": "sha256",
+    "variant": "memoff",
+    "round": "confirm-memory-0",
+    "iterations": 72,
+    "wall_seconds": 4.027461624937132,
+    "log": "confirm-memory-0-memoff-sha256.log",
+    "seconds": 3.770319208037108,
+    "validated": true
+  },
+  {
+    "case": "sha256",
+    "variant": "mem",
+    "round": "confirm-memory-0",
+    "iterations": 72,
+    "wall_seconds": 4.0230650419835,
+    "log": "confirm-memory-0-mem-sha256.log",
+    "seconds": 3.7674239170737565,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "off",
+    "round": "confirm-memory-0",
+    "iterations": 164,
+    "wall_seconds": 3.329593166941777,
+    "log": "confirm-memory-0-off-tar.log",
+    "seconds": 3.0722255420405418,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "pin",
+    "round": "confirm-memory-0",
+    "iterations": 164,
+    "wall_seconds": 3.213826958090067,
+    "log": "confirm-memory-0-pin-tar.log",
+    "seconds": 2.957862125011161,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "memoff",
+    "round": "confirm-memory-0",
+    "iterations": 164,
+    "wall_seconds": 3.2074927501380444,
+    "log": "confirm-memory-0-memoff-tar.log",
+    "seconds": 2.953992082970217,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "mem",
+    "round": "confirm-memory-0",
+    "iterations": 164,
+    "wall_seconds": 3.25406991597265,
+    "log": "confirm-memory-0-mem-tar.log",
+    "seconds": 2.997282916912809,
+    "validated": true
+  },
+  {
+    "case": "coremark_gcc",
+    "variant": "pin",
+    "round": "confirm-memory-1",
+    "iterations": 60000,
+    "wall_seconds": 11.883124917047098,
+    "log": "confirm-memory-1-pin-coremark_gcc.log",
+    "seconds": 11.633,
+    "score": 5157.740909,
+    "validated": true
+  },
+  {
+    "case": "coremark_gcc",
+    "variant": "memoff",
+    "round": "confirm-memory-1",
+    "iterations": 60000,
+    "wall_seconds": 12.14569745818153,
+    "log": "confirm-memory-1-memoff-coremark_gcc.log",
+    "seconds": 11.897,
+    "score": 5043.288224,
+    "validated": true
+  },
+  {
+    "case": "coremark_gcc",
+    "variant": "mem",
+    "round": "confirm-memory-1",
+    "iterations": 60000,
+    "wall_seconds": 11.594433458987623,
+    "log": "confirm-memory-1-mem-coremark_gcc.log",
+    "seconds": 11.344,
+    "score": 5289.139633,
+    "validated": true
+  },
+  {
+    "case": "coremark_gcc",
+    "variant": "off",
+    "round": "confirm-memory-1",
+    "iterations": 60000,
+    "wall_seconds": 12.132339000003412,
+    "log": "confirm-memory-1-off-coremark_gcc.log",
+    "seconds": 11.886,
+    "score": 5047.955578,
+    "validated": true
+  },
+  {
+    "case": "gzip",
+    "variant": "pin",
+    "round": "confirm-memory-1",
+    "iterations": 14,
+    "wall_seconds": 8.329906499944627,
+    "log": "confirm-memory-1-pin-gzip.log",
+    "seconds": 8.074605375062674,
+    "validated": true
+  },
+  {
+    "case": "gzip",
+    "variant": "memoff",
+    "round": "confirm-memory-1",
+    "iterations": 14,
+    "wall_seconds": 7.160850499989465,
+    "log": "confirm-memory-1-memoff-gzip.log",
+    "seconds": 6.903462958987802,
+    "validated": true
+  },
+  {
+    "case": "gzip",
+    "variant": "mem",
+    "round": "confirm-memory-1",
+    "iterations": 14,
+    "wall_seconds": 7.153683874988928,
+    "log": "confirm-memory-1-mem-gzip.log",
+    "seconds": 6.898209749953821,
+    "validated": true
+  },
+  {
+    "case": "gzip",
+    "variant": "off",
+    "round": "confirm-memory-1",
+    "iterations": 14,
+    "wall_seconds": 8.248580374987796,
+    "log": "confirm-memory-1-off-gzip.log",
+    "seconds": 7.991082957945764,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "pin",
+    "round": "confirm-memory-1",
+    "iterations": 66,
+    "wall_seconds": 6.7778089579660445,
+    "log": "confirm-memory-1-pin-gunzip.log",
+    "seconds": 6.5213445839472115,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "memoff",
+    "round": "confirm-memory-1",
+    "iterations": 66,
+    "wall_seconds": 5.406621125061065,
+    "log": "confirm-memory-1-memoff-gunzip.log",
+    "seconds": 5.153956624912098,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "mem",
+    "round": "confirm-memory-1",
+    "iterations": 66,
+    "wall_seconds": 5.350519709056243,
+    "log": "confirm-memory-1-mem-gunzip.log",
+    "seconds": 5.091562416870147,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "off",
+    "round": "confirm-memory-1",
+    "iterations": 66,
+    "wall_seconds": 6.649114083033055,
+    "log": "confirm-memory-1-off-gunzip.log",
+    "seconds": 6.387099750107154,
+    "validated": true
+  },
+  {
+    "case": "sed",
+    "variant": "pin",
+    "round": "confirm-memory-1",
+    "iterations": 14,
+    "wall_seconds": 9.54161070799455,
+    "log": "confirm-memory-1-pin-sed.log",
+    "seconds": 9.282035417156294,
+    "validated": true
+  },
+  {
+    "case": "sed",
+    "variant": "memoff",
+    "round": "confirm-memory-1",
+    "iterations": 14,
+    "wall_seconds": 8.709567584097385,
+    "log": "confirm-memory-1-memoff-sed.log",
+    "seconds": 8.450502834049985,
+    "validated": true
+  },
+  {
+    "case": "sed",
+    "variant": "mem",
+    "round": "confirm-memory-1",
+    "iterations": 14,
+    "wall_seconds": 8.804331332910806,
+    "log": "confirm-memory-1-mem-sed.log",
+    "seconds": 8.545499083120376,
+    "validated": true
+  },
+  {
+    "case": "sed",
+    "variant": "off",
+    "round": "confirm-memory-1",
+    "iterations": 14,
+    "wall_seconds": 9.257348832907155,
+    "log": "confirm-memory-1-off-sed.log",
+    "seconds": 9.00027733296156,
+    "validated": true
+  },
+  {
+    "case": "grep_fixed",
+    "variant": "pin",
+    "round": "confirm-memory-1",
+    "iterations": 158,
+    "wall_seconds": 3.162055999971926,
+    "log": "confirm-memory-1-pin-grep_fixed.log",
+    "seconds": 2.905758166918531,
+    "validated": true
+  },
+  {
+    "case": "grep_fixed",
+    "variant": "memoff",
+    "round": "confirm-memory-1",
+    "iterations": 158,
+    "wall_seconds": 2.894520458066836,
+    "log": "confirm-memory-1-memoff-grep_fixed.log",
+    "seconds": 2.63715733285062,
+    "validated": true
+  },
+  {
+    "case": "grep_fixed",
+    "variant": "mem",
+    "round": "confirm-memory-1",
+    "iterations": 158,
+    "wall_seconds": 2.8716946670319885,
+    "log": "confirm-memory-1-mem-grep_fixed.log",
+    "seconds": 2.6141435839235783,
+    "validated": true
+  },
+  {
+    "case": "grep_fixed",
+    "variant": "off",
+    "round": "confirm-memory-1",
+    "iterations": 158,
+    "wall_seconds": 3.1564362081699073,
+    "log": "confirm-memory-1-off-grep_fixed.log",
+    "seconds": 2.8980747919995338,
+    "validated": true
+  },
+  {
+    "case": "grep_regex",
+    "variant": "pin",
+    "round": "confirm-memory-1",
+    "iterations": 102,
+    "wall_seconds": 5.351366042159498,
+    "log": "confirm-memory-1-pin-grep_regex.log",
+    "seconds": 5.093464708188549,
+    "validated": true
+  },
+  {
+    "case": "grep_regex",
+    "variant": "memoff",
+    "round": "confirm-memory-1",
+    "iterations": 102,
+    "wall_seconds": 4.760253291809931,
+    "log": "confirm-memory-1-memoff-grep_regex.log",
+    "seconds": 4.4866157080978155,
+    "validated": true
+  },
+  {
+    "case": "grep_regex",
+    "variant": "mem",
+    "round": "confirm-memory-1",
+    "iterations": 102,
+    "wall_seconds": 4.6766422090586275,
+    "log": "confirm-memory-1-mem-grep_regex.log",
+    "seconds": 4.4176703749690205,
+    "validated": true
+  },
+  {
+    "case": "grep_regex",
+    "variant": "off",
+    "round": "confirm-memory-1",
+    "iterations": 102,
+    "wall_seconds": 5.272316500078887,
+    "log": "confirm-memory-1-off-grep_regex.log",
+    "seconds": 5.004447750048712,
+    "validated": true
+  },
+  {
+    "case": "sort",
+    "variant": "pin",
+    "round": "confirm-memory-1",
+    "iterations": 38,
+    "wall_seconds": 7.5886323330923915,
+    "log": "confirm-memory-1-pin-sort.log",
+    "seconds": 7.329560291022062,
+    "validated": true
+  },
+  {
+    "case": "sort",
+    "variant": "memoff",
+    "round": "confirm-memory-1",
+    "iterations": 38,
+    "wall_seconds": 7.481147000100464,
+    "log": "confirm-memory-1-memoff-sort.log",
+    "seconds": 7.221700916998088,
+    "validated": true
+  },
+  {
+    "case": "sort",
+    "variant": "mem",
+    "round": "confirm-memory-1",
+    "iterations": 38,
+    "wall_seconds": 7.443293042015284,
+    "log": "confirm-memory-1-mem-sort.log",
+    "seconds": 7.187235125107691,
+    "validated": true
+  },
+  {
+    "case": "sort",
+    "variant": "off",
+    "round": "confirm-memory-1",
+    "iterations": 38,
+    "wall_seconds": 7.665331041906029,
+    "log": "confirm-memory-1-off-sort.log",
+    "seconds": 7.403818415943533,
+    "validated": true
+  },
+  {
+    "case": "sha256",
+    "variant": "pin",
+    "round": "confirm-memory-1",
+    "iterations": 72,
+    "wall_seconds": 4.947536875028163,
+    "log": "confirm-memory-1-pin-sha256.log",
+    "seconds": 4.690975416917354,
+    "validated": true
+  },
+  {
+    "case": "sha256",
+    "variant": "memoff",
+    "round": "confirm-memory-1",
+    "iterations": 72,
+    "wall_seconds": 3.9606806251686066,
+    "log": "confirm-memory-1-memoff-sha256.log",
+    "seconds": 3.702706417068839,
+    "validated": true
+  },
+  {
+    "case": "sha256",
+    "variant": "mem",
+    "round": "confirm-memory-1",
+    "iterations": 72,
+    "wall_seconds": 3.9936944579239935,
+    "log": "confirm-memory-1-mem-sha256.log",
+    "seconds": 3.7335244580172002,
+    "validated": true
+  },
+  {
+    "case": "sha256",
+    "variant": "off",
+    "round": "confirm-memory-1",
+    "iterations": 72,
+    "wall_seconds": 5.015035500051454,
+    "log": "confirm-memory-1-off-sha256.log",
+    "seconds": 4.754628417082131,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "pin",
+    "round": "confirm-memory-1",
+    "iterations": 164,
+    "wall_seconds": 3.2779471250250936,
+    "log": "confirm-memory-1-pin-tar.log",
+    "seconds": 3.015088750049472,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "memoff",
+    "round": "confirm-memory-1",
+    "iterations": 164,
+    "wall_seconds": 3.4439115410204977,
+    "log": "confirm-memory-1-memoff-tar.log",
+    "seconds": 3.1840416670311242,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "mem",
+    "round": "confirm-memory-1",
+    "iterations": 164,
+    "wall_seconds": 3.309386417036876,
+    "log": "confirm-memory-1-mem-tar.log",
+    "seconds": 3.049176709027961,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "off",
+    "round": "confirm-memory-1",
+    "iterations": 164,
+    "wall_seconds": 3.2801961249206215,
+    "log": "confirm-memory-1-off-tar.log",
+    "seconds": 3.0195846669375896,
+    "validated": true
+  },
+  {
+    "case": "coremark_gcc",
+    "variant": "memoff",
+    "round": "confirm-memory-2",
+    "iterations": 60000,
+    "wall_seconds": 12.186668666778132,
+    "log": "confirm-memory-2-memoff-coremark_gcc.log",
+    "seconds": 11.934,
+    "score": 5027.652086,
+    "validated": true
+  },
+  {
+    "case": "coremark_gcc",
+    "variant": "mem",
+    "round": "confirm-memory-2",
+    "iterations": 60000,
+    "wall_seconds": 11.744439790956676,
+    "log": "confirm-memory-2-mem-coremark_gcc.log",
+    "seconds": 11.491,
+    "score": 5221.477678,
+    "validated": true
+  },
+  {
+    "case": "coremark_gcc",
+    "variant": "off",
+    "round": "confirm-memory-2",
+    "iterations": 60000,
+    "wall_seconds": 12.16740483394824,
+    "log": "confirm-memory-2-off-coremark_gcc.log",
+    "seconds": 11.914,
+    "score": 5036.091993,
+    "validated": true
+  },
+  {
+    "case": "coremark_gcc",
+    "variant": "pin",
+    "round": "confirm-memory-2",
+    "iterations": 60000,
+    "wall_seconds": 11.830247208941728,
+    "log": "confirm-memory-2-pin-coremark_gcc.log",
+    "seconds": 11.575,
+    "score": 5183.585313,
+    "validated": true
+  },
+  {
+    "case": "gzip",
+    "variant": "memoff",
+    "round": "confirm-memory-2",
+    "iterations": 14,
+    "wall_seconds": 7.199622000101954,
+    "log": "confirm-memory-2-memoff-gzip.log",
+    "seconds": 6.939237833023071,
+    "validated": true
+  },
+  {
+    "case": "gzip",
+    "variant": "mem",
+    "round": "confirm-memory-2",
+    "iterations": 14,
+    "wall_seconds": 7.203400583006442,
+    "log": "confirm-memory-2-mem-gzip.log",
+    "seconds": 6.945156916975975,
+    "validated": true
+  },
+  {
+    "case": "gzip",
+    "variant": "off",
+    "round": "confirm-memory-2",
+    "iterations": 14,
+    "wall_seconds": 8.28475591703318,
+    "log": "confirm-memory-2-off-gzip.log",
+    "seconds": 8.025603499962017,
+    "validated": true
+  },
+  {
+    "case": "gzip",
+    "variant": "pin",
+    "round": "confirm-memory-2",
+    "iterations": 14,
+    "wall_seconds": 8.323947792174295,
+    "log": "confirm-memory-2-pin-gzip.log",
+    "seconds": 8.065880666021258,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "memoff",
+    "round": "confirm-memory-2",
+    "iterations": 66,
+    "wall_seconds": 5.399038749979809,
+    "log": "confirm-memory-2-memoff-gunzip.log",
+    "seconds": 5.138993707951158,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "mem",
+    "round": "confirm-memory-2",
+    "iterations": 66,
+    "wall_seconds": 5.317688750103116,
+    "log": "confirm-memory-2-mem-gunzip.log",
+    "seconds": 5.058479791972786,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "off",
+    "round": "confirm-memory-2",
+    "iterations": 66,
+    "wall_seconds": 6.645515333162621,
+    "log": "confirm-memory-2-off-gunzip.log",
+    "seconds": 6.387012708000839,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "pin",
+    "round": "confirm-memory-2",
+    "iterations": 66,
+    "wall_seconds": 6.825047167018056,
+    "log": "confirm-memory-2-pin-gunzip.log",
+    "seconds": 6.565458666998893,
+    "validated": true
+  },
+  {
+    "case": "sed",
+    "variant": "memoff",
+    "round": "confirm-memory-2",
+    "iterations": 14,
+    "wall_seconds": 8.764612207887694,
+    "log": "confirm-memory-2-memoff-sed.log",
+    "seconds": 8.502972250105813,
+    "validated": true
+  },
+  {
+    "case": "sed",
+    "variant": "mem",
+    "round": "confirm-memory-2",
+    "iterations": 14,
+    "wall_seconds": 8.881874083075672,
+    "log": "confirm-memory-2-mem-sed.log",
+    "seconds": 8.621606000000611,
+    "validated": true
+  },
+  {
+    "case": "sed",
+    "variant": "off",
+    "round": "confirm-memory-2",
+    "iterations": 14,
+    "wall_seconds": 9.396792999934405,
+    "log": "confirm-memory-2-off-sed.log",
+    "seconds": 9.136322082951665,
+    "validated": true
+  },
+  {
+    "case": "sed",
+    "variant": "pin",
+    "round": "confirm-memory-2",
+    "iterations": 14,
+    "wall_seconds": 9.50114516587928,
+    "log": "confirm-memory-2-pin-sed.log",
+    "seconds": 9.224507834063843,
+    "validated": true
+  },
+  {
+    "case": "grep_fixed",
+    "variant": "memoff",
+    "round": "confirm-memory-2",
+    "iterations": 158,
+    "wall_seconds": 2.965143207926303,
+    "log": "confirm-memory-2-memoff-grep_fixed.log",
+    "seconds": 2.7038839170709252,
+    "validated": true
+  },
+  {
+    "case": "grep_fixed",
+    "variant": "mem",
+    "round": "confirm-memory-2",
+    "iterations": 158,
+    "wall_seconds": 2.8834957079961896,
+    "log": "confirm-memory-2-mem-grep_fixed.log",
+    "seconds": 2.624922291142866,
+    "validated": true
+  },
+  {
+    "case": "grep_fixed",
+    "variant": "off",
+    "round": "confirm-memory-2",
+    "iterations": 158,
+    "wall_seconds": 3.1661070419941097,
+    "log": "confirm-memory-2-off-grep_fixed.log",
+    "seconds": 2.9074337920174003,
+    "validated": true
+  },
+  {
+    "case": "grep_fixed",
+    "variant": "pin",
+    "round": "confirm-memory-2",
+    "iterations": 158,
+    "wall_seconds": 3.213549291016534,
+    "log": "confirm-memory-2-pin-grep_fixed.log",
+    "seconds": 2.9579291250556707,
+    "validated": true
+  },
+  {
+    "case": "grep_regex",
+    "variant": "memoff",
+    "round": "confirm-memory-2",
+    "iterations": 102,
+    "wall_seconds": 4.6601162501610816,
+    "log": "confirm-memory-2-memoff-grep_regex.log",
+    "seconds": 4.398704875027761,
+    "validated": true
+  },
+  {
+    "case": "grep_regex",
+    "variant": "mem",
+    "round": "confirm-memory-2",
+    "iterations": 102,
+    "wall_seconds": 4.746477375039831,
+    "log": "confirm-memory-2-mem-grep_regex.log",
+    "seconds": 4.484060375019908,
+    "validated": true
+  },
+  {
+    "case": "grep_regex",
+    "variant": "off",
+    "round": "confirm-memory-2",
+    "iterations": 102,
+    "wall_seconds": 5.281391833908856,
+    "log": "confirm-memory-2-off-grep_regex.log",
+    "seconds": 5.020743832923472,
+    "validated": true
+  },
+  {
+    "case": "grep_regex",
+    "variant": "pin",
+    "round": "confirm-memory-2",
+    "iterations": 102,
+    "wall_seconds": 5.369491790886968,
+    "log": "confirm-memory-2-pin-grep_regex.log",
+    "seconds": 5.111687750089914,
+    "validated": true
+  },
+  {
+    "case": "sort",
+    "variant": "memoff",
+    "round": "confirm-memory-2",
+    "iterations": 38,
+    "wall_seconds": 7.551703125005588,
+    "log": "confirm-memory-2-memoff-sort.log",
+    "seconds": 7.29024637513794,
+    "validated": true
+  },
+  {
+    "case": "sort",
+    "variant": "mem",
+    "round": "confirm-memory-2",
+    "iterations": 38,
+    "wall_seconds": 7.437704958952963,
+    "log": "confirm-memory-2-mem-sort.log",
+    "seconds": 7.175334042171016,
+    "validated": true
+  },
+  {
+    "case": "sort",
+    "variant": "off",
+    "round": "confirm-memory-2",
+    "iterations": 38,
+    "wall_seconds": 7.624766165856272,
+    "log": "confirm-memory-2-off-sort.log",
+    "seconds": 7.3643640000373125,
+    "validated": true
+  },
+  {
+    "case": "sort",
+    "variant": "pin",
+    "round": "confirm-memory-2",
+    "iterations": 38,
+    "wall_seconds": 7.653710291953757,
+    "log": "confirm-memory-2-pin-sort.log",
+    "seconds": 7.394551792182028,
+    "validated": true
+  },
+  {
+    "case": "sha256",
+    "variant": "memoff",
+    "round": "confirm-memory-2",
+    "iterations": 72,
+    "wall_seconds": 3.9894830000121146,
+    "log": "confirm-memory-2-memoff-sha256.log",
+    "seconds": 3.7316904577892274,
+    "validated": true
+  },
+  {
+    "case": "sha256",
+    "variant": "mem",
+    "round": "confirm-memory-2",
+    "iterations": 72,
+    "wall_seconds": 4.117086791899055,
+    "log": "confirm-memory-2-mem-sha256.log",
+    "seconds": 3.8557660840451717,
+    "validated": true
+  },
+  {
+    "case": "sha256",
+    "variant": "off",
+    "round": "confirm-memory-2",
+    "iterations": 72,
+    "wall_seconds": 5.006914624944329,
+    "log": "confirm-memory-2-off-sha256.log",
+    "seconds": 4.745716416044161,
+    "validated": true
+  },
+  {
+    "case": "sha256",
+    "variant": "pin",
+    "round": "confirm-memory-2",
+    "iterations": 72,
+    "wall_seconds": 4.979723250027746,
+    "log": "confirm-memory-2-pin-sha256.log",
+    "seconds": 4.717991749988869,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "memoff",
+    "round": "confirm-memory-2",
+    "iterations": 164,
+    "wall_seconds": 3.275958000216633,
+    "log": "confirm-memory-2-memoff-tar.log",
+    "seconds": 3.0144462091848254,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "mem",
+    "round": "confirm-memory-2",
+    "iterations": 164,
+    "wall_seconds": 3.2968087911140174,
+    "log": "confirm-memory-2-mem-tar.log",
+    "seconds": 3.0330533331725746,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "off",
+    "round": "confirm-memory-2",
+    "iterations": 164,
+    "wall_seconds": 3.2157967081293464,
+    "log": "confirm-memory-2-off-tar.log",
+    "seconds": 2.955799625022337,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "pin",
+    "round": "confirm-memory-2",
+    "iterations": 164,
+    "wall_seconds": 3.2921692500822246,
+    "log": "confirm-memory-2-pin-tar.log",
+    "seconds": 3.0326392501592636,
+    "validated": true
+  }
+]

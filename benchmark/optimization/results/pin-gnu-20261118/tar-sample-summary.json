@@ -1,0 +1,257 @@
+{
+  "mem2off": {
+    "listed_native_leaf_samples": 1224,
+    "top": [
+      {
+        "symbol": "fiberish::DecodeInstructionBounded(unsigned char const*, unsigned long, fiberish::DecodedInstTmp*, unsigned short*, unsigned short*)",
+        "samples": 116
+      },
+      {
+        "symbol": "ankerl::unordered_dense::v4_8_1::detail::table<fiberish::OperandIndex<true, true>::Key, std::vector<fiberish::OperandShapeEntry const*>, fiberish::OperandIndex<true, true>::KeyHash, ankerl::unordered_dense::v4_8_1::bucket_type::standard, ankerl::unordered_dense::v4_8_1::detail::default_container_t, false>::do_find<fiberish::OperandIndex<true, true>::Key>(fiberish::OperandIndex<true, true>::Key const&)",
+        "samples": 74
+      },
+      {
+        "symbol": "fiberish::FinalizeDecodedInstruction(fiberish::EmuState*, unsigned int, unsigned short, fiberish::DecodedOp*)",
+        "samples": 54
+      },
+      {
+        "symbol": "ankerl::unordered_dense::v4_8_1::detail::table<long long (*)(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long), long long (*)(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long), ankerl::unordered_dense::v4_8_1::hash<long long (*)(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long), void>, ankerl::unordered_dense::v4_8_1::bucket_type::standard, ankerl::unordered_dense::v4_8_1::detail::default_container_t, false>::do_find<long long (*)(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)>(long long (* const&)(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long))",
+        "samples": 53
+      },
+      {
+        "symbol": "fiberish::DecodeBlock(fiberish::EmuState*, unsigned int, unsigned int, unsigned long long, fiberish::BasicBlock*, bool*)",
+        "samples": 52
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpJcc_NE_Rel8(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::ExactOperandPolicy<5ull, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+        "samples": 49
+      },
+      {
+        "symbol": "fiberish::LowerOperandHandler(fiberish::DecodedOp const*)",
+        "samples": 49
+      },
+      {
+        "symbol": "fiberish::mem::Mmu::publish_runtime_tlb_flush_deduped(unsigned int)",
+        "samples": 49
+      },
+      {
+        "symbol": "fiberish::mem::Mmu::cache_decoded_block(unsigned int, fiberish::BasicBlock*)",
+        "samples": 38
+      },
+      {
+        "symbol": "fiberish::mem::Mmu::lookup_cached_block(unsigned int)",
+        "samples": 34
+      },
+      {
+        "symbol": "ankerl::unordered_dense::v4_8_1::detail::table<fiberish::mem::BlockCacheKey, unsigned int, fiberish::mem::BlockCacheKeyHash, ankerl::unordered_dense::v4_8_1::bucket_type::standard, ankerl::unordered_dense::v4_8_1::detail::default_container_t, false>::do_find<fiberish::mem::BlockCacheKey>(fiberish::mem::BlockCacheKey const&)",
+        "samples": 31
+      },
+      {
+        "symbol": "fiberish::GeneratedFindSuperOpcode(fiberish::DecodedOp const*)",
+        "samples": 30
+      },
+      {
+        "symbol": "fiberish::mem::CodeCacheState::InvalidateHostPages(fiberish::mem::HostPageSet const&, fiberish::mem::HostPageSet*)",
+        "samples": 30
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpRet(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::ExactOperandPolicy<3ull, 0u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+        "samples": 28
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpCall_Rel(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::ExactOperandPolicy<0ull, 0u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+        "samples": 22
+      },
+      {
+        "symbol": "fiberish::OperandClone_267_SuperOpcode_4_050_OpMovzx_Byte__OpInc_Reg_NF__OpAdd_EvGv_NF_32_ModReg__OpGroup1_EvIz_Cmp_32_Flags_Ecx(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+        "samples": 21
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpJcc_E_Rel8(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::ExactOperandPolicy<4ull, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+        "samples": 20
+      },
+      {
+        "symbol": "ankerl::unordered_dense::v4_8_1::detail::table<fiberish::mem::BlockCacheKey, unsigned int, fiberish::mem::BlockCacheKeyHash, ankerl::unordered_dense::v4_8_1::bucket_type::standard, ankerl::unordered_dense::v4_8_1::detail::default_container_t, false>::increase_size()",
+        "samples": 18
+      },
+      {
+        "symbol": "fiberish::OpExitBlock<0, false>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+        "samples": 17
+      },
+      {
+        "symbol": "fiberish::mem::CodeCacheState::RegisterBlockHostPages(unsigned int, fiberish::mem::HostPageSet const&)",
+        "samples": 15
+      }
+    ]
+  },
+  "mem2abi": {
+    "listed_native_leaf_samples": 1193,
+    "top": [
+      {
+        "symbol": "fiberish::DecodeInstructionBounded(unsigned char const*, unsigned long, fiberish::DecodedInstTmp*, unsigned short*, unsigned short*)",
+        "samples": 96
+      },
+      {
+        "symbol": "ankerl::unordered_dense::v4_8_1::detail::table<fiberish::OperandIndex<true, true>::Key, std::vector<fiberish::OperandShapeEntry const*>, fiberish::OperandIndex<true, true>::KeyHash, ankerl::unordered_dense::v4_8_1::bucket_type::standard, ankerl::unordered_dense::v4_8_1::detail::default_container_t, false>::do_find<fiberish::OperandIndex<true, true>::Key>(fiberish::OperandIndex<true, true>::Key const&)",
+        "samples": 75
+      },
+      {
+        "symbol": "fiberish::DecodeBlock(fiberish::EmuState*, unsigned int, unsigned int, unsigned long long, fiberish::BasicBlock*, bool*)",
+        "samples": 65
+      },
+      {
+        "symbol": "fiberish::mem::Mmu::publish_runtime_tlb_flush_deduped(unsigned int)",
+        "samples": 53
+      },
+      {
+        "symbol": "fiberish::LowerOperandHandler(fiberish::DecodedOp const*)",
+        "samples": 48
+      },
+      {
+        "symbol": "fiberish::mem::Mmu::cache_decoded_block(unsigned int, fiberish::BasicBlock*)",
+        "samples": 46
+      },
+      {
+        "symbol": "fiberish::mem::CodeCacheState::InvalidateHostPages(fiberish::mem::HostPageSet const&, fiberish::mem::HostPageSet*)",
+        "samples": 44
+      },
+      {
+        "symbol": "fiberish::FinalizeDecodedInstruction(fiberish::EmuState*, unsigned int, unsigned short, fiberish::DecodedOp*)",
+        "samples": 42
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpJcc_NE_Rel8(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::ExactOperandPolicy<5ull, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 41
+      },
+      {
+        "symbol": "ankerl::unordered_dense::v4_8_1::detail::table<fiberish::mem::BlockCacheKey, unsigned int, fiberish::mem::BlockCacheKeyHash, ankerl::unordered_dense::v4_8_1::bucket_type::standard, ankerl::unordered_dense::v4_8_1::detail::default_container_t, false>::do_find<fiberish::mem::BlockCacheKey>(fiberish::mem::BlockCacheKey const&)",
+        "samples": 37
+      },
+      {
+        "symbol": "ankerl::unordered_dense::v4_8_1::detail::table<long long (*)(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int), long long (*)(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int), ankerl::unordered_dense::v4_8_1::hash<long long (*)(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int), void>, ankerl::unordered_dense::v4_8_1::bucket_type::standard, ankerl::unordered_dense::v4_8_1::detail::default_container_t, false>::do_find<long long (*)(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)>(long long (* const&)(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int))",
+        "samples": 36
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpRet(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::ExactOperandPolicy<3ull, 0u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 25
+      },
+      {
+        "symbol": "fiberish::OpExitBlock<0, false>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 25
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpCall_Rel(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::ExactOperandPolicy<0ull, 0u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 24
+      },
+      {
+        "symbol": "fiberish::mem::Mmu::lookup_cached_block(unsigned int)",
+        "samples": 23
+      },
+      {
+        "symbol": "fiberish::GeneratedFindSuperOpcode(fiberish::DecodedOp const*)",
+        "samples": 22
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpJcc_E_Rel8(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::ExactOperandPolicy<4ull, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 17
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpMovzx_Byte_32_Edx(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::ExactOperandPolicy<34361311252ull, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 17
+      },
+      {
+        "symbol": "<deduplicated_symbol>",
+        "samples": 15
+      },
+      {
+        "symbol": "fiberish::ApplySuperOpcodesToBlockOps(fiberish::DecodedOp*, unsigned int, bool)",
+        "samples": 15
+      }
+    ]
+  },
+  "mem2": {
+    "listed_native_leaf_samples": 1211,
+    "top": [
+      {
+        "symbol": "fiberish::DecodeInstructionBounded(unsigned char const*, unsigned long, fiberish::DecodedInstTmp*, unsigned short*, unsigned short*)",
+        "samples": 119
+      },
+      {
+        "symbol": "fiberish::DecodeBlock(fiberish::EmuState*, unsigned int, unsigned int, unsigned long long, fiberish::BasicBlock*, bool*)",
+        "samples": 73
+      },
+      {
+        "symbol": "ankerl::unordered_dense::v4_8_1::detail::table<fiberish::OperandIndex<true, true>::Key, std::vector<fiberish::OperandShapeEntry const*>, fiberish::OperandIndex<true, true>::KeyHash, ankerl::unordered_dense::v4_8_1::bucket_type::standard, ankerl::unordered_dense::v4_8_1::detail::default_container_t, false>::do_find<fiberish::OperandIndex<true, true>::Key>(fiberish::OperandIndex<true, true>::Key const&)",
+        "samples": 66
+      },
+      {
+        "symbol": "fiberish::mem::Mmu::publish_runtime_tlb_flush_deduped(unsigned int)",
+        "samples": 58
+      },
+      {
+        "symbol": "fiberish::FinalizeDecodedInstruction(fiberish::EmuState*, unsigned int, unsigned short, fiberish::DecodedOp*)",
+        "samples": 53
+      },
+      {
+        "symbol": "fiberish::LowerOperandHandler(fiberish::DecodedOp const*)",
+        "samples": 51
+      },
+      {
+        "symbol": "ankerl::unordered_dense::v4_8_1::detail::table<long long (*)(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int), long long (*)(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int), ankerl::unordered_dense::v4_8_1::hash<long long (*)(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int), void>, ankerl::unordered_dense::v4_8_1::bucket_type::standard, ankerl::unordered_dense::v4_8_1::detail::default_container_t, false>::do_find<long long (*)(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)>(long long (* const&)(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int))",
+        "samples": 46
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpJcc_NE_Rel8(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::ExactOperandPolicy<5ull, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 43
+      },
+      {
+        "symbol": "fiberish::mem::Mmu::cache_decoded_block(unsigned int, fiberish::BasicBlock*)",
+        "samples": 40
+      },
+      {
+        "symbol": "ankerl::unordered_dense::v4_8_1::detail::table<fiberish::mem::BlockCacheKey, unsigned int, fiberish::mem::BlockCacheKeyHash, ankerl::unordered_dense::v4_8_1::bucket_type::standard, ankerl::unordered_dense::v4_8_1::detail::default_container_t, false>::do_find<fiberish::mem::BlockCacheKey>(fiberish::mem::BlockCacheKey const&)",
+        "samples": 35
+      },
+      {
+        "symbol": "fiberish::mem::CodeCacheState::InvalidateHostPages(fiberish::mem::HostPageSet const&, fiberish::mem::HostPageSet*)",
+        "samples": 33
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpCall_Rel(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::ExactOperandPolicy<0ull, 0u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 28
+      },
+      {
+        "symbol": "fiberish::GeneratedFindSuperOpcode(fiberish::DecodedOp const*)",
+        "samples": 28
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpMovzx_Byte_32_Edx(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::ExactOperandPolicy<34361311252ull, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 24
+      },
+      {
+        "symbol": "fiberish::mem::Mmu::lookup_cached_block(unsigned int)",
+        "samples": 22
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpJcc_E_Rel8(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::ExactOperandPolicy<4ull, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 20
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpRet(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::ExactOperandPolicy<3ull, 0u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 20
+      },
+      {
+        "symbol": "ankerl::unordered_dense::v4_8_1::detail::table<fiberish::mem::BlockCacheKey, unsigned int, fiberish::mem::BlockCacheKeyHash, ankerl::unordered_dense::v4_8_1::bucket_type::standard, ankerl::unordered_dense::v4_8_1::detail::default_container_t, false>::increase_size()",
+        "samples": 19
+      },
+      {
+        "symbol": "fiberish::ApplySuperOpcodesToBlockOps(fiberish::DecodedOp*, unsigned int, bool)",
+        "samples": 18
+      },
+      {
+        "symbol": "fiberish::mem::CodeCacheState::RegisterBlockHostPages(unsigned int, fiberish::mem::HostPageSet const&)",
+        "samples": 17
+      }
+    ]
+  }
+}

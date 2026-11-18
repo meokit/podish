@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <type_traits>
 #include <vector>
 #include "dispatch.h"
 
@@ -18,9 +19,11 @@ struct OperandShapeEntry {
     uint8_t width;
 };
 using RegisterOperandSelector = HandlerFunc (*)(const DecodedOp*);
+enum class PinOperandForm : uint8_t { Register, Opcode, Address };
 struct RegisterOperandEntry {
     HandlerFunc original;
     RegisterOperandSelector select;
+    PinOperandForm form = PinOperandForm::Register;
 };
 
 template <LogicFunc Target, PinWriteRole Role, bool Byte, bool Group1>
@@ -40,12 +43,28 @@ HandlerFunc SelectRegisterOperand(const DecodedOp* op) {
     }
 }
 
+template <LogicFunc Target, PinWriteRole Role, bool Byte, bool OpcodeRegister>
+HandlerFunc SelectEncodedOperand(const DecodedOp* op) {
+    if constexpr (Role == PinWriteRole::None) {
+        return DispatchWrapper<Target, EncodedOperandPolicy<Role, PinWriteClass::Other, Byte, OpcodeRegister>>;
+    } else {
+        const unsigned field = Role == PinWriteRole::Reg ? op->modrm >> 3 : op->modrm;
+        const unsigned parent = field & (Byte ? 3 : 7);
+        if (parent == 0)
+            return DispatchWrapper<Target, EncodedOperandPolicy<Role, PinWriteClass::Eax, Byte, OpcodeRegister>>;
+        if constexpr (!Byte)
+            if (parent == 4)
+                return DispatchWrapper<Target, EncodedOperandPolicy<Role, PinWriteClass::Esp, Byte, OpcodeRegister>>;
+        return DispatchWrapper<Target, EncodedOperandPolicy<Role, PinWriteClass::Other, Byte, OpcodeRegister>>;
+    }
+}
+
 FORCE_INLINE uint64_t OperandShape(const DecodedOp* op) {
     const uint32_t ea = op->meta.flags.has_mem ? GetExt(op)->data.ea_desc : 0;
     return op->modrm | (uint64_t(op->prefixes.all) << 8) | (uint64_t(ea) << 16);
 }
 
-template <bool HasRegisters>
+template <bool HasRegisters, bool HasEncoded = false>
 class OperandIndex {
     struct Key {
         HandlerFunc handler;
@@ -61,6 +80,9 @@ class OperandIndex {
     ankerl::unordered_dense::map<Key, std::vector<const OperandShapeEntry*>, KeyHash> shapes_;
     ankerl::unordered_dense::map<HandlerFunc, RegisterOperandSelector> registers_;
     std::array<uint64_t, 16> bits_{};
+    struct NoEncodedOperands {};
+    [[no_unique_address]] std::conditional_t<
+        HasEncoded, ankerl::unordered_dense::map<HandlerFunc, RegisterOperandEntry>, NoEncodedOperands> encoded_;
     static uint64_t HandlerHash(HandlerFunc handler) {
         return (reinterpret_cast<uintptr_t>(handler) >> 2) * uint64_t{0x9e3779b97f4a7c15ULL};
     }
@@ -81,6 +103,13 @@ public:
         if constexpr (HasRegisters) {
             registers_.reserve(register_count);
             for (size_t i = 0; i < register_count; ++i) {
+                if constexpr (HasEncoded) {
+                    if (registers[i].form != PinOperandForm::Register) {
+                        encoded_[registers[i].original] = registers[i];
+                        Remember(registers[i].original);
+                        continue;
+                    }
+                }
                 registers_[registers[i].original] = registers[i].select;
                 Remember(registers[i].original);
             }
@@ -109,6 +138,18 @@ public:
                 !op->prefixes.flags.lock) {
                 const auto reg = registers_.find(handler);
                 if (reg != registers_.end()) return reg->second(op);
+            }
+        }
+        if constexpr (HasEncoded) {
+            if (!op->prefixes.flags.lock) {
+                const auto entry = encoded_.find(handler);
+                if (entry != encoded_.end()) {
+                    const auto& binding = entry->second;
+                    const bool matches = binding.form == PinOperandForm::Opcode
+                                             ? !op->meta.flags.has_modrm
+                                             : op->meta.flags.has_modrm && (op->modrm & 0xc0) != 0xc0;
+                    if (matches) return binding.select(op);
+                }
             }
         }
         return nullptr;

@@ -1,0 +1,392 @@
+{
+  "sha256-gnuoff-sample-flat": {
+    "listed_native_leaf_samples": 7039,
+    "top": [
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpAdd_GvEv_NF(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::ExactOperandPolicy<25905070172ull, 0u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+        "samples": 499
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::LogicFlow fiberish::op::OpRotateRegImmediate<unsigned int, true, false>(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::ExactOperandPolicy<201ull, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+        "samples": 416
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpMov_Load_Edi_EspBaseNoIndexNoSegment(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::ExactOperandPolicy<25905070204ull, 0u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+        "samples": 334
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::LogicFlow fiberish::op::OpRotateRegImmediate<unsigned int, true, false>(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::ExactOperandPolicy<202ull, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+        "samples": 332
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::LogicFlow fiberish::op::OpRotateRegImmediate<unsigned int, true, false>(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::ExactOperandPolicy<206ull, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+        "samples": 319
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpGroup2_EvIb_Shr_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::ExactOperandPolicy<235ull, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+        "samples": 223
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpXor_EvGv(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::RegisterOperandPolicy<(fiberish::PinWriteRole)1, (fiberish::PinWriteClass)-1, false>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+        "samples": 219
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpGroup2_EvIb_Shr_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::ExactOperandPolicy<239ull, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+        "samples": 216
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpMov_Store_Ebx_EspBaseNoIndexNoSegment(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::ExactOperandPolicy<25905070172ull, 0u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+        "samples": 212
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpMov_Load_Ecx_EspBaseNoIndexNoSegment(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::ExactOperandPolicy<25905070156ull, 0u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+        "samples": 211
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpAdd_GvEv_NF(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::DynamicOperandPolicy>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+        "samples": 183
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpMov_Load_Esi_EspBaseNoIndexNoSegment(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::ExactOperandPolicy<25905070196ull, 0u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+        "samples": 180
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpAdd_GvEv_NF(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::ExactOperandPolicy<25905070164ull, 0u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+        "samples": 176
+      },
+      {
+        "symbol": "fiberish::OpExitBlock<0, false>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+        "samples": 157
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpAdd_EvGv_NF_32_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::ExactOperandPolicy<251ull, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+        "samples": 143
+      }
+    ]
+  },
+  "grep_regex-pin-sample-flat": {
+    "listed_native_leaf_samples": 7195,
+    "top": [
+      {
+        "symbol": "fiberish::SuperOpcode_4_043_OpMov_Load_Edx__OpMov_Load_Eax__OpGroup5_Ev_Inc_32_Flags__OpMovzx_Byte(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 1431
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpCmp_EvGv_32(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::DynamicOperandPolicy>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 695
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpJcc_NE_Rel8(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::DynamicOperandPolicy>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 382
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpJcc_E_Rel8(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::DynamicOperandPolicy>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 289
+      },
+      {
+        "symbol": "fiberish::OpExitBlock<0, false>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 239
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpMov_Load_Eax(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::DynamicOperandPolicy>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 221
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpMov_Store_Eax(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::DynamicOperandPolicy>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 201
+      },
+      {
+        "symbol": "fiberish::SuperOpcode_2_026_OpCmp_EvGv_32_ModReg__OpJcc_LE_Rel32(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 200
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpMov_Load_Edi(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::DynamicOperandPolicy>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 189
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpMov_Load_Esi(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::DynamicOperandPolicy>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 177
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpJmp_Rel8(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::ExactOperandPolicy<3ull, 0u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 159
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpMov_GbEb(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::DynamicOperandPolicy>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 125
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpMov_RegImm8(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::DynamicOperandPolicy>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 120
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpGroup1_EvIz_And_32_Flags(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::RegisterOperandPolicy<(fiberish::PinWriteRole)1, (fiberish::PinWriteClass)-1, false>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 119
+      },
+      {
+        "symbol": "fiberish::SuperOpcode_4_034_OpMov_Load_Edx_EaxBaseNoIndexNoSegment__OpLea_32_Ecx__OpGroup3_Ev_Not_32_Flags__OpAnd_EvGv_NF_32_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 117
+      }
+    ]
+  },
+  "gunzip-off-sample-flat": {
+    "listed_native_leaf_samples": 7237,
+    "top": [
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpJcc_AE_Rel8(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::DynamicOperandPolicy>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+        "samples": 483
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpCmp_EvGv_32(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::DynamicOperandPolicy>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+        "samples": 411
+      },
+      {
+        "symbol": "fiberish::SuperOpcode_4_039_OpMov_EvGv_Esi__OpMovzx_Byte__OpMov_Load_Ecx__OpXor_GvEv_NF(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+        "samples": 411
+      },
+      {
+        "symbol": "fiberish::SuperOpcode_4_162_OpMovzx_Byte__OpInc_Reg_NF__OpXor_EvGv_NF_32_ModReg__OpGroup2_EvIb_Shr_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+        "samples": 390
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpMov_Load_Edi(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::DynamicOperandPolicy>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+        "samples": 349
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpMov_Load_Eax(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::DynamicOperandPolicy>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+        "samples": 345
+      },
+      {
+        "symbol": "fiberish::op::Helper_Movs<unsigned char>(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)::'lambda'()::operator()() const",
+        "samples": 301
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpJcc_NE_Rel8(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::DynamicOperandPolicy>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+        "samples": 253
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpCmp_EvGv_32_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::RegisterOperandPolicy<(fiberish::PinWriteRole)0, (fiberish::PinWriteClass)-1, false>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+        "samples": 240
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpMov_Store_Eax(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::DynamicOperandPolicy>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+        "samples": 203
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpGroup2_EvCl_Shr(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::DynamicOperandPolicy>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+        "samples": 201
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpGroup2_EvCl_Shl_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::RegisterOperandPolicy<(fiberish::PinWriteRole)1, (fiberish::PinWriteClass)0, false>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+        "samples": 187
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpMovzx_Byte_32_Eax(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::DynamicOperandPolicy>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+        "samples": 186
+      },
+      {
+        "symbol": "fiberish::SuperOpcode_2_005_OpGroup1_EvIz_Cmp_32_Flags__OpJcc_NE_Rel32(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+        "samples": 181
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpOr_EvGv(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::DynamicOperandPolicy>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+        "samples": 178
+      }
+    ]
+  },
+  "sha256-gnu-sample-flat": {
+    "listed_native_leaf_samples": 7086,
+    "top": [
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpAdd_GvEv_NF(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::ExactOperandPolicy<25905070172ull, 0u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 593
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::LogicFlow fiberish::op::OpRotateRegImmediate<unsigned int, true, false>(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::ExactOperandPolicy<201ull, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 369
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::LogicFlow fiberish::op::OpRotateRegImmediate<unsigned int, true, false>(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::ExactOperandPolicy<202ull, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 358
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpMov_Load_Edi_EspBaseNoIndexNoSegment(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::ExactOperandPolicy<25905070204ull, 0u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 350
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::LogicFlow fiberish::op::OpRotateRegImmediate<unsigned int, true, false>(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::ExactOperandPolicy<206ull, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 298
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpAdd_GvEv_NF(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::DynamicOperandPolicy>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 224
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpMov_Store_Ebx_EspBaseNoIndexNoSegment(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::ExactOperandPolicy<25905070172ull, 0u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 210
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpMov_Load_Ecx_EspBaseNoIndexNoSegment(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::ExactOperandPolicy<25905070156ull, 0u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 204
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpGroup2_EvIb_Shr_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::ExactOperandPolicy<239ull, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 203
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpGroup2_EvIb_Shr_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::ExactOperandPolicy<235ull, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 185
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpAdd_GvEv_NF(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::ExactOperandPolicy<25905070164ull, 0u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 177
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpMov_Load_Esi_EspBaseNoIndexNoSegment(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::ExactOperandPolicy<25905070196ull, 0u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 173
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpXor_EvGv(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::RegisterOperandPolicy<(fiberish::PinWriteRole)1, (fiberish::PinWriteClass)-1, false>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 166
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpAdd_EvGv_NF_32_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::ExactOperandPolicy<251ull, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 146
+      },
+      {
+        "symbol": "fiberish::OpExitBlock<0, false>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 141
+      }
+    ]
+  },
+  "grep_regex-off-sample-flat": {
+    "listed_native_leaf_samples": 7202,
+    "top": [
+      {
+        "symbol": "fiberish::SuperOpcode_4_043_OpMov_Load_Edx__OpMov_Load_Eax__OpGroup5_Ev_Inc_32_Flags__OpMovzx_Byte(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+        "samples": 1519
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpCmp_EvGv_32(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::DynamicOperandPolicy>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+        "samples": 680
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpJcc_NE_Rel8(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::DynamicOperandPolicy>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+        "samples": 415
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpJcc_E_Rel8(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::DynamicOperandPolicy>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+        "samples": 278
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpMov_Load_Eax(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::DynamicOperandPolicy>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+        "samples": 233
+      },
+      {
+        "symbol": "fiberish::OpExitBlock<0, false>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+        "samples": 219
+      },
+      {
+        "symbol": "fiberish::SuperOpcode_2_026_OpCmp_EvGv_32_ModReg__OpJcc_LE_Rel32(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+        "samples": 204
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpMov_Load_Edi(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::DynamicOperandPolicy>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+        "samples": 203
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpMov_Store_Eax(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::DynamicOperandPolicy>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+        "samples": 178
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpMov_Load_Esi(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::DynamicOperandPolicy>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+        "samples": 176
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpJmp_Rel8(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::ExactOperandPolicy<3ull, 0u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+        "samples": 174
+      },
+      {
+        "symbol": "fiberish::SuperOpcode_4_062_OpMov_EvGv_Eax__OpGroup1_EvIb_Sub_32_Flags_Eax__OpMovzx_Byte_32_Ecx__OpCmp_EvGv_32_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+        "samples": 138
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpMov_RegImm8(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::DynamicOperandPolicy>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+        "samples": 116
+      },
+      {
+        "symbol": "fiberish::SuperOpcode_4_034_OpMov_Load_Edx_EaxBaseNoIndexNoSegment__OpLea_32_Ecx__OpGroup3_Ev_Not_32_Flags__OpAnd_EvGv_NF_32_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+        "samples": 115
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpGroup1_EvIz_And_32_Flags(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::RegisterOperandPolicy<(fiberish::PinWriteRole)1, (fiberish::PinWriteClass)-1, false>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long)",
+        "samples": 114
+      }
+    ]
+  },
+  "gunzip-pin-sample-flat": {
+    "listed_native_leaf_samples": 7204,
+    "top": [
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpJcc_AE_Rel8(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::DynamicOperandPolicy>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 507
+      },
+      {
+        "symbol": "fiberish::SuperOpcode_4_039_OpMov_EvGv_Esi__OpMovzx_Byte__OpMov_Load_Ecx__OpXor_GvEv_NF(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 421
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpMov_Load_Eax(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::DynamicOperandPolicy>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 400
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpCmp_EvGv_32(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::DynamicOperandPolicy>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 390
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpMov_Load_Edi(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::DynamicOperandPolicy>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 385
+      },
+      {
+        "symbol": "fiberish::SuperOpcode_4_162_OpMovzx_Byte__OpInc_Reg_NF__OpXor_EvGv_NF_32_ModReg__OpGroup2_EvIb_Shr_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 359
+      },
+      {
+        "symbol": "fiberish::op::Helper_Movs<unsigned char>(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&)::'lambda'()::operator()() const",
+        "samples": 327
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpJcc_NE_Rel8(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::DynamicOperandPolicy>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 269
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpCmp_EvGv_32_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::RegisterOperandPolicy<(fiberish::PinWriteRole)0, (fiberish::PinWriteClass)-1, false>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 222
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpGroup2_EvCl_Shr(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::DynamicOperandPolicy>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 191
+      },
+      {
+        "symbol": "fiberish::SuperOpcode_2_005_OpGroup1_EvIz_Cmp_32_Flags__OpJcc_NE_Rel32(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 186
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpGroup2_EvCl_Shl_ModReg(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::RegisterOperandPolicy<(fiberish::PinWriteRole)1, (fiberish::PinWriteClass)0, false>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 183
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpMovzx_Byte_32_Eax(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::DynamicOperandPolicy>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 172
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpSub_EvGv_NF(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::DynamicOperandPolicy>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 160
+      },
+      {
+        "symbol": "fiberish::DispatchWrapper<&fiberish::op::OpOr_EvGv(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned int*, unsigned long long&), fiberish::DynamicOperandPolicy>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+        "samples": 158
+      }
+    ]
+  }
+}

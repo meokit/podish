@@ -1,0 +1,10 @@
+test_explicit_compiler_sibling_wins_over_other_llvm_on_path (test_gen_handler_reflection.SymbolToolSelectionTests.test_explicit_compiler_sibling_wins_over_other_llvm_on_path) ... ok
+test_explicit_nm_overrides_compiler_and_path_discovery (test_gen_handler_reflection.SymbolToolSelectionTests.test_explicit_nm_overrides_compiler_and_path_discovery) ... ok
+test_missing_sibling_keeps_path_fallback (test_gen_handler_reflection.SymbolToolSelectionTests.test_missing_sibling_keeps_path_fallback) ... ok
+test_no_explicit_compiler_retains_existing_path_selection (test_gen_handler_reflection.SymbolToolSelectionTests.test_no_explicit_compiler_retains_existing_path_selection) ... ok
+test_symbol_tool_failure_includes_llvm_diagnostic (test_gen_handler_reflection.SymbolToolSelectionTests.test_symbol_tool_failure_includes_llvm_diagnostic) ... ok
+
+----------------------------------------------------------------------
+Ran 5 tests in 0.002s
+
+OK

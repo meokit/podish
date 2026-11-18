@@ -1,0 +1,49 @@
+{
+  "mem2off": {
+    "config": "fusion=SHAPED;enabled=ON;operand=HYBRID;budget=512;scope=ALL;pin=OFF;coverage=MEMORY;plan=58a03316b7f0ba3fd35249942d9f0faab7d9c50df0b4638d7b2fc5403341859c",
+    "binary_bytes": 3999280,
+    "sha256": "b021c3b23b5e5df782233b41dad08225eeea11c6158b84cd6dee37ddaf94dc1a",
+    "store": [
+      {
+        "symbol": "__ZN8fiberish15DispatchWrapperIXadL_ZNS_2op39OpMov_Store_Ebx_EspBaseNoIndexNoSegmentEPNS_8EmuStateEPNS_9DecodedOpEPNS_3mem8MicroTLBEjPjRyEENS_18ExactOperandPolicyILy25905070172ELj3EEEEExS3_S5_xyyjy",
+        "bytes": 208,
+        "sp_refs": 0,
+        "pin_loads": []
+      }
+    ],
+    "sections": "Segment __TEXT: 2408448\n\tSection __text: 1362200\n\tSection __stubs: 420\n\tSection __init_offsets: 4\n\tSection __const: 8032\n\tSection __cstring: 1024587\n\tSection __unwind_info: 752\n\tSection __eh_frame: 3824\n\ttotal 2399819\nSegment __DATA_CONST: 147456\n\tSection __got: 8576\n\tSection __const: 124264\n\ttotal 132840\nSegment __DATA: 81920\n\tSection __data: 24\n\tSection __thread_vars: 120\n\tSection __thread_data: 2\n\tSection __thread_bss: 3 (zerofill)\n\tSection __common: 41064 (zerofill)\n\tSection __bss: 24976 (zerofill)\n\ttotal 66189\nSegment __LINKEDIT: 1441792\ntotal 4079616\n"
+  },
+  "mem2abi": {
+    "config": "fusion=SHAPED;enabled=ON;operand=HYBRID;budget=512;scope=ALL;pin=ABI_ONLY;coverage=MEMORY;plan=58a03316b7f0ba3fd35249942d9f0faab7d9c50df0b4638d7b2fc5403341859c",
+    "binary_bytes": 4097888,
+    "sha256": "c41d903560c82c5d853259ecb0a2bfd4885f1dab18ad447fd50145b83c14f7ac",
+    "store": [
+      {
+        "symbol": "__ZN8fiberish15DispatchWrapperIXadL_ZNS_2op39OpMov_Store_Ebx_EspBaseNoIndexNoSegmentEPNS_8EmuStateEPNS_9DecodedOpEPNS_3mem8MicroTLBEjPjRyEENS_18ExactOperandPolicyILy25905070172ELj3EEEEExS3_S5_xyyjyjj",
+        "bytes": 208,
+        "sp_refs": 0,
+        "pin_loads": []
+      }
+    ],
+    "sections": "Segment __TEXT: 2490368\n\tSection __text: 1364804\n\tSection __stubs: 420\n\tSection __init_offsets: 4\n\tSection __const: 8032\n\tSection __cstring: 1101424\n\tSection __unwind_info: 752\n\tSection __eh_frame: 3824\n\ttotal 2479260\nSegment __DATA_CONST: 147456\n\tSection __got: 8576\n\tSection __const: 124264\n\ttotal 132840\nSegment __DATA: 81920\n\tSection __data: 24\n\tSection __thread_vars: 120\n\tSection __thread_data: 2\n\tSection __thread_bss: 3 (zerofill)\n\tSection __common: 41064 (zerofill)\n\tSection __bss: 24976 (zerofill)\n\ttotal 66189\nSegment __LINKEDIT: 1458176\ntotal 4177920\n"
+  },
+  "mem2": {
+    "config": "fusion=SHAPED;enabled=ON;operand=HYBRID;budget=512;scope=ALL;pin=EAX_ESP;coverage=MEMORY;plan=58a03316b7f0ba3fd35249942d9f0faab7d9c50df0b4638d7b2fc5403341859c",
+    "binary_bytes": 4114400,
+    "sha256": "95cea49e1b8d3bd4638a65fbb7fcbcf51ca5e30691c43608b9f05aa9a35bbe78",
+    "store": [
+      {
+        "symbol": "__ZN8fiberish15DispatchWrapperIXadL_ZNS_2op39OpMov_Store_Ebx_EspBaseNoIndexNoSegmentEPNS_8EmuStateEPNS_9DecodedOpEPNS_3mem8MicroTLBEjPjRyEENS_18ExactOperandPolicyILy25905070172ELj3EEEEExS3_S5_xyyjyjj",
+        "bytes": 208,
+        "sp_refs": 0,
+        "pin_loads": []
+      }
+    ],
+    "sections": "Segment __TEXT: 2506752\n\tSection __text: 1375972\n\tSection __stubs: 420\n\tSection __init_offsets: 4\n\tSection __const: 8032\n\tSection __cstring: 1101423\n\tSection __unwind_info: 752\n\tSection __eh_frame: 3824\n\ttotal 2490427\nSegment __DATA_CONST: 147456\n\tSection __got: 8576\n\tSection __const: 124264\n\ttotal 132840\nSegment __DATA: 81920\n\tSection __data: 24\n\tSection __thread_vars: 120\n\tSection __thread_data: 2\n\tSection __thread_bss: 3 (zerofill)\n\tSection __common: 41064 (zerofill)\n\tSection __bss: 24976 (zerofill)\n\ttotal 66189\nSegment __LINKEDIT: 1458176\ntotal 4194304\n"
+  },
+  "off": {
+    "binary_bytes": 3662736,
+    "sha256": "deeb5b552400c090a2a5be8b1f02e6d892e71030269ceb2bc3efa01444f529ce",
+    "sections": "Segment __TEXT: 2244608\n\tSection __text: 1308280\n\tSection __stubs: 420\n\tSection __init_offsets: 4\n\tSection __const: 8032\n\tSection __cstring: 917716\n\tSection __unwind_info: 752\n\tSection __eh_frame: 3824\n\ttotal 2239028\nSegment __DATA_CONST: 114688\n\tSection __got: 8016\n\tSection __const: 105280\n\ttotal 113296\nSegment __DATA: 81920\n\tSection __data: 24\n\tSection __thread_vars: 120\n\tSection __thread_data: 2\n\tSection __thread_bss: 3 (zerofill)\n\tSection __common: 41064 (zerofill)\n\tSection __bss: 24912 (zerofill)\n\ttotal 66125\nSegment __LINKEDIT: 1294336\ntotal 3735552\n"
+  }
+}

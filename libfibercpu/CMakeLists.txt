@@ -53,7 +53,8 @@ set(FIBERCPU_FUSION_STRATEGY "AUTO" CACHE STRING "Reviewed fusion set (AUTO, BAS
 set_property(CACHE FIBERCPU_FUSION_STRATEGY PROPERTY STRINGS AUTO BASE EXTENDED SHAPED)
 set(FIBERCPU_OPERAND_SPECIALIZATION "AUTO" CACHE STRING "Operand lowering (AUTO, OFF, PROFILE, REGISTER, HYBRID)")
 set_property(CACHE FIBERCPU_OPERAND_SPECIALIZATION PROPERTY STRINGS AUTO OFF PROFILE REGISTER HYBRID)
-set(FIBERCPU_OPERAND_BUDGET "256" CACHE STRING "Maximum frozen operand shapes")
+set(FIBERCPU_OPERAND_BUDGET "256" CACHE STRING "Maximum frozen operand shapes (0..1024)")
+set(FIBERCPU_OPERAND_PLAN_FILE "" CACHE FILEPATH "Explicit frozen operand plan (empty uses reviewed CoreMark plan)")
 set(FIBERCPU_OPERAND_SCOPE "AUTO" CACHE STRING "Operand lowering scope (AUTO, ALL, ADDED_FUSIONS)")
 set_property(CACHE FIBERCPU_OPERAND_SCOPE PROPERTY STRINGS AUTO ALL ADDED_FUSIONS)
 set(FIBERCPU_GPR_PIN "OFF" CACHE STRING "ARM64 EAX/ESP cache (OFF, ABI_ONLY, CONSERVATIVE, EAX_ESP)")
@@ -88,11 +89,18 @@ set(FIBERCPU_OPERAND_FUSIONS_ONLY OFF)
 if(FIBERCPU_OPERAND_SCOPE STREQUAL "ADDED_FUSIONS")
     set(FIBERCPU_OPERAND_FUSIONS_ONLY ON)
 endif()
+set(FIBERCPU_PIN_SPECIALIZATION "BASE" CACHE STRING "Pin access coverage (BASE, SCALAR, MEMORY)")
+set_property(CACHE FIBERCPU_PIN_SPECIALIZATION PROPERTY STRINGS BASE SCALAR MEMORY)
+set(_pin_specializations BASE SCALAR MEMORY)
+list(FIND _pin_specializations "${FIBERCPU_PIN_SPECIALIZATION}" FIBERCPU_PIN_SPECIALIZATION_MODE)
+if(FIBERCPU_PIN_SPECIALIZATION_MODE LESS 0)
+    message(FATAL_ERROR "Unknown pin specialization policy")
+endif()
 set(_operand_modes OFF PROFILE REGISTER HYBRID)
 list(FIND _operand_modes "${FIBERCPU_OPERAND_SPECIALIZATION}" FIBERCPU_OPERAND_MODE)
 set(_pin_modes OFF ABI_ONLY CONSERVATIVE EAX_ESP)
 list(FIND _pin_modes "${FIBERCPU_GPR_PIN}" FIBERCPU_GPR_PIN_MODE)
-if(FIBERCPU_OPERAND_MODE LESS 0 OR FIBERCPU_GPR_PIN_MODE LESS 0 OR NOT FIBERCPU_OPERAND_BUDGET MATCHES "^[0-9]+$" OR FIBERCPU_OPERAND_BUDGET GREATER 256)
+if(FIBERCPU_OPERAND_MODE LESS 0 OR FIBERCPU_GPR_PIN_MODE LESS 0 OR NOT FIBERCPU_OPERAND_BUDGET MATCHES "^[0-9]+$" OR FIBERCPU_OPERAND_BUDGET GREATER 1024)
     message(FATAL_ERROR "Invalid operand specialization, budget, or GPR pin mode")
 endif()
 if(NOT FIBERCPU_FUSION_STRATEGY MATCHES "^(BASE|EXTENDED|SHAPED)$")
@@ -195,7 +203,10 @@ if(FIBERCPU_LOWER_OPERANDS)
         endforeach()
         file(APPEND "${_combined}" "#include \"${_operand_output}\"\n")
     endif()
-    set(_plan "${CMAKE_CURRENT_SOURCE_DIR}/../benchmark/optimization/manifests/operand-shapes-v1.json")
+    set(_plan "${FIBERCPU_OPERAND_PLAN_FILE}")
+    if(NOT _plan)
+        set(_plan "${CMAKE_CURRENT_SOURCE_DIR}/../benchmark/optimization/manifests/operand-shapes-v1.json")
+    endif()
     add_custom_command(OUTPUT "${_operand_output}"
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/gen_operand_specializations.py"
             --source "${_operand_source}" --plan "${_plan}"
@@ -203,7 +214,7 @@ if(FIBERCPU_LOWER_OPERANDS)
             --variants "${CMAKE_CURRENT_SOURCE_DIR}/src/instruction_variants.inc"
             --fallbacks "${CMAKE_CURRENT_SOURCE_DIR}/src/instruction_fallbacks.inc"
             --output "${_operand_output}" --mode "${FIBERCPU_OPERAND_MODE}"
-            --budget "${FIBERCPU_OPERAND_BUDGET}" --fused-only "$<BOOL:${FIBERCPU_OPERAND_FUSIONS_ONLY}>" --pin-mode "${FIBERCPU_GPR_PIN_MODE}"
+            --pin-specialization "${FIBERCPU_PIN_SPECIALIZATION_MODE}" --budget "${FIBERCPU_OPERAND_BUDGET}" --fused-only "$<BOOL:${FIBERCPU_OPERAND_FUSIONS_ONLY}>" --pin-mode "${FIBERCPU_GPR_PIN_MODE}"
         DEPENDS "${_operand_source}" "${_plan}" "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/gen_operand_specializations.py"
             src/instruction_families.h src/instruction_variants.inc src/instruction_fallbacks.inc
         VERBATIM)
@@ -247,7 +258,7 @@ if(FIBERCPU_LOWER_OPERANDS)
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_plan}")
     file(SHA256 "${_plan}" _operand_plan_hash)
 endif()
-set(FIBERCPU_OPTIMIZATION_CONFIG "fusion=${FIBERCPU_FUSION_STRATEGY};enabled=${FIBERCPU_ENABLE_SUPEROPCODES};operand=${FIBERCPU_OPERAND_SPECIALIZATION};budget=${FIBERCPU_OPERAND_BUDGET};scope=${FIBERCPU_OPERAND_SCOPE};pin=${FIBERCPU_GPR_PIN};plan=${_operand_plan_hash}")
+set(FIBERCPU_OPTIMIZATION_CONFIG "fusion=${FIBERCPU_FUSION_STRATEGY};enabled=${FIBERCPU_ENABLE_SUPEROPCODES};operand=${FIBERCPU_OPERAND_SPECIALIZATION};budget=${FIBERCPU_OPERAND_BUDGET};scope=${FIBERCPU_OPERAND_SCOPE};pin=${FIBERCPU_GPR_PIN};coverage=${FIBERCPU_PIN_SPECIALIZATION};plan=${_operand_plan_hash}")
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/generated/optimization_config.h"
     "#pragma once\n#define FIBERCPU_OPTIMIZATION_CONFIG \"${FIBERCPU_OPTIMIZATION_CONFIG}\"\n")
 

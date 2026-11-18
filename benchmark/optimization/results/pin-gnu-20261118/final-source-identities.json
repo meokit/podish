@@ -1,0 +1,7 @@
+{
+  "libfibercpu/CMakeLists.txt": "18dc982bc2f78183753d3b10662ee147983c9144ac59ef00bceadf91c9ce6da9",
+  "libfibercpu/src/operand_policy.h": "f52142c742a8afb0dea4621c8973c0812be8c48267e44320973247784fec29eb",
+  "libfibercpu/src/operand_specialization.h": "9456ceef66f964765915d5b9894ccaea821609d20281269a7e3908fa6e93fb6e",
+  "scripts/gen_operand_specializations.py": "f6c3586d935c00c497b9da482fe853fbf3cc86beff91b8d22b201eb85ccb2f9a",
+  "benchmark/optimization/manifests/operand-shapes-gnu-v1.json": "58a03316b7f0ba3fd35249942d9f0faab7d9c50df0b4638d7b2fc5403341859c"
+}

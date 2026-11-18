@@ -1,0 +1,71 @@
+{
+  "gnuoff": [
+    {
+      "symbol": "__ZN8fiberish15DispatchWrapperIXadL_ZNS_2op39OpMov_Store_Ebx_EspBaseNoIndexNoSegmentEPNS_8EmuStateEPNS_9DecodedOpEPNS_3mem8MicroTLBEjPjRyEENS_18ExactOperandPolicyILy25905070172ELj0EEEEExS3_S5_xyyjy",
+      "bytes": 208,
+      "sp": 0,
+      "reloads": []
+    },
+    {
+      "symbol": "__ZN8fiberish15DispatchWrapperIXadL_ZNS_2op13OpAdd_GvEv_NFEPNS_8EmuStateEPNS_9DecodedOpEPNS_3mem8MicroTLBEjPjRyEENS_18ExactOperandPolicyILy25905070164ELj0EEEEExS3_S5_xyyjy",
+      "bytes": 284,
+      "sp": 0,
+      "reloads": []
+    },
+    {
+      "symbol": "__ZN8fiberish15DispatchWrapperIXadL_ZNS_2op13OpAdd_GvEv_NFEPNS_8EmuStateEPNS_9DecodedOpEPNS_3mem8MicroTLBEjPjRyEENS_18ExactOperandPolicyILy25905070196ELj0EEEEExS3_S5_xyyjy",
+      "bytes": 284,
+      "sp": 0,
+      "reloads": []
+    },
+    {
+      "symbol": "__ZN8fiberish15DispatchWrapperIXadL_ZNS_2op13OpAdd_GvEv_NFEPNS_8EmuStateEPNS_9DecodedOpEPNS_3mem8MicroTLBEjPjRyEENS_18ExactOperandPolicyILy25905070172ELj0EEEEExS3_S5_xyyjy",
+      "bytes": 284,
+      "sp": 0,
+      "reloads": []
+    },
+    {
+      "symbol": "__ZN8fiberish15DispatchWrapperIXadL_ZNS_2op38OpMov_Load_Edi_EspBaseNoIndexNoSegmentEPNS_8EmuStateEPNS_9DecodedOpEPNS_3mem8MicroTLBEjPjRyEENS_18ExactOperandPolicyILy25905070204ELj0EEEEExS3_S5_xyyjy",
+      "bytes": 300,
+      "sp": 0,
+      "reloads": []
+    }
+  ],
+  "gnu": [
+    {
+      "symbol": "__ZN8fiberish15DispatchWrapperIXadL_ZNS_2op39OpMov_Store_Ebx_EspBaseNoIndexNoSegmentEPNS_8EmuStateEPNS_9DecodedOpEPNS_3mem8MicroTLBEjPjRyEENS_18ExactOperandPolicyILy25905070172ELj0EEEEExS3_S5_xyyjyjj",
+      "bytes": 224,
+      "sp": 0,
+      "reloads": [
+        "   c6dfc:      \tldr\tw27, [x20]",
+        "   c6e00:      \tldr\tw28, [x20, #0x10]",
+        "   c6e4c:      \tldr\tw27, [x20]",
+        "   c6e50:      \tldr\tw28, [x20, #0x10]"
+      ]
+    },
+    {
+      "symbol": "__ZN8fiberish15DispatchWrapperIXadL_ZNS_2op13OpAdd_GvEv_NFEPNS_8EmuStateEPNS_9DecodedOpEPNS_3mem8MicroTLBEjPjRyEENS_18ExactOperandPolicyILy25905070164ELj0EEEEExS3_S5_xyyjyjj",
+      "bytes": 284,
+      "sp": 0,
+      "reloads": []
+    },
+    {
+      "symbol": "__ZN8fiberish15DispatchWrapperIXadL_ZNS_2op13OpAdd_GvEv_NFEPNS_8EmuStateEPNS_9DecodedOpEPNS_3mem8MicroTLBEjPjRyEENS_18ExactOperandPolicyILy25905070196ELj0EEEEExS3_S5_xyyjyjj",
+      "bytes": 284,
+      "sp": 0,
+      "reloads": []
+    },
+    {
+      "symbol": "__ZN8fiberish15DispatchWrapperIXadL_ZNS_2op13OpAdd_GvEv_NFEPNS_8EmuStateEPNS_9DecodedOpEPNS_3mem8MicroTLBEjPjRyEENS_18ExactOperandPolicyILy25905070172ELj0EEEEExS3_S5_xyyjyjj",
+      "bytes": 284,
+      "sp": 0,
+      "reloads": []
+    },
+    {
+      "symbol": "__ZN8fiberish15DispatchWrapperIXadL_ZNS_2op38OpMov_Load_Edi_EspBaseNoIndexNoSegmentEPNS_8EmuStateEPNS_9DecodedOpEPNS_3mem8MicroTLBEjPjRyEENS_18ExactOperandPolicyILy25905070204ELj0EEEEExS3_S5_xyyjyjj",
+      "bytes": 296,
+      "sp": 0,
+      "reloads": []
+    }
+  ]
+}

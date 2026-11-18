@@ -16,6 +16,8 @@
         <OperandSpecialization Condition="'$(OperandSpecialization)' == ''">AUTO</OperandSpecialization>
         <OperandScope Condition="'$(OperandScope)' == ''">AUTO</OperandScope>
         <OperandBudget Condition="'$(OperandBudget)' == ''">256</OperandBudget>
+        <PinSpecialization Condition="'$(PinSpecialization)' == ''">BASE</PinSpecialization>
+        <OperandPlanFile Condition="'$(OperandPlanFile)' == ''"></OperandPlanFile>
         <GprPin Condition="'$(GprPin)' == ''">OFF</GprPin>
         <SuperOpcodeTop Condition="'$(SuperOpcodeTop)' == ''">128</SuperOpcodeTop>
         <!-- Keep generated inputs outside the CMake tree: changing toolchains may recreate that tree. -->
@@ -46,6 +48,7 @@
         <NativeBuildInput Include="$(SuperOpcodeGenerationDir)/native-options.txt" />
         <NativeBuildInput Include="$(LibFibercpuSourceDir)/src/**/*" />
         <NativeBuildInput Include="$(LibFibercpuSourceDir)/3rdparty/**/*" />
+        <NativeBuildInput Include="$(OperandPlanFile)" Condition="'$(OperandPlanFile)' != ''" />
         <NativeBuildInput Include="$(SuperOpcodeSource)" Condition="'$(SuperOpcodeSource)' != ''" />
     </ItemGroup>
 
@@ -73,7 +76,7 @@
             Condition="'$(DesignTimeBuild)' != 'true' And '$(FiberishSkipNativeBuild)' != 'true'">
         <MakeDir Directories="$(SuperOpcodeGenerationDir)" />
         <WriteLinesToFile File="$(SuperOpcodeGenerationDir)/native-options.txt"
-            Lines="fusion=$(FusionStrategy);operand=$(OperandSpecialization);budget=$(OperandBudget);scope=$(OperandScope);pin=$(GprPin);super=$(EnableSuperOpcodes);source=$(SuperOpcodeSource);handler=$(EnableHandlerProfile);block=$(EnableBlockProfile);sequence=$(EnableSequenceProfile)"
+            Lines="fusion=$(FusionStrategy);operand=$(OperandSpecialization);budget=$(OperandBudget);scope=$(OperandScope);pin=$(GprPin);coverage=$(PinSpecialization);plan=$(OperandPlanFile);super=$(EnableSuperOpcodes);source=$(SuperOpcodeSource);handler=$(EnableHandlerProfile);block=$(EnableBlockProfile);sequence=$(EnableSequenceProfile)"
             Overwrite="true" WriteOnlyWhenDifferent="true" />
     </Target>
 
@@ -111,7 +114,7 @@
             <CMakeSequenceProfile Condition="'$(EnableSequenceProfile)' == 'true'">ON</CMakeSequenceProfile>
             <CMakeSequenceProfile Condition="'$(CMakeSequenceProfile)' == ''">OFF</CMakeSequenceProfile>
             <CMakeArgs>$(CMakeArgs) -DFIBERCPU_ENABLE_SEQUENCE_PROFILE=$(CMakeSequenceProfile)</CMakeArgs>
-            <CMakeArgs>$(CMakeArgs) -DFIBERCPU_FUSION_STRATEGY=$(FusionStrategy) -DFIBERCPU_OPERAND_SPECIALIZATION=$(OperandSpecialization) -DFIBERCPU_OPERAND_BUDGET=$(OperandBudget) -DFIBERCPU_OPERAND_SCOPE=$(OperandScope) -DFIBERCPU_GPR_PIN=$(GprPin)</CMakeArgs>
+            <CMakeArgs>$(CMakeArgs) -DFIBERCPU_FUSION_STRATEGY=$(FusionStrategy) -DFIBERCPU_OPERAND_SPECIALIZATION=$(OperandSpecialization) -DFIBERCPU_OPERAND_BUDGET=$(OperandBudget) -DFIBERCPU_OPERAND_SCOPE=$(OperandScope) -DFIBERCPU_GPR_PIN=$(GprPin) -DFIBERCPU_PIN_SPECIALIZATION=$(PinSpecialization) -DFIBERCPU_OPERAND_PLAN_FILE=&quot;$(OperandPlanFile)&quot;</CMakeArgs>
             <CMakeArgs>$(CMakeArgs) -DFIBERCPU_GENERATED_SUPEROPCODES_FILE=&quot;$(SuperOpcodeSource)&quot;</CMakeArgs>
             <CMakeGeneratorArgs Condition="'$(IsBrowserWasm)' == 'true'">-G Ninja</CMakeGeneratorArgs>
             <CMakeArgs Condition="'$(IsBrowserWasm)' == 'true'">$(CMakeArgs) -DCMAKE_TOOLCHAIN_FILE=&quot;$(EmscriptenToolchainFile)&quot; -DCMAKE_CROSSCOMPILING_EMULATOR=&quot;$(BrowserWasmNodeExecutable)&quot;</CMakeArgs>

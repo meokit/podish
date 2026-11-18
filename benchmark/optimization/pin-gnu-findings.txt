@@ -1,0 +1,152 @@
+EAX/ESP pin GNU regression profile, macOS ARM64, 2026-11-18
+
+Method
+All comparisons keep SHAPED fusion and HYBRID/ALL operand lowering fixed.
+Initial controls use the original 256-shape GCC plan. OFF, ABI_ONLY,
+CONSERVATIVE and EAX_ESP differ only in the pin mode. The final controls
+use the same reviewed 448-shape GCC+GNU plan, budget 512, MEMORY coverage.
+The old OFF/256 binary is also interleaved as an absolute-throughput reference.
+No Zig CC CoreMark was built or run. Existing GCC 15.2 -O2 i386 ELF:
+48c3ecf2c2e2bbbebc8249f3f2ab30933a1e85e8eeaa1b6c0806bed90a5085db.
+60000 iterations, 0x0 0x0 0x66 60000 7 1 2000, CRC and >=10s verified.
+Same managed CLI SHA256 cf316490138c0f831d1ff507bfde552ad539862d309c30b8457e2c802a5a620c.
+Apple M5 Max, AppleClang 17, Release/ThinLTO, preserve_none.
+Builds, functional tests, counts-only capture and sample runs are separate
+from serial timing. GNU outputs are checked after every timed invocation.
+The development fixture is seed 987654, 2097204 bytes, LC_ALL=C.
+
+Observed causes
+1. Pin is a write-through read cache, not dirty write-back. Generic handlers
+   conservatively reload EAX/ESP even when an encoding cannot modify them.
+   The original exact shape plan was collected from GCC CoreMark; GNU hot
+   shapes were largely absent. Missing fusion shapes and missing static
+   write classification are separate coverage gaps.
+2. gunzip native leaf samples include generic fused 4_039 and 4_162.
+   OFF->pin machine code sizes are 1312->1352 and 1140->1196 bytes, both
+   without SP references. Pin versions contain 5 and 7 pairs of cache
+   reload sites across their paths; these are NOT all executed per dispatch.
+   This directly supports redundant loads/metadata work on those handlers,
+   rather than a blanket claim that pin causes register spilling everywhere.
+3. regex grep spends about 20-21% of the listed native leaf samples in
+   4_043. Its original OFF/pin versions have 12/11 SP references across the
+   whole function. Cold paths are included; those counts do not establish
+   hot-path spill traffic. This fusion contains blocking memory INC, which
+   can invoke observers and must remain conservative across that call.
+4. After adding GNU shapes, SHA256 still initially lost about 4.3% from
+   pin relative to the same expanded plan without pin (single-round screen).
+   Its hot exact stack STORE still used keep_mask=0, because MOV's lowered
+   memory-only opcodes 0x201/0x203 were missing from write classification.
+   Original no-pin STORE: 208 bytes; pin STORE: 224 bytes, two cache-load
+   pairs on alternative normal tails; neither has SP references.
+   Final MEMORY pin STORE: 208 bytes, no EAX/ESP cache reloads, no SP refs.
+   Slow Restart/Retry exits still reload canonical architectural registers.
+5. ABI_ONLY controls retain two live tail arguments without assuming cache
+   values. They separate signature/register-pressure/code-layout overhead
+   from the cache's read savings and maintenance cost. The initial screen
+   shows gunzip -0.57%, regex grep -0.87% with ABI_ONLY, versus full pin
+   -2.86%/-2.26%. These are single-round diagnostics, not confidence bounds.
+   Sampling and disassembly do not provide PMU cache-miss/branch-miss rates.
+
+Write-through visibility
+Every architectural EAX/ESP write updates state->ctx.regs immediately, including
+partial AX/AL/AH/SP writes. The tail arguments are read caches. Known nonwrites
+forward incoming values; known writes refresh from the updated register file.
+Fault/retry/callback/branch boundaries reload canonical state. There is no dirty
+bit and no deferred write-back flush at present. This optimization removes reads,
+not the required architectural register-file writes.
+A future write-back mode must replace FIBERCPU_PIN_ASSUME: its current equality
+assertion between memory and pins becomes false while pins are dirty. Specialized
+accessors must read/write tail values directly, including direct ctx.regs and
+GetRegPtr paths. Unadapted kernels need a flush/reload barrier. This mode has not
+been implemented or mixed into the measurements in this report.
+
+Implementation
+- Append 64 fused + 128 scalar GNU exact shapes, keeping the original GCC
+  256 entries and their order: 448 total, including 128 fused and 320 scalar.
+  Each workload's dispatch estimates are normalized before selection.
+  Training workloads: gunzip, regex grep, gzip, sed, SHA256, tar. Fixed grep
+  and sort are held-out workloads. This is not an independent input corpus.
+- SCALAR covers opcode-register MOV/INC/DEC/BSWAP, LEA and Jcc, selected at
+  decode time. AL/AH and partial AX/SP writes use the architectural parent.
+- MEMORY also gives exact nonblocking integer ALU/test/cmp/MOV/MOVZX/MOVSX
+  forms their known write set, including lowered MOV memory forms. Memory
+  Rm destinations preserve both pins; register destinations refresh only
+  their known parent. No dynamic cache/heap choice in GetReg is introduced.
+- Faults, retry, branch exits and observer-capable/unknown kernels retain
+  conservative barriers. Blocking Group5 INC is deliberately not marked
+  observer-free. Guest backing memory is separate from EmuState storage.
+- Compile switches: FIBERCPU_PIN_SPECIALIZATION=BASE|SCALAR|MEMORY,
+  FIBERCPU_OPERAND_PLAN_FILE=<absolute JSON>, FIBERCPU_OPERAND_BUDGET=0..1024.
+  Defaults remain BASE, original plan, budget 256; AUTO pin remains OFF.
+  MSBuild forwards PinSpecialization, OperandPlanFile and OperandBudget;
+  input contents and all option values participate in incremental builds.
+
+Reproduce
+Configure shared Release libfibercpu with SHAPED, HYBRID, ALL, budget512,
+PIN_SPECIALIZATION=MEMORY and the absolute path to manifests/operand-shapes-gnu-v1.json.
+Build three independent native directories with GPR_PIN=OFF/ABI_ONLY/EAX_ESP.
+Use the same managed CLI/rootfs; the experiment's build.py and all full native
+binaries remain under artifacts/pin-gnu-20261118 for local reruns.
+run_matrix.py --out artifacts/pin-gnu-20261118 --variants off mem2off mem2abi mem2
+  --cases coremark_gcc gzip gunzip sed grep_fixed grep_regex sort sha256 tar
+  --rounds 3 --scale 2 --tag <new-tag>
+Results are in results/pin-gnu-20261118. Timing JSONs record validation status
+and log names. Full invocation logs are in artifacts/pin-gnu-20261118/full-evidence.
+Metadata stores the managed/native hashes and fixture identity.
+final-native-identities.json records resolved native options, native sizes,
+section sizes and the final representative STORE disassembly.
+Counts-only capture recipe: results/pin-gnu-20261118/capture.py --out <out> --repo <repo>
+It expects profile-cli with ENABLE_BLOCK_PROFILE=ON; counters and sampling
+are never enabled on timing binaries. blocks.bin is full BLK2 v2, not the
+truncated JSON top-block view. Canonical IDs are resolved in that same native
+binary. Block execution counts approximate dispatch frequencies (partial
+faulting blocks are a limitation); they are not measured hardware counters.
+To regenerate the manifest, decompress gnu-shapes.json.gz and run:
+extend_operand_plan.py --base manifests/operand-shapes-v1.json --counts <json>
+  --output <new-plan.json> --fused 64 --wrapper 128
+The regenerated plan must compare byte-for-byte with operand-shapes-gnu-v1.json.
+No guest data, immediate, displacement or address is used as a specialization key.
+
+Final three-round medians (throughput; paired pin ranges use matching round):
+case             oldOFF       newOFF       ABI_ONLY     newPIN     vsOldOFF    pinVsNewOFF   pairedPinRange
+coremark_gcc   5033.979361 5044.136192 5025.546528 5254.400560    +4.379%     +4.168%  +3.992..+4.528%
+gzip              1.760231    2.008180    2.016039    2.035699   +15.650%     +1.370%  -0.998..+1.440%
+gunzip           10.277610   12.872186   12.886339   13.058430   +27.057%     +1.447%  +0.899..+3.038%
+sed               1.559253    1.655257    1.641930    1.633422    +4.757%     -1.319%  -2.011..+0.434%
+grep_fixed       55.183026   58.999048   59.627924   60.723641   +10.040%     +2.923%  -0.498..+3.719%
+grep_regex       20.350526   23.272866   23.420020   23.258052   +14.287%     -0.064%  -1.350..+1.746%
+sort              5.145601    5.211335    5.218632    5.250494    +2.039%     +0.751%  -0.378..+1.898%
+sha256           15.157463   19.012040   19.026091   19.311630   +27.407%     +1.576%  +0.363..+3.056%
+tar              55.103387   55.230583   54.926370   54.545787    -1.012%     -1.240%  -2.755..-0.792%
+
+Interpretation and validation
+The large GNU gains above are mostly from broader specialization, not pin alone.
+With identical final rules, pin adds 4.168% GCC CoreMark, 1.447% gunzip and
+1.576% SHA256. Regex grep's -0.064% median has mixed-sign paired samples.
+Sed's -1.319% median also has mixed signs. Tar remains consistently slower:
+-1.240% median versus the same expanded plan without pin, all paired rounds
+-2.755..-0.792%. This does not meet a global zero-regression enablement bar.
+The old256 pin control also showed the original gunzip/regex regressions;
+those regressions were substantially repairable specialization gaps.
+Production defaults are unchanged, and global pin remains opt-in.
+Machine-code __text: old OFF 1308280 bytes, final OFF 1362200, final pin 1375972.
+The final pin __text increase versus old OFF is 5.17%; full dylib grows from
+3662736 to 4114400 bytes (12.33%). File size also includes reflection strings
+and linkedit; it is not a direct instruction-cache footprint measurement.
+CPU suite: 3165/3165 for final pin, final OFF, ABI_ONLY and unchanged AUTO defaults.
+PerfTools: 29/29; reflection generator Python: 5/5; native CTest: 2/2.
+Additional coverage includes all opcode-register destinations/partial widths,
+LEA, exact stack STORE/ADD and a resolved store fault whose callback replaces
+both pins before the Retry continuation. The manifest regenerates identically.
+
+Residual tar profile (separate from timings)
+Final OFF/ABI_ONLY/pin each ran 1000 archive invocations, sampled for 10s.
+Listed native leaf totals were 1224/1193/1211. The largest individual native
+function was DecodeInstructionBounded (116/96/119 samples), followed by decode,
+operand-map/lowering, block-cache and TLB maintenance. No single uncovered
+arithmetic fusion dominates this profile. Native leaf totals exclude managed,
+host I/O and samples below the flat-report cutoff. These samples do not resolve
+which instruction accounts for a 1.24% end-to-end difference. ABI_ONLY itself
+has a -0.551% median versus the same rules with the narrow ABI; preserving two
+extra arguments is not free on this workload. More execution-handler clones
+cannot be assumed to cure decode/cache or ABI overhead. Global pin stays OFF.
