@@ -1031,6 +1031,15 @@ public class SocketSyscallTests
         var family = BinaryPrimitives.ReadUInt16LittleEndian(env.ReadBytes(0x39000, 2));
         Assert.Equal((ushort)LinuxConstants.AF_NETLINK, family);
 
+        var sockaddr = new byte[12];
+        BinaryPrimitives.WriteUInt16LittleEndian(sockaddr, LinuxConstants.AF_NETLINK);
+        BinaryPrimitives.WriteUInt32LittleEndian(sockaddr.AsSpan(4), 0x4242);
+        BinaryPrimitives.WriteUInt32LittleEndian(sockaddr.AsSpan(8), 1);
+        env.WriteBytes(0x38000, sockaddr);
+        Assert.Equal(0, await CallSysBind(env, (uint)fd, 0x38000, (uint)sockaddr.Length));
+        Assert.Equal(0, await CallSysGetSockName(env, (uint)fd, 0x39000, 0x3A000));
+        Assert.Equal(sockaddr, env.ReadBytes(0x39000, sockaddr.Length));
+
         WriteNlMsg(env, 0x38000, LinuxConstants.RTM_GETLINK, LinuxConstants.NLM_F_REQUEST | LinuxConstants.NLM_F_DUMP,
             200);
         Assert.Equal(16, await CallSysWrite(env, (uint)fd, 0x38000, 16));
