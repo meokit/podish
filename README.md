@@ -58,6 +58,8 @@ Podish is roughly **2× iSH** and roughly **9× QEMU TCI** on the same class of 
 | JIT-capable guests | `LuaJIT` (`-joff`) | Stable | SMC handling validated; forced LuaJIT interpreter mode |
 | Build toolchain | `gcc`, `make` | Verified | CoreMark tree compiles end-to-end |
 | Networking tools | `git`, `OpenSSH` | Verified | `git clone` works; validates VFS / DNS / TLS paths |
+| Framebuffer games | PrBoom (DOOM shareware), SuperTux | Verified | Debian i386 SDL 1.2 fbcon, software rendering |
+| X11 desktop | X.Org, Openbox, xeyes, xclock, xterm | Verified | Guest fbdev driver with host SDL2 output |
 | Heavy modern runtime | `Node.js` | Starts | Usable for simple scripts; V8 JIT can trigger occasional crashes. Disabling V8 JIT stabilizes it at a steep performance cost. |
 
 **Experimental / in progress:**
@@ -171,6 +173,7 @@ Useful runtime flags:
 - `--network private` + `-p hostPort:containerPort` — private networking with port publishing
 - `-s` — syscall tracing
 - `--init` — engine-managed PID 1 reaper
+- `--fbdev --fbdev-size 800x600` — display the guest framebuffer and forward keyboard and mouse input. See [IA-32 framebuffer games and X11](tests/fbdev-games/README.md).
 
 ### Test
 

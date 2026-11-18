@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<openbox_menu xmlns="http://openbox.org/">
+  <menu id="root-menu" label="Applications">
+    <item label="Terminal"><action name="Execute"><execute>xterm -e /bin/sh</execute></action></item>
+    <item label="Clock"><action name="Execute"><execute>xclock</execute></action></item>
+    <item label="Eyes"><action name="Execute"><execute>xeyes</execute></action></item>
+    <separator/>
+    <menu id="client-list-combined-menu"/>
+    <item label="Exit"><action name="Exit"/></item>
+  </menu>
+</openbox_menu>
