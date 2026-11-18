@@ -13,6 +13,10 @@ void glEGLImageTargetRenderbufferStorageOES(GLenum target, void* image) {
     pg_gl(PG_IMAGE_RENDERBUFFER, target, pg_ptr(image));
 }
 
+void glEGLImageTargetTexture2DOES(GLenum target, void* image) {
+    pg_gl(PG_IMAGE_TEXTURE, target, pg_ptr(image));
+}
+
 int pg_call(uint32_t operation, const uint32_t args[PG_WORDS]) {
     struct pg_request request = {.operation = operation};
     memcpy(request.args, args, sizeof(request.args));

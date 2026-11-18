@@ -348,29 +348,7 @@ internal sealed unsafe partial class AngleDevice
                     return 0;
                 }
             }
-            case 119: // glGetActiveUniform
-            {
-                var size3 = 4;
-                var b3 = guest.Output(a[3], size3, nullable: true);
-                var size4 = 4;
-                var b4 = guest.Output(a[4], size4);
-                var size5 = 4;
-                var b5 = guest.Output(a[5], size5);
-                var size6 = Count(a[2], 1);
-                var b6 = guest.Output(a[6], size6);
-                fixed (byte* p3 = b3)
-                fixed (byte* p4 = b4)
-                fixed (byte* p5 = b5)
-                fixed (byte* p6 = b6)
-                {
-                    ((delegate* unmanaged[Cdecl]<uint, uint, int, void*, void*, void*, void*, void>)proc)(a[0], a[1], (int)a[2], p3, p4, p5, p6);
-                    guest.WriteOutput(a[3], b3, size3);
-                    guest.WriteOutput(a[4], b4, size4);
-                    guest.WriteOutput(a[5], b5, size5);
-                    guest.WriteOutput(a[6], b6, size6);
-                    return 0;
-                }
-            }
+            case 119: return GetActiveUniform(context, proc, a, guest);
             case 120: // glGetAttachedShaders
             {
                 var size2 = 4;
@@ -1007,18 +985,43 @@ internal sealed unsafe partial class AngleDevice
 
     internal const int GlFirst = 64;
     private const int GlBindTexture = 70;
+    private const int GlCompileShader = 84;
+    private const int GlCompressedTexImage2D = 85;
+    private const int GlCompressedTexSubImage2D = 86;
+    private const int GlCopyTexImage2D = 87;
+    private const int GlCopyTexSubImage2D = 88;
     private const int GlDeleteFramebuffers = 93;
+    private const int GlDeleteProgram = 94;
     private const int GlDeleteRenderbuffers = 95;
+    private const int GlDeleteShader = 96;
     private const int GlDeleteTextures = 97;
+    private const int GlDetachShader = 101;
+    private const int GlDrawArrays = 104;
+    private const int GlDrawElements = 105;
     private const int GlFinish = 108;
     private const int GlFlush = 109;
     private const int GlFramebufferRenderbuffer = 110;
     private const int GlFramebufferTexture2D = 111;
+    private const int GlGenerateMipmap = 114;
     private const int GlGetError = 124;
+    private const int GlGetBooleanv = 122;
+    private const int GlGetFloatv = 125;
     private const int GlGetFramebufferAttachmentParameteriv = 126;
+    private const int GlGetIntegerv = 127;
     private const int GlGetRenderbufferParameteriv = 130;
+    private const int GlGetShaderSource = 134;
+    private const int GlGetTexParameterfv = 136;
+    private const int GlGetTexParameteriv = 137;
     private const int GlIsTexture = 151;
+    private const int GlLinkProgram = 153;
     private const int GlRenderbufferStorage = 158;
+    private const int GlTexImage2D = 169;
+    private const int GlTexParameterf = 170;
+    private const int GlTexParameterfv = 171;
+    private const int GlTexParameteri = 172;
+    private const int GlTexParameteriv = 173;
+    private const int GlTexSubImage2D = 174;
+    private const int GlUseProgram = 194;
 
     internal static readonly string[] GlNames =
     [

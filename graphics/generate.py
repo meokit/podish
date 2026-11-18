@@ -15,13 +15,18 @@ TYPES = {
 NULLABLE_INPUT = {"glBufferData", "glTexImage2D", "glCompressedTexImage2D"}
 OPTIONAL_OUTPUT = {"count", "length"}
 SPECIAL = {
-    "glBindBuffer", "glDrawArrays", "glDrawElements", "glGetString", "glGetVertexAttribPointerv",
+    "glBindBuffer", "glDrawArrays", "glDrawElements", "glGetActiveUniform", "glGetString", "glGetVertexAttribPointerv",
     "glPixelStorei", "glShaderSource", "glVertexAttribPointer",
 }
 NAMED_OPS = (
-    "glBindTexture", "glDeleteFramebuffers", "glDeleteRenderbuffers", "glDeleteTextures", "glFinish", "glFlush",
-    "glFramebufferRenderbuffer", "glFramebufferTexture2D", "glGetError", "glGetFramebufferAttachmentParameteriv",
-    "glGetRenderbufferParameteriv", "glIsTexture", "glRenderbufferStorage",
+    "glBindTexture", "glCompileShader", "glCompressedTexImage2D", "glCompressedTexSubImage2D", "glCopyTexImage2D",
+    "glCopyTexSubImage2D", "glDeleteFramebuffers", "glDeleteProgram", "glDeleteRenderbuffers", "glDeleteShader",
+    "glDeleteTextures", "glDetachShader", "glDrawArrays", "glDrawElements",
+    "glFinish", "glFlush", "glFramebufferRenderbuffer", "glFramebufferTexture2D", "glGenerateMipmap", "glGetError",
+    "glGetBooleanv", "glGetFloatv", "glGetFramebufferAttachmentParameteriv", "glGetIntegerv",
+    "glGetRenderbufferParameteriv", "glGetShaderSource", "glGetTexParameterfv", "glGetTexParameteriv", "glIsTexture",
+    "glLinkProgram", "glRenderbufferStorage", "glTexImage2D", "glTexParameterf", "glTexParameterfv", "glTexParameteri",
+    "glTexParameteriv", "glTexSubImage2D", "glUseProgram",
 )
 
 

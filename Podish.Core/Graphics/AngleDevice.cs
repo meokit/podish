@@ -22,7 +22,7 @@ internal sealed unsafe partial class AngleDevice : IDisposable
     {
         Initialize = 1, CreateContext, DestroyContext, CreateSurface, DestroySurface,
         MakeCurrent, Present, ResizeSurface, FramebufferSize, ReleaseThread, SwapBuffers, CreateGbmSurface,
-        ImportImage, DestroyImage, ImageRenderbuffer
+        ImportImage, DestroyImage, ImageRenderbuffer, ImageTexture, PresentWaylandGpu
     }
 
     private readonly AngleLibrary _angle;
@@ -196,6 +196,8 @@ internal sealed unsafe partial class AngleDevice : IDisposable
             case EglOperation.ImportImage: return ImportImage(session, task, a);
             case EglOperation.DestroyImage: return DestroyImage(session, a[0]);
             case EglOperation.ImageRenderbuffer: return BindImageRenderbuffer(session, task, a[0], a[1]);
+            case EglOperation.ImageTexture: return BindImageTexture(session, task, a[0], a[1]);
+            case EglOperation.PresentWaylandGpu: return PresentWaylandGpu(session, task, a[0], (int)a[1], a[2]);
             default: return -(int)Errno.ENOTTY;
         }
     }
@@ -223,7 +225,7 @@ internal sealed unsafe partial class AngleDevice : IDisposable
         var handle = _angle.CreateContext(_angle.Display, Config, shared, attributes);
         if (handle == 0) return AngleError();
         var id = session.NextId++;
-        session.Contexts.Add(id, new Context(handle) { Managed = managed ? new ManagedFramebufferState() : null });
+        session.Contexts.Add(id, new Context(handle) { Managed = managed ? new ManagedFramebufferState(_kms!) : null });
         if (managed) _managedOwner = session;
         return (int)id;
     }
@@ -401,6 +403,20 @@ internal sealed unsafe partial class AngleDevice : IDisposable
     {
         int* attributes = stackalloc int[] { 0x3057, width, 0x3056, height, 0x3038 };
         return _angle.CreatePbufferSurface(_angle.Display, Config, attributes);
+    }
+
+    private int PresentWaylandGpu(Session session, FiberTask task, uint id, int fd, uint pitch)
+    {
+        if (_kms == null || !session.Surfaces.TryGetValue(id, out var surface) || surface.Kind != Wayland ||
+            !session.Bindings.TryGetValue(task, out var binding) || binding.Draw != id)
+            return -0x300D;
+        var file = task.Process.Syscalls.GetFD(fd, task);
+        if (DrmCardInode.GetGpuPrimeBuffer(file, (uint)surface.Width, (uint)surface.Height, pitch, 0x34325258)
+                is not KmsEglOutput.TextureBo buffer || buffer.Owner != _kms || buffer.InUse)
+            return -0x300C;
+        if (!Bind(session, binding)) return AngleError();
+        if (!_kms.CopyWaylandFrame(surface.Handle, buffer)) return -0x3002;
+        return _angle.SwapBuffers(_angle.Display, surface.Handle) != 0 ? 0 : AngleError();
     }
 
     private int Present(Session session, FiberTask task, uint id, uint output, uint length, GuestMemory guest)

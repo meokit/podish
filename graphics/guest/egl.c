@@ -14,6 +14,7 @@
 #define PG_PLATFORM_WAYLAND 0x31D8
 #define PG_PLATFORM_DEVICE 0x313F
 #define PG_DEVICE_ATTRIBUTE 0x322C
+#define PG_DRM_RENDER_NODE_FILE 0x3377
 #define PG_BAD_DEVICE 0x322B
 #define PG_DEVICE ((void*)(uintptr_t)1)
 #define PG_PLATFORM_SURFACELESS 0x31DD
@@ -257,9 +258,11 @@ PODISH_EXPORT EGLBoolean eglQueryDevicesEXT(EGLint max, void** devices, EGLint* 
 PODISH_EXPORT const char* eglQueryDeviceStringEXT(void* device, EGLint name) {
     if (device != PG_DEVICE)
         return (fail(PG_BAD_DEVICE), NULL);
-    if (name != EGL_EXTENSIONS)
-        return (fail(EGL_BAD_PARAMETER), NULL);
-    return "";
+    if (name == EGL_EXTENSIONS)
+        return getenv("PODISH_KMSDRM") ? "EGL_EXT_device_drm_render_node" : "";
+    if (name == PG_DRM_RENDER_NODE_FILE && getenv("PODISH_KMSDRM"))
+        return "/dev/dri/renderD128";
+    return (fail(EGL_BAD_PARAMETER), NULL);
 }
 
 PODISH_EXPORT EGLBoolean eglQueryDeviceAttribEXT(void* device, EGLint attribute, EGLAttrib* value) {
@@ -1067,6 +1070,7 @@ __eglMustCastToProperFunctionPointerType eglGetProcAddress(const char* name) {
     PROC(eglQueryDmaBufFormatsEXT);
     PROC(eglQueryDmaBufModifiersEXT);
     PROC(glEGLImageTargetRenderbufferStorageOES);
+    PROC(glEGLImageTargetTexture2DOES);
 #undef PROC
     if (strncmp(name, "gl", 2) == 0)
         return (__eglMustCastToProperFunctionPointerType)pg_get_gl_proc(name);

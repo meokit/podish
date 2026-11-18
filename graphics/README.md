@@ -104,7 +104,9 @@ dotnet "$cli" run --rm --kmsdrm --gles --rootfs "$rootfs" --user 1000:1000 \
 dotnet "$cli" run --rm --kmsdrm --gles --rootfs "$rootfs" -- /usr/local/bin/podish-kmsdrm-image-probe
 ```
 
-This path supports one managed compositor context and client `wl_shm` surfaces. Guest EGLImage texture sampling and client GPU dma-buf imports are outside this path. The image probe tests the lifetime of an FBO after destroying its EGLImage and closing the PRIME fd and GEM handles.
+This path supports one managed compositor context. In that context, guest `GL_TEXTURE_2D` objects can sample the same EGLImage with independent sampler parameters. Respecifying a texture detaches it from the shared image, with a GPU copy when the base level must be preserved. The image probe covers shared sampling, texture redefinition and the lifetime of FBOs after destroying their EGLImage and closing PRIME and GEM handles.
+
+Wayland EGL clients can also submit single-plane XRGB8888 buffers to the guest compositor. Guest EGL obtains a virtual PRIME fd from the render node and sends it over `zwp_linux_dmabuf_v1`. ANGLE blits the client pbuffer into the managed BO and the compositor samples the same GPU storage. EGL fences order producer writes and compositor reads. `wl_buffer.release` controls reuse of the three GPU slots. Clients fall back to `wl_shm` when the server does not advertise the format or rejects the import.
 
 For the packaged game tests, use the Debian rootfs from the earlier smoke-test instructions. The launch fixtures set the GLES profile before the first SDL window and check the engine's GPU swap log.
 
@@ -125,6 +127,40 @@ To run the same race through the guest compositor, install Cage and its dependen
 ```sh
 tests/gles/run.sh "$rootfs" cage supertuxkart
 ```
+
+Debian Bookworm's wlroots 0.15.1 loads the texture import entry point when the renderer advertises the external texture extension. Podish supports this path for managed RGB EGLImages and direct external sampler declarations in ESSL 1.00. Podish keeps external texture bindings and lifetimes separate and lowers these shader declarations to `sampler2D` for the host compiler. Require GPU submissions in the launcher with the following command.
+
+```sh
+PODISH_REQUIRE_WAYLAND_GPU=1 tests/gles/run.sh "$rootfs" cage supertuxkart
+```
+
+### External EGLImage test environment
+
+Use an i386 rootfs with the original Cage and wlroots packages, the STK binary above, and the DRM/GBM headers needed by `tests/kmsdrm/install-probe.sh`. The installer also accepts `DRM_HEADERS` and `GBM_HEADERS` from the host. Build and use the guest libraries from the same checkout as the CLI.
+
+```sh
+export PODISH_GLES_GUEST_DIR="$PWD/artifacts/podish-gles/guest"
+graphics/build-guest.sh "$PODISH_GLES_GUEST_DIR"
+dotnet build Podish.Cli -c Release --nologo
+tests/kmsdrm/install-probe.sh "$rootfs"
+tests/kmsdrm/run-external-image.sh "$rootfs"
+```
+
+Pass a case name after the rootfs to run it independently.
+
+| Case | Checks |
+| --- | --- |
+| `control` | The same PRIME import, image lifetime, shader reflection and pixel checks with ordinary 2D samplers. |
+| `shader` | Compile mixed ESSL 1.00 source supplied in multiple strings with explicit lengths, even across an identifier. Read back the original source and reflect both sampler types after linking. |
+| `state` | Separate 2D and external bindings by target and unit, default parameters, invalid mipmap and wrap operations, and deletion. |
+| `sampling` | Sample an RGB EGLImage beside a regular 2D texture, reject mixed active sampler types on the same unit, reassign the sampler units, and check updated pixels after releasing the PRIME fd, EGLImage and producer objects. |
+| `cage` | Run the 30-second STK profile under the original compositor and require the client to submit GPU buffers. |
+
+Run all cases to validate the extension and the unmodified compositor together.
+
+- The `Source2DTargetExternal` case verifies pixels after aliasing an EGLImage as an external texture. The Podish probe supplies the image through PRIME. [ANGLE ImageTest](https://chromium.googlesource.com/angle/angle/+/bafb59e142a3754e7c081bc5402b2cd81fdc62ab/src/tests/gl_tests/ImageTest.cpp#7100)
+- The EGL image format tests exercise rendering with an external texture and arrays of external samplers. The first Podish cases exercise the single-image and mixed-sampler paths. [Khronos EGL Image Format Tests](https://github.com/KhronosGroup/VK-GL-CTS/blob/main/modules/egl/teglImageFormatTests.cpp#L824)
+- The DMA-BUF YUV cases cover multi-plane images and color conversion. [Piglit DMA-BUF YUV sampling](https://cgit.freedesktop.org/piglit/tree/tests/spec/ext_image_dma_buf_import/sample_yuv.c)
 
 ### Buffer ownership and Vulkan compatibility
 

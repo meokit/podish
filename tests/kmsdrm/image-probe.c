@@ -19,6 +19,141 @@ static void require(bool ok, const char* check) {
     }
 }
 
+static GLuint sampling_shader(GLenum type, const GLchar* source) {
+    GLuint shader = glCreateShader(type);
+    glShaderSource(shader, 1, &source, NULL);
+    glCompileShader(shader);
+    GLint compiled = 0;
+    glGetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
+    require(compiled, "compile image sampling shader");
+    return shader;
+}
+
+static void sample_and_check(unsigned red, unsigned blue, const char* check) {
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    GLubyte pixel[4];
+    glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+    require(glGetError() == GL_NO_ERROR && pixel[0] == red && abs((int)pixel[1] - (int)blue) <= 1 && pixel[2] == 0 &&
+                pixel[3] == 255,
+            check);
+}
+
+static void check_sampling(EGLDisplay display, EGLImage image, GLuint source_fbo, unsigned width, unsigned height) {
+    typedef void (*bind_image_proc)(GLenum, void*);
+    bind_image_proc bind_image = (bind_image_proc)eglGetProcAddress("glEGLImageTargetTexture2DOES");
+    require(bind_image != NULL, "look up EGLImage texture target");
+
+    GLuint images[2], target, destination, alias_fbo;
+    glGenTextures(2, images);
+    glGenFramebuffers(1, &alias_fbo);
+    for (unsigned unit = 0; unit < 2; unit++) {
+        glActiveTexture(GL_TEXTURE0 + unit);
+        glBindTexture(GL_TEXTURE_2D, images[unit]);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        if (unit == 0) {
+            glBindFramebuffer(GL_FRAMEBUFFER, alias_fbo);
+            glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, images[0], 0);
+        }
+        bind_image(GL_TEXTURE_2D, image);
+    }
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    const GLubyte pattern[] = {255, 0, 0, 0, 0, 0, 255, 0};
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 2, 1, GL_RGBA, GL_UNSIGNED_BYTE, pattern);
+    require(glGetError() == GL_NO_ERROR, "update shared image through a texture sibling");
+    require(eglDestroyImage(display, image), "destroy EGLImage while texture and framebuffer siblings live");
+
+    glBindFramebuffer(GL_FRAMEBUFFER, alias_fbo);
+    require(glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE,
+            "update the framebuffer when its texture becomes image-backed");
+    GLint name;
+    glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME,
+                                          &name);
+    require((GLuint)name == images[0], "keep the guest texture attachment name");
+
+    glActiveTexture(GL_TEXTURE2);
+    glGenTextures(1, &target);
+    glBindTexture(GL_TEXTURE_2D, target);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    glGenFramebuffers(1, &destination);
+    glBindFramebuffer(GL_FRAMEBUFFER, destination);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, target, 0);
+    require(glCheckFramebufferStatus(GL_FRAMEBUFFER) == GL_FRAMEBUFFER_COMPLETE, "create sampling destination");
+
+    GLuint vert = sampling_shader(GL_VERTEX_SHADER, "attribute vec2 pos; void main(){gl_Position=vec4(pos,0.,1.);}");
+    GLuint frag = sampling_shader(
+        GL_FRAGMENT_SHADER,
+        "precision highp float; uniform sampler2D a,b; uniform vec2 uv;"
+        "void main(){vec4 x=texture2D(a,uv); vec4 y=texture2D(b,uv);gl_FragColor=vec4(x.r,y.b,0.,x.a*y.a);}");
+    GLuint program = glCreateProgram();
+    glAttachShader(program, vert);
+    glAttachShader(program, frag);
+    glBindAttribLocation(program, 0, "pos");
+    glLinkProgram(program);
+    GLint linked = 0;
+    glGetProgramiv(program, GL_LINK_STATUS, &linked);
+    require(linked, "link image sampling shader");
+    glUseProgram(program);
+    glUniform1i(glGetUniformLocation(program, "a"), 0);
+    glUniform1i(glGetUniformLocation(program, "b"), 1);
+    glUniform2f(glGetUniformLocation(program, "uv"), 0.75f / width, 0.5f / height);
+    const GLfloat vertices[] = {-1, -1, 3, -1, -1, 3};
+    GLuint vbo;
+    glGenBuffers(1, &vbo);
+    glBindBuffer(GL_ARRAY_BUFFER, vbo);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW);
+    glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 0, NULL);
+    glEnableVertexAttribArray(0);
+    glViewport(0, 0, 1, 1);
+    sample_and_check(255, 64, "sample one BO with nearest and linear filtering in the same draw");
+
+    GLint unit;
+    glGetIntegerv(GL_ACTIVE_TEXTURE, &unit);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &name);
+    require(unit == GL_TEXTURE2 && (GLuint)name == target,
+            "restore the active texture and native binding after sampling");
+    glActiveTexture(GL_TEXTURE0);
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &name);
+    require((GLuint)name == images[0] && glIsTexture(images[0]), "keep the guest texture identity");
+
+    const GLubyte green[4] = {0, 255, 0, 255};
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, green);
+    glBindFramebuffer(GL_FRAMEBUFFER, alias_fbo);
+    GLubyte pixel[4];
+    glReadPixels(0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel);
+    require(glGetError() == GL_NO_ERROR && pixel[0] == 0 && pixel[1] == 255 && pixel[2] == 0,
+            "redefine one sibling and update its framebuffer attachment");
+    glBindFramebuffer(GL_FRAMEBUFFER, destination);
+    sample_and_check(0, 64, "redefined texture has independent storage while its peer still samples the image");
+    glActiveTexture(GL_TEXTURE1);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    sample_and_check(0, 0, "apply sampler changes after binding the image");
+    glGenerateMipmap(GL_TEXTURE_2D);
+    require(glGetError() == GL_NO_ERROR, "generate mipmaps in independent storage");
+    glUniform2f(glGetUniformLocation(program, "uv"), 1.25f / width, 0.5f / height);
+    glBindFramebuffer(GL_FRAMEBUFFER, source_fbo);
+    glClearColor(1, 0, 0, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glBindFramebuffer(GL_FRAMEBUFFER, destination);
+    sample_and_check(0, 255, "preserve the detached base level while updating the original image");
+
+    glBindFramebuffer(GL_FRAMEBUFFER, source_fbo);
+    glDisableVertexAttribArray(0);
+    glUseProgram(0);
+    glDeleteBuffers(1, &vbo);
+    glDeleteProgram(program);
+    glDeleteShader(vert);
+    glDeleteShader(frag);
+    glDeleteFramebuffers(1, &alias_fbo);
+    glDeleteFramebuffers(1, &destination);
+    glDeleteTextures(1, &target);
+    glDeleteTextures(2, images);
+    glActiveTexture(GL_TEXTURE0);
+    puts("Managed EGLImage texture sampling passed (shared storage, independent filters and texture redefinition)");
+}
+
 static unsigned flips;
 static void flip_handler(int fd, unsigned sequence, unsigned sec, unsigned usec, void* data) {
     (void)fd;
@@ -92,7 +227,7 @@ int main(void) {
     glGetFramebufferAttachmentParameteriv(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_FRAMEBUFFER_ATTACHMENT_OBJECT_NAME,
                                           &name);
     require(type == GL_RENDERBUFFER && (GLuint)name == rb, "preserve guest renderbuffer attachment identity");
-    require(eglDestroyImage(display, image), "release EGLImage while FBO retains backing");
+    check_sampling(display, image, fbo, mode.hdisplay, mode.vdisplay);
 
     for (unsigned i = 0; i < 3; i++) {
         glClearColor(i == 0, i == 1, i == 2, 1.0);

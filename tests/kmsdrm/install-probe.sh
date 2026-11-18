@@ -27,4 +27,8 @@ mkdir -p "$dest"
     "$here/image-probe.c" -Wl,--allow-shlib-undefined "$drm_library" -L "$guest" -lgbm -lEGL -lGLESv2 \
     -o "$dest/podish-kmsdrm-image-probe"
 "${ZIG:-zig}" cc -target x86-linux-gnu.2.11 -O2 -Wall -Wextra \
+    -I "$gbm_headers" -I "$repo/graphics/guest/include" \
+    "$here/external-image-probe.c" -Wl,--allow-shlib-undefined -L "$guest" -lgbm -lEGL -lGLESv2 \
+    -o "$dest/podish-kmsdrm-external-image-probe"
+"${ZIG:-zig}" cc -target x86-linux-gnu.2.11 -O2 -Wall -Wextra \
     "$here/compositor-probe.c" -o "$dest/podish-kmsdrm-compositor-probe"

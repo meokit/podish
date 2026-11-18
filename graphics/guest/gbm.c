@@ -1,4 +1,5 @@
 #define _GNU_SOURCE
+#include "drm_gpu.h"
 #include "gbm_egl.h"
 #include <errno.h>
 #include <fcntl.h>
@@ -33,11 +34,6 @@ struct drm_map_dumb {
     uint64_t offset;
 };
 
-struct drm_prime_handle {
-    uint32_t handle, flags;
-    int32_t fd;
-};
-
 struct drm_import_bo {
     int32_t fd;
     uint32_t width, height, pitch, handle;
@@ -45,14 +41,10 @@ struct drm_import_bo {
 };
 
 #define DRM_VERSION _IOWR('d', 0x00, struct drm_version)
-#define DRM_PRIME_HANDLE_TO_FD _IOWR('d', 0x2d, struct drm_prime_handle)
 #define DRM_CREATE_DUMB _IOWR('d', 0xb2, struct drm_create_dumb)
 #define DRM_MAP_DUMB _IOWR('d', 0xb3, struct drm_map_dumb)
-#define DRM_GEM_CLOSE _IOW('d', 0x09, uint32_t[2])
-#define DRM_QUERY_GPU _IOR('d', 0xf0, uint32_t)
 #define DRM_LOCK_GPU_BO _IOW('d', 0xf1, uint32_t[2])
 #define DRM_IMPORT_GBM_BO _IOWR('d', 0xf2, struct drm_import_bo)
-#define DRM_CREATE_GPU_BO _IOWR('d', 0xf3, uint32_t[5])
 
 _Static_assert(sizeof(struct drm_version) == 36, "IA-32 drm_version");
 _Static_assert(sizeof(struct drm_create_dumb) == 32, "IA-32 drm_mode_create_dumb");
@@ -71,7 +63,6 @@ _Static_assert(sizeof(struct drm_import_bo) == 28, "IA-32 Podish GBM import");
 #define GBM_BO_IMPORT_FD 0x5503u
 #define GBM_BO_IMPORT_FD_MODIFIER 0x5504u
 #define DRM_FORMAT_MOD_LINEAR 0ull
-#define DRM_FORMAT_MOD_INVALID 0x00ffffffffffffffull
 
 union gbm_bo_handle {
     void* ptr;

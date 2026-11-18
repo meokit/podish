@@ -117,4 +117,12 @@ if [[ $2 == kmsdrm || $2 == cage ]]; then
         exit 1
     fi
     echo "Host EGL presented $frames KMS frames"
+    if [[ $2 == cage ]]; then
+        gpu_frames=$(rg -c 'Wayland EGL submitted a GPU buffer' "$engine_log" || true)
+        echo "Guest Wayland EGL submitted ${gpu_frames:-0} GPU frames"
+        if [[ ${PODISH_REQUIRE_WAYLAND_GPU:-0} == 1 && ${gpu_frames:-0} -lt 8 ]]; then
+            echo "Expected at least eight GPU submissions to Cage" >&2
+            exit 1
+        fi
+    fi
 fi

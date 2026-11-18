@@ -156,7 +156,7 @@ internal sealed unsafe partial class AngleDevice
         if (a[0] == 0x1F03)
         {
             ReadOnlySpan<byte> extensions = context.Managed == null ? "\0"u8
-                : "GL_OES_EGL_image GL_EXT_texture_format_BGRA8888 GL_EXT_unpack_subimage\0"u8;
+                : "GL_OES_EGL_image GL_OES_EGL_image_external GL_EXT_texture_format_BGRA8888 GL_EXT_unpack_subimage\0"u8;
             if (a[2] < extensions.Length) return -(int)Errno.EINVAL;
             guest.Write(a[1], extensions);
             return 0;
@@ -183,7 +183,9 @@ internal sealed unsafe partial class AngleDevice
         else guest.Read(a[3], MemoryMarshal.AsBytes(lengths));
         var pins = new GCHandle[count];
         var strings = stackalloc nint[count];
+        var segments = context.Managed == null ? null : new byte[count][];
         var total = 0;
+        var sourceLength = 0;
         try
         {
             for (var i = 0; i < count; i++)
@@ -193,8 +195,36 @@ internal sealed unsafe partial class AngleDevice
                 if (text == null) throw new GuestTransferException(Errno.EFAULT);
                 total += text.Length;
                 if (total > GuestMemory.MaxTransfer) throw new GuestTransferException(Errno.E2BIG);
+                if (segments != null)
+                {
+                    segments[i] = text;
+                    sourceLength += lengths[i] < 0 ? text.Length - 1 : lengths[i];
+                }
                 pins[i] = GCHandle.Alloc(text, GCHandleType.Pinned);
                 strings[i] = pins[i].AddrOfPinnedObject();
+            }
+            if (context.Managed is { } state && segments != null && IsShader(a[0]))
+            {
+                var source = new byte[sourceLength];
+                var offset = 0;
+                for (int i = 0; i < segments.Length; i++)
+                {
+                    var length = lengths[i] < 0 ? segments[i].Length - 1 : lengths[i];
+                    segments[i].AsSpan(0, length).CopyTo(source.AsSpan(offset));
+                    offset += length;
+                }
+                if (ExternalImageShader.TryRewrite(source, out var rewritten, out var externalUniforms))
+                {
+                    fixed (byte* ptr = rewritten!)
+                    {
+                        var text = (nint)ptr;
+                        var length = rewritten!.Length;
+                        ((delegate* unmanaged[Cdecl]<uint, int, nint*, int*, void>)proc)(a[0], 1, &text, &length);
+                    }
+                    state.ShaderRewrites[a[0]] = new ShaderRewrite(source, externalUniforms!);
+                    return 0;
+                }
+                state.ShaderRewrites.Remove(a[0]);
             }
             fixed (int* size = lengths)
                 ((delegate* unmanaged[Cdecl]<uint, int, nint*, int*, void>)proc)(a[0], count, strings, size);
