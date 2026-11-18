@@ -11,6 +11,8 @@ internal sealed unsafe class AngleLibrary
     private readonly string _directory;
     private readonly nint _egl;
     private readonly nint _gles;
+    private readonly nint _nativeDisplay;
+    private readonly int _nativePlatform;
 
     internal readonly nint Display;
     internal readonly nint Config;
@@ -25,14 +27,16 @@ internal sealed unsafe class AngleLibrary
     internal readonly delegate* unmanaged[Cdecl]<nint, nint, uint> SwapBuffers;
     internal readonly delegate* unmanaged[Cdecl]<int> GetError;
 
-    internal static AngleLibrary Acquire(string directory)
+    internal static AngleLibrary Acquire(string directory, KmsEglWindow? window = null)
     {
         lock (Gate)
         {
             if (_active == null)
-                _active = new AngleLibrary(directory);
-            else if (_active._directory != directory)
-                throw new InvalidOperationException("Active Podish containers must use the same ANGLE directory.");
+                _active = new AngleLibrary(directory, window);
+            else if (_active._directory != directory ||
+                     (window is { } requested && (_active._nativeDisplay != requested.Display ||
+                                                 _active._nativePlatform != requested.Platform)))
+                throw new InvalidOperationException("Active Podish containers must use the same ANGLE directory and native display.");
             _active._users++;
             return _active;
         }
@@ -50,9 +54,11 @@ internal sealed unsafe class AngleLibrary
         }
     }
 
-    private AngleLibrary(string directory)
+    private AngleLibrary(string directory, KmsEglWindow? window)
     {
         _directory = directory;
+        _nativeDisplay = window?.Display ?? 0;
+        _nativePlatform = window?.Platform ?? 0;
         var eglName = OperatingSystem.IsMacOS() ? "libEGL.dylib" :
             OperatingSystem.IsWindows() ? "libEGL.dll" : "libEGL.so";
         var glesName = OperatingSystem.IsMacOS() ? "libGLESv2.dylib" :
@@ -82,8 +88,25 @@ internal sealed unsafe class AngleLibrary
                 if (platformDisplay == null)
                     throw new InvalidOperationException("ANGLE does not export eglGetPlatformDisplayEXT.");
                 // ANGLE uses Metal on macOS and its default backend on other hosts.
-                int* attribs = stackalloc int[] { 0x3203, 0x3489, 0x3038 };
-                Display = platformDisplay(0x3202, 0, OperatingSystem.IsMacOS() ? attribs : null);
+                int* attribs = stackalloc int[5];
+                var i = 0;
+                if (OperatingSystem.IsMacOS())
+                {
+                    attribs[i++] = 0x3203; // EGL_PLATFORM_ANGLE_TYPE_ANGLE
+                    attribs[i++] = 0x3489; // Metal
+                }
+                else if (OperatingSystem.IsWindows() && window != null)
+                {
+                    attribs[i++] = 0x3203;
+                    attribs[i++] = 0x3208; // D3D11
+                }
+                if (_nativePlatform != 0)
+                {
+                    attribs[i++] = 0x348F; // EGL_PLATFORM_ANGLE_NATIVE_PLATFORM_TYPE_ANGLE
+                    attribs[i++] = _nativePlatform;
+                }
+                attribs[i] = 0x3038;
+                Display = platformDisplay(0x3202, _nativeDisplay, attribs);
             }
 
             var initialize = (delegate* unmanaged[Cdecl]<nint, int*, int*, uint>)Egl("eglInitialize");
@@ -113,7 +136,7 @@ internal sealed unsafe class AngleLibrary
         }
     }
 
-    private nint Egl(string name) => NativeLibrary.GetExport(_egl, name);
+    internal nint Egl(string name) => NativeLibrary.GetExport(_egl, name);
     private void Terminate(nint display) =>
         ((delegate* unmanaged[Cdecl]<nint, uint>)Egl("eglTerminate"))(display);
 }

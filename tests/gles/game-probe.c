@@ -17,7 +17,7 @@ struct renderer_info {
     int max_texture_width, max_texture_height;
 };
 
-/* SDL 2.26 Wayland creates its EGL surface before SDL_CreateRenderer can select ES. */
+/* SDL 2.26 can create its EGL surface before SDL_CreateRenderer can select ES. */
 __attribute__((visibility("default"))) void* SDL_CreateWindow(const char* title, int x, int y, int w, int h,
                                                               uint32_t flags) {
     void* (*create)(const char*, int, int, int, int, uint32_t) = dlsym(RTLD_NEXT, "SDL_CreateWindow");
@@ -25,7 +25,7 @@ __attribute__((visibility("default"))) void* SDL_CreateWindow(const char* title,
     const char* (*driver)(void) = dlsym(RTLD_NEXT, "SDL_GetCurrentVideoDriver");
     if (!create || !attribute || !driver)
         _exit(1);
-    if (driver() && !strcmp(driver(), "wayland")) {
+    if (driver() && (!strcmp(driver(), "wayland") || !strcmp(driver(), "KMSDRM") || !strcmp(driver(), "kmsdrm"))) {
         attribute(21, 4); /* SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES */
         attribute(17, 2); /* SDL_GL_CONTEXT_MAJOR_VERSION */
         attribute(18, 0); /* SDL_GL_CONTEXT_MINOR_VERSION */
@@ -116,6 +116,15 @@ __attribute__((visibility("default"))) void SDL_RenderPresent(SDL_Renderer* rend
     }
     if (size(renderer, &width, &height) != 0 || width < 1 || height < 1 || width > 4096 || height > 4096)
         _exit(1);
+    const char* driver = video_driver();
+    if (driver && (!strcmp(driver, "KMSDRM") || !strcmp(driver, "kmsdrm"))) {
+        // The launcher verifies actual host KMS swaps in the engine log. Avoid GL readback here.
+        present(renderer);
+        printf("SDL2 GLES KMSDRM game rendered %u frames (%dx%d)\n", frames, width, height);
+        fflush(stdout);
+        _exit(0);
+    }
+
     size_t count = (size_t)width * height;
     uint32_t* pixels = malloc(count * sizeof(*pixels));
     if (!pixels)
@@ -125,7 +134,6 @@ __attribute__((visibility("default"))) void SDL_RenderPresent(SDL_Renderer* rend
     free(pixels);
     present(renderer);
 
-    const char* driver = video_driver();
     if (image && (!strcmp(driver, "wayland") || framebuffer_has_image())) {
         printf("SDL2 GLES game smoke passed (%s, %dx%d, frame %u)\n", driver, width, height, frames);
         fflush(stdout);

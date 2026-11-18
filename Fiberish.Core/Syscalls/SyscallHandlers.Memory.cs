@@ -100,6 +100,7 @@ public partial class SyscallManager
         var isAnon = (flags & (int)MapFlags.Anonymous) != 0;
         LinuxFile? f = null;
         LinuxFile? mmapFile = null;
+        LinuxFile? backing = null;
         // Linux resolves a file descriptor before do_mmap validates length.
         if (!isAnon)
         {
@@ -157,8 +158,8 @@ public partial class SyscallManager
             if ((f.Flags & (FileFlags.O_WRONLY | FileFlags.O_RDWR)) == FileFlags.O_WRONLY)
                 return -(int)Errno.EACCES;
             if (!inode.SupportsMmap) return -(int)Errno.ENODEV;
-            if (inode is FramebufferInode framebuffer && !framebuffer.CanMap(offset, mapLen))
-                return -(int)Errno.EINVAL;
+            var resolve = inode.ResolveMmapBacking(f, mapLen, ref offset, out backing);
+            if (resolve != 0) return resolve;
             if (isShared && (prot & (int)Protection.Write) != 0)
             {
                 if (inode is TmpfsInode { HasWriteSeal: true }) return -(int)Errno.EPERM;
@@ -182,15 +183,15 @@ public partial class SyscallManager
 
         try
         {
-            if (f != null)
+            if (backing != null)
             {
                 // The mapping keeps its own inode FileMmap reference (as before), but its
                 // IN_CLOSE notification is deferred through a barrier shared with the fd's
                 // open file description.
-                var barrier = f.CloseBarrier ??= new LinuxFile.CloseNotificationBarrier(
-                    f.Dentry, f.OpenedInode, ((int)f.Flags & 3) != 0);
+                var barrier = backing.CloseBarrier ??= new LinuxFile.CloseNotificationBarrier(
+                    backing.Dentry, backing.OpenedInode, ((int)backing.Flags & 3) != 0);
                 barrier.AddMapping();
-                mmapFile = new LinuxFile(f.LivePath, f.Flags, LinuxFile.ReferenceKind.MmapHold, f.OpenedInode)
+                mmapFile = new LinuxFile(backing.LivePath, backing.Flags, LinuxFile.ReferenceKind.MmapHold, backing.OpenedInode)
                 {
                     CloseBarrier = barrier
                 };

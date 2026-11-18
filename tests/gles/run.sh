@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if [[ $# != 3 || ! -d $1 ]]; then
-    echo "Usage: $0 IA32_GLIBC_ROOTFS {fbdev|wayland} {doom|supertux}" >&2
+    echo "Usage: $0 IA32_GLIBC_ROOTFS {fbdev|wayland|kmsdrm} {doom|supertux}" >&2
     exit 2
 fi
 
@@ -20,6 +20,11 @@ case $2 in
     fbdev)
         display=(--fbdev --fbdev-size 640x480
                  -e SDL_VIDEODRIVER=offscreen -e PODISH_EGL_FBDEV_PBUFFER=1)
+        ;;
+    kmsdrm)
+        engine_log=$(mktemp)
+        trap 'rm -f "$engine_log"' EXIT
+        display=(--kmsdrm --log-level debug --log-file "$engine_log" -e SDL_VIDEODRIVER=kmsdrm)
         ;;
     wayland)
         engine_log=$(mktemp)
@@ -56,4 +61,14 @@ if [[ $2 == wayland ]]; then
         exit 1
     fi
     echo "Wayland compositor received GLES frames"
+fi
+
+if [[ $2 == kmsdrm ]]; then
+    frames=$(rg -c 'KMS EGL presented a GPU frame' "$engine_log" || true)
+    if [[ ${frames:-0} -lt 8 ]]; then
+        echo "Expected at least eight host KMS GPU swaps, observed ${frames:-0}" >&2
+        tail -30 "$engine_log" >&2
+        exit 1
+    fi
+    echo "Host EGL presented $frames KMS frames"
 fi

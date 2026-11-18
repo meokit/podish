@@ -20,6 +20,7 @@ enum pg_operation {
     PG_FB_SIZE,
     PG_RELEASE_THREAD,
     PG_SWAP,
+    PG_CREATE_GBM_SURFACE,
 };
 
 struct pg_request {

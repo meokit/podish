@@ -4,6 +4,7 @@ using System.Runtime.InteropServices;
 using Fiberish.Core;
 using Fiberish.Native;
 using Fiberish.VFS;
+using Microsoft.Extensions.Logging;
 
 namespace Podish.Core.Graphics;
 
@@ -15,25 +16,37 @@ internal sealed unsafe partial class AngleDevice : IDisposable
     private const uint Abi = 1;
     private const int MaxObjects = 64;
     private const int MaxSurfacePixels = 2 * FramebufferDevice.DimensionLimit * FramebufferDevice.DimensionLimit;
-    private const uint Pbuffer = 0, Fbdev = 1, Wayland = 2, FbdevPbuffer = 3;
+    private const uint Pbuffer = 0, Fbdev = 1, Wayland = 2, FbdevPbuffer = 3, Gbm = 4;
 
     private enum EglOperation : uint
     {
         Initialize = 1, CreateContext, DestroyContext, CreateSurface, DestroySurface,
-        MakeCurrent, Present, ResizeSurface, FramebufferSize, ReleaseThread, SwapBuffers
+        MakeCurrent, Present, ResizeSurface, FramebufferSize, ReleaseThread, SwapBuffers, CreateGbmSurface
     }
 
     private readonly AngleLibrary _angle;
     private readonly FramebufferDevice? _fb;
+    private readonly KmsEglOutput? _kms;
+    private nint Config => _kms?.Config ?? _angle.Config;
+    internal bool HasKmsOutput => _kms != null;
     private readonly HashSet<Session> _sessions = [];
     private Session? _hostSession;
     private Binding _hostBinding;
     private bool _disposed;
 
-    internal AngleDevice(string directory, FramebufferDevice? framebuffer)
+    internal AngleDevice(string directory, FramebufferDevice? framebuffer, KmsEglWindow? kmsWindow, ILogger logger)
     {
-        _angle = AngleLibrary.Acquire(directory);
+        _angle = AngleLibrary.Acquire(directory, kmsWindow);
         _fb = framebuffer;
+        try
+        {
+            if (kmsWindow is { } window) _kms = new KmsEglOutput(_angle, window, logger);
+        }
+        catch
+        {
+            _angle.Release();
+            throw;
+        }
     }
 
     internal Inode CreateInode(SuperBlock superBlock) => new DeviceInode(superBlock, this);
@@ -98,6 +111,7 @@ internal sealed unsafe partial class AngleDevice : IDisposable
         internal int Width = width;
         internal int Height = height;
         internal bool Deleted;
+        internal GbmBuffers? Buffers;
     }
 
     private readonly record struct Binding(uint Context, uint Draw, uint Read);
@@ -173,6 +187,8 @@ internal sealed unsafe partial class AngleDevice : IDisposable
             }
             case EglOperation.ReleaseThread: return SetCurrent(session, task, default);
             case EglOperation.SwapBuffers: return Present(session, task, a[0], 0, 0, guest);
+            case EglOperation.CreateGbmSurface:
+                return CreateGbmSurface(session, task, (int)a[0], (int)a[1], (int)a[2], a[3], guest);
             default: return -(int)Errno.ENOTTY;
         }
     }
@@ -190,7 +206,7 @@ internal sealed unsafe partial class AngleDevice : IDisposable
         {
             0x3098, 2, 0x3483, 0, 0x3453, 1, 0x3038, // GLES2 only, initialized resources.
         };
-        var handle = _angle.CreateContext(_angle.Display, _angle.Config, shared, attributes);
+        var handle = _angle.CreateContext(_angle.Display, Config, shared, attributes);
         if (handle == 0) return AngleError();
         var id = session.NextId++;
         session.Contexts.Add(id, new Context(handle));
@@ -236,8 +252,9 @@ internal sealed unsafe partial class AngleDevice : IDisposable
 
     private void FreeSurface(Session session, uint id)
     {
-        if (session.Surfaces.Remove(id, out var surface))
-            _angle.DestroySurface(_angle.Display, surface.Handle);
+        if (!session.Surfaces.Remove(id, out var surface)) return;
+        if (surface.Buffers is { } buffers) buffers.Dispose();
+        else _angle.DestroySurface(_angle.Display, surface.Handle);
     }
 
     private int SetCurrent(Session session, FiberTask task, Binding binding)
@@ -328,7 +345,7 @@ internal sealed unsafe partial class AngleDevice : IDisposable
 
     private int ResizeSurface(Session session, FiberTask task, uint id, int width, int height)
     {
-        if (!session.Surfaces.TryGetValue(id, out var surface) || surface.Kind is Pbuffer or FbdevPbuffer)
+        if (!session.Surfaces.TryGetValue(id, out var surface) || surface.Kind is Pbuffer or FbdevPbuffer or Gbm)
             return -0x300D;
         if (!ValidSize(width, height)) return -0x3004;
         if (!FitsSurfaceBudget(width, height, surface)) return -0x3003;
@@ -365,7 +382,7 @@ internal sealed unsafe partial class AngleDevice : IDisposable
     private nint NewPbuffer(int width, int height)
     {
         int* attributes = stackalloc int[] { 0x3057, width, 0x3056, height, 0x3038 };
-        return _angle.CreatePbufferSurface(_angle.Display, _angle.Config, attributes);
+        return _angle.CreatePbufferSurface(_angle.Display, Config, attributes);
     }
 
     private int Present(Session session, FiberTask task, uint id, uint output, uint length, GuestMemory guest)
@@ -374,6 +391,7 @@ internal sealed unsafe partial class AngleDevice : IDisposable
         if (!session.Bindings.TryGetValue(task, out var binding) || binding.Draw != id)
             return -0x300D;
         if (!Bind(session, binding)) return AngleError();
+        if (surface.Buffers is { } buffers) return SwapGbmSurface(session, binding, surface, buffers);
         if (surface.Kind != Pbuffer)
         {
             var size = surface.Width * surface.Height * 4;
@@ -446,7 +464,8 @@ internal sealed unsafe partial class AngleDevice : IDisposable
 
     private bool FitsSurfaceBudget(int width, int height, Surface? replaced = null)
     {
-        var allocated = _sessions.Sum(session => session.Surfaces.Values.Sum(surface => (long)surface.Width * surface.Height));
+        var allocated = _sessions.Sum(session => session.Surfaces.Values.Sum(surface =>
+            (long)surface.Width * surface.Height * (surface.Buffers?.Slots.Length ?? 1)));
         if (replaced != null) allocated -= (long)replaced.Width * replaced.Height;
         return allocated + (long)width * height <= MaxSurfacePixels;
     }
@@ -461,8 +480,8 @@ internal sealed unsafe partial class AngleDevice : IDisposable
         if (_hostSession == session) Unbind();
         foreach (var context in session.Contexts.Values)
             _angle.DestroyContext(_angle.Display, context.Handle);
-        foreach (var surface in session.Surfaces.Values)
-            _angle.DestroySurface(_angle.Display, surface.Handle);
+        foreach (var id in session.Surfaces.Keys.ToArray())
+            FreeSurface(session, id);
         session.Contexts.Clear();
         session.Surfaces.Clear();
         session.Bindings.Clear();
@@ -474,6 +493,7 @@ internal sealed unsafe partial class AngleDevice : IDisposable
         _disposed = true;
         foreach (var session in _sessions.ToArray())
             Close(session);
+        _kms?.Dispose();
         _angle.Release();
     }
 }

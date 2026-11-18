@@ -433,15 +433,21 @@ public partial class SyscallManager
         }
     }
 
-    public void RegisterVirtualCharacterDevice(string name, Func<SuperBlock, Inode> createInode)
+    public void RegisterVirtualCharacterDevice(string path, Func<SuperBlock, Inode> createInode)
     {
         var dev = PathWalk("/dev");
-        if (dev.Mount?.FsType != "devtmpfs" || dev.Dentry?.Inode is not TmpfsInode root)
+        if (dev.Mount?.FsType != "devtmpfs" || dev.Dentry?.Inode is not TmpfsInode)
             throw new IOException("Virtual character devices require a mounted /dev devtmpfs.");
-        var fsName = FsName.FromString(name);
-        var superBlock = dev.Dentry.SuperBlock;
-        var entry = new Dentry(fsName, createInode(superBlock), dev.Dentry, superBlock);
-        root.RegisterChild(dev.Dentry, fsName, entry);
+        var parts = path.Split('/');
+        if (parts.Any(part => part is "" or "." or ".."))
+            throw new ArgumentException("Expected a relative device path under /dev.", nameof(path));
+        for (var i = 0; i < parts.Length - 1; i++)
+            dev = EnsureDirectory(dev, FsName.FromString(parts[i]));
+
+        var name = FsName.FromString(parts[^1]);
+        var superBlock = dev.Dentry!.SuperBlock;
+        var entry = new Dentry(name, createInode(superBlock), dev.Dentry, superBlock);
+        ((TmpfsInode)dev.Dentry.Inode!).RegisterChild(dev.Dentry, name, entry);
     }
 
     private FileSystemType CreateDevPtsFileSystemType(ISignalBroadcaster signalBroadcaster)

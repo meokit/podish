@@ -13,3 +13,5 @@ cc=("${ZIG:-zig}" cc -target x86-linux-gnu.2.11 -O2 -std=gnu11 -Wall -Wextra
 "${cc[@]}" -Wl,-soname,libEGL.so.1,-z,nodelete egl.c wayland.c "$out/libGLESv2.so.2" -ldl -pthread -o "$out/libEGL.so.1"
 ln -sf libGLESv2.so.2 "$out/libGLESv2.so"
 ln -sf libEGL.so.1 "$out/libEGL.so"
+"${cc[@]}" -Wl,-soname,libgbm.so.1 gbm.c -pthread -o "$out/libgbm.so.1"
+ln -sf libgbm.so.1 "$out/libgbm.so"

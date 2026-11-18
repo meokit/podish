@@ -53,3 +53,37 @@ tests/gles/run.sh "$rootfs" wayland supertux
 ```
 
 The game probe selects SDL2's `opengles2` backend, checks for a nonuniform frame and exits. It also sets the GLES profile before SDL2 2.26 creates a Wayland window. The fbdev test reads the rendered game image from `/dev/fb0`. The Wayland launcher checks the compositor log for an XRGB8888 buffer and needs a host SDL video driver that supports the Wayland compositor's SDL window.
+
+## Virtual KMS and GBM
+
+`--kmsdrm` exposes an experimental IA-32 primary node at `/dev/dri/card0` and mounts `libgbm.so.1` from the guest build. It works with the distribution's `libdrm.so.2`. The virtual card has one 640×480 output with legacy modesetting, CPU-backed linear BOs, and vblank-timed page-flip events.
+
+Combine `--kmsdrm --gles` to open a host SDL window and enable GPU-backed GBM surfaces. A GBM surface has three texture-bindable EGL pbuffers. Guest EGL swap publishes a finished BO, then KMS modeset or flip selects the BO to present. The host ANGLE context samples it into the window using `eglBindTexImage`. The virtual flip event follows the GPU fence. Frame pixels stay in ANGLE during this path.
+
+The macOS Metal path is tested with Chocolate Doom and SuperTux. SDL also supplies native window handles for Windows, X11 and Wayland on Linux. The corresponding host ANGLE build must support window and texture-bindable pbuffer surfaces on that platform.
+
+Use an IA-32 glibc rootfs with `libdrm2`, `libdrm-dev` and `libgbm-dev` to build the smoke tests. The development headers can also be provided with the host variables `DRM_HEADERS` and `GBM_HEADERS`.
+
+```sh
+graphics/build-guest.sh
+tests/kmsdrm/install-probe.sh "$rootfs"
+dotnet "$cli" run --rm --kmsdrm --rootfs "$rootfs" -- /usr/local/bin/podish-kmsdrm-probe
+dotnet "$cli" run --rm --kmsdrm --gles --rootfs "$rootfs" -- /usr/local/bin/podish-kmsdrm-egl-probe
+```
+
+The GPU probe checks that EGL swap leaves the active KMS framebuffer alone. It then verifies modeset, page flip, the active BO's lifetime after the GBM lock is released, three-slot pool reuse and clean teardown.
+
+For the packaged game tests, use the Debian rootfs from the earlier smoke-test instructions. The launch fixtures set the GLES profile before the first SDL window and check the engine's GPU swap log.
+
+```sh
+tests/gles/install-probe.sh "$rootfs"
+tests/gles/run.sh "$rootfs" kmsdrm doom
+tests/gles/run.sh "$rootfs" kmsdrm supertux
+```
+
+### Buffer ownership and Vulkan compatibility
+
+- Keep a DRM GEM handle scoped to the open file description. A KMS framebuffer retains its backing buffer after the handle is closed, and mappings retain their own backing reference. A future PRIME export must create an independently owned virtual file usable with `SCM_RIGHTS`. An imported file produces a handle in the importing DRM file's namespace. [DRM UAPI](https://docs.kernel.org/gpu/drm-uapi.html) · [dma-buf lifetime and synchronization](https://docs.kernel.org/driver-api/dma-buf.html)
+- Keep EGL swap, KMS flip and buffer release separate. SDL swaps EGL, locks the GBM front BO and then registers and submits it to KMS. Its release of the prior BO follows the flip event. GPU-backed scanout must track both the producer fence and completion of the presenter's last access before letting GBM recycle the buffer. [SDL2 KMSDRM swap path](https://github.com/libsdl-org/SDL/blob/release-2.26.5/src/video/kmsdrm/SDL_kmsdrmopengles.c)
+- Keep the KMS objects independent of the host rendering API. The current implementation uses standard EGL pbuffer sharing. Backends that need cross-API interop can implement GPU scanout buffers using IOSurface or host dma-buf with its plane geometry and format modifier. [ANGLE IOSurface extension](https://chromium.googlesource.com/angle/angle/+/2ecfc5a1c29357c6e16555298771cc4d68f20d90/extensions/EGL_ANGLE_iosurface_client_buffer.txt) · [Vulkan DRM format modifiers](https://docs.vulkan.org/refpages/latest/refpages/source/VK_EXT_image_drm_format_modifier.html)
+- Vulkan WSI can reuse display objects, host buffer storage and presentation completion. Its swapchain will still own image acquisition, queue semaphore waits and present modes. Direct display can use the KMS path, and Wayland WSI submits through the compositor. A guest Vulkan ICD or a protocol such as Venus is a separate renderer transport. A macOS Vulkan backend that supports `VK_EXT_metal_objects` can import compatible IOSurface or Metal resources; probe that capability on the selected driver. [Vulkan WSI](https://docs.vulkan.org/spec/latest/chapters/VK_KHR_surface/wsi.html) · [Vulkan Metal interop](https://docs.vulkan.org/features/latest/features/proposals/VK_EXT_metal_objects.html) · [Mesa Venus requirements](https://docs.mesa3d.org/drivers/venus.html)

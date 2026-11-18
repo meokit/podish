@@ -1,11 +1,15 @@
 #define _GNU_SOURCE
+#include "gbm_egl.h"
 #include "transport.h"
 #include "wayland.h"
 #define EGLAPI PODISH_EXPORT
 #include <EGL/egl.h>
+#include <dlfcn.h>
 #include <pthread.h>
 #include <stdlib.h>
 
+#define PG_PLATFORM_GBM 0x31D7
+#define PG_GBM_ARGB8888 0x34325241
 #define PG_PLATFORM_WAYLAND 0x31D8
 #define PG_PLATFORM_DEVICE 0x313F
 #define PG_DEVICE_ATTRIBUTE 0x322C
@@ -15,7 +19,7 @@
 #define PG_CONFIG ((EGLConfig)(uintptr_t)1)
 #define PG_MAX_SIZE 4096
 
-enum surface_kind { PBUFFER, FBDEV, WAYLAND, FBDEV_PBUFFER };
+enum surface_kind { PBUFFER, FBDEV, WAYLAND, FBDEV_PBUFFER, GBM };
 struct context {
     uint32_t id;
     struct context* next;
@@ -26,6 +30,7 @@ struct surface {
     int width, height;
     int references, deleted;
     struct pg_wayland* window;
+    void* gbm_window;
     struct surface* next;
 };
 struct display {
@@ -46,6 +51,35 @@ static _Thread_local struct surface *current_read, *current_draw;
 static pthread_key_t thread_binding_key;
 static pthread_once_t thread_binding_once = PTHREAD_ONCE_INIT;
 static int thread_binding_ready;
+
+static struct {
+    int (*is_device)(void*);
+    int (*begin)(void*, void*, struct pg_gbm_geometry*);
+    void (*buffers)(void*, const uint32_t*);
+    void (*end)(void*);
+    void (*publish)(void*, uint32_t);
+    int ready;
+} gbm;
+static pthread_once_t gbm_once = PTHREAD_ONCE_INIT;
+
+static void load_gbm(void) {
+    void* lib = dlopen("libgbm.so.1", RTLD_NOW | RTLD_LOCAL);
+    if (!lib)
+        return;
+    gbm.is_device = dlsym(lib, "podish_gbm_is_device");
+    gbm.begin = dlsym(lib, "podish_gbm_begin");
+    gbm.buffers = dlsym(lib, "podish_gbm_set_buffers");
+    gbm.end = dlsym(lib, "podish_gbm_end");
+    gbm.publish = dlsym(lib, "podish_gbm_publish");
+    gbm.ready = gbm.is_device && gbm.begin && gbm.buffers && gbm.end && gbm.publish;
+    if (!gbm.ready)
+        dlclose(lib);
+}
+
+static int gbm_device(void* native) {
+    pthread_once(&gbm_once, load_gbm);
+    return gbm.ready && gbm.is_device(native);
+}
 
 static void release_binding(void* bound) {
     (void)bound;
@@ -116,6 +150,8 @@ static void collect_surface(struct display* d, struct surface* s) {
         link = &(*link)->next;
     *link = s->next;
     pg_wayland_destroy(s->window);
+    if (s->gbm_window)
+        gbm.end(s->gbm_window);
     free(s);
 }
 
@@ -159,6 +195,8 @@ static EGLDisplay get_display(EGLenum platform, void* native) {
 }
 
 EGLDisplay eglGetDisplay(EGLNativeDisplayType native) {
+    if (native && getenv("PODISH_KMSDRM") && gbm_device(native))
+        return get_display(PG_PLATFORM_GBM, native);
     return get_display(native ? PG_PLATFORM_WAYLAND : 0, native);
 }
 
@@ -168,6 +206,10 @@ EGLDisplay eglGetPlatformDisplay(EGLenum platform, void* native, const EGLAttrib
         return EGL_NO_DISPLAY;
     }
     switch (platform) {
+    case PG_PLATFORM_GBM:
+        if (gbm_device(native))
+            return get_display(platform, native);
+        break;
     case PG_PLATFORM_WAYLAND:
         if (native)
             return get_display(platform, native);
@@ -270,11 +312,14 @@ EGLBoolean eglTerminate(EGLDisplay display) {
 }
 
 const char* eglQueryString(EGLDisplay display, EGLint name) {
-    static const char extensions[] = "EGL_EXT_client_extensions EGL_EXT_platform_base EGL_EXT_platform_wayland "
-                                     "EGL_KHR_platform_wayland EGL_MESA_platform_surfaceless EGL_EXT_device_base "
-                                     "EGL_EXT_device_enumeration EGL_EXT_device_query EGL_EXT_platform_device";
+#define PG_CLIENT_EXTENSIONS                                                                                           \
+    "EGL_EXT_client_extensions EGL_EXT_platform_base EGL_EXT_platform_wayland "                                        \
+    "EGL_KHR_platform_wayland EGL_MESA_platform_surfaceless EGL_EXT_device_base "                                      \
+    "EGL_EXT_device_enumeration EGL_EXT_device_query EGL_EXT_platform_device"
     if (display == EGL_NO_DISPLAY && name == EGL_EXTENSIONS)
-        return extensions;
+        return getenv("PODISH_KMSDRM") ? PG_CLIENT_EXTENSIONS " EGL_KHR_platform_gbm EGL_MESA_platform_gbm"
+                                       : PG_CLIENT_EXTENSIONS;
+#undef PG_CLIENT_EXTENSIONS
     WITH_LOCK;
     if (!lookup(display, 1))
         return NULL;
@@ -313,7 +358,7 @@ static EGLint config_attribute(const struct display* display, EGLint attr) {
     case EGL_CONFORMANT:
         return EGL_OPENGL_ES2_BIT;
     case EGL_NATIVE_VISUAL_ID:
-        return 0;
+        return display->platform == PG_PLATFORM_GBM ? PG_GBM_ARGB8888 : 0;
     case EGL_NATIVE_RENDERABLE:
         return EGL_FALSE;
     case EGL_CONFIG_CAVEAT:
@@ -535,6 +580,33 @@ static EGLSurface make_surface(struct display* d, enum surface_kind kind, int wi
     return (EGLSurface)(uintptr_t)s->id;
 }
 
+static EGLSurface make_gbm_surface(struct display* display, void* native) {
+    struct pg_gbm_geometry size;
+    if (!gbm.begin(display->native, native, &size))
+        return (fail(EGL_BAD_NATIVE_WINDOW), EGL_NO_SURFACE);
+    struct surface* surface = calloc(1, sizeof(*surface));
+    if (!surface) {
+        gbm.end(native);
+        return (fail(EGL_BAD_ALLOC), EGL_NO_SURFACE);
+    }
+    uint32_t handles[PG_GBM_SLOTS];
+    int id = pg_gl(PG_CREATE_GBM_SURFACE, size.width, size.height, (uint32_t)size.fd, pg_ptr(handles));
+    if (!called(id)) {
+        gbm.end(native);
+        free(surface);
+        return EGL_NO_SURFACE;
+    }
+    gbm.buffers(native, handles);
+    *surface = (struct surface){.id = (uint32_t)id,
+                                .kind = GBM,
+                                .width = (int)size.width,
+                                .height = (int)size.height,
+                                .gbm_window = native,
+                                .next = display->surfaces};
+    display->surfaces = surface;
+    return (EGLSurface)(uintptr_t)id;
+}
+
 EGLSurface eglCreateWindowSurface(EGLDisplay display, EGLConfig config, EGLNativeWindowType native,
                                   const EGLint* attribs) {
     WITH_LOCK;
@@ -547,6 +619,8 @@ EGLSurface eglCreateWindowSurface(EGLDisplay display, EGLConfig config, EGLNativ
         if (a[0] != EGL_RENDER_BUFFER || a[1] != EGL_BACK_BUFFER)
             return (fail(EGL_BAD_ATTRIBUTE), EGL_NO_SURFACE);
 
+    if (d->platform == PG_PLATFORM_GBM)
+        return make_gbm_surface(d, (void*)(uintptr_t)native);
     int width, height;
     if (d->platform == PG_PLATFORM_WAYLAND) {
         struct pg_wayland* window = pg_wayland_create(d->native, (struct wl_egl_window*)(uintptr_t)native);
@@ -622,7 +696,7 @@ EGLBoolean eglDestroySurface(EGLDisplay display, EGLSurface handle) {
 
 static int refresh_size(struct surface* s) {
     int width, height;
-    if (s->kind == PBUFFER || s->kind == FBDEV_PBUFFER)
+    if (s->kind == PBUFFER || s->kind == FBDEV_PBUFFER || s->kind == GBM)
         return EGL_TRUE;
     if (s->kind == WAYLAND) {
         if (pg_wayland_size(s->window, &width, &height) < 0)
@@ -742,6 +816,13 @@ EGLBoolean eglSwapBuffers(EGLDisplay display, EGLSurface handle) {
         return fail(EGL_BAD_SURFACE);
     if (!refresh_size(s))
         return EGL_FALSE;
+    if (s->kind == GBM) {
+        int handle = pg_gl(PG_SWAP, s->id);
+        if (!called(handle))
+            return EGL_FALSE;
+        gbm.publish(s->gbm_window, (uint32_t)handle);
+        return EGL_TRUE;
+    }
     int result = s->kind == WAYLAND ? pg_wayland_present(s->window, s->id, s->width, s->height)
                                     : pg_gl(s->kind == PBUFFER ? PG_SWAP : PG_FRAME, s->id);
     return called(result);

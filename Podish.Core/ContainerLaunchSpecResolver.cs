@@ -215,6 +215,7 @@ public static class ContainerLaunchSpecResolver
             WaylandDesktopHeight = spec.WaylandDesktopHeight,
             Fbdev = spec.Fbdev,
             Gles = spec.Gles,
+            KmsDrm = spec.KmsDrm,
             FbdevWidth = spec.FbdevWidth,
             FbdevHeight = spec.FbdevHeight,
             MemoryQuotaBytes = spec.MemoryQuotaBytes,

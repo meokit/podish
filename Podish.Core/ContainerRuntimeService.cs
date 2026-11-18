@@ -62,6 +62,8 @@ public sealed class ContainerRunRequest
     public int WaylandDesktopHeight { get; init; } = 768;
     public FramebufferDevice? Framebuffer { get; init; }
     public bool EnableGles { get; init; }
+    public bool EnableKmsDrm { get; init; }
+    public KmsEglWindow? KmsWindow { get; init; }
     public ushort? TerminalRows { get; init; }
     public ushort? TerminalCols { get; init; }
     public Action<KernelRuntime, KernelScheduler, UTSNamespace?, int>? ConfigureVirtualDaemons { get; init; }
@@ -388,10 +390,11 @@ public sealed class ContainerRuntimeService
                 runtime.Syscalls.MountHostfs(hostPath, guestPath, readOnly);
             }
 
-            if (request.EnableGles)
+            if (request.EnableGles || request.EnableKmsDrm)
             {
-                startupPhase = "mount-gles";
-                gles = ContainerGles.Mount(runtime.Syscalls, request.Framebuffer);
+                startupPhase = "mount-graphics";
+                gles = ContainerGraphics.Mount(runtime.Syscalls, scheduler, request.Framebuffer,
+                    request.EnableGles, request.EnableKmsDrm, request.KmsWindow, _logger);
             }
 
             try
@@ -475,11 +478,13 @@ public sealed class ContainerRuntimeService
                 autoEnvs.Add($"{ContainerRunRequest.XdgRuntimeDirEnvVar}=/run");
             }
 
-            if (gles != null)
+            if (request.KmsWindow != null) autoEnvs.Add("PODISH_KMSDRM=1");
+
+            if (request.EnableGles || request.EnableKmsDrm)
             {
                 const string prefix = "LD_LIBRARY_PATH=";
                 var previous = request.GuestEnvs.LastOrDefault(env => env.StartsWith(prefix, StringComparison.Ordinal));
-                autoEnvs.Add(prefix + ContainerGles.GuestPath +
+                autoEnvs.Add(prefix + ContainerGraphics.GuestPath +
                              (previous?.Length > prefix.Length ? ":" + previous[prefix.Length..] : ""));
             }
 

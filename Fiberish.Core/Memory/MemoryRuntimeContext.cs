@@ -270,6 +270,13 @@ public sealed class MemoryRuntimeContext : IDisposable
             LinuxFile.ReferenceKind.MmapHold);
     }
 
+    internal LinuxFile CreateDrmBufferFile(uint length, int uid, int gid, Mount mount)
+    {
+        var name = $".drm.{Interlocked.Increment(ref _nextSharedAnonymousBackingId)}";
+        return CreateUnlinkedShmFile(name, length, 0x180, uid, gid, FileFlags.O_RDWR, mount,
+            LinuxFile.ReferenceKind.Normal);
+    }
+
     internal LinuxFile CreateMemfdFile(string displayName, FileFlags fileFlags, int mode, int uid, int gid,
         bool allowSealing, bool executable, bool noExecSeal, Mount mount)
     {

@@ -439,7 +439,11 @@ internal sealed class FramebufferInode : MappingBackedInode
     // Video memory must remain resident when guests unmap it or invoke msync.
     protected override AddressSpacePolicy.AddressSpaceCacheClass? MappingCacheClass => null;
 
-    internal bool CanMap(long offset, uint length) => offset >= 0 && (ulong)offset + length <= Size;
+    public override int ResolveMmapBacking(LinuxFile file, uint length, ref long offset, out LinuxFile backing)
+    {
+        backing = file;
+        return offset >= 0 && (ulong)offset + length <= Size ? 0 : -(int)Errno.EINVAL;
+    }
 
     public override int Ioctl(LinuxFile linuxFile, FiberTask task, uint request, uint arg) =>
         _device.Ioctl(task.CPU, request, arg);
