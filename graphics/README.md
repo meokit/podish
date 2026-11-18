@@ -120,6 +120,12 @@ With the GLES/SSE2 build of SuperTuxKart installed at `/usr/local/bin/supertuxka
 tests/gles/run.sh "$rootfs" kmsdrm supertuxkart
 ```
 
+To run the same race through the guest compositor, install Cage and its dependencies in the STK rootfs. The launcher provides a fresh temporary directory for each run.
+
+```sh
+tests/gles/run.sh "$rootfs" cage supertuxkart
+```
+
 ### Buffer ownership and Vulkan compatibility
 
 - Keep a DRM GEM handle scoped to the open file description. A KMS framebuffer retains its backing buffer after the handle is closed, and mappings retain their own backing reference. A future PRIME export must create an independently owned virtual file usable with `SCM_RIGHTS`. An imported file produces a handle in the importing DRM file's namespace. [DRM UAPI](https://docs.kernel.org/gpu/drm-uapi.html) · [dma-buf lifetime and synchronization](https://docs.kernel.org/driver-api/dma-buf.html)

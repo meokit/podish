@@ -71,7 +71,8 @@ internal sealed unsafe partial class KmsEglOutput
             int width = 0, height = 0;
             Require(_querySurface(_angle.Display, _surface, 0x3057, &width) != 0 &&
                     _querySurface(_angle.Display, _surface, 0x3056, &height) != 0, "query texture scanout size");
-            _blit(0, 0, (int)buffer.Width, (int)buffer.Height, 0, 0, width, height, 0x4000, 0x2600);
+            // DRM scanout puts BO row zero at the top. The EGL window uses GL's bottom-left origin.
+            _blit(0, (int)buffer.Height, (int)buffer.Width, 0, 0, 0, width, height, 0x4000, 0x2600);
             Require(GlError() == 0, "blit the compositor texture");
             var fence = Fence();
             Require(fence != 0, "create texture scanout fence");

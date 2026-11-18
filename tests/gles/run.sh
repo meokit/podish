@@ -2,7 +2,12 @@
 set -euo pipefail
 
 if [[ $# != 3 || ! -d $1 ]]; then
-    echo "Usage: $0 IA32_GLIBC_ROOTFS {fbdev|wayland|kmsdrm} {doom|supertux|supertuxkart}" >&2
+    echo "Usage: $0 IA32_GLIBC_ROOTFS {fbdev|wayland|kmsdrm|cage} {doom|supertux|supertuxkart}" >&2
+    exit 2
+fi
+
+if [[ $2 == cage && $3 != supertuxkart ]]; then
+    echo "The Cage run currently supports SuperTuxKart" >&2
     exit 2
 fi
 
@@ -21,10 +26,18 @@ case $2 in
         display=(--fbdev --fbdev-size 640x480
                  -e SDL_VIDEODRIVER=offscreen -e PODISH_EGL_FBDEV_PBUFFER=1)
         ;;
-    kmsdrm)
+    kmsdrm|cage)
         engine_log=$(mktemp)
         trap 'rm -f "$engine_log"' EXIT
-        display=(--kmsdrm --log-level debug --log-file "$engine_log" -e SDL_VIDEODRIVER=kmsdrm)
+        display=(--kmsdrm --log-level debug --log-file "$engine_log")
+        if [[ $2 == cage ]]; then
+            display+=(--user 1000:1000 -e LIBSEAT_BACKEND=builtin -e SEATD_VTBOUND=0 -e WLR_BACKENDS=drm
+                      -e WLR_DRM_DEVICES=/dev/dri/card0 -e WLR_RENDERER=gles2 -e SDL_VIDEODRIVER=wayland)
+            present='KMS EGL presented a compositor texture'
+        else
+            display+=(-e SDL_VIDEODRIVER=kmsdrm)
+            present='KMS EGL presented a GPU frame'
+        fi
         ;;
     wayland)
         engine_log=$(mktemp)
@@ -47,8 +60,8 @@ case $3 in
               /usr/share/games/supertux2/levels/world1/journey_begins.stl)
         ;;
     supertuxkart)
-        if [[ $2 != kmsdrm ]]; then
-            echo "The SuperTuxKart profile uses KMSDRM" >&2
+        if [[ $2 != kmsdrm && $2 != cage ]]; then
+            echo "The SuperTuxKart profile uses KMSDRM or Cage" >&2
             exit 2
         fi
         game_log=$(mktemp)
@@ -58,6 +71,15 @@ case $3 in
         game=(/usr/local/bin/supertuxkart-gles-sse2 --log=nocolor --no-sound --race-now
               --track=lighthouse --kart=tux --numkarts=3 --ai=puffy,gavroche
               --screensize=640x480 --seed=23 --profile-time=30)
+        if [[ $2 == cage ]]; then
+            cage_tmp=$(mktemp -d)
+            trap 'rm -f "$engine_log" "$game_log"; rm -rf "$cage_tmp"' EXIT
+            mkdir -m 1777 "$cage_tmp/tmp" "$cage_tmp/tmp/.X11-unix"
+            mkdir -m 0777 "$cage_tmp/tmp/runtime" "$cage_tmp/tmp/home"
+            display+=(-v "$cage_tmp/tmp:/tmp" -e XDG_RUNTIME_DIR=/tmp/runtime)
+            game_env+=(-e HOME=/tmp/home -e SUPERTUXKART_SAVEDIR=/tmp/home)
+            game=(/usr/bin/cage -d -- "${game[@]}")
+        fi
         ;;
     *)
         echo "Unknown game $3" >&2
@@ -87,8 +109,8 @@ if [[ $2 == wayland ]]; then
     echo "Wayland compositor received GLES frames"
 fi
 
-if [[ $2 == kmsdrm ]]; then
-    frames=$(rg -c 'KMS EGL presented a GPU frame' "$engine_log" || true)
+if [[ $2 == kmsdrm || $2 == cage ]]; then
+    frames=$(rg -c "$present" "$engine_log" || true)
     if [[ ${frames:-0} -lt 8 ]]; then
         echo "Expected at least eight host KMS GPU swaps, observed ${frames:-0}" >&2
         tail -30 "$engine_log" >&2
