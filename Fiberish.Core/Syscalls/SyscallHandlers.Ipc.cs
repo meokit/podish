@@ -15,7 +15,7 @@ public partial class SyscallManager
     ///     - SHMCTL (24): Control shared memory segment
     ///     On i386, the call parameter encodes:
     ///     - Low 16 bits: the IPC operation (op)
-    ///     - High 16 bits: version/flags (usually 0 or IPC_64)
+    ///     - High 16 bits: call version for operations that use it
     /// </summary>
     private async ValueTask<int> SysIpc(Engine engine,
         uint call, // IPC subcommand with version (low 16 bits = op, high 16 bits = version)
@@ -33,14 +33,13 @@ public partial class SyscallManager
 
         // Decode call: low 16 bits are the operation, high bits may contain version flags
         var op = (int)(call & 0xFFFF);
-        var version = (int)(call >> 16);
 
         var ret = op switch
         {
             LinuxConstants.SHMGET => DoShmGet(this, (int)first, second, (int)third, uid, gid, pid),
             LinuxConstants.SHMAT => DoShmAt(this, engine, (int)first, ptr, (int)second, third, pid),
             LinuxConstants.SHMDT => DoShmDt(this, engine, ptr, pid),
-            LinuxConstants.SHMCTL => DoShmCtl(this, engine, (int)first, (int)second, ptr, uid, gid, pid, version),
+            LinuxConstants.SHMCTL => SysVShm.ShmCtl((int)first, (int)second, ptr, engine, uid, gid, pid),
 
             LinuxConstants.SEMGET => SysVSem.SemGet((int)first, (int)second, (int)third, uid, gid, t?.Process),
             LinuxConstants.SEMCTL => DoSemCtlFromIpc(engine, this, (int)first, (int)second, third, ptr, uid, gid, t?.Process),
@@ -114,22 +113,35 @@ public partial class SyscallManager
         return sm.SysVShm.ShmDt(shmaddr, pid, sm.Mem, engine, process);
     }
 
-    /// <summary>
-    ///     SHMCTL: Control operations on shared memory segment.
-    ///     args: shmid, cmd, buf
-    ///     returns: 0 on success, negative errno on failure
-    ///     Note: cmd may have IPC_64 flag set (0x0100) on i386 glibc.
-    /// </summary>
-    private static int DoShmCtl(SyscallManager sm, Engine engine, int shmid, int cmd, uint buf, int uid, int gid,
-        int pid, int version)
+    private ValueTask<int> SysShmGet(Engine engine, uint key, uint size, uint flags)
     {
-        // Handle IPC_64 flag - strip it from cmd and pass to ShmCtl
-        // Modern glibc on i386 always sets IPC_64 in the version field
-        var actualCmd = cmd;
-        if ((version & (LinuxConstants.IPC_64 >> 8)) != 0 || (cmd & LinuxConstants.IPC_64) != 0)
-            actualCmd = cmd & ~LinuxConstants.IPC_64;
+        var process = (engine.Owner as FiberTask)?.Process;
+        return ValueTask.FromResult(SysVShm.ShmGet((int)key, size, (int)flags,
+            process?.EUID ?? 0, process?.EGID ?? 0, process?.TGID ?? 0));
+    }
 
-        return sm.SysVShm.ShmCtl(shmid, actualCmd, buf, engine, uid, gid, pid);
+    private ValueTask<int> SysShmCtl(Engine engine, uint shmid, uint command, uint buffer)
+    {
+        // The direct syscall always uses shmid64_ds and takes an unversioned command.
+        if ((command & LinuxConstants.IPC_64) != 0)
+            return ValueTask.FromResult(-(int)Errno.EINVAL);
+
+        var process = (engine.Owner as FiberTask)?.Process;
+        return ValueTask.FromResult(SysVShm.ShmCtl((int)shmid, (int)command | LinuxConstants.IPC_64,
+            buffer, engine, process?.EUID ?? 0, process?.EGID ?? 0, process?.TGID ?? 0));
+    }
+
+    private ValueTask<int> SysShmAt(Engine engine, uint shmid, uint address, uint flags)
+    {
+        var process = (engine.Owner as FiberTask)?.Process;
+        return ValueTask.FromResult((int)SysVShm.ShmAt((int)shmid, address, (int)flags, process?.TGID ?? 0,
+            Mem, engine, process));
+    }
+
+    private ValueTask<int> SysShmDt(Engine engine, uint address)
+    {
+        var process = (engine.Owner as FiberTask)?.Process;
+        return ValueTask.FromResult(SysVShm.ShmDt(address, process?.TGID ?? 0, Mem, engine, process));
     }
 
     private static int DoSemCtlFromIpc(Engine engine, SyscallManager sm, int first, int second, uint third, uint ptr,
@@ -160,12 +172,6 @@ public partial class SyscallManager
         var uid = t?.Process.EUID ?? 0;
         var gid = t?.Process.EGID ?? 0;
         return ValueTask.FromResult(SysVSem.SemGet((int)key, (int)nsems, (int)semflg, uid, gid, t?.Process));
-    }
-
-    private async ValueTask<int> SysSemOp(Engine engine, uint semid, uint sops, uint nsops, uint _4, uint _5,
-        uint _6)
-    {
-        return await SysVSem.SemOp((int)semid, sops, nsops, engine);
     }
 
     private async ValueTask<int> SysSemTimedOpTime64(Engine engine, uint semid, uint sops, uint nsops, uint timeout,

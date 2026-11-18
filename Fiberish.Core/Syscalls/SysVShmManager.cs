@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using Fiberish.Core;
 using Fiberish.Memory;
 using Fiberish.Native;
@@ -12,7 +13,7 @@ public class SysVShmSegment
 {
     public int Key { get; set; } // IPC key (IPC_PRIVATE = 0)
     public int Shmid { get; set; } // Segment identifier
-    public uint Size { get; set; } // Size in bytes (page-aligned)
+    public uint Size { get; set; } // Requested size in bytes
     public int Mode { get; set; } // Permission mode (lower 9 bits)
     public int Uid { get; set; } // Owner UID
     public int Gid { get; set; } // Owner GID
@@ -31,7 +32,8 @@ public class SysVShmSegment
     /// <summary>
     ///     Number of pages in this segment.
     /// </summary>
-    public uint PageCount => (Size + LinuxConstants.PageSize - 1) / LinuxConstants.PageSize;
+    public uint PageCount => (uint)(((ulong)Size + LinuxConstants.PageSize - 1) / LinuxConstants.PageSize);
+    internal uint MappedSize => PageCount * LinuxConstants.PageSize;
 }
 
 /// <summary>
@@ -69,7 +71,7 @@ public class SysVShmManager
     ///     Get or create a shared memory segment.
     /// </summary>
     /// <param name="key">IPC key (0 = IPC_PRIVATE)</param>
-    /// <param name="size">Size in bytes (will be rounded up to page boundary)</param>
+    /// <param name="size">Requested size in bytes</param>
     /// <param name="flags">IPC_CREAT, IPC_EXCL, and permission flags</param>
     /// <param name="uid">Creator/owner UID</param>
     /// <param name="gid">Creator/owner GID</param>
@@ -77,10 +79,6 @@ public class SysVShmManager
     /// <returns>shmid on success, negative errno on failure</returns>
     public int ShmGet(int key, uint size, int flags, int uid, int gid, int pid)
     {
-        // Round size up to page boundary
-        var alignedSize = (size + LinuxConstants.PageSize - 1) & ~(uint)(LinuxConstants.PageSize - 1);
-        if (alignedSize == 0) alignedSize = LinuxConstants.PageSize;
-
         // Single-container scheduler-thread ownership: SysV SHM metadata is mutated on scheduler thread.
         // Check if key exists (and not IPC_PRIVATE)
         if (key != LinuxConstants.IPC_PRIVATE && _segmentsByKey.TryGetValue(key, out var existing))
@@ -104,6 +102,10 @@ public class SysVShmManager
         if (key != LinuxConstants.IPC_PRIVATE && (flags & LinuxConstants.IPC_CREAT) == 0)
             return -(int)Errno.ENOENT; // No IPC_CREAT and doesn't exist -> error
 
+        var alignedSize = ((ulong)size + LinuxConstants.PageSize - 1) & ~(ulong)(LinuxConstants.PageSize - 1);
+        if (size == 0 || alignedSize > uint.MaxValue)
+            return -(int)Errno.EINVAL;
+
         // Create new segment
         var shmid = _nextShmid++;
         SysVShmSegment segment;
@@ -113,20 +115,19 @@ public class SysVShmManager
             {
                 Key = key,
                 Shmid = shmid,
-                Size = alignedSize,
+                Size = size,
                 Mode = flags & 0x1FF, // Lower 9 bits are permissions
                 Uid = uid,
                 Gid = gid,
                 CUid = uid,
                 CGid = gid,
                 Cpid = pid,
-                Lpid = pid,
                 CTime = DateTime.UtcNow,
-                ATime = DateTime.UtcNow,
-                DTime = DateTime.UtcNow,
+                ATime = DateTime.UnixEpoch,
+                DTime = DateTime.UnixEpoch,
                 NAttch = 0,
                 MarkedForDelete = false,
-                BackingFile = _memoryContext.CreateSysVSharedMemoryFile(shmid, alignedSize, uid, gid)
+                BackingFile = _memoryContext.CreateSysVSharedMemoryFile(shmid, (uint)alignedSize, uid, gid)
             };
         }
         catch
@@ -181,7 +182,7 @@ public class SysVShmManager
         if (attachAddr == 0)
         {
             // Auto-allocate: find free region
-            attachAddr = FindFreeRegion(vmaManager, segment.Size);
+            attachAddr = FindFreeRegion(vmaManager, segment.MappedSize);
             if (attachAddr == 0)
                 return -(int)Errno.ENOMEM;
         }
@@ -197,7 +198,7 @@ public class SysVShmManager
         }
 
         var taskSize = vmaManager.Layout?.TaskSize ?? LinuxConstants.TaskSize32;
-        if (!TryComputeRangeEnd(attachAddr, segment.Size, taskSize, out var attachEnd))
+        if (!TryComputeRangeEnd(attachAddr, segment.MappedSize, taskSize, out var attachEnd))
             return -(int)Errno.EINVAL;
 
         // Check for overlapping VMAs unless SHM_REMAP is specified
@@ -208,7 +209,7 @@ public class SysVShmManager
             if ((flags & LinuxConstants.SHM_REMAP) != 0)
             {
                 // SHM_REMAP: unmap existing mappings at this address
-                ProcessAddressSpaceSync.Munmap(vmaManager, engine, attachAddr, segment.Size, ownerProcess);
+                ProcessAddressSpaceSync.Munmap(vmaManager, engine, attachAddr, segment.MappedSize, ownerProcess);
                 DropAttachmentsInRange(vmaManager, attachAddr, attachEnd, pid);
             }
             else
@@ -295,7 +296,7 @@ public class SysVShmManager
             return -(int)Errno.EIDRM; // Segment was already removed
 
         // Unmap the VMA
-        ProcessAddressSpaceSync.Munmap(vmaManager, engine, addr, segment.Size, ownerProcess);
+        ProcessAddressSpaceSync.Munmap(vmaManager, engine, addr, segment.MappedSize, ownerProcess);
 
         // Update segment
         segment.NAttch--;
@@ -325,7 +326,7 @@ public class SysVShmManager
         if (!_segmentsByShmid.TryGetValue(shmid, out var segment))
             return -(int)Errno.EIDRM;
 
-        // Handle IPC_64 flag - strip it from cmd
+        bool ipc64 = (cmd & LinuxConstants.IPC_64) != 0;
         var actualCmd = cmd & ~LinuxConstants.IPC_64;
 
         switch (actualCmd)
@@ -334,24 +335,26 @@ public class SysVShmManager
                 // Check read permission
                 if (!CheckPermission(segment, uid, gid, LinuxConstants.SHM_R))
                     return -(int)Errno.EACCES;
-                return WriteShmidDs(segment, buf, engine);
+                return WriteShmidDs(segment, buf, engine, ipc64);
 
             case LinuxConstants.IPC_SET:
                 // Check write permission and ownership
-                if (segment.Uid != uid && uid != 0)
+                if (uid != 0 && uid != segment.Uid && uid != segment.CUid)
                     return -(int)Errno.EPERM;
-                return ReadShmidDsForSet(segment, buf, engine);
+                return ReadShmidDsForSet(segment, buf, engine, ipc64);
 
             case LinuxConstants.IPC_RMID:
                 // Check ownership
-                if (segment.CUid != uid && uid != 0)
+                if (uid != 0 && uid != segment.Uid && uid != segment.CUid)
                     return -(int)Errno.EPERM;
 
                 segment.MarkedForDelete = true;
-                segment.Lpid = pid;
-                segment.CTime = DateTime.UtcNow;
+                if (segment.Key != LinuxConstants.IPC_PRIVATE)
+                {
+                    _segmentsByKey.Remove(segment.Key);
+                    segment.Key = LinuxConstants.IPC_PRIVATE;
+                }
 
-                // If no attachments, destroy immediately
                 if (segment.NAttch == 0)
                     DestroySegment(segment);
 
@@ -397,7 +400,7 @@ public class SysVShmManager
             if (_segmentsByShmid.TryGetValue(attach.Shmid, out var segment))
             {
                 // [P1] Must munmap the VmArea to avoid leaking page references
-                ProcessAddressSpaceSync.Munmap(vmaManager, engine, attach.BaseAddr, segment.Size, ownerProcess);
+                ProcessAddressSpaceSync.Munmap(vmaManager, engine, attach.BaseAddr, segment.MappedSize, ownerProcess);
 
                 segment.NAttch--;
                 segment.DTime = DateTime.UtcNow;
@@ -431,27 +434,11 @@ public class SysVShmManager
         // Root has all permissions
         if (uid == 0) return true;
 
-        var mode = segment.Mode;
-        if (segment.Uid == uid)
-        {
-            // Owner permissions
-            if ((flags & LinuxConstants.SHM_R) != 0 && (mode & 0400) == 0) return false;
-            if ((flags & LinuxConstants.SHM_W) != 0 && (mode & 0200) == 0) return false;
-        }
-        else if (segment.Gid == gid)
-        {
-            // Group permissions
-            if ((flags & LinuxConstants.SHM_R) != 0 && (mode & 0040) == 0) return false;
-            if ((flags & LinuxConstants.SHM_W) != 0 && (mode & 0020) == 0) return false;
-        }
-        else
-        {
-            // Other permissions
-            if ((flags & LinuxConstants.SHM_R) != 0 && (mode & 0004) == 0) return false;
-            if ((flags & LinuxConstants.SHM_W) != 0 && (mode & 0002) == 0) return false;
-        }
-
-        return true;
+        int shift = segment.Uid == uid || segment.CUid == uid ? 6
+            : segment.Gid == gid || segment.CGid == gid ? 3
+            : 0;
+        int requested = (flags | (flags << 3) | (flags << 6)) & 0x1c0;
+        return (requested & ~(segment.Mode << (6 - shift))) == 0;
     }
 
     private uint FindFreeRegion(VMAManager vmaManager, uint size)
@@ -467,7 +454,7 @@ public class SysVShmManager
             if (!ReferenceEquals(attach.AddressSpace, vmaManager)) continue;
             if (!_segmentsByShmid.TryGetValue(attach.Shmid, out var segment)) continue;
             var taskSize = vmaManager.Layout?.TaskSize ?? LinuxConstants.TaskSize32;
-            if (!TryComputeRangeEnd(attach.BaseAddr, segment.Size, taskSize, out var attachEnd)) continue;
+            if (!TryComputeRangeEnd(attach.BaseAddr, segment.MappedSize, taskSize, out var attachEnd)) continue;
             if (attach.BaseAddr >= end || attachEnd <= start) continue;
 
             _attaches.RemoveAt(i);
@@ -490,88 +477,75 @@ public class SysVShmManager
         return end > start;
     }
 
-    private int WriteShmidDs(SysVShmSegment segment, uint buf, Engine engine)
+    // i386 shmid_ds and shmid64_ds from Linux UAPI. The latter stores the 64-bit
+    // timestamps in adjacent little-endian words and extends UID/GID and PID fields.
+    private const int LegacyShmidDsSize = 48;
+    private const int Ipc64ShmidDsSize = 84;
+
+    private static int WriteShmidDs(SysVShmSegment segment, uint buf, Engine engine, bool ipc64)
     {
-        // Write shmid_ds structure to user memory
-        // Structure layout (i386 obsolete/compat):
-        // - ipc_perm (16 bytes)
-        // - shm_segsz (4 bytes)
-        // - shm_atime (4 bytes)
-        // - shm_dtime (4 bytes)
-        // - shm_ctime (4 bytes)
-        // - shm_cpid (2 bytes)
-        // - shm_lpid (2 bytes)
-        // - shm_nattch (2 bytes)
-        // - shm_unused (2 bytes)
-        // - shm_unused2 (4 bytes)
-        // - shm_unused3 (4 bytes)
-        // Total: 48 bytes
+        Span<byte> data = stackalloc byte[ipc64 ? Ipc64ShmidDsSize : LegacyShmidDsSize];
+        data.Clear();
+        int mode = segment.Mode | (segment.MarkedForDelete ? 0x200 : 0); // SHM_DEST
+        BinaryPrimitives.WriteInt32LittleEndian(data, segment.Key);
+        if (ipc64)
+        {
+            BinaryPrimitives.WriteInt32LittleEndian(data[4..], segment.Uid);
+            BinaryPrimitives.WriteInt32LittleEndian(data[8..], segment.Gid);
+            BinaryPrimitives.WriteInt32LittleEndian(data[12..], segment.CUid);
+            BinaryPrimitives.WriteInt32LittleEndian(data[16..], segment.CGid);
+            BinaryPrimitives.WriteUInt16LittleEndian(data[20..], (ushort)mode);
+            BinaryPrimitives.WriteUInt32LittleEndian(data[36..], segment.Size);
+            BinaryPrimitives.WriteInt64LittleEndian(data[40..], ToUnixSeconds(segment.ATime));
+            BinaryPrimitives.WriteInt64LittleEndian(data[48..], ToUnixSeconds(segment.DTime));
+            BinaryPrimitives.WriteInt64LittleEndian(data[56..], ToUnixSeconds(segment.CTime));
+            BinaryPrimitives.WriteInt32LittleEndian(data[64..], segment.Cpid);
+            BinaryPrimitives.WriteInt32LittleEndian(data[68..], segment.Lpid);
+            BinaryPrimitives.WriteInt32LittleEndian(data[72..], segment.NAttch);
+        }
+        else
+        {
+            BinaryPrimitives.WriteUInt16LittleEndian(data[4..], ToLegacyId(segment.Uid));
+            BinaryPrimitives.WriteUInt16LittleEndian(data[6..], ToLegacyId(segment.Gid));
+            BinaryPrimitives.WriteUInt16LittleEndian(data[8..], ToLegacyId(segment.CUid));
+            BinaryPrimitives.WriteUInt16LittleEndian(data[10..], ToLegacyId(segment.CGid));
+            BinaryPrimitives.WriteUInt16LittleEndian(data[12..], (ushort)mode);
+            BinaryPrimitives.WriteUInt32LittleEndian(data[16..], segment.Size);
+            BinaryPrimitives.WriteInt32LittleEndian(data[20..], (int)ToUnixSeconds(segment.ATime));
+            BinaryPrimitives.WriteInt32LittleEndian(data[24..], (int)ToUnixSeconds(segment.DTime));
+            BinaryPrimitives.WriteInt32LittleEndian(data[28..], (int)ToUnixSeconds(segment.CTime));
+            BinaryPrimitives.WriteUInt16LittleEndian(data[32..], (ushort)segment.Cpid);
+            BinaryPrimitives.WriteUInt16LittleEndian(data[34..], (ushort)segment.Lpid);
+            BinaryPrimitives.WriteUInt16LittleEndian(data[36..], (ushort)segment.NAttch);
+        }
 
-        if (buf == 0) return -(int)Errno.EINVAL;
-
-        var data = new byte[48];
-        var offset = 0;
-
-        // ipc_perm structure (16 bytes)
-        BitConverter.TryWriteBytes(data.AsSpan(offset), segment.Key);
-        offset += 4;
-        BitConverter.TryWriteBytes(data.AsSpan(offset), (ushort)segment.Uid);
-        offset += 2;
-        BitConverter.TryWriteBytes(data.AsSpan(offset), (ushort)segment.Gid);
-        offset += 2;
-        BitConverter.TryWriteBytes(data.AsSpan(offset), (ushort)segment.CUid);
-        offset += 2;
-        BitConverter.TryWriteBytes(data.AsSpan(offset), (ushort)segment.CGid);
-        offset += 2;
-        BitConverter.TryWriteBytes(data.AsSpan(offset), (ushort)segment.Mode);
-        offset += 2;
-        BitConverter.TryWriteBytes(data.AsSpan(offset), (ushort)segment.Shmid);
-        offset += 2; // seq (reuse shmid)
-
-        // Rest of shmid_ds
-        BitConverter.TryWriteBytes(data.AsSpan(offset), (int)segment.Size);
-        offset += 4;
-        BitConverter.TryWriteBytes(data.AsSpan(offset), (int)segment.ATime.Subtract(DateTime.UnixEpoch).TotalSeconds);
-        offset += 4;
-        BitConverter.TryWriteBytes(data.AsSpan(offset), (int)segment.DTime.Subtract(DateTime.UnixEpoch).TotalSeconds);
-        offset += 4;
-        BitConverter.TryWriteBytes(data.AsSpan(offset), (int)segment.CTime.Subtract(DateTime.UnixEpoch).TotalSeconds);
-        offset += 4;
-        BitConverter.TryWriteBytes(data.AsSpan(offset), (ushort)segment.Cpid);
-        offset += 2;
-        BitConverter.TryWriteBytes(data.AsSpan(offset), (ushort)segment.Lpid);
-        offset += 2;
-        BitConverter.TryWriteBytes(data.AsSpan(offset), (ushort)segment.NAttch);
-        offset += 2;
-        // shm_unused, shm_unused2, shm_unused3 are zero
-
-        if (!engine.CopyToUser(buf, data))
-            return -(int)Errno.EFAULT;
-
-        return 0;
+        return buf != 0 && engine.CopyToUser(buf, data) ? 0 : -(int)Errno.EFAULT;
     }
 
-    private int ReadShmidDsForSet(SysVShmSegment segment, uint buf, Engine engine)
+    private static int ReadShmidDsForSet(SysVShmSegment segment, uint buf, Engine engine, bool ipc64)
     {
-        // Read ipc_perm portion from user memory and update segment
-        if (buf == 0) return -(int)Errno.EINVAL;
-
-        var data = new byte[16];
-        if (!engine.CopyFromUser(buf, data))
+        Span<byte> data = stackalloc byte[ipc64 ? Ipc64ShmidDsSize : LegacyShmidDsSize];
+        if (buf == 0 || !engine.CopyFromUser(buf, data))
             return -(int)Errno.EFAULT;
 
-        // Only uid, gid, and mode can be changed
-        var uid = BitConverter.ToUInt16(data, 2);
-        var gid = BitConverter.ToUInt16(data, 4);
-        var mode = BitConverter.ToUInt16(data, 10);
+        int uid = ipc64 ? BinaryPrimitives.ReadInt32LittleEndian(data[4..])
+            : BinaryPrimitives.ReadUInt16LittleEndian(data[4..]);
+        int gid = ipc64 ? BinaryPrimitives.ReadInt32LittleEndian(data[8..])
+            : BinaryPrimitives.ReadUInt16LittleEndian(data[6..]);
+        if (uid == -1 || gid == -1)
+            return -(int)Errno.EINVAL;
 
         segment.Uid = uid;
         segment.Gid = gid;
-        segment.Mode = mode;
+        segment.Mode = BinaryPrimitives.ReadUInt16LittleEndian(data[(ipc64 ? 20 : 12)..]) & 0x1ff;
         segment.CTime = DateTime.UtcNow;
-
         return 0;
     }
+
+    private static long ToUnixSeconds(DateTime time) => new DateTimeOffset(time).ToUnixTimeSeconds();
+
+    private static ushort ToLegacyId(int id) => (uint)id <= ushort.MaxValue ? (ushort)id : (ushort)65534;
+
 }
 
 /// <summary>

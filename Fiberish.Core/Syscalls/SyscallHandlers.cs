@@ -860,15 +860,24 @@ public partial class SyscallManager
             case X86SyscallNumbers.ipc:
                 handled = true;
                 return SysIpc(engine, ebx, ecx, edx, esi, edi, ebp);
+            case X86SyscallNumbers.shmget:
+                handled = true;
+                return SysShmGet(engine, ebx, ecx, edx);
+            case X86SyscallNumbers.shmctl:
+                handled = true;
+                return SysShmCtl(engine, ebx, ecx, edx);
+            case X86SyscallNumbers.shmat:
+                handled = true;
+                return SysShmAt(engine, ebx, ecx, edx);
+            case X86SyscallNumbers.shmdt:
+                handled = true;
+                return SysShmDt(engine, ebx);
             case X86SyscallNumbers.semget:
                 handled = true;
                 return SysSemGet(engine, ebx, ecx, edx, esi, edi, ebp);
             case X86SyscallNumbers.semctl:
                 handled = true;
                 return SysSemCtl(engine, ebx, ecx, edx, esi, edi, ebp);
-            case X86SyscallNumbers.semop:
-                handled = true;
-                return SysSemOp(engine, ebx, ecx, edx, esi, edi, ebp);
             case X86SyscallNumbers.semtimedop_time64:
                 handled = true;
                 return SysSemTimedOpTime64(engine, ebx, ecx, edx, esi, edi, ebp);

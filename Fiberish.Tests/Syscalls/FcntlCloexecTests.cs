@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Reflection;
 using System.Text;
 using Fiberish.Core;
@@ -158,6 +159,26 @@ public class FcntlCloexecTests
 
         var rc = await env.Call("SysMemfdCreate", nameAddr, MFD_EXEC | MFD_NOEXEC_SEAL);
         Assert.Equal(-(int)Errno.EINVAL, rc);
+    }
+
+    [Fact]
+    public async Task DevPtsStatfs_ReportsLinuxFilesystemMagic()
+    {
+        using var env = new TestEnv();
+        env.SyscallManager.MountStandardDev();
+        const uint path = 0x27000;
+        const uint result = path + 64;
+        env.MapUserPage(path);
+        env.WriteCString(path, "/dev/pts");
+        var magic = new byte[4];
+
+        Assert.Equal(0, await env.Call("SysStatfs", path, result));
+        Assert.True(env.Engine.CopyFromUser(result, magic));
+        Assert.Equal(0x1cd1, BinaryPrimitives.ReadInt32LittleEndian(magic));
+
+        Assert.Equal(0, await env.Call("SysStatfs64", path, 84, result));
+        Assert.True(env.Engine.CopyFromUser(result, magic));
+        Assert.Equal(0x1cd1, BinaryPrimitives.ReadInt32LittleEndian(magic));
     }
 
     private sealed class TestEnv : IDisposable

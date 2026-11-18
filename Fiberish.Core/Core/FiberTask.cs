@@ -2707,7 +2707,7 @@ public partial class FiberTask
             return true;
 
         // semop(2) and semtimedop(2) waits are never automatically restarted.
-        if (syscallNr == X86SyscallNumbers.semop || syscallNr == X86SyscallNumbers.semtimedop_time64)
+        if (IsSemaphoreWait(syscallNr, syscallArg1))
             return true;
 
         if (HasSocketTimeoutForCurrentSyscall(task, syscallNr, syscallArg1))
@@ -2721,10 +2721,17 @@ public partial class FiberTask
         if (syscallNr == X86SyscallNumbers.epoll_wait ||
             syscallNr == X86SyscallNumbers.epoll_pwait ||
             syscallNr == X86SyscallNumbers.epoll_pwait2 ||
-            syscallNr == X86SyscallNumbers.semop)
+            IsSemaphoreWait(syscallNr, syscallArg1))
             return true;
 
         return HasSocketTimeoutForCurrentSyscall(task, syscallNr, syscallArg1);
+    }
+
+    private static bool IsSemaphoreWait(uint syscallNr, uint syscallArg1)
+    {
+        return syscallNr == X86SyscallNumbers.semtimedop_time64 ||
+               syscallNr == X86SyscallNumbers.ipc &&
+               (syscallArg1 & 0xffff) is LinuxConstants.SEMOP or LinuxConstants.SEMTIMEDOP;
     }
 
     private static bool HasSocketTimeoutForCurrentSyscall(FiberTask task, uint syscallNr, uint syscallArg1)

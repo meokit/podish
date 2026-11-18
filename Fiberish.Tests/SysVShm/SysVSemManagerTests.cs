@@ -161,7 +161,7 @@ public class SysVSemManagerTests
         Assert.NotNull(method);
 
         var stopInterrupted = (bool)method!.Invoke(null,
-            [ctx.Task, (uint)X86SyscallNumbers.semop, 0u])!;
+            [ctx.Task, (uint)X86SyscallNumbers.ipc, (uint)LinuxConstants.SEMOP])!;
 
         Assert.True(stopInterrupted);
     }

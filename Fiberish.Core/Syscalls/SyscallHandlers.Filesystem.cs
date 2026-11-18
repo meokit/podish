@@ -2176,6 +2176,7 @@ LocResolvedUtimens64:
         {
             "tmpfs" => 0x01021994,
             "devtmpfs" => 0x01021994,
+            "devpts" => 0x00001CD1,
             "proc" => 0x00009FA0,
             "overlay" => unchecked(0x794C7630),
             "hostfs" => 0x0000EF53,

@@ -548,16 +548,16 @@ public static class LinuxConstants
     public const int SHM_STAT_ANY = 15;
 
     // shmat flags (from linux/shm.h)
-    public const int SHM_RDONLY = 010000; // read-only access
-    public const int SHM_RND = 020000; // round attach address to SHMLBA
-    public const int SHM_REMAP = 040000; // take-over region on attach
-    public const int SHM_EXEC = 0100000; // execution access
+    public const int SHM_RDONLY = 0x1000; // read-only access
+    public const int SHM_RND = 0x2000; // round attach address to SHMLBA
+    public const int SHM_REMAP = 0x4000; // take-over region on attach
+    public const int SHM_EXEC = 0x8000; // execution access
 
     // shmget flags (from linux/shm.h)
-    public const int SHM_R = 0400; // or S_IRUGO
-    public const int SHM_W = 0200; // or S_IWUGO
-    public const int SHM_HUGETLB = 04000; // segment will use huge TLB pages
-    public const int SHM_NORESERVE = 010000; // don't check for reservations
+    public const int SHM_R = 0x100; // or S_IRUGO
+    public const int SHM_W = 0x080; // or S_IWUGO
+    public const int SHM_HUGETLB = 0x800; // segment will use huge TLB pages
+    public const int SHM_NORESERVE = 0x1000; // don't check for reservations
 
     // IPC version flags
     public const int IPC_OLD = 0;

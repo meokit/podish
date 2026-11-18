@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using Fiberish.Core;
 using Fiberish.Memory;
 using Fiberish.Native;
@@ -32,20 +33,130 @@ public class SysVShmManagerTests
         Assert.Equal(shmid1, shmid2);
     }
 
-    [Fact]
-    public void ShmCtl_Ipc64Stat_ShouldBeAccepted()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ShmCtl_Stat_UsesI386LayoutAndRequestedSize(bool ipc64)
     {
         using var ctx = new TestContext();
 
-        var shmid = ctx.Manager.ShmGet(0x2234, 4096, LinuxConstants.IPC_CREAT | 0x1FF, 0, 0, 2000);
+        const int key = 0x2234;
+        const uint size = 4097;
+        const int uid = 70000, gid = 90000, creatorPid = 1234, attachPid = 3456;
+        const int mode = 0x180;
+        var shmid = ctx.Manager.ShmGet(key, size, LinuxConstants.IPC_CREAT | mode, uid, gid, creatorPid);
         Assert.True(shmid > 0);
+        Assert.Equal(-(int)Errno.EINVAL, ctx.Manager.ShmGet(key, size + 1, 0, uid, gid, creatorPid));
 
         const uint userBuf = 0x40000000;
         ctx.MapUserPage(userBuf);
+        var buffer = Enumerable.Repeat((byte)0x7d, 85).ToArray();
+        Assert.True(ctx.Engine.CopyToUser(userBuf, buffer));
 
-        var ret = ctx.Manager.ShmCtl(shmid, LinuxConstants.IPC_STAT | LinuxConstants.IPC_64, userBuf, ctx.Engine, 0,
-            0, 2000);
-        Assert.Equal(0, ret);
+        int command = LinuxConstants.IPC_STAT | (ipc64 ? LinuxConstants.IPC_64 : 0);
+        byte[] Stat()
+        {
+            Assert.Equal(0, ctx.Manager.ShmCtl(shmid, command, userBuf, ctx.Engine, 0, 0, creatorPid));
+            Assert.True(ctx.Engine.CopyFromUser(userBuf, buffer));
+            return buffer;
+        }
+
+        var data = Stat();
+        Assert.Equal(key, BinaryPrimitives.ReadInt32LittleEndian(data));
+        if (ipc64)
+        {
+            Assert.Equal(uid, BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(4)));
+            Assert.Equal(gid, BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(8)));
+            Assert.Equal(uid, BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(12)));
+            Assert.Equal(gid, BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(16)));
+            Assert.Equal(mode, BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(20)));
+            Assert.Equal(0u, BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(56 + 4)));
+            Assert.Equal(creatorPid, BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(64)));
+            Assert.Equal(0, BinaryPrimitives.ReadInt64LittleEndian(data.AsSpan(76)));
+            Assert.Equal(0x7d, data[84]);
+        }
+        else
+        {
+            for (int offset = 4; offset <= 10; offset += 2)
+                Assert.Equal(65534, BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(offset)));
+            Assert.Equal(mode, BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(12)));
+            Assert.Equal(creatorPid, BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(32)));
+            Assert.Equal(0, BinaryPrimitives.ReadInt64LittleEndian(data.AsSpan(40)));
+            Assert.Equal(0x7d, data[48]);
+        }
+
+        Assert.Equal(size, BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(ipc64 ? 36 : 16)));
+        Assert.Equal(0, ReadTime(data, ipc64 ? 40 : 20));
+        Assert.Equal(0, ReadTime(data, ipc64 ? 48 : 24));
+        Assert.True(ReadTime(data, ipc64 ? 56 : 28) > 0);
+        Assert.Equal(0, ReadCounter(data, ipc64 ? 68 : 34));
+        Assert.Equal(0, ReadCounter(data, ipc64 ? 72 : 36));
+
+        const uint attachAddress = 0x21000000;
+        Assert.Equal(attachAddress, ctx.Manager.ShmAt(shmid, attachAddress, 0, attachPid, ctx.Vma, ctx.Engine));
+        Assert.Equal(attachAddress + 8192u, ctx.Vma.FindVmArea(attachAddress)!.End);
+        data = Stat();
+        Assert.True(ReadTime(data, ipc64 ? 40 : 20) > 0);
+        Assert.Equal(0, ReadTime(data, ipc64 ? 48 : 24));
+        Assert.Equal(attachPid, ReadCounter(data, ipc64 ? 68 : 34));
+        Assert.Equal(1, ReadCounter(data, ipc64 ? 72 : 36));
+
+        Assert.Equal(0, ctx.Manager.ShmDt(attachAddress, attachPid + 1, ctx.Vma, ctx.Engine));
+        data = Stat();
+        Assert.True(ReadTime(data, ipc64 ? 48 : 24) > 0);
+        Assert.Equal(attachPid + 1, ReadCounter(data, ipc64 ? 68 : 34));
+        Assert.Equal(0, ReadCounter(data, ipc64 ? 72 : 36));
+
+        long ReadTime(byte[] value, int offset) => ipc64
+            ? BinaryPrimitives.ReadInt64LittleEndian(value.AsSpan(offset))
+            : BinaryPrimitives.ReadInt32LittleEndian(value.AsSpan(offset));
+
+        int ReadCounter(byte[] value, int offset) => ipc64
+            ? BinaryPrimitives.ReadInt32LittleEndian(value.AsSpan(offset))
+            : BinaryPrimitives.ReadUInt16LittleEndian(value.AsSpan(offset));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ShmCtl_Set_ReadsI386OwnerAndModeOffsets(bool ipc64)
+    {
+        using var ctx = new TestContext();
+
+        int shmid = ctx.Manager.ShmGet(LinuxConstants.IPC_PRIVATE, 10, 0x1ff, 42, 43, 2000);
+        Assert.True(shmid > 0);
+
+        const uint address = 0x40000000;
+        ctx.MapUserPage(address);
+        var data = new byte[ipc64 ? 84 : 48];
+        int uid = ipc64 ? 64001 + 65536 : 64001;
+        int gid = ipc64 ? 64002 + 65536 : 64002;
+        const ushort mode = 0x181;
+        if (ipc64)
+        {
+            BinaryPrimitives.WriteInt32LittleEndian(data.AsSpan(4), uid);
+            BinaryPrimitives.WriteInt32LittleEndian(data.AsSpan(8), gid);
+            BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(20), (ushort)(mode | 0x8000));
+        }
+        else
+        {
+            BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(4), (ushort)uid);
+            BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(6), (ushort)gid);
+            BinaryPrimitives.WriteUInt16LittleEndian(data.AsSpan(12), (ushort)(mode | 0x8000));
+        }
+
+        Assert.True(ctx.Engine.CopyToUser(address, data));
+        int version = ipc64 ? LinuxConstants.IPC_64 : 0;
+        Assert.Equal(0, ctx.Manager.ShmCtl(shmid, LinuxConstants.IPC_SET | version, address, ctx.Engine, 42, 43, 2000));
+        Assert.Equal(0, ctx.Manager.ShmCtl(shmid, LinuxConstants.IPC_STAT | version, address, ctx.Engine, uid, gid, 2001));
+        Assert.True(ctx.Engine.CopyFromUser(address, data));
+        Assert.Equal(uid, ipc64 ? BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(4))
+            : BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(4)));
+        Assert.Equal(gid, ipc64 ? BinaryPrimitives.ReadInt32LittleEndian(data.AsSpan(8))
+            : BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(6)));
+        Assert.Equal(mode, BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(ipc64 ? 20 : 12)));
+        Assert.Equal(42, BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(ipc64 ? 12 : 8)));
+        Assert.Equal(43, BinaryPrimitives.ReadUInt16LittleEndian(data.AsSpan(ipc64 ? 16 : 10)));
     }
 
     [Fact]
