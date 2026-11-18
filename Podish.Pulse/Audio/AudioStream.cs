@@ -6,6 +6,7 @@ public sealed class AudioStream
 {
     private readonly Lock _gate = new();
     private readonly int _inputBytesPerFrame;
+    private readonly int _inputBytesPerSample;
     private readonly byte _inputChannels;
     private readonly uint _inputRate;
     private readonly byte _outputChannels;
@@ -31,8 +32,8 @@ public sealed class AudioStream
         SampleSpec? outputSpec = null)
     {
         _ = channelMap;
-        if (inputSpec.Format != SampleFormat.S16Le)
-            throw new ArgumentOutOfRangeException(nameof(inputSpec), "Only S16Le is supported");
+        if (inputSpec.Format is not (SampleFormat.U8 or SampleFormat.S16Le))
+            throw new ArgumentOutOfRangeException(nameof(inputSpec), "Only U8 and S16Le are supported");
         if (inputSpec.Channels is < 1 or > 2)
             throw new ArgumentOutOfRangeException(nameof(inputSpec), "Only mono/stereo streams are supported");
         if (inputSpec.SampleRate == 0)
@@ -50,7 +51,8 @@ public sealed class AudioStream
         _inputRate = inputSpec.SampleRate;
         _outputChannels = resolvedOutput.Channels;
         _outputRate = resolvedOutput.SampleRate;
-        _inputBytesPerFrame = inputSpec.BytesPerSample * inputSpec.Channels;
+        _inputBytesPerSample = inputSpec.BytesPerSample;
+        _inputBytesPerFrame = _inputBytesPerSample * _inputChannels;
         Capacity = AlignToFrame(Math.Max(_inputBytesPerFrame, capacity), _inputBytesPerFrame);
         _ring = new byte[Capacity];
         _gain = initialGain;
@@ -250,17 +252,15 @@ public sealed class AudioStream
     private void ReadFrameStereo(int frameIndex, out float left, out float right)
     {
         var byteIndex = (_readOffset + frameIndex * _inputBytesPerFrame) % Capacity;
-        var sample0 = ReadInt16(byteIndex);
-        if (_inputChannels == 1)
-        {
-            left = sample0 / 32768.0f;
-            right = left;
-            return;
-        }
+        left = ReadSample(byteIndex);
+        right = _inputChannels == 1 ? left : ReadSample((byteIndex + _inputBytesPerSample) % Capacity);
+    }
 
-        var sample1 = ReadInt16((byteIndex + sizeof(short)) % Capacity);
-        left = sample0 / 32768.0f;
-        right = sample1 / 32768.0f;
+    private float ReadSample(int byteIndex)
+    {
+        return InputSpec.Format == SampleFormat.U8
+            ? (_ring[byteIndex] - 128) / 128.0f
+            : ReadInt16(byteIndex) / 32768.0f;
     }
 
     private short ReadInt16(int byteIndex)

@@ -26,7 +26,7 @@ internal sealed unsafe class SdlAudioSink : ManagedAudioSink
     {
         if (!_initialized)
         {
-            if (_sdl.Init(Sdl.InitAudio) != 0)
+            if (_sdl.InitSubSystem(Sdl.InitAudio) != 0)
                 throw new InvalidOperationException(
                     $"SDL audio init failed: {Marshal.PtrToStringUTF8((nint)_sdl.GetError())}");
             _initialized = true;
@@ -51,19 +51,13 @@ internal sealed unsafe class SdlAudioSink : ManagedAudioSink
                 throw new InvalidOperationException(
                     $"SDL open audio device failed: {Marshal.PtrToStringUTF8((nint)_sdl.GetError())}");
 
+            var driver = Marshal.PtrToStringUTF8((nint)_sdl.GetCurrentAudioDriver());
             _logger.LogInformation(
-                "{Prefix} opened SDL audio device id={DeviceId} format={Format} channels={Channels} rate={Rate} samples={Samples}",
-                PulseServerLogging.Audio, _deviceId, sampleSpec.Format, sampleSpec.Channels,
-                sampleSpec.SampleRate, obtained.Samples);
+                "{Prefix} opened default SDL audio device driver={Driver} id={DeviceId} format={Format} channels={Channels} rate={Rate} samples={Samples}",
+                PulseServerLogging.Audio, driver, _deviceId, DefaultSampleSpec.Format, obtained.Channels,
+                obtained.Freq, obtained.Samples);
+            _sdl.PauseAudioDevice(_deviceId, 0);
         }
-    }
-
-    protected override void SetBackendPausedCore(bool paused)
-    {
-        if (_deviceId == 0)
-            return;
-
-        _sdl.PauseAudioDevice(_deviceId, paused ? 1 : 0);
     }
 
     protected override void DisposeCore()
@@ -71,6 +65,7 @@ internal sealed unsafe class SdlAudioSink : ManagedAudioSink
         if (_deviceId != 0)
         {
             _sdl.CloseAudioDevice(_deviceId);
+            _logger.LogDebug("{Prefix} closed SDL audio device id={DeviceId}", PulseServerLogging.Audio, _deviceId);
             _deviceId = 0;
         }
 

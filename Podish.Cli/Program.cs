@@ -8,6 +8,7 @@ using Fiberish.VFS;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Podish.Cli.Display;
+using Podish.Cli.Pulse;
 using Podish.Cli.Wayland;
 using Podish.Core;
 using Podish.Display;
@@ -1610,6 +1611,7 @@ internal class Program
     {
         using var _logScope = Logging.BeginScope(ProgramLoggerFactory);
         using var runtimeThread = new ContainerRuntimeThread(Logger, ProgramLoggerFactory);
+        using var pulseServerState = enablePulseServer ? new PulseServerState(ProgramLoggerFactory) : null;
         var waylandDisplayState = enableWaylandServer
             ? new WaylandDisplayServerState(ProgramLoggerFactory, waylandDesktopOptions)
             : null;
@@ -1654,7 +1656,7 @@ internal class Program
                 WaylandDesktopHeight = waylandDesktopOptions.Height,
                 ConfigureVirtualDaemons = enablePulseServer || enableWaylandServer
                     ? (runtime, scheduler, uts, parentPid) =>
-                        RegisterVirtualDaemons(rootfsPath, runtime, scheduler, uts, parentPid, enablePulseServer,
+                        RegisterVirtualDaemons(rootfsPath, runtime, scheduler, uts, parentPid, pulseServerState,
                             enableWaylandServer, waylandDesktopOptions, waylandDisplayState, waylandIngressBridge)
                     : null
             });
@@ -1693,18 +1695,17 @@ internal class Program
     }
 
     private static void RegisterVirtualDaemons(string rootfsPath, KernelRuntime runtime, KernelScheduler scheduler,
-        UTSNamespace? uts, int ownerPid, bool enablePulseServer, bool enableWaylandServer,
+        UTSNamespace? uts, int ownerPid, PulseServerState? pulseServerState, bool enableWaylandServer,
         WaylandDesktopOptions waylandDesktopOptions, WaylandDisplayServerState? waylandDisplayState,
         WaylandDisplayIngressBridge? waylandIngressBridge)
     {
         var registry = new VirtualDaemonRegistry(runtime.Syscalls, scheduler);
-        if (enablePulseServer)
+        if (pulseServerState != null)
         {
             CleanupVirtualSocket(rootfsPath, runtime, ContainerRunRequest.PulseServerSocketPath,
                 "Podish.RegisterVirtualDaemons.pulse.cleanup");
             var pulseDaemon = new PodishPulseVirtualDaemon(ContainerRunRequest.PulseServerSocketPath,
-                ownerPid,
-                ProgramLoggerFactory);
+                ownerPid, pulseServerState);
             var pulseRuntime = registry.Spawn(pulseDaemon, parentPid: ownerPid, uts: uts);
             Logger.LogInformation("Registered Podish virtual Pulse daemon pid={Pid} ownerPid={OwnerPid} path={Path}",
                 pulseRuntime.Process.TGID, ownerPid, pulseDaemon.UnixPath);

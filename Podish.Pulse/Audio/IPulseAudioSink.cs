@@ -7,7 +7,6 @@ public interface IPulseAudioSink : IDisposable
     SampleSpec DefaultSampleSpec { get; }
     void EnsureFormat(SampleSpec sampleSpec);
     void AttachStream(PlaybackStreamState stream, Action playbackProgressCallback);
-    void DetachStream(uint channelIndex);
-    void NotifyStreamStateChanged();
+    void DetachStream(uint streamIndex);
     void SetMasterVolume(ChannelVolume volume, bool muted);
 }

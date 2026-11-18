@@ -11,6 +11,33 @@ namespace Podish.Pulse.Tests;
 public class PlaybackCommandTests
 {
     [Fact]
+    public void DecodePlaybackStream_PreservesVersion16PayloadLayout()
+    {
+        const ushort version = 16;
+        const uint sequence = 2;
+        var request = ProtocolMessage.Create(CommandTag.CreatePlaybackStream, sequence, writer =>
+            writer.WriteCreatePlaybackStreamParams(new CreatePlaybackStreamParams
+            {
+                SampleSpec = new SampleSpec(SampleFormat.S16Le, 2, 22050),
+                ChannelMap = ChannelMap.Stereo(),
+                BufferAttr = new PlaybackBufferAttr { TargetLength = 4096 },
+                Flags = PlaybackStreamFlags.EarlyRequests
+            }), version);
+
+        byte[] encoded = ProtocolMessageIO.Encode(request, version);
+        var descriptor = DescriptorIO.Read(encoded);
+        var payload = encoded[Constants.DescriptorSize..];
+        var decoded = ProtocolMessageIO.Decode(descriptor, payload, payload.Length, version);
+
+        var reader = decoded.ReadPayload();
+        var actual = reader.ReadCreatePlaybackStreamParams();
+        Assert.Equal(22050u, actual.SampleSpec.SampleRate);
+        Assert.Equal(4096u, actual.BufferAttr!.TargetLength);
+        Assert.Equal(PlaybackStreamFlags.EarlyRequests, actual.Flags);
+        Assert.False(reader.HasDataLeft());
+    }
+
+    [Fact]
     public void PropsUpdateModesBehaveLikePulseAudio()
     {
         var props = new Props();
@@ -259,7 +286,7 @@ public class PlaybackStreamStateTests
     }
 
     [Fact]
-    public void ShouldRequestMoreDependsOnCorkStateAndOutputEstimate()
+    public void ShouldRequestMoreDependsOnCorkStateAndInputBytes()
     {
         var stream = CreateStream();
         Assert.True(stream.ShouldRequestMore());
@@ -269,6 +296,22 @@ public class PlaybackStreamStateTests
 
         stream.SetCorked(false);
         stream.Append(new byte[stream.TargetBytesHint]);
+        Assert.False(stream.ShouldRequestMore());
+    }
+
+    [Fact]
+    public void RefillAccountsForInputBytesBeforeResampling()
+    {
+        var parameters = CreateParameters();
+        parameters.SampleSpec = new SampleSpec(SampleFormat.S16Le, 1, 11025);
+        parameters.ChannelMap = ChannelMap.Mono();
+        var stream = new PlaybackStreamState(0, 1, parameters, "SDL");
+
+        stream.Append(new byte[stream.TargetBytesHint / 2]);
+
+        Assert.True(stream.QueuedOutputEstimateBytes > stream.TargetBytesHint);
+        Assert.True(stream.ShouldRequestMore());
+        stream.RecordRequest(stream.TargetBytesHint / 2);
         Assert.False(stream.ShouldRequestMore());
     }
 
@@ -372,6 +415,30 @@ public class PolyfillAudioStreamTests
         Assert.Equal(0, mix[1], 3);
         Assert.Equal(0, mix[2], 3);
         Assert.True(mix[3] > 0.99f);
+    }
+
+    [Fact]
+    public void MixIntoCentersAndExpandsUnsigned8BitMono()
+    {
+        var stream = CreateAudioStream(new SampleSpec(SampleFormat.U8, 1, 48000));
+        Assert.Equal(3, stream.PutData([0, 128, 255]));
+
+        var mix = new float[6];
+
+        Assert.Equal(3, stream.MixInto(mix, 3));
+        Assert.Equal(new[] { -1f, -1f, 0f, 0f, 127f / 128f, 127f / 128f }, mix);
+    }
+
+    [Fact]
+    public void MixIntoPreservesUnsigned8BitStereoChannels()
+    {
+        var stream = CreateAudioStream(new SampleSpec(SampleFormat.U8, 2, 48000));
+        Assert.Equal(4, stream.PutData([0, 128, 128, 255]));
+
+        var mix = new float[4];
+
+        Assert.Equal(2, stream.MixInto(mix, 2));
+        Assert.Equal(new[] { -1f, 0f, 0f, 127f / 128f }, mix);
     }
 
     [Fact]

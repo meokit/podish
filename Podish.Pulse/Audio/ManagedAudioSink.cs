@@ -2,11 +2,13 @@ namespace Podish.Pulse.Audio;
 
 public abstract class ManagedAudioSink : IPulseAudioSink
 {
+    private readonly Lock _backendGate = new();
     private readonly Lock _gate = new();
     private readonly Dictionary<uint, StreamRegistration> _streams = new();
     private float _masterGain = 1.0f;
     private float[] _mixScratch = Array.Empty<float>();
     private bool _muted;
+    private volatile bool _disposed;
 
     protected ManagedAudioSink(SampleSpec defaultSampleSpec)
     {
@@ -21,10 +23,10 @@ public abstract class ManagedAudioSink : IPulseAudioSink
             throw new InvalidOperationException(
                 $"Unsupported playback format: {sampleSpec.Format}/{sampleSpec.Channels}/{sampleSpec.SampleRate}");
 
-        lock (_gate)
+        lock (_backendGate)
         {
+            ObjectDisposedException.ThrowIf(_disposed, this);
             EnsureBackendFormatCore(sampleSpec);
-            UpdateBackendPausedLocked();
         }
     }
 
@@ -32,25 +34,16 @@ public abstract class ManagedAudioSink : IPulseAudioSink
     {
         lock (_gate)
         {
-            _streams[stream.ChannelIndex] = new StreamRegistration(stream, playbackProgressCallback);
-            UpdateBackendPausedLocked();
+            if (!_disposed)
+                _streams[stream.StreamIndex] = new StreamRegistration(stream, playbackProgressCallback);
         }
     }
 
-    public void DetachStream(uint channelIndex)
+    public void DetachStream(uint streamIndex)
     {
         lock (_gate)
         {
-            _streams.Remove(channelIndex);
-            UpdateBackendPausedLocked();
-        }
-    }
-
-    public void NotifyStreamStateChanged()
-    {
-        lock (_gate)
-        {
-            UpdateBackendPausedLocked();
+            _streams.Remove(streamIndex);
         }
     }
 
@@ -65,9 +58,19 @@ public abstract class ManagedAudioSink : IPulseAudioSink
 
     public void Dispose()
     {
+        lock (_backendGate)
+        {
+            if (_disposed)
+                return;
+
+            _disposed = true;
+            // The backend can wait for a callback to finish here.
+            DisposeCore();
+        }
+
         lock (_gate)
         {
-            DisposeCore();
+            _streams.Clear();
         }
     }
 
@@ -77,7 +80,7 @@ public abstract class ManagedAudioSink : IPulseAudioSink
 
         lock (_gate)
         {
-            if (_streams.Count == 0)
+            if (_disposed || _streams.Count == 0)
                 return;
 
             var frames = destination.Length / (DefaultSampleSpec.Channels * sizeof(short));
@@ -93,7 +96,10 @@ public abstract class ManagedAudioSink : IPulseAudioSink
             {
                 var mixedFrames = registration.State.AudioStream.MixInto(mix, frames);
                 if (mixedFrames > 0)
+                {
                     anyMixed = true;
+                    registration.ProgressCallback();
+                }
             }
 
             if (anyMixed && (_muted || _masterGain != 1.0f))
@@ -102,32 +108,11 @@ public abstract class ManagedAudioSink : IPulseAudioSink
 
             if (anyMixed)
                 AudioMixer.WriteS16LeStereo(destination, mix, frames);
-
-            foreach (var registration in _streams.Values)
-                if (anyMixed || registration.State.PendingDrainSequence != null ||
-                    registration.State.ShouldRequestMore())
-                    registration.ProgressCallback();
-
-            UpdateBackendPausedLocked();
         }
     }
 
     protected abstract void EnsureBackendFormatCore(SampleSpec sampleSpec);
-    protected abstract void SetBackendPausedCore(bool paused);
     protected abstract void DisposeCore();
-
-    private void UpdateBackendPausedLocked()
-    {
-        var shouldPause = true;
-        foreach (var registration in _streams.Values)
-            if (!registration.State.Corked && registration.State.HasPendingOutput)
-            {
-                shouldPause = false;
-                break;
-            }
-
-        SetBackendPausedCore(shouldPause);
-    }
 
     private static float ComputeAverageGain(ChannelVolume volume)
     {

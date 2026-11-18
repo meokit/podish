@@ -190,9 +190,10 @@ internal sealed class PulseServerSession
         }
 
         if (stream != null)
+        {
             _state.RemovePlaybackStream(stream.StreamIndex);
-
-        _state.AudioSink.DetachStream(channelIndex);
+            _state.AudioSink.DetachStream(stream.StreamIndex);
+        }
     }
 
     public PlaybackStreamState? GetPlaybackStreamByChannelIndex(uint channelIndex)
@@ -286,7 +287,7 @@ internal sealed class PulseServerSession
             }
 
             var bytesNeeded = stream.TargetBytesHint -
-                              (stream.QueuedOutputEstimateBytes + stream.PendingRequestedBytes);
+                              (stream.BufferedBytes + stream.PendingRequestedBytes);
             var requestBytes = Math.Max(stream.RequestBytesHint, bytesNeeded);
             stream.RecordRequest(requestBytes);
             _logger.LogDebug(
@@ -322,7 +323,6 @@ internal sealed class PulseServerSession
 
     public void NotifyPlaybackStateChanged()
     {
-        _state.AudioSink.NotifyStreamStateChanged();
         RequestPlaybackPump();
     }
 
@@ -513,11 +513,8 @@ internal sealed class PulseServerSession
         {
             stream.Clear();
             _state.RemovePlaybackStream(stream.StreamIndex);
-            _state.AudioSink.DetachStream(stream.ChannelIndex);
+            _state.AudioSink.DetachStream(stream.StreamIndex);
         }
-
-        if (streams.Length > 0)
-            _state.AudioSink.NotifyStreamStateChanged();
     }
 
     private async ValueTask SendRawAsync(byte[] payload)

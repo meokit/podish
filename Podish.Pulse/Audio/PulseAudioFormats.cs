@@ -6,7 +6,7 @@ public static class PulseAudioFormats
 {
     public static bool IsSupported(SampleSpec sampleSpec)
     {
-        return sampleSpec.Format == SampleFormat.S16Le &&
+        return sampleSpec.Format is SampleFormat.U8 or SampleFormat.S16Le &&
                (sampleSpec.Channels == 1 || sampleSpec.Channels == 2) &&
                sampleSpec.SampleRate > 0;
     }

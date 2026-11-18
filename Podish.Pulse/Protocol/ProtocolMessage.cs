@@ -5,6 +5,8 @@ namespace Podish.Pulse.Protocol;
 /// </summary>
 public sealed class ProtocolMessage
 {
+    private readonly ushort _protocolVersion;
+
     /// <summary>
     /// The command tag identifying the type of message.
     /// </summary>
@@ -23,9 +25,8 @@ public sealed class ProtocolMessage
     /// <summary>
     /// Creates a new ProtocolMessage instance.
     /// </summary>
-    public ProtocolMessage()
+    public ProtocolMessage() : this(default, 0, Array.Empty<byte>())
     {
-        Payload = Array.Empty<byte>();
     }
 
     /// <summary>
@@ -35,7 +36,13 @@ public sealed class ProtocolMessage
     /// <param name="sequence">The sequence number.</param>
     /// <param name="payload">The payload.</param>
     public ProtocolMessage(CommandTag commandTag, uint sequence, byte[] payload)
+        : this(commandTag, sequence, payload, Constants.MaxVersion)
     {
+    }
+
+    internal ProtocolMessage(CommandTag commandTag, uint sequence, byte[] payload, ushort protocolVersion)
+    {
+        _protocolVersion = protocolVersion;
         CommandTag = commandTag;
         Sequence = sequence;
         Payload = payload ?? Array.Empty<byte>();
@@ -53,18 +60,14 @@ public sealed class ProtocolMessage
     {
         var writer = new TagStructWriter(protocolVersion);
         writerAction(writer);
-        return new ProtocolMessage(commandTag, sequence, writer.ToArray());
+        return new ProtocolMessage(commandTag, sequence, writer.ToArray(), protocolVersion);
     }
 
-    /// <summary>
-    /// Reads the payload as a tagstruct.
-    /// </summary>
-    /// <param name="protocolVersion">The protocol version.</param>
-    /// <returns>A TagStructReader for the payload.</returns>
-    public TagStructReader ReadPayload(ushort protocolVersion = Constants.MaxVersion)
-    {
-        return new TagStructReader(Payload, protocolVersion);
-    }
+    /// <summary>Reads the payload using the negotiated protocol version.</summary>
+    public TagStructReader ReadPayload() => ReadPayload(_protocolVersion);
+
+    /// <summary>Reads the payload using the specified protocol version.</summary>
+    public TagStructReader ReadPayload(ushort protocolVersion) => new(Payload, protocolVersion);
 }
 
 /// <summary>
@@ -132,7 +135,7 @@ public static class ProtocolMessageIO
         // Remaining data is the command-specific payload
         byte[] commandPayload = reader.Remaining.ToArray();
         
-        return new ProtocolMessage(commandTag, sequence, commandPayload);
+        return new ProtocolMessage(commandTag, sequence, commandPayload, protocolVersion);
     }
 
     public static ProtocolMessage Decode(Descriptor descriptor, byte[] payloadBuffer, int payloadLength,
@@ -151,7 +154,7 @@ public static class ProtocolMessageIO
         uint sequence = reader.ReadU32();
 
         byte[] commandPayload = reader.Remaining;
-        return new ProtocolMessage(commandTag, sequence, commandPayload);
+        return new ProtocolMessage(commandTag, sequence, commandPayload, protocolVersion);
     }
 
     /// <summary>

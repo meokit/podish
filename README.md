@@ -58,7 +58,7 @@ Podish is roughly **2× iSH** and roughly **9× QEMU TCI** on the same class of 
 | JIT-capable guests | `LuaJIT` (`-joff`) | Stable | SMC handling validated; forced LuaJIT interpreter mode |
 | Build toolchain | `gcc`, `make` | Verified | CoreMark tree compiles end-to-end |
 | Networking tools | `git`, `OpenSSH` | Verified | `git clone` works; validates VFS / DNS / TLS paths |
-| Framebuffer games | PrBoom (DOOM shareware), SuperTux | Verified | Debian i386 SDL 1.2 fbcon, software rendering |
+| Framebuffer games | PrBoom (DOOM shareware), SuperTux | Verified | Debian i386 SDL 1.2 fbcon with sound and music through PulseAudio |
 | X11 desktop | X.Org, Openbox, xeyes, xclock, xterm | Verified | Guest fbdev driver with host SDL2 output |
 | Heavy modern runtime | `Node.js` | Starts | Usable for simple scripts; V8 JIT can trigger occasional crashes. Disabling V8 JIT stabilizes it at a steep performance cost. |
 

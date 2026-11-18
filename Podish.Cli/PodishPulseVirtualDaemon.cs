@@ -12,12 +12,12 @@ internal sealed class PodishPulseVirtualDaemon : IVirtualDaemon
     private readonly int _ownerPid;
     private readonly PulseServerState _serverState;
 
-    public PodishPulseVirtualDaemon(string unixPath, int ownerPid, ILoggerFactory loggerFactory)
+    public PodishPulseVirtualDaemon(string unixPath, int ownerPid, PulseServerState serverState)
     {
         UnixPath = unixPath;
         _ownerPid = ownerPid;
-        _logger = loggerFactory.CreateLogger<PodishPulseVirtualDaemon>();
-        _serverState = new PulseServerState(loggerFactory);
+        _logger = serverState.LoggerFactory.CreateLogger<PodishPulseVirtualDaemon>();
+        _serverState = serverState;
     }
 
     public string Name => "podish-pulse";

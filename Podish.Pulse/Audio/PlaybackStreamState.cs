@@ -229,7 +229,7 @@ public sealed class PlaybackStreamState
         if (!StartedNotified && BufferedBytes == 0)
             return true;
 
-        return QueuedOutputEstimateBytes + PendingRequestedBytes < TargetBytesHint;
+        return BufferedBytes + PendingRequestedBytes < TargetBytesHint;
     }
 
     private static float ComputeGain(ChannelVolume volume, bool mute)

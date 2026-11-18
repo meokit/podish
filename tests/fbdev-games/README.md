@@ -10,7 +10,7 @@ tests/fbdev-games/run.sh /tmp/podish-classics doom -warp 1 1
 tests/fbdev-games/run.sh /tmp/podish-classics supertux /usr/share/games/supertux/levels/world1/level1.stl
 ```
 
-The games use the Debian i386 builds of PrBoom 2.5.0 and SuperTux 0.1.3 with SDL 1.2.14. PrBoom loads the DOOM 1.9 shareware IWAD. Omit the level argument to start SuperTux at its menu. Both launchers disable game audio. Close the SDL window to stop the guest.
+The games use the Debian i386 builds of PrBoom 2.5.0 and SuperTux 0.1.3 with SDL 1.2.14. PrBoom loads the DOOM 1.9 shareware IWAD. Omit the level argument to start SuperTux at its menu. Both games send sound effects and music from the guest SDL 1.2 PulseAudio driver to Podish’s virtual PulseAudio server. The server plays them through the host SDL2 audio device. The game root filesystem includes FreePats for PrBoom’s MIDI music. Rebuild an older game root filesystem in a new directory to install the PulseAudio-enabled SDL and sound patches. If you carry over a SuperTux configuration saved by the old launcher, re-enable Sound and Music in Options. Close the SDL window to stop the guest.
 
 ## SDL 1.0.8 fbcon
 
@@ -48,7 +48,7 @@ tests/fbdev-games/install-linux-doom.sh /tmp/podish-x11 /tmp/podish-classics
 tests/fbdev-games/run-x11.sh /tmp/podish-x11 doom
 ```
 
-This launches E1M1 in an Openbox window on an 8-bit X.Org screen so the game can install its palette. The original external sound server is optional and is absent from this image.
+This launches E1M1 in an Openbox window on an 8-bit X.Org screen so the game can install its palette. Use the PrBoom launcher above for DOOM sound effects and music. The original Linux port sends sound effects to its optional OSS sound server and has placeholder music functions.
 
 ## Using another root filesystem
 
