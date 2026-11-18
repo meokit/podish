@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/epoll.h>
+#include <sys/mman.h>
 #include <unistd.h>
 #include <xf86drm.h>
 #include <xf86drmMode.h>
@@ -33,9 +34,9 @@ static void flipped(int fd, unsigned sequence, unsigned sec, unsigned usec, unsi
     ++flips;
 }
 
-static uint32_t register_fb(int fd, struct gbm_bo* bo, bool legacy) {
+static uint32_t register_fb(int fd, struct gbm_bo* bo, uint32_t height, bool legacy) {
     uint32_t fb;
-    uint32_t width = gbm_bo_get_width(bo), height = gbm_bo_get_height(bo);
+    uint32_t width = gbm_bo_get_width(bo);
     uint32_t handles[4] = {gbm_bo_get_handle(bo).u32};
     uint32_t pitches[4] = {gbm_bo_get_stride(bo)};
     uint32_t offsets[4] = {0};
@@ -60,6 +61,51 @@ static void wait_flip(int fd, int epoll, unsigned expected, uint32_t crtc, uintp
     require(drmHandleEvent(fd, &event_context) == 0, "read flip using drmHandleEvent");
     require(flips == expected && event_crtc == crtc && cookie == data, "verify flip event fields");
     require(poll(&pfd, 1, 0) == 0, "event queue becomes empty");
+}
+
+static void check_prime(int primary, struct gbm_bo* bo, uint32_t value) {
+    char* path = drmGetRenderDeviceNameFromFd(primary);
+    require(path && !strcmp(path, "/dev/dri/renderD128"), "discover render node through sysfs");
+    int render = open(path, O_RDWR | O_CLOEXEC);
+    free(path);
+    require(render >= 0 && drmGetNodeTypeFromFd(render) == DRM_NODE_RENDER, "open render node");
+    require(drmModeGetResources(render) == NULL && drmSetMaster(render) < 0, "render node cannot modeset");
+
+    int readonly;
+    require(drmPrimeHandleToFD(primary, gbm_bo_get_handle(bo).u32, DRM_CLOEXEC, &readonly) == 0,
+            "export a read-only PRIME fd");
+    require(mmap(NULL, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, readonly, 0) == MAP_FAILED && errno == EACCES,
+            "reject writable mappings of a read-only PRIME fd");
+    close(readonly);
+
+    int share = gbm_bo_get_fd_for_plane(bo, 0);
+    require(share >= 0 && (fcntl(share, F_GETFD) & FD_CLOEXEC), "export GBM buffer as a PRIME fd");
+    uint32_t handle, repeat;
+    require(drmPrimeFDToHandle(render, share, &handle) == 0 && drmPrimeFDToHandle(render, share, &repeat) == 0 &&
+                handle == repeat,
+            "PRIME imports reuse the handle within one DRM file");
+
+    struct gbm_device* device = gbm_create_device(render);
+    require(device != NULL, "create GBM render device");
+    struct gbm_import_fd_data info = {.fd = share,
+                                      .width = gbm_bo_get_width(bo),
+                                      .height = gbm_bo_get_height(bo),
+                                      .stride = gbm_bo_get_stride(bo),
+                                      .format = gbm_bo_get_format(bo)};
+    struct gbm_bo* first = gbm_bo_import(device, GBM_BO_IMPORT_FD, &info, GBM_BO_USE_LINEAR);
+    struct gbm_bo* second = gbm_bo_import(device, GBM_BO_IMPORT_FD, &info, GBM_BO_USE_LINEAR);
+    require(first && second, "import PRIME buffer into two GBM objects");
+    close(share);
+    gbm_bo_destroy(first);
+    require(drmCloseBufferHandle(render, handle) == 0, "release the libdrm PRIME handle");
+    uint32_t stride;
+    void* map;
+    uint32_t* pixel = gbm_bo_map(second, 3, 4, 1, 1, GBM_BO_TRANSFER_READ, &stride, &map);
+    require(pixel && *pixel == value, "GBM import shares data and owns its own handle");
+    gbm_bo_unmap(second, map);
+    gbm_bo_destroy(second);
+    gbm_device_destroy(device);
+    close(render);
 }
 
 int main(void) {
@@ -97,7 +143,9 @@ int main(void) {
     require(!gbm_device_is_format_supported(device, GBM_FORMAT_XRGB8888, GBM_BO_USE_RENDERING),
             "GPU capability negotiation");
     struct gbm_bo* first = gbm_bo_create(device, mode.hdisplay, mode.vdisplay, GBM_FORMAT_XRGB8888, usage);
-    struct gbm_bo* second = gbm_bo_create(device, mode.hdisplay, mode.vdisplay, GBM_FORMAT_XRGB8888, usage);
+    const uint64_t linear = 0;
+    struct gbm_bo* second =
+        gbm_bo_create_with_modifiers(device, mode.hdisplay, mode.vdisplay + 32, GBM_FORMAT_XRGB8888, &linear, 1);
     require(first && second, "allocate two GBM BOs through DRM");
     require(gbm_bo_get_plane_count(first) == 1 && gbm_bo_get_modifier(first) == 0, "query GBM plane metadata");
 
@@ -109,6 +157,7 @@ int main(void) {
     require(*alias == 0, "new BO is zero initialized");
     *pixel = 0x00a05533;
     require(*alias == 0x00a05533, "mappings share linear buffer pages");
+    check_prime(fd, first, *alias);
     gbm_bo_unmap(first, alias_token);
 
     uint32_t initial = 0x01234567;
@@ -120,8 +169,8 @@ int main(void) {
     require(alias && *alias == 0x00a05533, "different BOs have independent storage");
     gbm_bo_unmap(first, alias_token);
 
-    uint32_t first_fb = register_fb(fd, first, true);
-    uint32_t second_fb = register_fb(fd, second, false);
+    uint32_t first_fb = register_fb(fd, first, mode.vdisplay, true);
+    uint32_t second_fb = register_fb(fd, second, mode.vdisplay, false);
     uint32_t invalid;
     require(drmModeAddFB(other, mode.hdisplay, mode.vdisplay, 24, 32, stride, gbm_bo_get_handle(first).u32, &invalid) <
                 0,

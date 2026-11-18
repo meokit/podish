@@ -22,3 +22,5 @@ mkdir -p "$dest"
     -I "$drm_headers" -I "$drm_headers/libdrm" -I "$gbm_headers" -I "$repo/graphics/guest/include" \
     "$here/egl-probe.c" -Wl,--allow-shlib-undefined "$drm_library" -L "$guest" -lgbm -lEGL -lGLESv2 \
     -o "$dest/podish-kmsdrm-egl-probe"
+"${ZIG:-zig}" cc -target x86-linux-gnu.2.11 -O2 -Wall -Wextra \
+    "$here/compositor-probe.c" -o "$dest/podish-kmsdrm-compositor-probe"

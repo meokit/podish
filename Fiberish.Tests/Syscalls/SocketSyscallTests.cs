@@ -951,7 +951,7 @@ public class SocketSyscallTests
         Assert.True(fd >= 0);
 
         var file = Assert.IsType<LinuxFile>(env.SyscallManager.GetFD(fd));
-        Assert.IsType<NetlinkRouteSocketInode>(file.Dentry.Inode);
+        Assert.IsType<NetlinkSocketInode>(file.Dentry.Inode);
     }
 
     [Fact]

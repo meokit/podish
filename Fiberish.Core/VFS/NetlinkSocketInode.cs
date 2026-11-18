@@ -10,17 +10,17 @@ namespace Fiberish.VFS;
 
 internal sealed record NetlinkSocketAddress(uint PortId, uint Groups);
 
-public sealed class NetlinkRouteSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource,
+public sealed class NetlinkSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource,
     IDispatcherEdgeWaitSource
 {
     private readonly AsyncWaitQueue _readWaitQueue;
     private readonly Queue<byte[]> _responses = new();
     private readonly KernelScheduler _scheduler;
-    private readonly Func<NetDeviceSetSnapshot> _snapshotProvider;
+    private readonly Func<NetDeviceSetSnapshot>? _routeSnapshot;
     internal NetlinkSocketAddress Address { get; set; } = new(0, 0);
 
-    public NetlinkRouteSocketInode(ulong ino, SuperBlock sb, KernelScheduler scheduler,
-        Func<NetDeviceSetSnapshot> snapshotProvider)
+    public NetlinkSocketInode(ulong ino, SuperBlock sb, KernelScheduler scheduler,
+        Func<NetDeviceSetSnapshot>? routeSnapshot)
     {
         Ino = ino;
         SuperBlock = sb;
@@ -28,7 +28,7 @@ public sealed class NetlinkRouteSocketInode : Inode, ITaskWaitSource, IDispatche
         Mode = 0x1ED;
         _scheduler = scheduler;
         _readWaitQueue = new AsyncWaitQueue(scheduler);
-        _snapshotProvider = snapshotProvider;
+        _routeSnapshot = routeSnapshot;
     }
 
     bool IDispatcherWaitSource.RegisterWait(LinuxFile file, IReadyDispatcher dispatcher, Action callback,
@@ -331,6 +331,11 @@ public sealed class NetlinkRouteSocketInode : Inode, ITaskWaitSource, IDispatche
 
     private int HandleWrite(ReadOnlySpan<byte> payload)
     {
+        // Static virtual devices expose their initial state in sysfs. There are no
+        // hotplug announcements and guest processes cannot inject kernel events.
+        if (_routeSnapshot is null)
+            return -(int)Errno.EOPNOTSUPP;
+
         if (payload.Length < 16)
             return -(int)Errno.EINVAL;
 
@@ -341,7 +346,7 @@ public sealed class NetlinkRouteSocketInode : Inode, ITaskWaitSource, IDispatche
         var nlmsgType = BinaryPrimitives.ReadUInt16LittleEndian(payload.Slice(4, 2));
         var nlmsgFlags = BinaryPrimitives.ReadUInt16LittleEndian(payload.Slice(6, 2));
         var nlmsgSeq = BinaryPrimitives.ReadUInt32LittleEndian(payload.Slice(8, 4));
-        var snapshot = _snapshotProvider();
+        var snapshot = _routeSnapshot();
 
         var responses = new List<byte[]>();
         if ((nlmsgFlags & LinuxConstants.NLM_F_DUMP) != 0)

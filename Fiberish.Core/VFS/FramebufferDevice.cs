@@ -139,6 +139,28 @@ public sealed class FramebufferDevice
         }
     }
 
+    internal bool TryPresentXrgb8888(LinuxFile source, int width, int height, int pitch)
+    {
+        lock (_gate)
+        {
+            var mode = _mode;
+            if (_inode == null || mode.Depth != 32 || mode.Width != width || mode.Height != height ||
+                source.OpenedInode == null)
+                return false;
+
+            var row = _row.AsSpan(0, width * 4);
+            for (var y = 0; y < height; y++)
+            {
+                if (source.OpenedInode.ReadToHost(null, source, row, (long)y * pitch) != row.Length)
+                    return false;
+                var position = (y + mode.YOffset) * mode.Stride + mode.XOffset * 4;
+                if (_inode.WriteVideoMemory(null, row, position) != row.Length)
+                    return false;
+            }
+            return true;
+        }
+    }
+
     /// <summary>Copies the visible framebuffer as tightly packed, little-endian XRGB8888.</summary>
     public bool TryCopyFrame(Span<byte> xrgb8888, out int width, out int height)
     {

@@ -6,7 +6,7 @@ using Fiberish.Native;
 namespace Fiberish.VFS;
 
 /// <summary>A virtual DRM primary node with one legacy KMS output and CPU or GPU buffers.</summary>
-public sealed class DrmCardInode : Inode, ITaskWaitSource, IPollNotificationSource
+public sealed partial class DrmCardInode : Inode, ITaskWaitSource, IPollNotificationSource
 {
     private const uint CrtcId = 1, ConnectorId = 2, EncoderId = 3;
     public const int ModeWidth = 640, ModeHeight = 480;
@@ -33,18 +33,21 @@ public sealed class DrmCardInode : Inode, ITaskWaitSource, IPollNotificationSour
 
     private readonly KernelScheduler _scheduler;
     private readonly bool _gpuBuffers;
+    private readonly FramebufferDevice? _cpuOutput;
     private readonly byte[] _mode = CreateMode();
     private Session? _master;
     private Session? _scanoutOwner;
     private uint _scanout;
     private DrmScanoutBuffer? _activeGpu;
     private PendingFlip? _pending;
-    private uint _nextId = EncoderId + 1;
+    private uint _nextId = DpmsProperty + 1;
 
-    public DrmCardInode(SuperBlock superBlock, KernelScheduler scheduler, bool gpuBuffers)
+    public DrmCardInode(SuperBlock superBlock, KernelScheduler scheduler, bool gpuBuffers,
+        FramebufferDevice? cpuOutput = null)
     {
         _scheduler = scheduler;
         _gpuBuffers = gpuBuffers;
+        _cpuOutput = cpuOutput;
         SuperBlock = superBlock;
         Type = InodeType.CharDev;
         Ino = 0x22600;
@@ -52,6 +55,8 @@ public sealed class DrmCardInode : Inode, ITaskWaitSource, IPollNotificationSour
         Rdev = 0xe200; // DRM major 226, card0 minor 0.
         SetInitialLinkCount(1, "Virtual DRM registration");
     }
+
+    private sealed record Framebuffer(Buffer Backing, uint Width, uint Height);
 
     private sealed record Buffer(LinuxFile? File, uint Width, uint Height, uint Pitch, uint Size,
         DrmScanoutBuffer? Gpu = null)
@@ -74,10 +79,12 @@ public sealed class DrmCardInode : Inode, ITaskWaitSource, IPollNotificationSour
     private sealed class Session(KernelScheduler scheduler)
     {
         internal readonly Dictionary<uint, Buffer> Buffers = [];
-        internal readonly Dictionary<uint, Buffer> Framebuffers = [];
+        internal readonly Dictionary<uint, Framebuffer> Framebuffers = [];
         internal readonly Queue<byte[]> Events = [];
         internal readonly AsyncWaitQueue Readable = new(scheduler);
         internal Fiberish.Core.Timer? Timer;
+        internal uint Magic;
+        internal bool UniversalPlanes;
     }
 
     public override bool SupportsMmap => true;
@@ -95,8 +102,9 @@ public sealed class DrmCardInode : Inode, ITaskWaitSource, IPollNotificationSour
     {
         var session = (Session)file.PrivateData!;
         Deactivate(session);
+        _pendingMagic.Remove(session.Magic);
         if (_master == session) _master = null;
-        foreach (var buffer in session.Framebuffers.Values) buffer.Release();
+        foreach (var fb in session.Framebuffers.Values) fb.Backing.Release();
         foreach (var handle in session.Buffers.Keys.ToArray()) CloseBuffer(session, handle);
         session.Framebuffers.Clear();
         base.Release(file);
@@ -158,11 +166,15 @@ public sealed class DrmCardInode : Inode, ITaskWaitSource, IPollNotificationSour
             return 0;
         }
 
+        if (request == CreateLease) return -(int)Errno.EOPNOTSUPP;
+
         var size = request switch
         {
             Version or GemClose or GetCap or AuthMagic or GetResources or GetCrtc or SetCrtc or GetEncoder or
                 GetConnector or AddFb or AddFb2 or RemoveFb or PageFlip or CreateDumb or MapDumb or DestroyDumb or
-                GetProperties or LockGpuBuffer => (int)((request >> 16) & 0x3fff),
+                GetProperties or LockGpuBuffer or GetMagic or SetClientCap or PrimeExport or PrimeImport or
+                GetPlaneResources or GetPlane or GetProperty or SetConnectorProperty or SetCursor or
+                ListLessees or ImportGbmBo => (int)((request >> 16) & 0x3fff),
             _ => 0
         };
         if (size == 0) return -(int)Errno.ENOTTY;
@@ -177,13 +189,23 @@ public sealed class DrmCardInode : Inode, ITaskWaitSource, IPollNotificationSour
             {
                 Version => GetVersion(cpu, data),
                 GetCap => GetCapability(data),
-                AuthMagic => _master == session ? -(int)Errno.EINVAL : -(int)Errno.EACCES,
+                GetMagic => GetAuthenticationMagic(session, data),
+                AuthMagic => Authenticate(session, data),
+                SetClientCap => SetClientCapability(session, data),
                 GetResources => Resources(session, cpu, data),
                 GetCrtc => Crtc(data),
                 SetCrtc => SetMode(session, cpu, data),
                 GetEncoder => Encoder(data),
                 GetConnector => Connector(cpu, data),
-                GetProperties => ObjectProperties(data),
+                GetProperties => ObjectProperties(cpu, data),
+                GetPlaneResources => PlaneResources(session, cpu, data),
+                GetPlane => Plane(session, cpu, data),
+                GetProperty => Property(cpu, data),
+                SetConnectorProperty => SetDpms(session, data),
+                SetCursor => DisableHardwareCursor(session, data),
+                ListLessees => ListNoLessees(data),
+                PrimeImport or ImportGbmBo => ImportPrime(session, task, arg, data, request == ImportGbmBo),
+                PrimeExport => ExportPrime(session, task, arg, data),
                 CreateDumb => AllocateBuffer(session, task, arg, data),
                 MapDumb => GetBufferOffset(session, data),
                 DestroyDumb or GemClose => CloseBuffer(session, U32(data, 0)),
@@ -195,7 +217,8 @@ public sealed class DrmCardInode : Inode, ITaskWaitSource, IPollNotificationSour
             };
             // Mutations returning identifiers validate their writeback before publishing the object.
             if (rc != 0 || request is CreateDumb or AddFb or AddFb2 or GemClose or DestroyDumb or RemoveFb
-                or SetCrtc or PageFlip or LockGpuBuffer)
+                or SetCrtc or PageFlip or LockGpuBuffer or SetClientCap or AuthMagic or SetConnectorProperty
+                or SetCursor or PrimeExport or PrimeImport or ImportGbmBo)
                 return rc;
             return cpu.CopyToUser(arg, data) ? 0 : -(int)Errno.EFAULT;
         }
@@ -229,7 +252,8 @@ public sealed class DrmCardInode : Inode, ITaskWaitSource, IPollNotificationSour
         {
             0x1 or 0x6 or 0x10 or 0x12 => 1, // dumb BO, monotonic timestamps, modifiers, CRTC in event
             0x3 => 24,                      // preferred dumb-buffer depth
-            0x2 or 0x4 or 0x5 or 0x7 or 0x13 or 0x14 => 0,
+            0x5 => 3, // PRIME import and export for linear BOs
+            0x2 or 0x4 or 0x7 or 0x13 or 0x14 => 0,
             _ => -1
         };
         if (value < 0) return -(int)Errno.EINVAL;
@@ -265,7 +289,7 @@ public sealed class DrmCardInode : Inode, ITaskWaitSource, IPollNotificationSour
         if (U32(data, 32) > 0) CopyOut(cpu, U64(data, 8), _mode);
         CopyId(cpu, U64(data, 0), U32(data, 40), EncoderId);
         Put(data, 32, 1);
-        Put(data, 36, 0);
+        WritePropertyList(cpu, data, 16, 24, 36, DpmsProperty, _dpms);
         Put(data, 40, 1);
         Put(data, 44, _scanout != 0 ? EncoderId : 0);
         Put(data, 52, 15); // DRM_MODE_CONNECTOR_VIRTUAL
@@ -298,18 +322,6 @@ public sealed class DrmCardInode : Inode, ITaskWaitSource, IPollNotificationSour
         return 0;
     }
 
-    private static int ObjectProperties(Span<byte> data)
-    {
-        var exists = (U32(data, 20), U32(data, 24)) switch
-        {
-            (CrtcId, 0xcccccccc) or (ConnectorId, 0xc0c0c0c0) or (EncoderId, 0xe0e0e0e0) => true,
-            _ => false
-        };
-        if (!exists) return -(int)Errno.ENOENT;
-        Put(data, 16, 0);
-        return 0;
-    }
-
     private int AllocateBuffer(Session session, FiberTask task, uint arg, Span<byte> data)
     {
         var height = U32(data, 0);
@@ -319,7 +331,7 @@ public sealed class DrmCardInode : Inode, ITaskWaitSource, IPollNotificationSour
             return -(int)Errno.EINVAL;
         var pitch = (width * 4 + 63) & ~63u;
         var length = (pitch * height + LinuxConstants.PageOffsetMask) & LinuxConstants.PageMask;
-        var allocated = session.Buffers.Values.Concat(session.Framebuffers.Values)
+        var allocated = session.Buffers.Values.Concat(session.Framebuffers.Values.Select(fb => fb.Backing))
             .Where(b => b.File != null).DistinctBy(b => b.File).Sum(b => (long)b.Size);
         if (session.Buffers.Count >= MaxObjects || allocated + length > BufferStride)
             return -(int)Errno.ENOMEM;
@@ -368,7 +380,11 @@ public sealed class DrmCardInode : Inode, ITaskWaitSource, IPollNotificationSour
         var handle = U32(data, extended ? 20 : 24);
         if (!session.Buffers.TryGetValue(handle, out var buffer)) return -(int)Errno.ENOENT;
         if (session.Framebuffers.Count >= MaxObjects) return -(int)Errno.ENOSPC;
-        if (U32(data, 4) != buffer.Width || U32(data, 8) != buffer.Height) return -(int)Errno.EINVAL;
+        var width = U32(data, 4);
+        var height = U32(data, 8);
+        if (width == 0 || height == 0 || width > buffer.Width || height > buffer.Height ||
+            (buffer.Gpu != null && (width != buffer.Width || height != buffer.Height)))
+            return -(int)Errno.EINVAL;
         if (extended)
         {
             // One linear plane. The format and plane count are part of the framebuffer, not the BO handle.
@@ -382,17 +398,17 @@ public sealed class DrmCardInode : Inode, ITaskWaitSource, IPollNotificationSour
         Put(data, 0, id);
         if (!cpu.CopyToUser(arg, data)) return -(int)Errno.EFAULT;
         buffer.Retain();
-        session.Framebuffers.Add(id, buffer);
+        session.Framebuffers.Add(id, new Framebuffer(buffer, width, height));
         return 0;
     }
 
     private int RemoveFramebuffer(Session session, uint id)
     {
-        if (!session.Framebuffers.TryGetValue(id, out var buffer)) return -(int)Errno.ENOENT;
+        if (!session.Framebuffers.TryGetValue(id, out var fb)) return -(int)Errno.ENOENT;
         if (_pending is { } pending && (pending.Fb == id || _scanout == id)) return -(int)Errno.EBUSY;
         session.Framebuffers.Remove(id);
         if (id == _scanout) Deactivate(session);
-        buffer.Release();
+        fb.Backing.Release();
         return 0;
     }
 
@@ -400,13 +416,18 @@ public sealed class DrmCardInode : Inode, ITaskWaitSource, IPollNotificationSour
     {
         if (_master != session) return -(int)Errno.EACCES;
         if (U32(data, 12) != CrtcId) return -(int)Errno.ENOENT;
-        if (_pending != null) return -(int)Errno.EBUSY;
         var fb = U32(data, 16);
         if (U32(data, 32) == 0 || fb == 0)
         {
+            if (_pending is { } pending)
+            {
+                pending.Owner.Timer?.Cancel();
+                CompleteFlip();
+            }
             Activate(null, 0, null);
             return 0;
         }
+        if (_pending != null) return -(int)Errno.EBUSY;
         if (!session.Framebuffers.TryGetValue(fb, out var buffer)) return -(int)Errno.ENOENT;
         if (U32(data, 8) != 1 || U32(data, 20) != 0 || U32(data, 24) != 0 ||
             buffer.Width != Width || buffer.Height != Height ||
@@ -417,9 +438,18 @@ public sealed class DrmCardInode : Inode, ITaskWaitSource, IPollNotificationSour
         if (pointer == 0 || pointer > uint.MaxValue - 3 || !cpu.CopyFromUser((uint)pointer, connector))
             return -(int)Errno.EFAULT;
         if (U32(connector, 0) != ConnectorId) return -(int)Errno.ENOENT;
-        if (buffer.Gpu is { } gpu && (!gpu.Ready || !gpu.Present())) return -(int)Errno.EIO;
-        Activate(session, fb, buffer.Gpu);
+        if (buffer.Backing.Gpu is { Ready: false } || !PresentBuffer(buffer)) return -(int)Errno.EIO;
+        Activate(session, fb, buffer.Backing.Gpu);
         return 0;
+    }
+
+    private bool PresentBuffer(Framebuffer framebuffer)
+    {
+        var buffer = framebuffer.Backing;
+        if (buffer.Gpu is { } gpu) return gpu.Present();
+        if (_cpuOutput != null && buffer.File is { } file)
+            _cpuOutput.TryPresentXrgb8888(file, (int)framebuffer.Width, (int)framebuffer.Height, (int)buffer.Pitch);
+        return true;
     }
 
     private void Activate(Session? owner, uint id, DrmScanoutBuffer? gpu)
@@ -443,9 +473,10 @@ public sealed class DrmCardInode : Inode, ITaskWaitSource, IPollNotificationSour
         if (buffer.Width != Width || buffer.Height != Height) return -(int)Errno.EINVAL;
         if ((flags & 1) != 0 && session.Events.Count >= MaxEvents) return -(int)Errno.EBUSY;
 
-        if (buffer.Gpu is { Ready: false }) return -(int)Errno.EINVAL;
-        buffer.Gpu?.Pin();
-        _pending = new PendingFlip(session, fb, (flags & 1) != 0, U64(data, 16), buffer.Gpu);
+        var gpu = buffer.Backing.Gpu;
+        if (gpu is { Ready: false }) return -(int)Errno.EINVAL;
+        gpu?.Pin();
+        _pending = new PendingFlip(session, fb, (flags & 1) != 0, U64(data, 16), gpu);
         var now = MonotonicClock.Milliseconds;
         var next = ((now * 60 / 1000 + 1) * 1000 + 59) / 60;
         session.Timer = _scheduler.ScheduleTimer(next - now, CompleteFlip);
@@ -460,7 +491,7 @@ public sealed class DrmCardInode : Inode, ITaskWaitSource, IPollNotificationSour
         _pending = null;
         try
         {
-            if (flip.Gpu == null || flip.Gpu.Present())
+            if (PresentBuffer(session.Framebuffers[flip.Fb]))
                 Activate(session, flip.Fb, flip.Gpu);
         }
         finally

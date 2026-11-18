@@ -645,6 +645,7 @@ public static class LinuxConstants
 
     // netlink / rtnetlink
     public const int NETLINK_ROUTE = 0;
+    public const int NETLINK_KOBJECT_UEVENT = 15;
     public const ushort RTM_NEWLINK = 16;
     public const ushort RTM_GETLINK = 18;
     public const ushort RTM_NEWADDR = 20;

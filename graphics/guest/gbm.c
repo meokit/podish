@@ -1,6 +1,7 @@
 #define _GNU_SOURCE
 #include "gbm_egl.h"
 #include <errno.h>
+#include <fcntl.h>
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdint.h>
@@ -32,16 +33,30 @@ struct drm_map_dumb {
     uint64_t offset;
 };
 
+struct drm_prime_handle {
+    uint32_t handle, flags;
+    int32_t fd;
+};
+
+struct drm_import_bo {
+    int32_t fd;
+    uint32_t width, height, pitch, handle;
+    uint64_t size;
+};
+
 #define DRM_VERSION _IOWR('d', 0x00, struct drm_version)
+#define DRM_PRIME_HANDLE_TO_FD _IOWR('d', 0x2d, struct drm_prime_handle)
 #define DRM_CREATE_DUMB _IOWR('d', 0xb2, struct drm_create_dumb)
 #define DRM_MAP_DUMB _IOWR('d', 0xb3, struct drm_map_dumb)
-#define DRM_DESTROY_DUMB _IOWR('d', 0xb4, uint32_t)
+#define DRM_GEM_CLOSE _IOW('d', 0x09, uint32_t[2])
 #define DRM_QUERY_GPU _IOR('d', 0xf0, uint32_t)
 #define DRM_LOCK_GPU_BO _IOW('d', 0xf1, uint32_t[2])
+#define DRM_IMPORT_GBM_BO _IOWR('d', 0xf2, struct drm_import_bo)
 
 _Static_assert(sizeof(struct drm_version) == 36, "IA-32 drm_version");
 _Static_assert(sizeof(struct drm_create_dumb) == 32, "IA-32 drm_mode_create_dumb");
 _Static_assert(sizeof(struct drm_map_dumb) == 16, "IA-32 drm_mode_map_dumb");
+_Static_assert(sizeof(struct drm_import_bo) == 28, "IA-32 Podish GBM import");
 
 #define GBM_FORMAT_XRGB8888 0x34325258u
 #define GBM_FORMAT_ARGB8888 0x34325241u
@@ -52,6 +67,10 @@ _Static_assert(sizeof(struct drm_map_dumb) == 16, "IA-32 drm_mode_map_dumb");
 #define GBM_BO_USE_LINEAR (1u << 4)
 #define GBM_BO_TRANSFER_READ 1u
 #define GBM_BO_TRANSFER_WRITE 2u
+#define GBM_BO_IMPORT_FD 0x5503u
+#define GBM_BO_IMPORT_FD_MODIFIER 0x5504u
+#define DRM_FORMAT_MOD_LINEAR 0ull
+#define DRM_FORMAT_MOD_INVALID 0x00ffffffffffffffull
 
 union gbm_bo_handle {
     void* ptr;
@@ -59,6 +78,17 @@ union gbm_bo_handle {
     uint32_t u32;
     int64_t s64;
     uint64_t u64;
+};
+
+struct gbm_import_fd_data {
+    int fd;
+    uint32_t width, height, stride, format;
+};
+
+struct gbm_import_fd_modifier_data {
+    uint32_t width, height, format, num_fds;
+    int fds[4], strides[4], offsets[4];
+    uint64_t modifier;
 };
 
 struct gbm_device {
@@ -174,6 +204,72 @@ GBM_EXPORT struct gbm_bo* gbm_bo_create(struct gbm_device* device, uint32_t widt
     return bo;
 }
 
+GBM_EXPORT struct gbm_bo* gbm_bo_create_with_modifiers2(struct gbm_device* device, uint32_t width, uint32_t height,
+                                                        uint32_t format, const uint64_t* modifiers, unsigned count,
+                                                        uint32_t usage) {
+    if (modifiers) {
+        for (unsigned i = 0; i < count; i++) {
+            if (modifiers[i] == DRM_FORMAT_MOD_LINEAR)
+                return gbm_bo_create(device, width, height, format, usage | GBM_BO_USE_LINEAR);
+        }
+    }
+    errno = EINVAL;
+    return NULL;
+}
+
+GBM_EXPORT struct gbm_bo* gbm_bo_create_with_modifiers(struct gbm_device* device, uint32_t width, uint32_t height,
+                                                       uint32_t format, const uint64_t* modifiers, unsigned count) {
+    return gbm_bo_create_with_modifiers2(device, width, height, format, modifiers, count, 0);
+}
+
+GBM_EXPORT struct gbm_bo* gbm_bo_import(struct gbm_device* device, uint32_t type, void* buffer, uint32_t usage) {
+    if (!buffer || (usage & GBM_BO_USE_RENDERING)) {
+        errno = EINVAL;
+        return NULL;
+    }
+
+    struct gbm_import_fd_data info;
+    if (type == GBM_BO_IMPORT_FD) {
+        info = *(const struct gbm_import_fd_data*)buffer;
+    } else if (type == GBM_BO_IMPORT_FD_MODIFIER) {
+        const struct gbm_import_fd_modifier_data* planes = buffer;
+        if (planes->num_fds != 1 || planes->offsets[0] != 0 ||
+            (planes->modifier != DRM_FORMAT_MOD_LINEAR && planes->modifier != DRM_FORMAT_MOD_INVALID)) {
+            errno = EINVAL;
+            return NULL;
+        }
+        info = (struct gbm_import_fd_data){planes->fds[0], planes->width, planes->height, planes->strides[0],
+                                           planes->format};
+    } else {
+        errno = EINVAL;
+        return NULL;
+    }
+    if (!gbm_device_is_format_supported(device, info.format, usage)) {
+        errno = EINVAL;
+        return NULL;
+    }
+
+    struct gbm_bo* bo = calloc(1, sizeof(*bo));
+    if (!bo)
+        return NULL;
+    struct drm_import_bo request = {.fd = info.fd, .width = info.width, .height = info.height, .pitch = info.stride};
+    if (ioctl(device->fd, DRM_IMPORT_GBM_BO, &request) < 0) {
+        int error = errno;
+        free(bo);
+        errno = error;
+        return NULL;
+    }
+    *bo = (struct gbm_bo){.device = device,
+                          .width = info.width,
+                          .height = info.height,
+                          .format = info.format,
+                          .stride = info.stride,
+                          .handle = request.handle,
+                          .bytes = (size_t)request.size};
+    atomic_fetch_add(&device->refs, 1);
+    return bo;
+}
+
 GBM_EXPORT uint32_t gbm_bo_get_width(struct gbm_bo* bo) {
     return bo->width;
 }
@@ -196,6 +292,26 @@ GBM_EXPORT struct gbm_device* gbm_bo_get_device(struct gbm_bo* bo) {
 GBM_EXPORT union gbm_bo_handle gbm_bo_get_handle(struct gbm_bo* bo) {
     return (union gbm_bo_handle){.u64 = bo->handle};
 }
+GBM_EXPORT union gbm_bo_handle gbm_bo_get_handle_for_plane(struct gbm_bo* bo, int plane) {
+    if (plane == 0)
+        return gbm_bo_get_handle(bo);
+    errno = EINVAL;
+    return (union gbm_bo_handle){.s32 = -1};
+}
+
+GBM_EXPORT int gbm_bo_get_fd_for_plane(struct gbm_bo* bo, int plane) {
+    if (plane != 0) {
+        errno = EINVAL;
+        return -1;
+    }
+    struct drm_prime_handle request = {.handle = bo->handle, .flags = O_CLOEXEC | O_RDWR, .fd = -1};
+    return ioctl(bo->device->fd, DRM_PRIME_HANDLE_TO_FD, &request) < 0 ? -1 : request.fd;
+}
+
+GBM_EXPORT int gbm_bo_get_fd(struct gbm_bo* bo) {
+    return gbm_bo_get_fd_for_plane(bo, 0);
+}
+
 GBM_EXPORT uint64_t gbm_bo_get_modifier(struct gbm_bo* bo) {
     (void)bo;
     return 0;
@@ -231,7 +347,8 @@ GBM_EXPORT void gbm_bo_destroy(struct gbm_bo* bo) {
         return; // The GBM surface owns this BO.
     if (bo->destroy_user)
         bo->destroy_user(bo, bo->user);
-    ioctl(bo->device->fd, DRM_DESTROY_DUMB, &bo->handle);
+    uint32_t close_request[2] = {bo->handle, 0};
+    ioctl(bo->device->fd, DRM_GEM_CLOSE, close_request);
     gbm_device_destroy(bo->device);
     free(bo);
 }

@@ -45,7 +45,7 @@ public partial class SyscallManager
             return rc;
         }
 
-        if (file.OpenedInode is NetlinkRouteSocketInode)
+        if (file.OpenedInode is NetlinkSocketInode)
             return 0; // Netlink stub
 
         return -(int)Errno.ENOTSOCK;
@@ -93,7 +93,7 @@ public partial class SyscallManager
             return 0;
         }
 
-        if (file.OpenedInode is NetlinkRouteSocketInode)
+        if (file.OpenedInode is NetlinkSocketInode)
             return -(int)Errno.ENOPROTOOPT;
 
         return -(int)Errno.ENOTSOCK;

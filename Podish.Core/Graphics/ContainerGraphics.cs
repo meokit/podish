@@ -45,7 +45,14 @@ internal static class ContainerGraphics
             {
                 syscalls.BindMountSubtree(source.Mount!, "", GuestPath, readOnly: true);
                 if (device != null) syscalls.RegisterVirtualCharacterDevice(AngleDevice.Name, device.CreateInode);
-                if (kmsDrm) syscalls.RegisterVirtualCharacterDevice("dri/card0", sb => new DrmCardInode(sb, scheduler, device?.HasKmsOutput == true));
+                if (kmsDrm)
+                {
+                    DrmCardInode? card = null;
+                    syscalls.RegisterVirtualCharacterDevice("dri/card0",
+                        sb => card = new DrmCardInode(sb, scheduler, device?.HasKmsOutput == true, framebuffer));
+                    syscalls.RegisterVirtualCharacterDevice("dri/renderD128", _ => card!.CreateRenderNode());
+                    MountDrmSysfs(syscalls);
+                }
                 return device;
             }
             catch
@@ -58,6 +65,35 @@ internal static class ContainerGraphics
                                    DllNotFoundException or EntryPointNotFoundException or InvalidOperationException)
         {
             throw new ContainerConfigurationException($"Could not start guest graphics. {ex.Message}");
+        }
+    }
+
+    private static void MountDrmSysfs(SyscallManager syscalls)
+    {
+        using var source = new MountFile(syscalls.CreateDetachedTmpfsMount("podish-drm-sysfs"));
+        var mount = source.Mount!;
+        // libudev verifies the filesystem type of the canonical device directory.
+        mount.Root.SuperBlock.Type = new FileSystemType { Name = "sysfs" };
+        const string device = "devices/platform/podish-drm";
+        WriteNode("card0", 0);
+        WriteNode("renderD128", 128);
+        syscalls.WriteFileInDetachedMount(mount, device + "/uevent", "DRIVER=podish\nMODALIAS=platform:podish-drm\n"u8);
+        syscalls.WriteFileInDetachedMount(mount, "bus/platform/uevent", []);
+        syscalls.CreateSymlinkInDetachedMount(mount, device + "/subsystem", "/sys/bus/platform");
+
+        foreach (var tree in new[] { "dev/char", "class/drm", device, "bus/platform" })
+            syscalls.BindMountSubtree(mount, tree, "/sys/" + tree, readOnly: true);
+
+        void WriteNode(string name, int minor)
+        {
+            var path = device + "/drm/" + name;
+            var uevent = $"MAJOR=226\nMINOR={minor}\nDEVNAME=dri/{name}\nDEVTYPE=drm_minor\n";
+            syscalls.WriteFileInDetachedMount(mount, path + "/uevent", System.Text.Encoding.ASCII.GetBytes(uevent));
+            syscalls.WriteFileInDetachedMount(mount, path + "/dev", System.Text.Encoding.ASCII.GetBytes($"226:{minor}\n"));
+            syscalls.CreateSymlinkInDetachedMount(mount, path + "/subsystem", "/sys/class/drm");
+            syscalls.CreateSymlinkInDetachedMount(mount, path + "/device", "/sys/" + device);
+            syscalls.CreateSymlinkInDetachedMount(mount, $"dev/char/226:{minor}", "/sys/" + path);
+            syscalls.CreateSymlinkInDetachedMount(mount, "class/drm/" + name, "/sys/" + path);
         }
     }
 }

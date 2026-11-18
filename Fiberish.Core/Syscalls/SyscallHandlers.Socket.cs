@@ -33,12 +33,13 @@ public partial class SyscallManager
         {
             if (realType != LinuxConstants.SOCK_RAW && realType != LinuxConstants.SOCK_DGRAM)
                 return -(int)Errno.ESOCKTNOSUPPORT;
-            if (protocol != LinuxConstants.NETLINK_ROUTE)
+            if (protocol is not (LinuxConstants.NETLINK_ROUTE or LinuxConstants.NETLINK_KOBJECT_UEVENT))
                 return -(int)Errno.EPROTONOSUPPORT;
 
-            var inode = new NetlinkRouteSocketInode(0, MemfdSuperBlock, task.CommonKernel,
-                () => NetDeviceSnapshotProvider.Capture(NetworkMode,
-                    TryGetPrivateNetNamespace()));
+            var inode = new NetlinkSocketInode(0, MemfdSuperBlock, task.CommonKernel,
+                protocol == LinuxConstants.NETLINK_ROUTE
+                    ? () => NetDeviceSnapshotProvider.Capture(NetworkMode, TryGetPrivateNetNamespace())
+                    : null);
             var fileFlags = FileFlags.O_RDWR;
             if ((type & LinuxConstants.SOCK_NONBLOCK) != 0) fileFlags |= FileFlags.O_NONBLOCK;
             if ((type & LinuxConstants.SOCK_CLOEXEC) != 0) fileFlags |= FileFlags.O_CLOEXEC;
@@ -230,7 +231,7 @@ public partial class SyscallManager
         if (file.TryGetSocketEndpointOps(out var ops))
             return ops.Bind(file, task, endpoint);
 
-        if (file.OpenedInode is NetlinkRouteSocketInode netlink && endpoint is NetlinkSocketAddress address)
+        if (file.OpenedInode is NetlinkSocketInode netlink && endpoint is NetlinkSocketAddress address)
         {
             netlink.Address = address with { PortId = address.PortId == 0 ? (uint)task.Process.TGID : address.PortId };
             return 0;
@@ -282,7 +283,7 @@ public partial class SyscallManager
             return WriteAnySockaddr(engine, file, addrPtr, addrLenPtr, res);
         }
 
-        if (file.OpenedInode is NetlinkRouteSocketInode netlink)
+        if (file.OpenedInode is NetlinkSocketInode netlink)
         {
             if (addrPtr == 0 || addrLenPtr == 0) return -(int)Errno.EFAULT;
             return WriteSockaddrNetlink(engine, addrPtr, addrLenPtr, netlink.Address);
@@ -309,7 +310,7 @@ public partial class SyscallManager
             return WriteAnySockaddr(engine, file, addrPtr, addrLenPtr, res);
         }
 
-        if (file.OpenedInode is NetlinkRouteSocketInode) return -(int)Errno.ENOTCONN;
+        if (file.OpenedInode is NetlinkSocketInode) return -(int)Errno.ENOTCONN;
 
         return -(int)Errno.ENOTSOCK;
     }
@@ -419,7 +420,7 @@ public partial class SyscallManager
             return await ops.SendAsync(file, task, buf, flags);
         }
 
-        if (file.OpenedInode is NetlinkRouteSocketInode netlinkInode)
+        if (file.OpenedInode is NetlinkSocketInode netlinkInode)
             return await netlinkInode.SendAsync(file, buf, flags);
 
         return -(int)Errno.ENOTSOCK;
@@ -477,7 +478,7 @@ public partial class SyscallManager
             }
         }
 
-        if (file.OpenedInode is NetlinkRouteSocketInode netlinkInode)
+        if (file.OpenedInode is NetlinkSocketInode netlinkInode)
         {
             var buf = ArrayPool<byte>.Shared.Rent(len);
             try
@@ -589,7 +590,7 @@ public partial class SyscallManager
         if (file.TryGetSocketDataOps(out var ops))
             return await ops.SendMsgAsync(file, task, buf, fds, flags | msg.msg_flags, endpoint);
 
-        if (file.OpenedInode is NetlinkRouteSocketInode netlinkInode)
+        if (file.OpenedInode is NetlinkSocketInode netlinkInode)
             return await netlinkInode.SendAsync(file, buf, flags | msg.msg_flags);
 
         return -(int)Errno.ENOTSOCK;
@@ -682,7 +683,7 @@ public partial class SyscallManager
             return bytes;
         }
 
-        if (file.OpenedInode is NetlinkRouteSocketInode netlinkInode)
+        if (file.OpenedInode is NetlinkSocketInode netlinkInode)
         {
             var bytes = await netlinkInode.RecvAsync(file, task, buf, flags | msg.msg_flags, buf.Length);
             if (bytes < 0) return bytes;
@@ -816,7 +817,7 @@ public partial class SyscallManager
     {
         if (addrPtr == 0) return (null, requireNonNull ? -(int)Errno.EFAULT : 0);
         if (addrLen < 0) return (null, -(int)Errno.EINVAL);
-        if (file.OpenedInode is NetlinkRouteSocketInode)
+        if (file.OpenedInode is NetlinkSocketInode)
         {
             Span<byte> address = stackalloc byte[12];
             if (addrLen < address.Length) return (null, -(int)Errno.EINVAL);
@@ -842,7 +843,7 @@ public partial class SyscallManager
         if (res.UnixAddressRaw != null ||
             (file.TryGetSocketEndpointOps(out var ops) &&
              ops.SocketAddressFamily == AddressFamily.Unix) ||
-            file.OpenedInode is NetlinkRouteSocketInode)
+            file.OpenedInode is NetlinkSocketInode)
             return WriteSockaddrUnix(engine, addrPtr, addrLenPtr, res.UnixAddressRaw);
         if (res.EndPoint != null) return WriteSockaddr(engine, addrPtr, addrLenPtr, res.EndPoint);
         return 0;

@@ -56,7 +56,7 @@ The game probe selects SDL2's `opengles2` backend, checks for a nonuniform frame
 
 ## Virtual KMS and GBM
 
-`--kmsdrm` exposes an experimental IA-32 primary node at `/dev/dri/card0` and mounts `libgbm.so.1` from the guest build. It works with the distribution's `libdrm.so.2`. The virtual card has one 640×480 output with legacy modesetting, CPU-backed linear BOs, and vblank-timed page-flip events.
+`--kmsdrm` exposes `/dev/dri/card0` and `/dev/dri/renderD128` and mounts the guest `libgbm.so.1`. The virtual card has one 640×480 output with legacy modesetting, a universal primary plane, CPU-backed linear BOs, and vblank-timed page-flip events. The distribution's libdrm can discover both nodes and use PRIME to share linear buffers between open file descriptions. The render node can allocate and import buffers without acquiring DRM master.
 
 Combine `--kmsdrm --gles` to open a host SDL window and enable GPU-backed GBM surfaces. A GBM surface has three texture-bindable EGL pbuffers. Guest EGL swap publishes a finished BO, then KMS modeset or flip selects the BO to present. The host ANGLE context samples it into the window using `eglBindTexImage`. The virtual flip event follows the GPU fence. Frame pixels stay in ANGLE during this path.
 
@@ -72,6 +72,25 @@ dotnet "$cli" run --rm --kmsdrm --gles --rootfs "$rootfs" -- /usr/local/bin/podi
 ```
 
 The GPU probe checks that EGL swap leaves the active KMS framebuffer alone. It then verifies modeset, page flip, the active BO's lifetime after the GBM lock is released, three-slot pool reuse and clean teardown.
+
+### Run a DRM Wayland compositor
+
+Debian Bookworm i386 Cage 0.1.4 and wlroots 0.15.1 can run directly on the virtual DRM card. Install Cage, Xwayland, Weston, and Mesa's EGL, GLES and GBM runtime packages in the guest. Run Cage as a non-root guest user with a writable `XDG_RUNTIME_DIR` and `/tmp/.X11-unix`. The command below uses `/run/user/1000` for the guest runtime directory.
+
+```sh
+tests/kmsdrm/install-probe.sh "$rootfs"
+dotnet "$cli" run --rm --kmsdrm --fbdev --rootfs "$rootfs" --user 1000:1000 \
+    -e XDG_RUNTIME_DIR=/run/user/1000 -e LIBSEAT_BACKEND=builtin -e SEATD_VTBOUND=0 \
+    -e WLR_BACKENDS=drm -e WLR_DRM_DEVICES=/dev/dri/card0 -e WLR_RENDERER=gles2 \
+    -e WLR_RENDERER_ALLOW_SOFTWARE=1 -e GBM_ALWAYS_SOFTWARE=1 \
+    -e MESA_LOADER_DRIVER_OVERRIDE=kms_swrast \
+    -e LD_PRELOAD=/usr/lib/i386-linux-gnu/libgbm.so.1 \
+    -- /usr/bin/cage -d -- /usr/local/bin/podish-kmsdrm-compositor-probe /usr/bin/weston-simple-shm
+```
+
+The probe reports eight changing frames from the KMS scanout preview. Mesa's software DRI driver allocates GBM buffers on `renderD128`, and wlroots imports them on `card0` for scanout. Use `--static /usr/bin/weston-simple-dmabuf-feedback` in place of `/usr/bin/weston-simple-shm` to verify a client that sends its GBM buffers over `zwp_linux_dmabuf_v1`.
+
+To exercise Pixman, set `WLR_RENDERER=pixman` and omit the Mesa variables and preload. For either renderer, `--fbdev` displays the CPU-backed KMS scanout in the host preview window. The virtual card currently uses a fixed connector and legacy modesetting. ANGLE-backed compositor rendering requires EGLImage import and GPU-backed GBM BOs.
 
 For the packaged game tests, use the Debian rootfs from the earlier smoke-test instructions. The launch fixtures set the GLES profile before the first SDL window and check the engine's GPU swap log.
 
