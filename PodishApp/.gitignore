@@ -1,0 +1,14 @@
+# Build artefacts
+.build/
+.swiftpm/
+DerivedData/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+
+# Generated iOS rootfs tarball (regenerate with scripts/build-rootfs.sh)
+Resources/Rootfs/alpine-i386.tar.gz
+Resources/Rootfs/alpine-i386.tar
+
+# .NET publish staging
+artifacts/podish-native/_staging/
