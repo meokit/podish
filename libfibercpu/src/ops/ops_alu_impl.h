@@ -26,15 +26,15 @@ enum class AddrModeSpec : uint8_t {
 template <bool UpdateFlags>
 FORCE_INLINE LogicFlow OpAdd_EbGb_Internal(LogicFuncParams) {
     // 00: ADD r/m8, r8
-    auto dest_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
+    auto dest_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!dest_res) return LogicFlow::RestartMemoryOp;
     uint8_t dest = *dest_res;
 
-    uint8_t src = GetReg8(state, (op->modrm >> 3) & 7);
+    uint8_t src = gpr.GetReg8(state, (op->modrm >> 3) & 7);
     uint8_t res = AluAdd<uint8_t, UpdateFlags>(state, flags_cache, dest, src);
 
     // retry on TLB miss
-    if (!WriteModRM<uint8_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) {
+    if (!WriteModRM<uint8_t, OpOnTLBMiss::Retry>(state, gpr, op, res, utlb)) {
         return LogicFlow::RetryMemoryOp;
     }
     return LogicFlow::Continue;
@@ -50,40 +50,40 @@ FORCE_INLINE LogicFlow OpAdd_EvGv_Internal(LogicFuncParams) {
         uint8_t rm = op->modrm & 7;
         uint16_t dest;
         if constexpr (AddrMode == AddrModeSpec::ModReg) {
-            dest = static_cast<uint16_t>(GetReg(state, rm));
+            dest = static_cast<uint16_t>(gpr.GetReg(state, rm));
         } else {
-            auto dest_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+            auto dest_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
             if (!dest_res) return LogicFlow::RestartMemoryOp;
             dest = *dest_res;
         }
 
-        uint16_t src = GetReg(state, (op->modrm >> 3) & 7) & 0xFFFF;
+        uint16_t src = gpr.GetReg(state, (op->modrm >> 3) & 7) & 0xFFFF;
         uint16_t res = AluAdd<uint16_t, UpdateFlags>(state, flags_cache, dest, src);
 
         if constexpr (AddrMode == AddrModeSpec::ModReg) {
-            uint32_t reg = GetReg(state, rm);
-            SetReg(state, rm, (reg & 0xFFFF0000u) | res);
+            uint32_t reg = gpr.GetReg(state, rm);
+            gpr.SetReg(state, rm, (reg & 0xFFFF0000u) | res);
         } else {
-            if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
+            if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, gpr, op, res, utlb)) return LogicFlow::RetryMemoryOp;
         }
     } else {
         uint8_t rm = op->modrm & 7;
         uint32_t dest;
         if constexpr (AddrMode == AddrModeSpec::ModReg) {
-            dest = GetReg(state, rm);
+            dest = gpr.GetReg(state, rm);
         } else {
-            auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+            auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
             if (!dest_res) return LogicFlow::RestartMemoryOp;
             dest = *dest_res;
         }
 
-        uint32_t src = GetReg(state, (op->modrm >> 3) & 7);
+        uint32_t src = gpr.GetReg(state, (op->modrm >> 3) & 7);
         uint32_t res = AluAdd<uint32_t, UpdateFlags>(state, flags_cache, dest, src);
 
         if constexpr (AddrMode == AddrModeSpec::ModReg) {
-            SetReg(state, rm, res);
+            gpr.SetReg(state, rm, res);
         } else {
-            if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
+            if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, gpr, op, res, utlb)) return LogicFlow::RetryMemoryOp;
         }
     }
     return LogicFlow::Continue;
@@ -92,19 +92,18 @@ FORCE_INLINE LogicFlow OpAdd_EvGv_Internal(LogicFuncParams) {
 template <bool UpdateFlags>
 FORCE_INLINE LogicFlow OpAdd_GbEb_Internal(LogicFuncParams) {
     // 02: ADD r8, r/m8
-    auto src_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
     uint8_t src = *src_res;
 
     uint8_t reg = (op->modrm >> 3) & 7;
-    uint8_t dest = GetReg8(state, reg);
+    uint8_t dest = gpr.GetReg8(state, reg);
     uint8_t res = AluAdd<uint8_t, UpdateFlags>(state, flags_cache, dest, src);
 
-    uint32_t* rptr = GetRegPtr(state, reg & 3);
     if (reg < 4)
-        *rptr = (*rptr & 0xFFFFFF00) | res;
+        gpr.SetReg(state, reg & 3, (gpr.GetReg(state, reg & 3) & 0xFFFFFF00) | res);
     else
-        *rptr = (*rptr & 0xFFFF00FF) | (res << 8);
+        gpr.SetReg(state, reg & 3, (gpr.GetReg(state, reg & 3) & 0xFFFF00FF) | (res << 8));
     return LogicFlow::Continue;
 }
 
@@ -113,21 +112,21 @@ FORCE_INLINE LogicFlow OpAdd_GvEv_Internal(LogicFuncParams) {
     // 03: ADD r16/32, r/m16/32
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
-        auto src_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        auto src_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         uint16_t src = *src_res;
 
-        uint16_t dest = GetReg(state, reg) & 0xFFFF;
+        uint16_t dest = gpr.GetReg(state, reg) & 0xFFFF;
         uint16_t res = AluAdd<uint16_t, UpdateFlags>(state, flags_cache, dest, src);
-        SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | res);
+        gpr.SetReg(state, reg, (gpr.GetReg(state, reg) & 0xFFFF0000) | res);
     } else {
-        auto src_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        auto src_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         uint32_t src = *src_res;
 
-        uint32_t dest = GetReg(state, reg);
+        uint32_t dest = gpr.GetReg(state, reg);
         uint32_t res = AluAdd<uint32_t, UpdateFlags>(state, flags_cache, dest, src);
-        SetReg(state, reg, res);
+        gpr.SetReg(state, reg, res);
     }
     return LogicFlow::Continue;
 }
@@ -135,12 +134,12 @@ FORCE_INLINE LogicFlow OpAdd_GvEv_Internal(LogicFuncParams) {
 template <bool UpdateFlags>
 FORCE_INLINE LogicFlow OpAdc_EbGb_Internal(LogicFuncParams) {
     // 10: ADC r/m8, r8
-    auto dest_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
+    auto dest_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!dest_res) return LogicFlow::RestartMemoryOp;
     uint8_t dest = *dest_res;
 
-    uint8_t src = GetReg8(state, (op->modrm >> 3) & 7);
-    return ExecuteCarryRmw<CarryRmwKind::Adc, uint8_t, UpdateFlags>(state, op, dest, src, utlb, flags_cache);
+    uint8_t src = gpr.GetReg8(state, (op->modrm >> 3) & 7);
+    return ExecuteCarryRmw<CarryRmwKind::Adc, uint8_t, UpdateFlags>(state, gpr, op, dest, src, utlb, flags_cache);
 }
 
 template <bool UpdateFlags>
@@ -148,38 +147,37 @@ FORCE_INLINE LogicFlow OpAdc_EvGv_Internal(LogicFuncParams) {
     // 11: ADC r/m16/32, r16/32
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
-        auto dest_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        auto dest_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
         if (!dest_res) return LogicFlow::RestartMemoryOp;
         uint16_t dest = *dest_res;
 
-        uint16_t src = GetReg(state, reg) & 0xFFFF;
-        return ExecuteCarryRmw<CarryRmwKind::Adc, uint16_t, UpdateFlags>(state, op, dest, src, utlb, flags_cache);
+        uint16_t src = gpr.GetReg(state, reg) & 0xFFFF;
+        return ExecuteCarryRmw<CarryRmwKind::Adc, uint16_t, UpdateFlags>(state, gpr, op, dest, src, utlb, flags_cache);
     } else {
-        auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
         if (!dest_res) return LogicFlow::RestartMemoryOp;
         uint32_t dest = *dest_res;
 
-        uint32_t src = GetReg(state, reg);
-        return ExecuteCarryRmw<CarryRmwKind::Adc, uint32_t, UpdateFlags>(state, op, dest, src, utlb, flags_cache);
+        uint32_t src = gpr.GetReg(state, reg);
+        return ExecuteCarryRmw<CarryRmwKind::Adc, uint32_t, UpdateFlags>(state, gpr, op, dest, src, utlb, flags_cache);
     }
 }
 
 template <bool UpdateFlags>
 FORCE_INLINE LogicFlow OpAdc_GbEb_Internal(LogicFuncParams) {
     // 12: ADC r8, r/m8
-    auto src_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
     uint8_t src = *src_res;
     uint8_t reg = (op->modrm >> 3) & 7;
-    uint8_t dest = GetReg8(state, reg);
+    uint8_t dest = gpr.GetReg8(state, reg);
     uint8_t res = AluAdc<uint8_t, UpdateFlags>(state, flags_cache, dest, src);
 
     // Write back to reg8
-    uint32_t* rptr = GetRegPtr(state, reg & 3);
     if (reg < 4)
-        *rptr = (*rptr & 0xFFFFFF00) | res;
+        gpr.SetReg(state, reg & 3, (gpr.GetReg(state, reg & 3) & 0xFFFFFF00) | res);
     else
-        *rptr = (*rptr & 0xFFFF00FF) | (res << 8);
+        gpr.SetReg(state, reg & 3, (gpr.GetReg(state, reg & 3) & 0xFFFF00FF) | (res << 8));
     return LogicFlow::Continue;
 }
 
@@ -188,21 +186,21 @@ FORCE_INLINE LogicFlow OpAdc_GvEv_Internal(LogicFuncParams) {
     // 13: ADC r16/32, r/m16/32
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
-        auto src_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        auto src_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         uint16_t src = *src_res;
 
-        uint16_t dest = GetReg(state, reg) & 0xFFFF;
+        uint16_t dest = gpr.GetReg(state, reg) & 0xFFFF;
         uint16_t res = AluAdc<uint16_t, UpdateFlags>(state, flags_cache, dest, src);
-        SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | res);
+        gpr.SetReg(state, reg, (gpr.GetReg(state, reg) & 0xFFFF0000) | res);
     } else {
-        auto src_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        auto src_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         uint32_t src = *src_res;
 
-        uint32_t dest = GetReg(state, reg);
+        uint32_t dest = gpr.GetReg(state, reg);
         uint32_t res = AluAdc<uint32_t, UpdateFlags>(state, flags_cache, dest, src);
-        SetReg(state, reg, res);
+        gpr.SetReg(state, reg, res);
     }
     return LogicFlow::Continue;
 }
@@ -218,40 +216,40 @@ FORCE_INLINE LogicFlow OpSub_EvGv_Internal(LogicFuncParams) {
         uint8_t rm = op->modrm & 7;
         uint16_t dest;
         if constexpr (AddrMode == AddrModeSpec::ModReg) {
-            dest = static_cast<uint16_t>(GetReg(state, rm));
+            dest = static_cast<uint16_t>(gpr.GetReg(state, rm));
         } else {
-            auto dest_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+            auto dest_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
             if (!dest_res) return LogicFlow::RestartMemoryOp;
             dest = *dest_res;
         }
 
-        uint16_t src = GetReg(state, reg) & 0xFFFF;
+        uint16_t src = gpr.GetReg(state, reg) & 0xFFFF;
         uint16_t res = AluSub<uint16_t, UpdateFlags>(state, flags_cache, dest, src);
 
         if constexpr (AddrMode == AddrModeSpec::ModReg) {
-            uint32_t reg_value = GetReg(state, rm);
-            SetReg(state, rm, (reg_value & 0xFFFF0000u) | res);
+            uint32_t reg_value = gpr.GetReg(state, rm);
+            gpr.SetReg(state, rm, (reg_value & 0xFFFF0000u) | res);
         } else {
-            if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
+            if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, gpr, op, res, utlb)) return LogicFlow::RetryMemoryOp;
         }
     } else {
         uint8_t rm = op->modrm & 7;
         uint32_t dest;
         if constexpr (AddrMode == AddrModeSpec::ModReg) {
-            dest = GetReg(state, rm);
+            dest = gpr.GetReg(state, rm);
         } else {
-            auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+            auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
             if (!dest_res) return LogicFlow::RestartMemoryOp;
             dest = *dest_res;
         }
 
-        uint32_t src = GetReg(state, reg);
+        uint32_t src = gpr.GetReg(state, reg);
         uint32_t res = AluSub<uint32_t, UpdateFlags>(state, flags_cache, dest, src);
 
         if constexpr (AddrMode == AddrModeSpec::ModReg) {
-            SetReg(state, rm, res);
+            gpr.SetReg(state, rm, res);
         } else {
-            if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
+            if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, gpr, op, res, utlb)) return LogicFlow::RetryMemoryOp;
         }
     }
     return LogicFlow::Continue;
@@ -260,14 +258,14 @@ FORCE_INLINE LogicFlow OpSub_EvGv_Internal(LogicFuncParams) {
 template <bool UpdateFlags>
 FORCE_INLINE LogicFlow OpAnd_EbGb_Internal(LogicFuncParams) {
     // 20: AND r/m8, r8
-    auto dest_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
+    auto dest_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!dest_res) return LogicFlow::RestartMemoryOp;
     uint8_t dest = *dest_res;
 
-    uint8_t src = GetReg8(state, (op->modrm >> 3) & 7);
+    uint8_t src = gpr.GetReg8(state, (op->modrm >> 3) & 7);
     uint8_t res = AluAnd<uint8_t, UpdateFlags>(state, flags_cache, dest, src);
 
-    if (!WriteModRM<uint8_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
+    if (!WriteModRM<uint8_t, OpOnTLBMiss::Retry>(state, gpr, op, res, utlb)) return LogicFlow::RetryMemoryOp;
     return LogicFlow::Continue;
 }
 
@@ -282,40 +280,40 @@ FORCE_INLINE LogicFlow OpAnd_EvGv_Internal(LogicFuncParams) {
         uint8_t rm = op->modrm & 7;
         uint16_t dest;
         if constexpr (AddrMode == AddrModeSpec::ModReg) {
-            dest = static_cast<uint16_t>(GetReg(state, rm));
+            dest = static_cast<uint16_t>(gpr.GetReg(state, rm));
         } else {
-            auto dest_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+            auto dest_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
             if (!dest_res) return LogicFlow::RestartMemoryOp;
             dest = *dest_res;
         }
 
-        uint16_t src = GetReg(state, reg) & 0xFFFF;
+        uint16_t src = gpr.GetReg(state, reg) & 0xFFFF;
         uint16_t res = AluAnd<uint16_t, UpdateFlags>(state, flags_cache, dest, src);
 
         if constexpr (AddrMode == AddrModeSpec::ModReg) {
-            uint32_t reg_value = GetReg(state, rm);
-            SetReg(state, rm, (reg_value & 0xFFFF0000u) | res);
+            uint32_t reg_value = gpr.GetReg(state, rm);
+            gpr.SetReg(state, rm, (reg_value & 0xFFFF0000u) | res);
         } else {
-            if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
+            if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, gpr, op, res, utlb)) return LogicFlow::RetryMemoryOp;
         }
     } else {
         uint8_t rm = op->modrm & 7;
         uint32_t dest;
         if constexpr (AddrMode == AddrModeSpec::ModReg) {
-            dest = GetReg(state, rm);
+            dest = gpr.GetReg(state, rm);
         } else {
-            auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+            auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
             if (!dest_res) return LogicFlow::RestartMemoryOp;
             dest = *dest_res;
         }
 
-        uint32_t src = GetReg(state, reg);
+        uint32_t src = gpr.GetReg(state, reg);
         uint32_t res = AluAnd<uint32_t, UpdateFlags>(state, flags_cache, dest, src);
 
         if constexpr (AddrMode == AddrModeSpec::ModReg) {
-            SetReg(state, rm, res);
+            gpr.SetReg(state, rm, res);
         } else {
-            if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
+            if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, gpr, op, res, utlb)) return LogicFlow::RetryMemoryOp;
         }
     }
     return LogicFlow::Continue;
@@ -324,19 +322,18 @@ FORCE_INLINE LogicFlow OpAnd_EvGv_Internal(LogicFuncParams) {
 template <bool UpdateFlags>
 FORCE_INLINE LogicFlow OpAnd_GbEb_Internal(LogicFuncParams) {
     // 22: AND r8, r/m8
-    auto src_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
     uint8_t src = *src_res;
 
     uint8_t reg = (op->modrm >> 3) & 7;
-    uint8_t dest = GetReg8(state, reg);
+    uint8_t dest = gpr.GetReg8(state, reg);
     uint8_t res = AluAnd<uint8_t, UpdateFlags>(state, flags_cache, dest, src);
 
-    uint32_t* rptr = GetRegPtr(state, reg & 3);
     if (reg < 4)
-        *rptr = (*rptr & 0xFFFFFF00) | res;
+        gpr.SetReg(state, reg & 3, (gpr.GetReg(state, reg & 3) & 0xFFFFFF00) | res);
     else
-        *rptr = (*rptr & 0xFFFF00FF) | (res << 8);
+        gpr.SetReg(state, reg & 3, (gpr.GetReg(state, reg & 3) & 0xFFFF00FF) | (res << 8));
     return LogicFlow::Continue;
 }
 
@@ -345,21 +342,21 @@ FORCE_INLINE LogicFlow OpAnd_GvEv_Internal(LogicFuncParams) {
     // 23: AND r16/32, r/m16/32
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
-        auto src_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        auto src_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         uint16_t src = *src_res;
 
-        uint16_t dest = GetReg(state, reg) & 0xFFFF;
+        uint16_t dest = gpr.GetReg(state, reg) & 0xFFFF;
         uint16_t res = AluAnd<uint16_t, UpdateFlags>(state, flags_cache, dest, src);
-        SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | res);
+        gpr.SetReg(state, reg, (gpr.GetReg(state, reg) & 0xFFFF0000) | res);
     } else {
-        auto src_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        auto src_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         uint32_t src = *src_res;
 
-        uint32_t dest = GetReg(state, reg);
+        uint32_t dest = gpr.GetReg(state, reg);
         uint32_t res = AluAnd<uint32_t, UpdateFlags>(state, flags_cache, dest, src);
-        SetReg(state, reg, res);
+        gpr.SetReg(state, reg, res);
     }
     return LogicFlow::Continue;
 }
@@ -375,40 +372,40 @@ FORCE_INLINE LogicFlow OpOr_EvGv_Internal(LogicFuncParams) {
         uint8_t rm = op->modrm & 7;
         uint16_t dest;
         if constexpr (AddrMode == AddrModeSpec::ModReg) {
-            dest = static_cast<uint16_t>(GetReg(state, rm));
+            dest = static_cast<uint16_t>(gpr.GetReg(state, rm));
         } else {
-            auto dest_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+            auto dest_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
             if (!dest_res) return LogicFlow::RestartMemoryOp;
             dest = *dest_res;
         }
 
-        uint16_t src = GetReg(state, reg) & 0xFFFF;
+        uint16_t src = gpr.GetReg(state, reg) & 0xFFFF;
         uint16_t res = AluOr<uint16_t, UpdateFlags>(state, flags_cache, dest, src);
 
         if constexpr (AddrMode == AddrModeSpec::ModReg) {
-            uint32_t reg_value = GetReg(state, rm);
-            SetReg(state, rm, (reg_value & 0xFFFF0000u) | res);
+            uint32_t reg_value = gpr.GetReg(state, rm);
+            gpr.SetReg(state, rm, (reg_value & 0xFFFF0000u) | res);
         } else {
-            if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
+            if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, gpr, op, res, utlb)) return LogicFlow::RetryMemoryOp;
         }
     } else {
         uint8_t rm = op->modrm & 7;
         uint32_t dest;
         if constexpr (AddrMode == AddrModeSpec::ModReg) {
-            dest = GetReg(state, rm);
+            dest = gpr.GetReg(state, rm);
         } else {
-            auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+            auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
             if (!dest_res) return LogicFlow::RestartMemoryOp;
             dest = *dest_res;
         }
 
-        uint32_t src = GetReg(state, reg);
+        uint32_t src = gpr.GetReg(state, reg);
         uint32_t res = AluOr<uint32_t, UpdateFlags>(state, flags_cache, dest, src);
 
         if constexpr (AddrMode == AddrModeSpec::ModReg) {
-            SetReg(state, rm, res);
+            gpr.SetReg(state, rm, res);
         } else {
-            if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
+            if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, gpr, op, res, utlb)) return LogicFlow::RetryMemoryOp;
         }
     }
     return LogicFlow::Continue;
@@ -425,40 +422,40 @@ FORCE_INLINE LogicFlow OpXor_EvGv_Internal(LogicFuncParams) {
         uint8_t rm = op->modrm & 7;
         uint16_t dest;
         if constexpr (AddrMode == AddrModeSpec::ModReg) {
-            dest = static_cast<uint16_t>(GetReg(state, rm));
+            dest = static_cast<uint16_t>(gpr.GetReg(state, rm));
         } else {
-            auto dest_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+            auto dest_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
             if (!dest_res) return LogicFlow::RestartMemoryOp;
             dest = *dest_res;
         }
 
-        uint16_t src = GetReg(state, reg) & 0xFFFF;
+        uint16_t src = gpr.GetReg(state, reg) & 0xFFFF;
         uint16_t res = AluXor<uint16_t, UpdateFlags>(state, flags_cache, dest, src);
 
         if constexpr (AddrMode == AddrModeSpec::ModReg) {
-            uint32_t reg_value = GetReg(state, rm);
-            SetReg(state, rm, (reg_value & 0xFFFF0000u) | res);
+            uint32_t reg_value = gpr.GetReg(state, rm);
+            gpr.SetReg(state, rm, (reg_value & 0xFFFF0000u) | res);
         } else {
-            if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
+            if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, gpr, op, res, utlb)) return LogicFlow::RetryMemoryOp;
         }
     } else {
         uint8_t rm = op->modrm & 7;
         uint32_t dest;
         if constexpr (AddrMode == AddrModeSpec::ModReg) {
-            dest = GetReg(state, rm);
+            dest = gpr.GetReg(state, rm);
         } else {
-            auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+            auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
             if (!dest_res) return LogicFlow::RestartMemoryOp;
             dest = *dest_res;
         }
 
-        uint32_t src = GetReg(state, reg);
+        uint32_t src = gpr.GetReg(state, reg);
         uint32_t res = AluXor<uint32_t, UpdateFlags>(state, flags_cache, dest, src);
 
         if constexpr (AddrMode == AddrModeSpec::ModReg) {
-            SetReg(state, rm, res);
+            gpr.SetReg(state, rm, res);
         } else {
-            if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
+            if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, gpr, op, res, utlb)) return LogicFlow::RetryMemoryOp;
         }
     }
     return LogicFlow::Continue;
@@ -473,15 +470,15 @@ FORCE_INLINE LogicFlow OpInc_Reg_Internal(LogicFuncParams) {
     bool old_cf = ReadCF(flags_cache);
 
     if (op->prefixes.flags.opsize) {
-        uint16_t val = (uint16_t)GetReg(state, reg);
+        uint16_t val = (uint16_t)gpr.GetReg(state, reg);
         uint16_t res = AluAdd<uint16_t, UpdateFlags>(state, flags_cache, val, 1);
         if constexpr (UpdateFlags) AssignCF(flags_cache, old_cf);
-        SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | res);
+        gpr.SetReg(state, reg, (gpr.GetReg(state, reg) & 0xFFFF0000) | res);
     } else {
-        uint32_t val = GetReg(state, reg);
+        uint32_t val = gpr.GetReg(state, reg);
         uint32_t res = AluAdd<uint32_t, UpdateFlags>(state, flags_cache, val, 1U);
         if constexpr (UpdateFlags) AssignCF(flags_cache, old_cf);
-        SetReg(state, reg, res);
+        gpr.SetReg(state, reg, res);
     }
     return LogicFlow::Continue;
 }
@@ -495,15 +492,15 @@ FORCE_INLINE LogicFlow OpDec_Reg_Internal(LogicFuncParams) {
     bool old_cf = ReadCF(flags_cache);
 
     if (op->prefixes.flags.opsize) {
-        uint16_t val = (uint16_t)GetReg(state, reg);
+        uint16_t val = (uint16_t)gpr.GetReg(state, reg);
         uint16_t res = AluSub<uint16_t, UpdateFlags>(state, flags_cache, val, 1);
         if constexpr (UpdateFlags) AssignCF(flags_cache, old_cf);
-        SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | res);
+        gpr.SetReg(state, reg, (gpr.GetReg(state, reg) & 0xFFFF0000) | res);
     } else {
-        uint32_t val = GetReg(state, reg);
+        uint32_t val = gpr.GetReg(state, reg);
         uint32_t res = AluSub<uint32_t, UpdateFlags>(state, flags_cache, val, 1U);
         if constexpr (UpdateFlags) AssignCF(flags_cache, old_cf);
-        SetReg(state, reg, res);
+        gpr.SetReg(state, reg, res);
     }
     return LogicFlow::Continue;
 }
@@ -511,14 +508,14 @@ FORCE_INLINE LogicFlow OpDec_Reg_Internal(LogicFuncParams) {
 template <bool UpdateFlags>
 FORCE_INLINE LogicFlow OpAdd_AlImm_Internal(LogicFuncParams) {
     // 04: ADD AL, imm8
-    uint8_t dest = GetReg8(state, EAX);  // AL is Reg 0 low byte
+    uint8_t dest = gpr.GetReg8(state, EAX);  // AL is Reg 0 low byte
     uint8_t src = (uint8_t)imm;
     uint8_t res = AluAdd<uint8_t, UpdateFlags>(state, flags_cache, dest, src);
 
     // Write back to AL
-    uint32_t val = GetReg(state, EAX);
+    uint32_t val = gpr.GetReg(state, EAX);
     val = (val & 0xFFFFFF00) | res;
-    SetReg(state, EAX, val);
+    gpr.SetReg(state, EAX, val);
     return LogicFlow::Continue;
 }
 
@@ -527,19 +524,19 @@ FORCE_INLINE LogicFlow OpAdd_EaxImm_Internal(LogicFuncParams) {
     // 05: ADD EAX, imm32
     if (op->prefixes.flags.opsize) {
         // ADD AX, imm16
-        uint16_t dest = GetReg(state, EAX) & 0xFFFF;
+        uint16_t dest = gpr.GetReg(state, EAX) & 0xFFFF;
         uint16_t src = (uint16_t)imm;
         uint16_t res = AluAdd<uint16_t, UpdateFlags>(state, flags_cache, dest, src);
 
-        uint32_t val = GetReg(state, EAX);
+        uint32_t val = gpr.GetReg(state, EAX);
         val = (val & 0xFFFF0000) | res;
-        SetReg(state, EAX, val);
+        gpr.SetReg(state, EAX, val);
     } else {
         // ADD EAX, imm32
-        uint32_t dest = GetReg(state, EAX);
+        uint32_t dest = gpr.GetReg(state, EAX);
         uint32_t src = imm;
         uint32_t res = AluAdd<uint32_t, UpdateFlags>(state, flags_cache, dest, src);
-        SetReg(state, EAX, res);
+        gpr.SetReg(state, EAX, res);
     }
     return LogicFlow::Continue;
 }
@@ -547,33 +544,32 @@ FORCE_INLINE LogicFlow OpAdd_EaxImm_Internal(LogicFuncParams) {
 template <bool UpdateFlags>
 FORCE_INLINE LogicFlow OpOr_EbGb_Internal(LogicFuncParams) {
     // 08: OR r/m8, r8
-    auto dest_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
+    auto dest_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!dest_res) return LogicFlow::RestartMemoryOp;
     uint8_t dest = *dest_res;
 
-    uint8_t src = GetReg8(state, (op->modrm >> 3) & 7);
+    uint8_t src = gpr.GetReg8(state, (op->modrm >> 3) & 7);
     uint8_t res = AluOr<uint8_t, UpdateFlags>(state, flags_cache, dest, src);
 
-    if (!WriteModRM<uint8_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
+    if (!WriteModRM<uint8_t, OpOnTLBMiss::Retry>(state, gpr, op, res, utlb)) return LogicFlow::RetryMemoryOp;
     return LogicFlow::Continue;
 }
 
 template <bool UpdateFlags>
 FORCE_INLINE LogicFlow OpOr_GbEb_Internal(LogicFuncParams) {
     // 0A: OR r8, r/m8
-    auto src_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
     uint8_t src = *src_res;
 
     uint8_t reg = (op->modrm >> 3) & 7;
-    uint8_t dest = GetReg8(state, reg);
+    uint8_t dest = gpr.GetReg8(state, reg);
     uint8_t res = AluOr<uint8_t, UpdateFlags>(state, flags_cache, dest, src);
 
-    uint32_t* rptr = GetRegPtr(state, reg & 3);
     if (reg < 4)
-        *rptr = (*rptr & 0xFFFFFF00) | res;
+        gpr.SetReg(state, reg & 3, (gpr.GetReg(state, reg & 3) & 0xFFFFFF00) | res);
     else
-        *rptr = (*rptr & 0xFFFF00FF) | (res << 8);
+        gpr.SetReg(state, reg & 3, (gpr.GetReg(state, reg & 3) & 0xFFFF00FF) | (res << 8));
     return LogicFlow::Continue;
 }
 
@@ -582,21 +578,21 @@ FORCE_INLINE LogicFlow OpOr_GvEv_Internal(LogicFuncParams) {
     // 0B: OR r16/32, r/m16/32
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
-        auto src_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        auto src_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         uint16_t src = *src_res;
 
-        uint16_t dest = GetReg(state, reg) & 0xFFFF;
+        uint16_t dest = gpr.GetReg(state, reg) & 0xFFFF;
         uint16_t res = AluOr<uint16_t, UpdateFlags>(state, flags_cache, dest, src);
-        SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | res);
+        gpr.SetReg(state, reg, (gpr.GetReg(state, reg) & 0xFFFF0000) | res);
     } else {
-        auto src_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        auto src_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         uint32_t src = *src_res;
 
-        uint32_t dest = GetReg(state, reg);
+        uint32_t dest = gpr.GetReg(state, reg);
         uint32_t res = AluOr<uint32_t, UpdateFlags>(state, flags_cache, dest, src);
-        SetReg(state, reg, res);
+        gpr.SetReg(state, reg, res);
     }
     return LogicFlow::Continue;
 }
@@ -604,13 +600,13 @@ FORCE_INLINE LogicFlow OpOr_GvEv_Internal(LogicFuncParams) {
 template <bool UpdateFlags>
 FORCE_INLINE LogicFlow OpOr_AlImm_Internal(LogicFuncParams) {
     // 0C: OR AL, imm8
-    uint8_t dest = GetReg8(state, EAX);
+    uint8_t dest = gpr.GetReg8(state, EAX);
     uint8_t src = (uint8_t)imm;
     uint8_t res = AluOr<uint8_t, UpdateFlags>(state, flags_cache, dest, src);
 
-    uint32_t val = GetReg(state, EAX);
+    uint32_t val = gpr.GetReg(state, EAX);
     val = (val & 0xFFFFFF00) | res;
-    SetReg(state, EAX, val);
+    gpr.SetReg(state, EAX, val);
     return LogicFlow::Continue;
 }
 
@@ -618,17 +614,17 @@ template <bool UpdateFlags>
 FORCE_INLINE LogicFlow OpOr_EaxImm_Internal(LogicFuncParams) {
     // 0D: OR EAX, imm32
     if (op->prefixes.flags.opsize) {
-        uint16_t dest = GetReg(state, EAX) & 0xFFFF;
+        uint16_t dest = gpr.GetReg(state, EAX) & 0xFFFF;
         uint16_t src = (uint16_t)imm;
         uint16_t res = AluOr<uint16_t, UpdateFlags>(state, flags_cache, dest, src);
-        uint32_t val = GetReg(state, EAX);
+        uint32_t val = gpr.GetReg(state, EAX);
         val = (val & 0xFFFF0000) | res;
-        SetReg(state, EAX, val);
+        gpr.SetReg(state, EAX, val);
     } else {
-        uint32_t dest = GetReg(state, EAX);
+        uint32_t dest = gpr.GetReg(state, EAX);
         uint32_t src = imm;
         uint32_t res = AluOr<uint32_t, UpdateFlags>(state, flags_cache, dest, src);
-        SetReg(state, EAX, res);
+        gpr.SetReg(state, EAX, res);
     }
     return LogicFlow::Continue;
 }
@@ -636,13 +632,13 @@ FORCE_INLINE LogicFlow OpOr_EaxImm_Internal(LogicFuncParams) {
 template <bool UpdateFlags>
 FORCE_INLINE LogicFlow OpAdc_AlImm_Internal(LogicFuncParams) {
     // 14: ADC AL, imm8
-    uint8_t dest = GetReg8(state, EAX);
+    uint8_t dest = gpr.GetReg8(state, EAX);
     uint8_t src = (uint8_t)imm;
     uint8_t res = AluAdc<uint8_t, UpdateFlags>(state, flags_cache, dest, src);
 
-    uint32_t val = GetReg(state, EAX);
+    uint32_t val = gpr.GetReg(state, EAX);
     val = (val & 0xFFFFFF00) | res;
-    SetReg(state, EAX, val);
+    gpr.SetReg(state, EAX, val);
     return LogicFlow::Continue;
 }
 
@@ -650,17 +646,17 @@ template <bool UpdateFlags>
 FORCE_INLINE LogicFlow OpAdc_EaxImm_Internal(LogicFuncParams) {
     // 15: ADC EAX, imm32
     if (op->prefixes.flags.opsize) {
-        uint16_t dest = GetReg(state, EAX) & 0xFFFF;
+        uint16_t dest = gpr.GetReg(state, EAX) & 0xFFFF;
         uint16_t src = (uint16_t)imm;
         uint16_t res = AluAdc<uint16_t, UpdateFlags>(state, flags_cache, dest, src);
-        uint32_t val = GetReg(state, EAX);
+        uint32_t val = gpr.GetReg(state, EAX);
         val = (val & 0xFFFF0000) | res;
-        SetReg(state, EAX, val);
+        gpr.SetReg(state, EAX, val);
     } else {
-        uint32_t dest = GetReg(state, EAX);
+        uint32_t dest = gpr.GetReg(state, EAX);
         uint32_t src = imm;
         uint32_t res = AluAdc<uint32_t, UpdateFlags>(state, flags_cache, dest, src);
-        SetReg(state, EAX, res);
+        gpr.SetReg(state, EAX, res);
     }
     return LogicFlow::Continue;
 }
@@ -668,12 +664,12 @@ FORCE_INLINE LogicFlow OpAdc_EaxImm_Internal(LogicFuncParams) {
 template <bool UpdateFlags>
 FORCE_INLINE LogicFlow OpSbb_EbGb_Internal(LogicFuncParams) {
     // 18: SBB r/m8, r8
-    auto dest_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
+    auto dest_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!dest_res) return LogicFlow::RestartMemoryOp;
     uint8_t dest = *dest_res;
 
-    uint8_t src = GetReg8(state, (op->modrm >> 3) & 7);
-    return ExecuteCarryRmw<CarryRmwKind::Sbb, uint8_t, UpdateFlags>(state, op, dest, src, utlb, flags_cache);
+    uint8_t src = gpr.GetReg8(state, (op->modrm >> 3) & 7);
+    return ExecuteCarryRmw<CarryRmwKind::Sbb, uint8_t, UpdateFlags>(state, gpr, op, dest, src, utlb, flags_cache);
 }
 
 template <bool UpdateFlags>
@@ -681,38 +677,37 @@ FORCE_INLINE LogicFlow OpSbb_EvGv_Internal(LogicFuncParams) {
     // 19: SBB r/m16/32, r16/32
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
-        auto dest_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        auto dest_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
         if (!dest_res) return LogicFlow::RestartMemoryOp;
         uint16_t dest = *dest_res;
 
-        uint16_t src = GetReg(state, reg) & 0xFFFF;
-        return ExecuteCarryRmw<CarryRmwKind::Sbb, uint16_t, UpdateFlags>(state, op, dest, src, utlb, flags_cache);
+        uint16_t src = gpr.GetReg(state, reg) & 0xFFFF;
+        return ExecuteCarryRmw<CarryRmwKind::Sbb, uint16_t, UpdateFlags>(state, gpr, op, dest, src, utlb, flags_cache);
     } else {
-        auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
         if (!dest_res) return LogicFlow::RestartMemoryOp;
         uint32_t dest = *dest_res;
 
-        uint32_t src = GetReg(state, reg);
-        return ExecuteCarryRmw<CarryRmwKind::Sbb, uint32_t, UpdateFlags>(state, op, dest, src, utlb, flags_cache);
+        uint32_t src = gpr.GetReg(state, reg);
+        return ExecuteCarryRmw<CarryRmwKind::Sbb, uint32_t, UpdateFlags>(state, gpr, op, dest, src, utlb, flags_cache);
     }
 }
 
 template <bool UpdateFlags>
 FORCE_INLINE LogicFlow OpSbb_GbEb_Internal(LogicFuncParams) {
     // 1A: SBB r8, r/m8
-    auto src_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
     uint8_t src = *src_res;
 
     uint8_t reg = (op->modrm >> 3) & 7;
-    uint8_t dest = GetReg8(state, reg);
+    uint8_t dest = gpr.GetReg8(state, reg);
     uint8_t res = AluSbb<uint8_t, UpdateFlags>(state, flags_cache, dest, src);
 
-    uint32_t* rptr = GetRegPtr(state, reg & 3);
     if (reg < 4)
-        *rptr = (*rptr & 0xFFFFFF00) | res;
+        gpr.SetReg(state, reg & 3, (gpr.GetReg(state, reg & 3) & 0xFFFFFF00) | res);
     else
-        *rptr = (*rptr & 0xFFFF00FF) | (res << 8);
+        gpr.SetReg(state, reg & 3, (gpr.GetReg(state, reg & 3) & 0xFFFF00FF) | (res << 8));
     return LogicFlow::Continue;
 }
 
@@ -721,21 +716,21 @@ FORCE_INLINE LogicFlow OpSbb_GvEv_Internal(LogicFuncParams) {
     // 1B: SBB r16/32, r/m16/32
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
-        auto src_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        auto src_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         uint16_t src = *src_res;
 
-        uint16_t dest = GetReg(state, reg) & 0xFFFF;
+        uint16_t dest = gpr.GetReg(state, reg) & 0xFFFF;
         uint16_t res = AluSbb<uint16_t, UpdateFlags>(state, flags_cache, dest, src);
-        SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | res);
+        gpr.SetReg(state, reg, (gpr.GetReg(state, reg) & 0xFFFF0000) | res);
     } else {
-        auto src_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        auto src_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         uint32_t src = *src_res;
 
-        uint32_t dest = GetReg(state, reg);
+        uint32_t dest = gpr.GetReg(state, reg);
         uint32_t res = AluSbb<uint32_t, UpdateFlags>(state, flags_cache, dest, src);
-        SetReg(state, reg, res);
+        gpr.SetReg(state, reg, res);
     }
     return LogicFlow::Continue;
 }
@@ -743,12 +738,12 @@ FORCE_INLINE LogicFlow OpSbb_GvEv_Internal(LogicFuncParams) {
 template <bool UpdateFlags>
 FORCE_INLINE LogicFlow OpSbb_AlImm_Internal(LogicFuncParams) {
     // 1C: SBB AL, imm8
-    uint8_t dest = GetReg8(state, EAX);
+    uint8_t dest = gpr.GetReg8(state, EAX);
     uint8_t src = (uint8_t)imm;
     uint8_t res = AluSbb<uint8_t, UpdateFlags>(state, flags_cache, dest, src);
-    uint32_t val = GetReg(state, EAX);
+    uint32_t val = gpr.GetReg(state, EAX);
     val = (val & 0xFFFFFF00) | res;
-    SetReg(state, EAX, val);
+    gpr.SetReg(state, EAX, val);
     return LogicFlow::Continue;
 }
 
@@ -756,17 +751,17 @@ template <bool UpdateFlags>
 FORCE_INLINE LogicFlow OpSbb_EaxImm_Internal(LogicFuncParams) {
     // 1D: SBB EAX, imm32
     if (op->prefixes.flags.opsize) {
-        uint16_t dest = GetReg(state, EAX) & 0xFFFF;
+        uint16_t dest = gpr.GetReg(state, EAX) & 0xFFFF;
         uint16_t src = (uint16_t)imm;
         uint16_t res = AluSbb<uint16_t, UpdateFlags>(state, flags_cache, dest, src);
-        uint32_t val = GetReg(state, EAX);
+        uint32_t val = gpr.GetReg(state, EAX);
         val = (val & 0xFFFF0000) | res;
-        SetReg(state, EAX, val);
+        gpr.SetReg(state, EAX, val);
     } else {
-        uint32_t dest = GetReg(state, EAX);
+        uint32_t dest = gpr.GetReg(state, EAX);
         uint32_t src = imm;
         uint32_t res = AluSbb<uint32_t, UpdateFlags>(state, flags_cache, dest, src);
-        SetReg(state, EAX, res);
+        gpr.SetReg(state, EAX, res);
     }
     return LogicFlow::Continue;
 }
@@ -774,12 +769,12 @@ FORCE_INLINE LogicFlow OpSbb_EaxImm_Internal(LogicFuncParams) {
 template <bool UpdateFlags>
 FORCE_INLINE LogicFlow OpAnd_AlImm_Internal(LogicFuncParams) {
     // 24: AND AL, imm8
-    uint8_t dest = GetReg8(state, EAX);
+    uint8_t dest = gpr.GetReg8(state, EAX);
     uint8_t src = (uint8_t)imm;
     uint8_t res = AluAnd<uint8_t, UpdateFlags>(state, flags_cache, dest, src);
-    uint32_t val = GetReg(state, EAX);
+    uint32_t val = gpr.GetReg(state, EAX);
     val = (val & 0xFFFFFF00) | res;
-    SetReg(state, EAX, val);
+    gpr.SetReg(state, EAX, val);
     return LogicFlow::Continue;
 }
 
@@ -787,17 +782,17 @@ template <bool UpdateFlags>
 FORCE_INLINE LogicFlow OpAnd_EaxImm_Internal(LogicFuncParams) {
     // 25: AND EAX, imm32
     if (op->prefixes.flags.opsize) {
-        uint16_t dest = GetReg(state, EAX) & 0xFFFF;
+        uint16_t dest = gpr.GetReg(state, EAX) & 0xFFFF;
         uint16_t src = (uint16_t)imm;
         uint16_t res = AluAnd<uint16_t, UpdateFlags>(state, flags_cache, dest, src);
-        uint32_t val = GetReg(state, EAX);
+        uint32_t val = gpr.GetReg(state, EAX);
         val = (val & 0xFFFF0000) | res;
-        SetReg(state, EAX, val);
+        gpr.SetReg(state, EAX, val);
     } else {
-        uint32_t dest = GetReg(state, EAX);
+        uint32_t dest = gpr.GetReg(state, EAX);
         uint32_t src = imm;
         uint32_t res = AluAnd<uint32_t, UpdateFlags>(state, flags_cache, dest, src);
-        SetReg(state, EAX, res);
+        gpr.SetReg(state, EAX, res);
     }
     return LogicFlow::Continue;
 }
@@ -805,33 +800,32 @@ FORCE_INLINE LogicFlow OpAnd_EaxImm_Internal(LogicFuncParams) {
 template <bool UpdateFlags>
 FORCE_INLINE LogicFlow OpSub_EbGb_Internal(LogicFuncParams) {
     // 28: SUB r/m8, r8
-    auto dest_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
+    auto dest_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!dest_res) return LogicFlow::RestartMemoryOp;
     uint8_t dest = *dest_res;
 
-    uint8_t src = GetReg8(state, (op->modrm >> 3) & 7);
+    uint8_t src = gpr.GetReg8(state, (op->modrm >> 3) & 7);
     uint8_t res = AluSub<uint8_t, UpdateFlags>(state, flags_cache, dest, src);
 
-    if (!WriteModRM<uint8_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
+    if (!WriteModRM<uint8_t, OpOnTLBMiss::Retry>(state, gpr, op, res, utlb)) return LogicFlow::RetryMemoryOp;
     return LogicFlow::Continue;
 }
 
 template <bool UpdateFlags>
 FORCE_INLINE LogicFlow OpSub_GbEb_Internal(LogicFuncParams) {
     // 2A: SUB r8, r/m8
-    auto src_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
     uint8_t src = *src_res;
 
     uint8_t reg = (op->modrm >> 3) & 7;
-    uint8_t dest = GetReg8(state, reg);
+    uint8_t dest = gpr.GetReg8(state, reg);
     uint8_t res = AluSub<uint8_t, UpdateFlags>(state, flags_cache, dest, src);
 
-    uint32_t* rptr = GetRegPtr(state, reg & 3);
     if (reg < 4)
-        *rptr = (*rptr & 0xFFFFFF00) | res;
+        gpr.SetReg(state, reg & 3, (gpr.GetReg(state, reg & 3) & 0xFFFFFF00) | res);
     else
-        *rptr = (*rptr & 0xFFFF00FF) | (res << 8);
+        gpr.SetReg(state, reg & 3, (gpr.GetReg(state, reg & 3) & 0xFFFF00FF) | (res << 8));
     return LogicFlow::Continue;
 }
 
@@ -840,21 +834,21 @@ FORCE_INLINE LogicFlow OpSub_GvEv_Internal(LogicFuncParams) {
     // 2B: SUB r16/32, r/m16/32
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
-        auto src_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        auto src_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         uint16_t src = *src_res;
 
-        uint16_t dest = GetReg(state, reg) & 0xFFFF;
+        uint16_t dest = gpr.GetReg(state, reg) & 0xFFFF;
         uint16_t res = AluSub<uint16_t, UpdateFlags>(state, flags_cache, dest, src);
-        SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | res);
+        gpr.SetReg(state, reg, (gpr.GetReg(state, reg) & 0xFFFF0000) | res);
     } else {
-        auto src_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        auto src_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         uint32_t src = *src_res;
 
-        uint32_t dest = GetReg(state, reg);
+        uint32_t dest = gpr.GetReg(state, reg);
         uint32_t res = AluSub<uint32_t, UpdateFlags>(state, flags_cache, dest, src);
-        SetReg(state, reg, res);
+        gpr.SetReg(state, reg, res);
     }
     return LogicFlow::Continue;
 }
@@ -862,12 +856,12 @@ FORCE_INLINE LogicFlow OpSub_GvEv_Internal(LogicFuncParams) {
 template <bool UpdateFlags>
 FORCE_INLINE LogicFlow OpSub_AlImm_Internal(LogicFuncParams) {
     // 2C: SUB AL, imm8
-    uint8_t dest = GetReg8(state, EAX);
+    uint8_t dest = gpr.GetReg8(state, EAX);
     uint8_t src = (uint8_t)imm;
     uint8_t res = AluSub<uint8_t, UpdateFlags>(state, flags_cache, dest, src);
-    uint32_t val = GetReg(state, EAX);
+    uint32_t val = gpr.GetReg(state, EAX);
     val = (val & 0xFFFFFF00) | res;
-    SetReg(state, EAX, val);
+    gpr.SetReg(state, EAX, val);
     return LogicFlow::Continue;
 }
 
@@ -875,17 +869,17 @@ template <bool UpdateFlags>
 FORCE_INLINE LogicFlow OpSub_EaxImm_Internal(LogicFuncParams) {
     // 2D: SUB EAX, imm32
     if (op->prefixes.flags.opsize) {
-        uint16_t dest = GetReg(state, EAX) & 0xFFFF;
+        uint16_t dest = gpr.GetReg(state, EAX) & 0xFFFF;
         uint16_t src = (uint16_t)imm;
         uint16_t res = AluSub<uint16_t, UpdateFlags>(state, flags_cache, dest, src);
-        uint32_t val = GetReg(state, EAX);
+        uint32_t val = gpr.GetReg(state, EAX);
         val = (val & 0xFFFF0000) | res;
-        SetReg(state, EAX, val);
+        gpr.SetReg(state, EAX, val);
     } else {
-        uint32_t dest = GetReg(state, EAX);
+        uint32_t dest = gpr.GetReg(state, EAX);
         uint32_t src = imm;
         uint32_t res = AluSub<uint32_t, UpdateFlags>(state, flags_cache, dest, src);
-        SetReg(state, EAX, res);
+        gpr.SetReg(state, EAX, res);
     }
     return LogicFlow::Continue;
 }
@@ -893,32 +887,31 @@ FORCE_INLINE LogicFlow OpSub_EaxImm_Internal(LogicFuncParams) {
 template <bool UpdateFlags>
 FORCE_INLINE LogicFlow OpXor_EbGb_Internal(LogicFuncParams) {
     // 30: XOR r/m8, r8
-    auto dest_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
+    auto dest_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!dest_res) return LogicFlow::RestartMemoryOp;
     uint8_t dest = *dest_res;
 
-    uint8_t src = GetReg8(state, (op->modrm >> 3) & 7);
+    uint8_t src = gpr.GetReg8(state, (op->modrm >> 3) & 7);
     uint8_t res = AluXor<uint8_t, UpdateFlags>(state, flags_cache, dest, src);
 
-    if (!WriteModRM<uint8_t, OpOnTLBMiss::Retry>(state, op, res, utlb)) return LogicFlow::RetryMemoryOp;
+    if (!WriteModRM<uint8_t, OpOnTLBMiss::Retry>(state, gpr, op, res, utlb)) return LogicFlow::RetryMemoryOp;
     return LogicFlow::Continue;
 }
 
 template <bool UpdateFlags>
 FORCE_INLINE LogicFlow OpXor_GbEb_Internal(LogicFuncParams) {
     // 32: XOR r8, r/m8
-    auto src_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
     uint8_t src = *src_res;
 
     uint8_t reg = (op->modrm >> 3) & 7;
-    uint8_t dest = GetReg8(state, reg);
+    uint8_t dest = gpr.GetReg8(state, reg);
     uint8_t res = AluXor<uint8_t, UpdateFlags>(state, flags_cache, dest, src);
-    uint32_t* rptr = GetRegPtr(state, reg & 3);
     if (reg < 4)
-        *rptr = (*rptr & 0xFFFFFF00) | res;
+        gpr.SetReg(state, reg & 3, (gpr.GetReg(state, reg & 3) & 0xFFFFFF00) | res);
     else
-        *rptr = (*rptr & 0xFFFF00FF) | (res << 8);
+        gpr.SetReg(state, reg & 3, (gpr.GetReg(state, reg & 3) & 0xFFFF00FF) | (res << 8));
     return LogicFlow::Continue;
 }
 
@@ -927,21 +920,21 @@ FORCE_INLINE LogicFlow OpXor_GvEv_Internal(LogicFuncParams) {
     // 33: XOR r16/32, r/m16/32
     uint8_t reg = (op->modrm >> 3) & 7;
     if (op->prefixes.flags.opsize) {
-        auto src_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        auto src_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         uint16_t src = *src_res;
 
-        uint16_t dest = GetReg(state, reg) & 0xFFFF;
+        uint16_t dest = gpr.GetReg(state, reg) & 0xFFFF;
         uint16_t res = AluXor<uint16_t, UpdateFlags>(state, flags_cache, dest, src);
-        SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | res);
+        gpr.SetReg(state, reg, (gpr.GetReg(state, reg) & 0xFFFF0000) | res);
     } else {
-        auto src_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        auto src_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         uint32_t src = *src_res;
 
-        uint32_t dest = GetReg(state, reg);
+        uint32_t dest = gpr.GetReg(state, reg);
         uint32_t res = AluXor<uint32_t, UpdateFlags>(state, flags_cache, dest, src);
-        SetReg(state, reg, res);
+        gpr.SetReg(state, reg, res);
     }
     return LogicFlow::Continue;
 }
@@ -949,12 +942,12 @@ FORCE_INLINE LogicFlow OpXor_GvEv_Internal(LogicFuncParams) {
 template <bool UpdateFlags>
 FORCE_INLINE LogicFlow OpXor_AlImm_Internal(LogicFuncParams) {
     // 34: XOR AL, imm8
-    uint8_t dest = GetReg8(state, EAX);
+    uint8_t dest = gpr.GetReg8(state, EAX);
     uint8_t src = (uint8_t)imm;
     uint8_t res = AluXor<uint8_t, UpdateFlags>(state, flags_cache, dest, src);
-    uint32_t val = GetReg(state, EAX);
+    uint32_t val = gpr.GetReg(state, EAX);
     val = (val & 0xFFFFFF00) | res;
-    SetReg(state, EAX, val);
+    gpr.SetReg(state, EAX, val);
     return LogicFlow::Continue;
 }
 
@@ -962,17 +955,17 @@ template <bool UpdateFlags>
 FORCE_INLINE LogicFlow OpXor_EaxImm_Internal(LogicFuncParams) {
     // 35: XOR EAX, imm32
     if (op->prefixes.flags.opsize) {
-        uint16_t dest = GetReg(state, EAX) & 0xFFFF;
+        uint16_t dest = gpr.GetReg(state, EAX) & 0xFFFF;
         uint16_t src = (uint16_t)imm;
         uint16_t res = AluXor<uint16_t, UpdateFlags>(state, flags_cache, dest, src);
-        uint32_t val = GetReg(state, EAX);
+        uint32_t val = gpr.GetReg(state, EAX);
         val = (val & 0xFFFF0000) | res;
-        SetReg(state, EAX, val);
+        gpr.SetReg(state, EAX, val);
     } else {
-        uint32_t dest = GetReg(state, EAX);
+        uint32_t dest = gpr.GetReg(state, EAX);
         uint32_t src = imm;
         uint32_t res = AluXor<uint32_t, UpdateFlags>(state, flags_cache, dest, src);
-        SetReg(state, EAX, res);
+        gpr.SetReg(state, EAX, res);
     }
     return LogicFlow::Continue;
 }
@@ -1034,15 +1027,15 @@ FORCE_INLINE LogicFlow OpCarryRmw_ModReg_Internal(LogicFuncParams) {
     const uint8_t rm = op->modrm & 7;
     const uint8_t reg = (op->modrm >> 3) & 7;
     if constexpr (IsByte) {
-        return ExecuteCarryRmw<Kind, uint8_t, UpdateFlags, true>(state, op, GetReg8(state, rm), GetReg8(state, reg),
-                                                                 utlb, flags_cache);
+        return ExecuteCarryRmw<Kind, uint8_t, UpdateFlags, true>(state, gpr, op, gpr.GetReg8(state, rm),
+                                                                 gpr.GetReg8(state, reg), utlb, flags_cache);
     } else if (op->prefixes.flags.opsize) {
-        return ExecuteCarryRmw<Kind, uint16_t, UpdateFlags, true>(state, op, static_cast<uint16_t>(GetReg(state, rm)),
-                                                                  static_cast<uint16_t>(GetReg(state, reg)), utlb,
-                                                                  flags_cache);
+        return ExecuteCarryRmw<Kind, uint16_t, UpdateFlags, true>(
+            state, gpr, op, static_cast<uint16_t>(gpr.GetReg(state, rm)), static_cast<uint16_t>(gpr.GetReg(state, reg)),
+            utlb, flags_cache);
     } else {
-        return ExecuteCarryRmw<Kind, uint32_t, UpdateFlags, true>(state, op, GetReg(state, rm), GetReg(state, reg),
-                                                                  utlb, flags_cache);
+        return ExecuteCarryRmw<Kind, uint32_t, UpdateFlags, true>(state, gpr, op, gpr.GetReg(state, rm),
+                                                                  gpr.GetReg(state, reg), utlb, flags_cache);
     }
 }
 
@@ -1184,7 +1177,7 @@ FORCE_INLINE LogicFlow OpDec_Reg_NF(LogicFuncParams) { return OpDec_Reg_Internal
 // Non-template functions
 FORCE_INLINE LogicFlow OpCmp_AlImm(LogicFuncParams) {
     // 3C: CMP AL, imm8
-    uint8_t dest = GetReg8(state, EAX);
+    uint8_t dest = gpr.GetReg8(state, EAX);
     uint8_t src = (uint8_t)imm;
     AluSub(state, flags_cache, dest, src);
     return LogicFlow::Continue;
@@ -1193,11 +1186,11 @@ FORCE_INLINE LogicFlow OpCmp_AlImm(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpCmp_EaxImm(LogicFuncParams) {
     // 3D: CMP EAX, imm32
     if (op->prefixes.flags.opsize) {
-        uint16_t dest = GetReg(state, EAX) & 0xFFFF;
+        uint16_t dest = gpr.GetReg(state, EAX) & 0xFFFF;
         uint16_t src = (uint16_t)imm;
         AluSub(state, flags_cache, dest, src);
     } else {
-        uint32_t dest = GetReg(state, EAX);
+        uint32_t dest = gpr.GetReg(state, EAX);
         uint32_t src = imm;
         AluSub(state, flags_cache, dest, src);
     }
@@ -1206,18 +1199,18 @@ FORCE_INLINE LogicFlow OpCmp_EaxImm(LogicFuncParams) {
 
 FORCE_INLINE LogicFlow OpTest_EbGb(LogicFuncParams) {
     // 84: TEST r/m8, r8
-    auto dest_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, op, utlb);
+    auto dest_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!dest_res) return LogicFlow::RestartMemoryOp;
     uint8_t dest = *dest_res;
 
-    uint8_t src = GetReg8(state, (op->modrm >> 3) & 7);
+    uint8_t src = gpr.GetReg8(state, (op->modrm >> 3) & 7);
     AluAnd(state, flags_cache, dest, src);
     return LogicFlow::Continue;
 }
 
 FORCE_INLINE LogicFlow OpTest_AlImm(LogicFuncParams) {
     // A8: TEST AL, imm8
-    uint8_t dest = GetReg8(state, EAX);
+    uint8_t dest = gpr.GetReg8(state, EAX);
     uint8_t src = (uint8_t)imm;
     AluAnd(state, flags_cache, dest, src);
     return LogicFlow::Continue;
@@ -1226,11 +1219,11 @@ FORCE_INLINE LogicFlow OpTest_AlImm(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpTest_EaxImm(LogicFuncParams) {
     // A9: TEST EAX, imm32
     if (op->prefixes.flags.opsize) {
-        uint16_t dest = GetReg(state, EAX) & 0xFFFF;
+        uint16_t dest = gpr.GetReg(state, EAX) & 0xFFFF;
         uint16_t src = (uint16_t)imm;
         AluAnd(state, flags_cache, dest, src);
     } else {
-        uint32_t dest = GetReg(state, EAX);
+        uint32_t dest = gpr.GetReg(state, EAX);
         uint32_t src = imm;
         AluAnd(state, flags_cache, dest, src);
     }
@@ -1255,7 +1248,7 @@ namespace op {
 FORCE_INLINE LogicFlow OpDaa(LogicFuncParams) {
     // 27: DAA
     // Decimal Adjust AL after Addition
-    uint8_t al = GetReg8(state, EAX);
+    uint8_t al = gpr.GetReg8(state, EAX);
     uint32_t flags = GetFlags32(flags_cache);
     bool cf = (flags & CF_MASK);
     bool af = (flags & AF_MASK);
@@ -1278,7 +1271,7 @@ FORCE_INLINE LogicFlow OpDaa(LogicFuncParams) {
     if (new_af) flags |= AF_MASK;
     UpdateResultFlags<uint8_t>(al, flags);  // Updates SF, ZF, PF
 
-    SetReg8(state, EAX, al);
+    gpr.SetReg8(state, EAX, al);
     SetFlags32AndSyncParityState(flags_cache, flags);
     return LogicFlow::Continue;
 }
@@ -1286,7 +1279,7 @@ FORCE_INLINE LogicFlow OpDaa(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpDas(LogicFuncParams) {
     // 2F: DAS
     // Decimal Adjust AL after Subtraction
-    uint8_t al = GetReg8(state, EAX);
+    uint8_t al = gpr.GetReg8(state, EAX);
     uint32_t flags = GetFlags32(flags_cache);
     bool cf = (flags & CF_MASK);
     bool af = (flags & AF_MASK);
@@ -1321,7 +1314,7 @@ FORCE_INLINE LogicFlow OpDas(LogicFuncParams) {
     if (new_af) flags |= AF_MASK;
     UpdateResultFlags<uint8_t>(al, flags);
 
-    SetReg8(state, EAX, al);
+    gpr.SetReg8(state, EAX, al);
     SetFlags32AndSyncParityState(flags_cache, flags);
     return LogicFlow::Continue;
 }
@@ -1329,9 +1322,9 @@ FORCE_INLINE LogicFlow OpDas(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpAaa(LogicFuncParams) {
     // 37: AAA
     // ASCII Adjust after Addition
-    uint8_t al = GetReg8(state, EAX);
-    uint8_t ah = GetReg8(state, EAX + 1);  // Not exactly +1 but high byte
-    ah = (GetReg(state, EAX) >> 8) & 0xFF;
+    uint8_t al = gpr.GetReg8(state, EAX);
+    uint8_t ah = gpr.GetReg8(state, EAX + 1);  // Not exactly +1 but high byte
+    ah = (gpr.GetReg(state, EAX) >> 8) & 0xFF;
 
     uint32_t flags = GetFlags32(flags_cache);
     bool af = (flags & AF_MASK);
@@ -1341,7 +1334,7 @@ FORCE_INLINE LogicFlow OpAaa(LogicFuncParams) {
     if ((al & 0x0F) > 9 || af) {
         // The adjustment is 16-bit AX arithmetic: an AL carry must also
         // propagate into AH in addition to the explicit AH increment.
-        const uint16_t adjusted = static_cast<uint16_t>(GetReg(state, EAX) + 0x106);
+        const uint16_t adjusted = static_cast<uint16_t>(gpr.GetReg(state, EAX) + 0x106);
         al = static_cast<uint8_t>(adjusted);
         ah = static_cast<uint8_t>(adjusted >> 8);
         new_af = true;
@@ -1357,10 +1350,10 @@ FORCE_INLINE LogicFlow OpAaa(LogicFuncParams) {
     if (new_af) flags |= AF_MASK;
 
     // Update Regs
-    uint32_t eax = GetReg(state, EAX);
+    uint32_t eax = gpr.GetReg(state, EAX);
     eax &= 0xFFFF0000;
     eax |= (uint16_t)((ah << 8) | al);
-    SetReg(state, EAX, eax);
+    gpr.SetReg(state, EAX, eax);
 
     SetFlags32AndSyncParityState(flags_cache, flags);
     return LogicFlow::Continue;
@@ -1369,8 +1362,8 @@ FORCE_INLINE LogicFlow OpAaa(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpAas(LogicFuncParams) {
     // 3F: AAS
     // ASCII Adjust after Subtraction
-    uint8_t al = GetReg8(state, EAX);
-    uint8_t ah = (GetReg(state, EAX) >> 8) & 0xFF;
+    uint8_t al = gpr.GetReg8(state, EAX);
+    uint8_t ah = (gpr.GetReg(state, EAX) >> 8) & 0xFF;
 
     uint32_t flags = GetFlags32(flags_cache);
     bool af = (flags & AF_MASK);
@@ -1379,7 +1372,7 @@ FORCE_INLINE LogicFlow OpAas(LogicFuncParams) {
 
     if ((al & 0x0F) > 9 || af) {
         // Preserve the borrow from AX-6 before subtracting the extra 0x100.
-        const uint16_t adjusted = static_cast<uint16_t>(GetReg(state, EAX) - 0x106);
+        const uint16_t adjusted = static_cast<uint16_t>(gpr.GetReg(state, EAX) - 0x106);
         al = static_cast<uint8_t>(adjusted);
         ah = static_cast<uint8_t>(adjusted >> 8);
         new_af = true;
@@ -1392,10 +1385,10 @@ FORCE_INLINE LogicFlow OpAas(LogicFuncParams) {
     if (new_cf) flags |= CF_MASK;
     if (new_af) flags |= AF_MASK;
 
-    uint32_t eax = GetReg(state, EAX);
+    uint32_t eax = gpr.GetReg(state, EAX);
     eax &= 0xFFFF0000;
     eax |= (uint16_t)((ah << 8) | al);
-    SetReg(state, EAX, eax);
+    gpr.SetReg(state, EAX, eax);
 
     SetFlags32AndSyncParityState(flags_cache, flags);
     return LogicFlow::Continue;
@@ -1404,20 +1397,21 @@ FORCE_INLINE LogicFlow OpAas(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpSalc(LogicFuncParams) {
     // Legacy SALC is accepted by the 32-bit compatibility model. It preserves
     // every flag and every register bit except AL.
-    SetReg8(state, EAX, ReadCF(flags_cache) ? 0xFF : 0);
+    gpr.SetReg8(state, EAX, ReadCF(flags_cache) ? 0xFF : 0);
     return LogicFlow::Continue;
 }
 
 FORCE_INLINE LogicFlow OpArpl(LogicFuncParams) {
     // ARPL operates only on selector RPL bits; no descriptor lookup is needed.
     // Delay ZF and destination changes until the memory operation can complete.
-    auto destination = ReadModRM<uint16_t, OpOnTLBMiss::Blocking>(state, op, utlb);
+    auto destination = ReadModRM<uint16_t, OpOnTLBMiss::Blocking>(state, gpr, op, utlb);
     if (!destination) return LogicFlow::ExitOnCurrentEIP;
-    const uint16_t source = static_cast<uint16_t>(GetReg(state, (op->modrm >> 3) & 7));
+    const uint16_t source = static_cast<uint16_t>(gpr.GetReg(state, (op->modrm >> 3) & 7));
     const bool adjusted = (*destination & 3) < (source & 3);
     if (adjusted) {
         const uint16_t result = static_cast<uint16_t>((*destination & ~3u) | (source & 3));
-        if (!WriteModRM<uint16_t, OpOnTLBMiss::Blocking>(state, op, result, utlb)) return LogicFlow::ExitOnCurrentEIP;
+        if (!WriteModRM<uint16_t, OpOnTLBMiss::Blocking>(state, gpr, op, result, utlb))
+            return LogicFlow::ExitOnCurrentEIP;
     }
     AssignZF(flags_cache, adjusted);
     return LogicFlow::Continue;
@@ -1425,7 +1419,7 @@ FORCE_INLINE LogicFlow OpArpl(LogicFuncParams) {
 
 FORCE_INLINE LogicFlow OpAam(LogicFuncParams) {
     // D4 ib: AAM imm8
-    uint8_t al = GetReg8(state, EAX);
+    uint8_t al = gpr.GetReg8(state, EAX);
     uint8_t base = (uint8_t)imm;
     if (base == 0) {
         // Divide by zero
@@ -1437,10 +1431,10 @@ FORCE_INLINE LogicFlow OpAam(LogicFuncParams) {
     uint8_t ah = al / base;
     uint8_t new_al = al % base;
 
-    uint32_t eax = GetReg(state, EAX);
+    uint32_t eax = gpr.GetReg(state, EAX);
     eax &= 0xFFFF0000;
     eax |= (uint16_t)((ah << 8) | new_al);
-    SetReg(state, EAX, eax);
+    gpr.SetReg(state, EAX, eax);
 
     // SF, ZF, PF are modified based on AL logic (result in AL?)
     // Manual says: The flags SF, ZF, and PF are set according to the resulting binary value in the AL register.
@@ -1455,17 +1449,17 @@ FORCE_INLINE LogicFlow OpAam(LogicFuncParams) {
 
 FORCE_INLINE LogicFlow OpAad(LogicFuncParams) {
     // D5 ib: AAD imm8
-    uint8_t al = GetReg8(state, EAX);
-    uint8_t ah = (GetReg(state, EAX) >> 8) & 0xFF;
+    uint8_t al = gpr.GetReg8(state, EAX);
+    uint8_t ah = (gpr.GetReg(state, EAX) >> 8) & 0xFF;
     uint8_t base = (uint8_t)imm;
 
     uint8_t temp_al = (uint8_t)(al + (ah * base));
     uint8_t temp_ah = 0;
 
-    uint32_t eax = GetReg(state, EAX);
+    uint32_t eax = gpr.GetReg(state, EAX);
     eax &= 0xFFFF0000;
     eax |= (uint16_t)((temp_ah << 8) | temp_al);
-    SetReg(state, EAX, eax);
+    gpr.SetReg(state, EAX, eax);
 
     // SF, ZF, PF set according to AL
     uint32_t flags = GetFlags32(flags_cache);

@@ -13,11 +13,17 @@ p.add_argument('--budget', type=int, default=256)
 p.add_argument('--pin-specialization', type=int, default=0)
 p.add_argument('--fused-only', type=int, default=0)
 p.add_argument('--pin-mode', type=int, default=0)
+p.add_argument('--pin-mask', type=int, default=0)
 a = p.parse_args()
 if not 0 <= a.budget <= 1024:
     p.error("budget must be between 0 and the bounded 1024-shape limit")
-if a.mode not in range(4) or a.pin_mode not in range(4) or a.pin_specialization not in range(3):
+if a.mode not in range(4) or a.pin_mode not in range(5) or a.pin_specialization not in range(3):
     p.error("invalid lowering or pin mode")
+if not 0 <= a.pin_mask <= 0xff or bool(a.pin_mode) != bool(a.pin_mask):
+    p.error("pin mask must describe the enabled guest GPRs")
+pin_bits = {reg: 1 << slot for slot, reg in enumerate(reg for reg in range(8) if a.pin_mask & (1 << reg))}
+all_pins = (1 << len(pin_bits)) - 1
+basic_pin = bool(pin_bits) and tuple(pin_bits) != (0, 4)
 source = pathlib.Path(a.source).read_text()
 families = {name: int(op, 16) for name, op in re.findall(r'using\s+(\w+)\s*=\s*Encoding<0x([0-9A-Fa-f]+),', pathlib.Path(a.families).read_text())}
 targets = {}
@@ -26,6 +32,11 @@ for op, name in re.findall(r'INSTRUCTION_FALLBACK\(0x([0-9A-Fa-f]+),\s*(\w+)\)',
 for name, fam in re.findall(r'INSTRUCTION_(?:FUSION_)?VARIANT\((\w+),\s*(\w+),', pathlib.Path(a.variants).read_text()):
     targets.setdefault(name, set()).add(families[fam])
 def traits(op):
+    # On unverified pin sets restrict new clones to basic ModRM ALU, MOV,
+    # CMP and TEST. The ordinary ISA specialization table still applies.
+    if basic_pin and not ((op < 0x3c and op % 8 < 4) or op in
+                            (0x84, 0x85, 0x88, 0x89, 0x8a, 0x8b, 0x200, 0x202)):
+        return None
     if a.pin_specialization:
         if 0x40 <= op <= 0x4f or 0xb8 <= op <= 0xbf or 0x1c8 <= op <= 0x1cf: return ('Rm', False, 'Opcode')
         if 0xb0 <= op <= 0xb7: return ('Rm', True, 'Opcode')
@@ -60,11 +71,11 @@ def keep_for(name, shape):
                           (0x201, 0x203, 0x84, 0x85, 0x88, 0x89, 0x8a, 0x8b,
                            0x1b6, 0x1b7, 0x1be, 0x1bf) for op in codes)
         if a.pin_specialization < 2 or not memory_safe: return 0
-        if role == 'Rm': return 3
-    if role == 'None' or group is True and ((shape >> 3) & 7) == 7: return 3
+        if role == 'Rm': return all_pins
+    if role == 'None' or group is True and ((shape >> 3) & 7) == 7: return all_pins
     field = (shape >> 3) if role == 'Reg' else shape
     idx = field & (3 if byte else 7)
-    return 2 if idx == 0 else 1 if idx == 4 else 3
+    return all_pins & ~pin_bits.get(idx, 0)
 
 def body_for(name):
     marker = 'ATTR_PRESERVE_NONE int64_t ' + name + '('
@@ -76,7 +87,7 @@ def body_for(name):
 code = ['// Generated operand lowering. Inputs contain encoding facts, never immediates/addresses.',
         '#include "operand_specialization.h"', 'namespace fiberish {']
 entries = []
-if a.mode in (1, 3):
+if a.mode in (1, 3) and not basic_pin:
     for i, item in enumerate(json.loads(pathlib.Path(a.plan).read_text())[:a.budget]):
         if a.fused_only and item['kind'] != 'fused': continue
         original = item['original']; shapes = item['shapes']; width = item['width']
@@ -98,7 +109,7 @@ if a.mode in (1, 3):
             body = body.replace(original, clone)
             pos = body.index('{') + 1
             body = body[:pos] + '\n' + ''.join(f'    AssumeOperandShape<{shapes[j]}ULL>(op + {j});\n' for j in range(width)) + body[pos:]
-            keep = 3
+            keep = all_pins
             for name, shape in zip(ops, shapes): keep &= keep_for(name, shape)
             # Exits remain conservative; only the final normal tail may preserve known nonwrites.
             key = body.rfind('flags_cache FIBERCPU_PIN_RELOAD')
@@ -113,7 +124,7 @@ code += ['namespace {']
 code += ['static const OperandShapeEntry shapes[] = {'] + (entries or ['    {},']) + ['};',
          f'constexpr size_t shape_count = {len(entries)};']
 registers = []
-if not a.fused_only and (a.mode in (2, 3) or a.pin_mode == 3):
+if not a.fused_only and (a.mode in (2, 3) or a.pin_mode >= 3):
     for name, (role, byte, group) in sorted(safe.items()):
         if group == 'Memory': continue  # Exact shapes only; never claim a register form.
         if group in ('Opcode', 'Address'):

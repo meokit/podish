@@ -53,6 +53,7 @@
 
 namespace fiberish {
 struct EmuState;
+struct GprCache;
 struct DecodedOp;
 
 // Handler Function (Preserve None ABI, functionality + dispatch)
@@ -72,8 +73,8 @@ enum class LogicFlow : uint8_t {
 
 #define LogicFuncParams                                                                                    \
     EmuState *RESTRICT state, DecodedOp *RESTRICT op, mem::MicroTLB *utlb, uint32_t imm, uint32_t *branch, \
-        uint64_t &flags_cache
-#define LogicPassParams state, op, utlb, imm, branch, flags_cache
+        uint64_t &flags_cache, GprCache gpr
+#define LogicPassParams state, op, utlb, imm, branch, flags_cache, gpr
 
 // Logic Function (Standard ABI, implementation)
 // It may modify op and next_handler to control flow!
@@ -118,7 +119,7 @@ union Meta {
         uint8_t has_imm : 1;
         uint8_t is_control_flow : 1;
         uint8_t no_flags : 1;
-        uint8_t reserved0 : 1;
+        uint8_t operand_lowered : 1;
         uint8_t ext_kind : 2;
     } flags;
 };

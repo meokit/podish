@@ -1,0 +1,24 @@
+[
+  {
+    "case": "coremark_gcc",
+    "variant": "wt",
+    "round": "final-coremark-0",
+    "iterations": 60000,
+    "wall_seconds": 11.678523084148765,
+    "log": "final-coremark-0-wt-coremark_gcc.log",
+    "seconds": 11.425,
+    "score": 5251.641138,
+    "validated": true
+  },
+  {
+    "case": "coremark_gcc",
+    "variant": "joined",
+    "round": "final-coremark-0",
+    "iterations": 60000,
+    "wall_seconds": 11.574643166968599,
+    "log": "final-coremark-0-joined-coremark_gcc.log",
+    "seconds": 11.321,
+    "score": 5299.885169,
+    "validated": true
+  }
+]

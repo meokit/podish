@@ -248,6 +248,104 @@ public sealed class PinnedRegisterTests
         }
     }
 
+    [Fact]
+    public unsafe void BlockingMemoryFaultPublishesPinsAndResumesWithCallbackValues()
+    {
+        using var cpu = new CpuSandbox();
+        cpu.UnmapMemory(CpuSandbox.DataAddress, CpuSandbox.PageSize);
+        cpu[Reg.EAX] = 0x11112222;
+        cpu[Reg.ESP] = 0x33334444;
+        cpu[Reg.EDI] = CpuSandbox.DataAddress;
+        // Add to both pins, then INC [EDI] takes a blocking read miss and
+        // completes in the same handler. Subsequent MOVs use the callback values.
+        byte[] code = [0x83, 0xC0, 1, 0x83, 0xC4, 2, 0xFF, 0x07, 0x89, 0xC2, 0x89, 0xE3];
+        cpu.WriteCode(code);
+        var context = new FaultContext(cpu, true);
+        var root = GCHandle.Alloc(context);
+        try
+        {
+            X86Native.SetFaultCallback(cpu.State, &OnFault, GCHandle.ToIntPtr(root));
+            cpu.Run(CpuSandbox.CodeAddress + (uint)code.Length);
+            Assert.Null(context.Error);
+            Assert.Equal(1, context.Invocations);
+            Assert.Equal(EmuStatus.Stopped, cpu.Status);
+            Assert.Equal(0xAABBCCDDu, cpu[Reg.EDX]);
+            Assert.Equal(0x12345678u, cpu[Reg.EBX]);
+            Assert.Equal(0x99887767u, BitConverter.ToUInt32(cpu.ReadMemory(CpuSandbox.DataAddress, 4)));
+        }
+        finally
+        {
+            X86Native.SetFaultCallback(cpu.State, null, IntPtr.Zero);
+            root.Free();
+        }
+    }
+
+    [Fact]
+    public unsafe void InterruptPublishesPinsAndContinuesWithCallbackValues()
+    {
+        using var cpu = new CpuSandbox();
+        var code = new List<byte>();
+        for (int register = 0; register < 8; register++)
+        {
+            // MOV r32, imm32 puts a distinct value in each possible pin.
+            code.Add((byte)(0xB8 | register));
+            code.AddRange(BitConverter.GetBytes(InterruptInput(register)));
+        }
+        code.AddRange(new byte[] { 0xCD, 0x81 });
+        for (int register = 0; register < 8; register++)
+        {
+            // MOV [disp32], r32 reads every callback value inside the chain.
+            code.AddRange(new byte[] { 0x89, (byte)(0x05 | register << 3) });
+            code.AddRange(BitConverter.GetBytes(CpuSandbox.DataAddress + 4u * (uint)register));
+        }
+        cpu.WriteCode(code.ToArray());
+        var context = new FaultContext(cpu, true);
+        var root = GCHandle.Alloc(context);
+        try
+        {
+            X86Native.SetInterruptHook(cpu.State, 0x81, &OnInterrupt, GCHandle.ToIntPtr(root));
+            cpu.Run(CpuSandbox.CodeAddress + (uint)code.Count);
+            Assert.Null(context.Error);
+            Assert.Equal(1, context.Invocations);
+            Assert.Equal(EmuStatus.Stopped, cpu.Status);
+            byte[] stored = cpu.ReadMemory(CpuSandbox.DataAddress, 32);
+            for (int register = 0; register < 8; register++)
+                Assert.Equal(InterruptOutput(register), BitConverter.ToUInt32(stored, register * 4));
+        }
+        finally
+        {
+            X86Native.SetInterruptHook(cpu.State, 0x81, null, IntPtr.Zero);
+            root.Free();
+        }
+    }
+
+    private static uint InterruptInput(int register) => 0x11112222u + (uint)register * 0x01020304u;
+    private static uint InterruptOutput(int register) => 0xAABBCCDDu - (uint)register * 0x01020304u;
+
+    [UnmanagedCallersOnly]
+    private static int OnInterrupt(IntPtr state, uint vector, IntPtr userdata)
+    {
+        var context = (FaultContext)GCHandle.FromIntPtr(userdata).Target!;
+        try
+        {
+            Assert.Equal(0x81u, vector);
+            Assert.Equal(context.Cpu.State, state);
+            for (int register = 0; register < 8; register++)
+            {
+                Assert.Equal(InterruptInput(register), context.Cpu[(Reg)register]);
+                context.Cpu[(Reg)register] = InterruptOutput(register);
+            }
+            context.Invocations++;
+            return 1;
+        }
+        catch (Exception error)
+        {
+            context.Error = error;
+            X86Native.EmuFault(state);
+            return 0;
+        }
+    }
+
     [UnmanagedCallersOnly]
     private static int OnFault(IntPtr state, uint address, int isWrite, IntPtr userdata)
     {

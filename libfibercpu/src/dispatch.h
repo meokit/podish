@@ -65,6 +65,7 @@ FORCE_INLINE ATTR_PRESERVE_NONE int64_t ResolveBranchTargetInline(EmuState* REST
     (void)utlb_addend;
     state->clear_pending_mem_op();
     if (instr_limit <= 0) {
+        FIBERCPU_PIN_COMMIT(state);
         CommitFlagsCache(state, flags_cache);
         state->ctx.eip = target_eip;
         return instr_limit;
@@ -119,7 +120,7 @@ ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState* RESTRICT state, DecodedOp* 
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     OperandPolicy::Assume(op);
     // Execute Logic
-    auto flow = Target(state, op, &utlb, GetImm(op), &branch, flags_cache);
+    auto flow = Target(state, op, &utlb, GetImm(op), &branch, flags_cache, FIBERCPU_GPR_CACHE);
     mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
 
     switch (flow) {
@@ -153,11 +154,13 @@ ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState* RESTRICT state, DecodedOp* 
             __builtin_unreachable();
         case LogicFlow::ExitOnCurrentEIP:
             RecordBlockHandlersThrough(state, op);
+            FIBERCPU_PIN_COMMIT(state);
             CommitFlagsCache(state, flags_cache);
             if (!state->eip_dirty) state->sync_eip_to_op_start(op);
             return instr_limit;
         case LogicFlow::ExitOnNextEIP:
             RecordBlockHandlersThrough(state, op);
+            FIBERCPU_PIN_COMMIT(state);
             CommitFlagsCache(state, flags_cache);
             if (!state->eip_dirty) state->sync_eip_to_op_end(op);
             return instr_limit;
@@ -174,6 +177,7 @@ ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState* RESTRICT state, DecodedOp* 
             ATTR_MUSTTAIL return ResolveBranchTargetInline<ExtKind::ControlFlow>(
                 state, op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
         default:
+            FIBERCPU_PIN_COMMIT(state);
             CommitFlagsCache(state, flags_cache);
             return instr_limit;
     }

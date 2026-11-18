@@ -10,9 +10,11 @@ public sealed class SequenceProfileTests
     public void BuildIdentitySeparatesTrainingFromOptimization()
     {
         var features = X86Native.GetBuildFeatures();
-        Assert.Equal(0u, features & ~0x73fu);
+        Assert.Equal(0u, features & ~0xf3fu);
         Assert.InRange((features >> 4) & 3u, 0u, 3u);
-        Assert.InRange((features >> 8) & 3u, 0u, 3u);
+        uint pinMode = ((features >> 8) & 3u) | ((features >> 9) & 4u);
+        Assert.InRange(pinMode, 0u, 4u);
+        Assert.Equal(pinMode == 4, X86Native.GetOptimizationConfig().Contains("pin=WRITE_BACK;"));
         Assert.Contains("pin=", X86Native.GetOptimizationConfig());
         Assert.Contains("operand=", X86Native.GetOptimizationConfig());
         Assert.NotEqual(3u, features & 3u);

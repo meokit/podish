@@ -1123,7 +1123,8 @@ uint32_t X86_GetBuildFeatures(void) {
 #ifdef FIBERCPU_ENABLE_HANDLER_PROFILE
     features |= 8u;
 #endif
-    features |= (FIBERCPU_OPERAND_MODE << 4) | (FIBERCPU_GPR_PIN_MODE << 8);
+    features |=
+        (FIBERCPU_OPERAND_MODE << 4) | ((FIBERCPU_GPR_PIN_MODE & 3) << 8) | ((FIBERCPU_GPR_PIN_MODE >> 2) << 11);
 #if FIBERCPU_OPERAND_FUSIONS_ONLY
     features |= 1u << 10;
 #endif

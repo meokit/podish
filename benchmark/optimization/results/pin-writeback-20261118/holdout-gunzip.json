@@ -1,0 +1,62 @@
+[
+  {
+    "case": "gunzip",
+    "variant": "joined",
+    "round": "holdout-gunzip-0",
+    "iterations": 33,
+    "wall_seconds": 5.073029583087191,
+    "log": "holdout-gunzip-0-joined-gunzip.log",
+    "seconds": 4.816438041860238,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "wt",
+    "round": "holdout-gunzip-0",
+    "iterations": 33,
+    "wall_seconds": 5.06400049990043,
+    "log": "holdout-gunzip-0-wt-gunzip.log",
+    "seconds": 4.8023630829993635,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "wt",
+    "round": "holdout-gunzip-1",
+    "iterations": 33,
+    "wall_seconds": 5.123064583865926,
+    "log": "holdout-gunzip-1-wt-gunzip.log",
+    "seconds": 4.856663416838273,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "joined",
+    "round": "holdout-gunzip-1",
+    "iterations": 33,
+    "wall_seconds": 5.030793417012319,
+    "log": "holdout-gunzip-1-joined-gunzip.log",
+    "seconds": 4.768143207998946,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "joined",
+    "round": "holdout-gunzip-2",
+    "iterations": 33,
+    "wall_seconds": 4.995674916077405,
+    "log": "holdout-gunzip-2-joined-gunzip.log",
+    "seconds": 4.73317312495783,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "wt",
+    "round": "holdout-gunzip-2",
+    "iterations": 33,
+    "wall_seconds": 5.061895749997348,
+    "log": "holdout-gunzip-2-wt-gunzip.log",
+    "seconds": 4.800016999943182,
+    "validated": true
+  }
+]

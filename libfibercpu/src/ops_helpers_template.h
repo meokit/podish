@@ -5,15 +5,15 @@
 #include "common.h"
 #include "decoder.h"
 #include "exec_utils.h"
-#include "state.h"
 #include "ops/ops_carry_rmw_impl.h"
+#include "state.h"
 
 namespace fiberish {
 
 // Template Helper for Group 1 (ALU operations with immediate)
 template <typename T, bool UpdateFlags = true, uint8_t FixedSubOp = 0xFF, Specialized S = Specialized::None>
-FORCE_INLINE LogicFlow Helper_Group1(EmuState* state, DecodedOp* op, uint64_t& flags_cache, T dest, T src,
-                                     mem::MicroTLB* utlb) {
+FORCE_INLINE LogicFlow Helper_Group1(EmuState* state, GprCache& gpr, DecodedOp* op, uint64_t& flags_cache, T dest,
+                                     T src, mem::MicroTLB* utlb) {
     uint8_t subop;
     if constexpr (FixedSubOp != 0xFF) {
         subop = FixedSubOp;
@@ -31,11 +31,11 @@ FORCE_INLINE LogicFlow Helper_Group1(EmuState* state, DecodedOp* op, uint64_t& f
             res = AluOr<T, UpdateFlags>(state, flags_cache, dest, src);
             break;
         case 2:
-            return ExecuteCarryRmw<CarryRmwKind::Adc, T, UpdateFlags, S == Specialized::ModReg>(
-                state, op, dest, src, utlb, flags_cache);
+            return ExecuteCarryRmw<CarryRmwKind::Adc, T, UpdateFlags, S == Specialized::ModReg>(state, gpr, op, dest,
+                                                                                                src, utlb, flags_cache);
         case 3:
-            return ExecuteCarryRmw<CarryRmwKind::Sbb, T, UpdateFlags, S == Specialized::ModReg>(
-                state, op, dest, src, utlb, flags_cache);
+            return ExecuteCarryRmw<CarryRmwKind::Sbb, T, UpdateFlags, S == Specialized::ModReg>(state, gpr, op, dest,
+                                                                                                src, utlb, flags_cache);
         case 4:
             res = AluAnd<T, UpdateFlags>(state, flags_cache, dest, src);
             break;
@@ -50,7 +50,7 @@ FORCE_INLINE LogicFlow Helper_Group1(EmuState* state, DecodedOp* op, uint64_t& f
             return LogicFlow::Continue;  // CMP (No writeback)
         default:
             state->fault_vector = 6;
-            if (!state->hooks.on_invalid_opcode(state)) {
+            if (!gpr.WithCanonical(state, [&] { return state->hooks.on_invalid_opcode(state); })) {
                 state->status = EmuStatus::Fault;
             }
             return LogicFlow::ExitOnCurrentEIP;
@@ -59,33 +59,34 @@ FORCE_INLINE LogicFlow Helper_Group1(EmuState* state, DecodedOp* op, uint64_t& f
     if constexpr (S == Specialized::ModReg) {
         uint8_t rm = op->modrm & 7;
         if constexpr (sizeof(T) == 1) {
-            uint32_t* rptr = GetRegPtr(state, rm & 3);
-            uint32_t curr = *rptr;
+            uint32_t curr = gpr.GetReg(state, rm & 3);
             if (rm < 4)
                 curr = (curr & 0xFFFFFF00) | (static_cast<uint8_t>(res) & 0xFF);
             else
                 curr = (curr & 0xFFFF00FF) | ((static_cast<uint8_t>(res) & 0xFF) << 8);
-            *rptr = curr;
+            gpr.SetReg(state, rm & 3, curr);
         } else if constexpr (sizeof(T) == 2) {
-            uint32_t* rptr = GetRegPtr(state, rm);
-            *rptr = (*rptr & 0xFFFF0000) | (static_cast<uint16_t>(res) & 0xFFFF);
+            gpr.SetReg(state, rm, (gpr.GetReg(state, rm) & 0xFFFF0000) | (static_cast<uint16_t>(res) & 0xFFFF));
         } else {
-            SetReg(state, rm, static_cast<uint32_t>(res));
+            gpr.SetReg(state, rm, static_cast<uint32_t>(res));
         }
     } else if constexpr (sizeof(T) == 1) {
-        if (!WriteModRM<uint8_t, OpOnTLBMiss::Retry>(state, op, (uint8_t)res, utlb)) return LogicFlow::RetryMemoryOp;
+        if (!WriteModRM<uint8_t, OpOnTLBMiss::Retry>(state, gpr, op, (uint8_t)res, utlb))
+            return LogicFlow::RetryMemoryOp;
     } else if constexpr (sizeof(T) == 2) {
-        if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, op, (uint16_t)res, utlb)) return LogicFlow::RetryMemoryOp;
+        if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, gpr, op, (uint16_t)res, utlb))
+            return LogicFlow::RetryMemoryOp;
     } else {
-        if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, op, (uint32_t)res, utlb)) return LogicFlow::RetryMemoryOp;
+        if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, gpr, op, (uint32_t)res, utlb))
+            return LogicFlow::RetryMemoryOp;
     }
     return LogicFlow::Continue;
 }
 
 // Template Helper for Group 3 (MUL, DIV, TEST, NOT, NEG)
 template <typename T, bool UpdateFlags = true, uint8_t FixedSubOp = 0xFF>
-FORCE_INLINE LogicFlow Helper_Group3(EmuState* state, DecodedOp* op, uint64_t& flags_cache, T val, mem::MicroTLB* utlb,
-                                     uint32_t imm) {
+FORCE_INLINE LogicFlow Helper_Group3(EmuState* state, GprCache& gpr, DecodedOp* op, uint64_t& flags_cache, T val,
+                                     mem::MicroTLB* utlb, uint32_t imm) {
     uint8_t subop;
     if constexpr (FixedSubOp != 0xFF) {
         subop = FixedSubOp;
@@ -102,11 +103,14 @@ FORCE_INLINE LogicFlow Helper_Group3(EmuState* state, DecodedOp* op, uint64_t& f
         }
         case 2:  // NOT
             if constexpr (sizeof(T) == 1) {
-                if (!WriteModRM<uint8_t, OpOnTLBMiss::Retry>(state, op, ~val, utlb)) return LogicFlow::RetryMemoryOp;
+                if (!WriteModRM<uint8_t, OpOnTLBMiss::Retry>(state, gpr, op, ~val, utlb))
+                    return LogicFlow::RetryMemoryOp;
             } else if constexpr (sizeof(T) == 2) {
-                if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, op, ~val, utlb)) return LogicFlow::RetryMemoryOp;
+                if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, gpr, op, ~val, utlb))
+                    return LogicFlow::RetryMemoryOp;
             } else {
-                if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, op, ~val, utlb)) return LogicFlow::RetryMemoryOp;
+                if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, gpr, op, ~val, utlb))
+                    return LogicFlow::RetryMemoryOp;
             }
             return LogicFlow::Continue;
         case 3:  // NEG
@@ -120,13 +124,13 @@ FORCE_INLINE LogicFlow Helper_Group3(EmuState* state, DecodedOp* op, uint64_t& f
             }
 
             if constexpr (sizeof(T) == 1) {
-                if (!WriteModRM<uint8_t, OpOnTLBMiss::Retry>(state, op, (uint8_t)res, utlb))
+                if (!WriteModRM<uint8_t, OpOnTLBMiss::Retry>(state, gpr, op, (uint8_t)res, utlb))
                     return LogicFlow::RetryMemoryOp;
             } else if constexpr (sizeof(T) == 2) {
-                if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, op, (uint16_t)res, utlb))
+                if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, gpr, op, (uint16_t)res, utlb))
                     return LogicFlow::RetryMemoryOp;
             } else {
-                if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, op, (uint32_t)res, utlb))
+                if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, gpr, op, (uint32_t)res, utlb))
                     return LogicFlow::RetryMemoryOp;
             }
             return LogicFlow::Continue;
@@ -134,11 +138,10 @@ FORCE_INLINE LogicFlow Helper_Group3(EmuState* state, DecodedOp* op, uint64_t& f
         case 4:  // MUL (Unsigned)
         {
             if constexpr (sizeof(T) == 1) {  // Byte: AX = AL * r/m8
-                uint8_t al = GetReg8(state, EAX);
+                uint8_t al = gpr.GetReg8(state, EAX);
                 uint16_t res = (uint16_t)al * (uint16_t)val;
 
-                uint32_t* rax = GetRegPtr(state, EAX);
-                *rax = (*rax & 0xFFFF0000) | res;
+                gpr.SetReg(state, EAX, (gpr.GetReg(state, EAX) & 0xFFFF0000) | res);
 
                 if constexpr (UpdateFlags) {
                     if ((res & 0xFF00) != 0)
@@ -147,13 +150,11 @@ FORCE_INLINE LogicFlow Helper_Group3(EmuState* state, DecodedOp* op, uint64_t& f
                         ClearFlagBits(flags_cache, OF_MASK | CF_MASK);
                 }
             } else if constexpr (sizeof(T) == 2) {  // Word: DX:AX = AX * r/m16
-                uint16_t ax = (uint16_t)(GetReg(state, EAX) & 0xFFFF);
+                uint16_t ax = (uint16_t)(gpr.GetReg(state, EAX) & 0xFFFF);
                 uint32_t res = (uint32_t)ax * (uint32_t)val;
 
-                uint32_t* rax = GetRegPtr(state, EAX);
-                uint32_t* rdx = GetRegPtr(state, EDX);
-                *rax = (*rax & 0xFFFF0000) | (res & 0xFFFF);
-                *rdx = (*rdx & 0xFFFF0000) | ((res >> 16) & 0xFFFF);
+                gpr.SetReg(state, EAX, (gpr.GetReg(state, EAX) & 0xFFFF0000) | (res & 0xFFFF));
+                gpr.SetReg(state, EDX, (gpr.GetReg(state, EDX) & 0xFFFF0000) | ((res >> 16) & 0xFFFF));
 
                 if constexpr (UpdateFlags) {
                     if ((res >> 16) != 0)
@@ -162,10 +163,10 @@ FORCE_INLINE LogicFlow Helper_Group3(EmuState* state, DecodedOp* op, uint64_t& f
                         ClearFlagBits(flags_cache, OF_MASK | CF_MASK);
                 }
             } else {  // Dword: EDX:EAX = EAX * r/m32
-                uint32_t eax = GetReg(state, EAX);
+                uint32_t eax = gpr.GetReg(state, EAX);
                 uint64_t res = (uint64_t)eax * (uint64_t)val;
-                SetReg(state, EAX, (uint32_t)res);
-                SetReg(state, EDX, (uint32_t)(res >> 32));
+                gpr.SetReg(state, EAX, (uint32_t)res);
+                gpr.SetReg(state, EDX, (uint32_t)(res >> 32));
 
                 if constexpr (UpdateFlags) {
                     if ((res >> 32) != 0)
@@ -179,11 +180,10 @@ FORCE_INLINE LogicFlow Helper_Group3(EmuState* state, DecodedOp* op, uint64_t& f
         case 5:  // IMUL (Signed)
         {
             if constexpr (sizeof(T) == 1) {  // AX = AL * r/m8
-                int8_t al = (int8_t)GetReg8(state, EAX);
+                int8_t al = (int8_t)gpr.GetReg8(state, EAX);
                 int16_t res = (int16_t)al * (int16_t)(int8_t)val;
 
-                uint32_t* rax = GetRegPtr(state, EAX);
-                *rax = (*rax & 0xFFFF0000) | (uint16_t)res;
+                gpr.SetReg(state, EAX, (gpr.GetReg(state, EAX) & 0xFFFF0000) | (uint16_t)res);
 
                 if constexpr (UpdateFlags) {
                     if (res != (int16_t)(int8_t)res)
@@ -192,13 +192,11 @@ FORCE_INLINE LogicFlow Helper_Group3(EmuState* state, DecodedOp* op, uint64_t& f
                         ClearFlagBits(flags_cache, OF_MASK | CF_MASK);
                 }
             } else if constexpr (sizeof(T) == 2) {  // Word: DX:AX = AX * r/m16
-                int16_t ax = (int16_t)(GetReg(state, EAX) & 0xFFFF);
+                int16_t ax = (int16_t)(gpr.GetReg(state, EAX) & 0xFFFF);
                 int32_t res = (int32_t)ax * (int32_t)(int16_t)val;
 
-                uint32_t* rax = GetRegPtr(state, EAX);
-                uint32_t* rdx = GetRegPtr(state, EDX);
-                *rax = (*rax & 0xFFFF0000) | (res & 0xFFFF);
-                *rdx = (*rdx & 0xFFFF0000) | ((res >> 16) & 0xFFFF);
+                gpr.SetReg(state, EAX, (gpr.GetReg(state, EAX) & 0xFFFF0000) | (res & 0xFFFF));
+                gpr.SetReg(state, EDX, (gpr.GetReg(state, EDX) & 0xFFFF0000) | ((res >> 16) & 0xFFFF));
 
                 if constexpr (UpdateFlags) {
                     if (res != (int32_t)(int16_t)res)
@@ -207,10 +205,10 @@ FORCE_INLINE LogicFlow Helper_Group3(EmuState* state, DecodedOp* op, uint64_t& f
                         ClearFlagBits(flags_cache, OF_MASK | CF_MASK);
                 }
             } else {  // Dword: EDX:EAX = EAX * r/m32
-                int32_t eax = (int32_t)GetReg(state, EAX);
+                int32_t eax = (int32_t)gpr.GetReg(state, EAX);
                 int64_t res = (int64_t)eax * (int64_t)(int32_t)val;
-                SetReg(state, EAX, (uint32_t)res);
-                SetReg(state, EDX, (uint32_t)(res >> 32));
+                gpr.SetReg(state, EAX, (uint32_t)res);
+                gpr.SetReg(state, EDX, (uint32_t)(res >> 32));
 
                 if constexpr (UpdateFlags) {
                     if (res != (int64_t)(int32_t)res)
@@ -224,10 +222,10 @@ FORCE_INLINE LogicFlow Helper_Group3(EmuState* state, DecodedOp* op, uint64_t& f
         case 6:  // DIV (Unsigned)
         {
             if constexpr (sizeof(T) == 1) {  // AX / r/m8
-                uint16_t ax = (uint16_t)GetReg(state, EAX) & 0xFFFF;
+                uint16_t ax = (uint16_t)gpr.GetReg(state, EAX) & 0xFFFF;
                 if (val == 0) {
                     state->fault_vector = 0;  // #DE
-                    if (!state->hooks.on_interrupt(state, 0)) {
+                    if (!gpr.WithCanonical(state, [&] { return state->hooks.on_interrupt(state, 0); })) {
                         state->status = EmuStatus::Fault;
                     }
                     return LogicFlow::ExitOnCurrentEIP;
@@ -237,19 +235,19 @@ FORCE_INLINE LogicFlow Helper_Group3(EmuState* state, DecodedOp* op, uint64_t& f
 
                 if (q > 0xFF) {
                     state->fault_vector = 0;  // #DE
-                    if (!state->hooks.on_interrupt(state, 0)) {
+                    if (!gpr.WithCanonical(state, [&] { return state->hooks.on_interrupt(state, 0); })) {
                         state->status = EmuStatus::Fault;
                     }
                     return LogicFlow::ExitOnCurrentEIP;
                 }
 
-                uint32_t* rax = GetRegPtr(state, EAX);
-                *rax = (*rax & 0xFFFF0000) | (r << 8) | (q & 0xFF);
+                gpr.SetReg(state, EAX, (gpr.GetReg(state, EAX) & 0xFFFF0000) | (r << 8) | (q & 0xFF));
             } else if constexpr (sizeof(T) == 2) {  // DX:AX / r/m16
-                uint32_t dx_ax = ((uint32_t)(GetReg(state, EDX) & 0xFFFF) << 16) | (GetReg(state, EAX) & 0xFFFF);
+                uint32_t dx_ax =
+                    ((uint32_t)(gpr.GetReg(state, EDX) & 0xFFFF) << 16) | (gpr.GetReg(state, EAX) & 0xFFFF);
                 if (val == 0) {
                     state->fault_vector = 0;  // #DE
-                    if (!state->hooks.on_interrupt(state, 0)) {
+                    if (!gpr.WithCanonical(state, [&] { return state->hooks.on_interrupt(state, 0); })) {
                         state->status = EmuStatus::Fault;
                     }
                     return LogicFlow::ExitOnCurrentEIP;
@@ -259,21 +257,19 @@ FORCE_INLINE LogicFlow Helper_Group3(EmuState* state, DecodedOp* op, uint64_t& f
 
                 if (q > 0xFFFF) {
                     state->fault_vector = 0;  // #DE
-                    if (!state->hooks.on_interrupt(state, 0)) {
+                    if (!gpr.WithCanonical(state, [&] { return state->hooks.on_interrupt(state, 0); })) {
                         state->status = EmuStatus::Fault;
                     }
                     return LogicFlow::ExitOnCurrentEIP;
                 }
 
-                uint32_t* rax = GetRegPtr(state, EAX);
-                uint32_t* rdx = GetRegPtr(state, EDX);
-                *rax = (*rax & 0xFFFF0000) | (q & 0xFFFF);
-                *rdx = (*rdx & 0xFFFF0000) | (r & 0xFFFF);
+                gpr.SetReg(state, EAX, (gpr.GetReg(state, EAX) & 0xFFFF0000) | (q & 0xFFFF));
+                gpr.SetReg(state, EDX, (gpr.GetReg(state, EDX) & 0xFFFF0000) | (r & 0xFFFF));
             } else {  // EDX:EAX / r/m32
-                uint64_t edx_eax = ((uint64_t)GetReg(state, EDX) << 32) | GetReg(state, EAX);
+                uint64_t edx_eax = ((uint64_t)gpr.GetReg(state, EDX) << 32) | gpr.GetReg(state, EAX);
                 if (val == 0) {
                     state->fault_vector = 0;  // #DE
-                    if (!state->hooks.on_interrupt(state, 0)) {
+                    if (!gpr.WithCanonical(state, [&] { return state->hooks.on_interrupt(state, 0); })) {
                         state->status = EmuStatus::Fault;
                     }
                     return LogicFlow::ExitOnCurrentEIP;
@@ -283,25 +279,25 @@ FORCE_INLINE LogicFlow Helper_Group3(EmuState* state, DecodedOp* op, uint64_t& f
 
                 if (q > 0xFFFFFFFF) {
                     state->fault_vector = 0;  // #DE
-                    if (!state->hooks.on_interrupt(state, 0)) {
+                    if (!gpr.WithCanonical(state, [&] { return state->hooks.on_interrupt(state, 0); })) {
                         state->status = EmuStatus::Fault;
                     }
                     return LogicFlow::ExitOnCurrentEIP;
                 }
 
-                SetReg(state, EAX, (uint32_t)q);
-                SetReg(state, EDX, (uint32_t)r);
+                gpr.SetReg(state, EAX, (uint32_t)q);
+                gpr.SetReg(state, EDX, (uint32_t)r);
             }
             break;
         }
         case 7:  // IDIV (Signed)
         {
             if constexpr (sizeof(T) == 1) {  // AX / r/m8
-                int16_t ax = (int16_t)(GetReg(state, EAX) & 0xFFFF);
+                int16_t ax = (int16_t)(gpr.GetReg(state, EAX) & 0xFFFF);
                 int8_t v = (int8_t)val;
                 if (v == 0 || (ax == std::numeric_limits<int16_t>::min() && v == -1)) {
                     state->fault_vector = 0;  // #DE
-                    if (!state->hooks.on_interrupt(state, 0)) {
+                    if (!gpr.WithCanonical(state, [&] { return state->hooks.on_interrupt(state, 0); })) {
                         state->status = EmuStatus::Fault;
                     }
                     return LogicFlow::ExitOnCurrentEIP;
@@ -314,23 +310,22 @@ FORCE_INLINE LogicFlow Helper_Group3(EmuState* state, DecodedOp* op, uint64_t& f
 
                 if (q > 127 || q < -128) {
                     state->fault_vector = 0;  // #DE
-                    if (!state->hooks.on_interrupt(state, 0)) {
+                    if (!gpr.WithCanonical(state, [&] { return state->hooks.on_interrupt(state, 0); })) {
                         state->status = EmuStatus::Fault;
                     }
                     return LogicFlow::ExitOnCurrentEIP;
                 }
 
-                uint32_t* rax = GetRegPtr(state, EAX);
-                *rax = (*rax & 0xFFFF0000) | ((uint8_t)r << 8) | ((uint8_t)q);
+                gpr.SetReg(state, EAX, (gpr.GetReg(state, EAX) & 0xFFFF0000) | ((uint8_t)r << 8) | ((uint8_t)q));
             } else if constexpr (sizeof(T) == 2) {  // DX:AX / r/m16
                 int32_t dx_ax =
-                    (int32_t)(((uint32_t)(GetReg(state, EDX) & 0xFFFF) << 16) | (GetReg(state, EAX) & 0xFFFF));
+                    (int32_t)(((uint32_t)(gpr.GetReg(state, EDX) & 0xFFFF) << 16) | (gpr.GetReg(state, EAX) & 0xFFFF));
                 int16_t v = (int16_t)val;
                 // The host divide must not execute INT32_MIN / -1: guest
                 // quotient overflow is #DE, not a host arithmetic exception.
                 if (v == 0 || (dx_ax == std::numeric_limits<int32_t>::min() && v == -1)) {
                     state->fault_vector = 0;  // #DE
-                    if (!state->hooks.on_interrupt(state, 0)) {
+                    if (!gpr.WithCanonical(state, [&] { return state->hooks.on_interrupt(state, 0); })) {
                         state->status = EmuStatus::Fault;
                     }
                     return LogicFlow::ExitOnCurrentEIP;
@@ -340,27 +335,25 @@ FORCE_INLINE LogicFlow Helper_Group3(EmuState* state, DecodedOp* op, uint64_t& f
 
                 if (q > 32767 || q < -32768) {
                     state->fault_vector = 0;  // #DE
-                    if (!state->hooks.on_interrupt(state, 0)) {
+                    if (!gpr.WithCanonical(state, [&] { return state->hooks.on_interrupt(state, 0); })) {
                         state->status = EmuStatus::Fault;
                     }
                     return LogicFlow::ExitOnCurrentEIP;
                 }
 
-                uint32_t* rax = GetRegPtr(state, EAX);
-                uint32_t* rdx = GetRegPtr(state, EDX);
-                *rax = (*rax & 0xFFFF0000) | (q & 0xFFFF);
-                *rdx = (*rdx & 0xFFFF0000) | (r & 0xFFFF);
+                gpr.SetReg(state, EAX, (gpr.GetReg(state, EAX) & 0xFFFF0000) | (q & 0xFFFF));
+                gpr.SetReg(state, EDX, (gpr.GetReg(state, EDX) & 0xFFFF0000) | (r & 0xFFFF));
             } else {  // EDX:EAX / r/m32
                 // Assemble as an unsigned bitvector before interpreting the
                 // signed dividend, avoiding overflow in a signed left shift.
-                uint64_t bits = ((uint64_t)GetReg(state, EDX) << 32) | GetReg(state, EAX);
+                uint64_t bits = ((uint64_t)gpr.GetReg(state, EDX) << 32) | gpr.GetReg(state, EAX);
                 int64_t edx_eax = static_cast<int64_t>(bits);
                 int32_t v = (int32_t)val;
                 // Guard both / and % before either host instruction can trap.
                 // Return without committing EAX/EDX or advancing the guest EIP.
                 if (v == 0 || (edx_eax == std::numeric_limits<int64_t>::min() && v == -1)) {
                     state->fault_vector = 0;  // #DE
-                    if (!state->hooks.on_interrupt(state, 0)) {
+                    if (!gpr.WithCanonical(state, [&] { return state->hooks.on_interrupt(state, 0); })) {
                         state->status = EmuStatus::Fault;
                     }
                     return LogicFlow::ExitOnCurrentEIP;
@@ -370,20 +363,20 @@ FORCE_INLINE LogicFlow Helper_Group3(EmuState* state, DecodedOp* op, uint64_t& f
 
                 if (q > 2147483647LL || q < -2147483648LL) {
                     state->fault_vector = 0;  // #DE
-                    if (!state->hooks.on_interrupt(state, 0)) {
+                    if (!gpr.WithCanonical(state, [&] { return state->hooks.on_interrupt(state, 0); })) {
                         state->status = EmuStatus::Fault;
                     }
                     return LogicFlow::ExitOnCurrentEIP;
                 }
 
-                SetReg(state, EAX, (uint32_t)q);
-                SetReg(state, EDX, (uint32_t)r);
+                gpr.SetReg(state, EAX, (uint32_t)q);
+                gpr.SetReg(state, EDX, (uint32_t)r);
             }
             break;
         }
         default:
             state->fault_vector = 6;
-            if (!state->hooks.on_invalid_opcode(state)) {
+            if (!gpr.WithCanonical(state, [&] { return state->hooks.on_invalid_opcode(state); })) {
                 state->status = EmuStatus::Fault;
             }
             return LogicFlow::ExitOnCurrentEIP;
@@ -393,7 +386,7 @@ FORCE_INLINE LogicFlow Helper_Group3(EmuState* state, DecodedOp* op, uint64_t& f
 
 // Template Helper for Group 4 (INC, DEC)
 template <typename T, bool UpdateFlags = true, uint8_t FixedSubOp = 0xFF>
-FORCE_INLINE LogicFlow Helper_Group4(EmuState* state, DecodedOp* op, uint64_t& flags_cache, T val,
+FORCE_INLINE LogicFlow Helper_Group4(EmuState* state, GprCache& gpr, DecodedOp* op, uint64_t& flags_cache, T val,
                                      mem::MicroTLB* utlb) {
     uint8_t subop;
     if constexpr (FixedSubOp != 0xFF) {
@@ -411,13 +404,13 @@ FORCE_INLINE LogicFlow Helper_Group4(EmuState* state, DecodedOp* op, uint64_t& f
             if constexpr (UpdateFlags) SetFlags32(flags_cache, (GetFlags32(flags_cache) & ~CF_MASK) | old_cf);
 
             if constexpr (sizeof(T) == 1) {
-                if (!WriteModRM<uint8_t, OpOnTLBMiss::Retry>(state, op, (uint8_t)res, utlb))
+                if (!WriteModRM<uint8_t, OpOnTLBMiss::Retry>(state, gpr, op, (uint8_t)res, utlb))
                     return LogicFlow::RetryMemoryOp;
             } else if constexpr (sizeof(T) == 2) {
-                if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, op, (uint16_t)res, utlb))
+                if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, gpr, op, (uint16_t)res, utlb))
                     return LogicFlow::RetryMemoryOp;
             } else {
-                if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, op, (uint32_t)res, utlb))
+                if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, gpr, op, (uint32_t)res, utlb))
                     return LogicFlow::RetryMemoryOp;
             }
             break;
@@ -428,20 +421,20 @@ FORCE_INLINE LogicFlow Helper_Group4(EmuState* state, DecodedOp* op, uint64_t& f
             if constexpr (UpdateFlags) SetFlags32(flags_cache, (GetFlags32(flags_cache) & ~CF_MASK) | old_cf);
 
             if constexpr (sizeof(T) == 1) {
-                if (!WriteModRM<uint8_t, OpOnTLBMiss::Retry>(state, op, (uint8_t)res, utlb))
+                if (!WriteModRM<uint8_t, OpOnTLBMiss::Retry>(state, gpr, op, (uint8_t)res, utlb))
                     return LogicFlow::RetryMemoryOp;
             } else if constexpr (sizeof(T) == 2) {
-                if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, op, (uint16_t)res, utlb))
+                if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, gpr, op, (uint16_t)res, utlb))
                     return LogicFlow::RetryMemoryOp;
             } else {
-                if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, op, (uint32_t)res, utlb))
+                if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, gpr, op, (uint32_t)res, utlb))
                     return LogicFlow::RetryMemoryOp;
             }
             break;
         }
         default:
             state->fault_vector = 6;
-            if (!state->hooks.on_invalid_opcode(state)) {
+            if (!gpr.WithCanonical(state, [&] { return state->hooks.on_invalid_opcode(state); })) {
                 state->status = EmuStatus::Fault;
             }
             return LogicFlow::ExitOnCurrentEIP;
@@ -451,8 +444,8 @@ FORCE_INLINE LogicFlow Helper_Group4(EmuState* state, DecodedOp* op, uint64_t& f
 
 // Template Helper for Group 5 (INC, DEC, CALL, JMP, PUSH)
 template <typename T, bool UpdateFlags = true, uint8_t FixedSubOp = 0xFF>
-FORCE_INLINE LogicFlow Helper_Group5(EmuState* state, DecodedOp* op, uint64_t& flags_cache, T val, mem::MicroTLB* utlb,
-                                     uint32_t* branch) {
+FORCE_INLINE LogicFlow Helper_Group5(EmuState* state, GprCache& gpr, DecodedOp* op, uint64_t& flags_cache, T val,
+                                     mem::MicroTLB* utlb, uint32_t* branch) {
     uint8_t subop;
     if constexpr (FixedSubOp != 0xFF) {
         subop = FixedSubOp;
@@ -468,10 +461,10 @@ FORCE_INLINE LogicFlow Helper_Group5(EmuState* state, DecodedOp* op, uint64_t& f
             if constexpr (UpdateFlags) SetFlags32(flags_cache, (GetFlags32(flags_cache) & ~CF_MASK) | old_cf);
 
             if constexpr (sizeof(T) == 2) {
-                if (!WriteModRM<uint16_t, OpOnTLBMiss::Blocking>(state, op, res, utlb))
+                if (!WriteModRM<uint16_t, OpOnTLBMiss::Blocking>(state, gpr, op, res, utlb))
                     return LogicFlow::ExitOnCurrentEIP;
             } else {
-                if (!WriteModRM<uint32_t, OpOnTLBMiss::Blocking>(state, op, res, utlb))
+                if (!WriteModRM<uint32_t, OpOnTLBMiss::Blocking>(state, gpr, op, res, utlb))
                     return LogicFlow::ExitOnCurrentEIP;
             }
             break;
@@ -483,10 +476,10 @@ FORCE_INLINE LogicFlow Helper_Group5(EmuState* state, DecodedOp* op, uint64_t& f
             if constexpr (UpdateFlags) SetFlags32(flags_cache, (GetFlags32(flags_cache) & ~CF_MASK) | old_cf);
 
             if constexpr (sizeof(T) == 2) {
-                if (!WriteModRM<uint16_t, OpOnTLBMiss::Blocking>(state, op, res, utlb))
+                if (!WriteModRM<uint16_t, OpOnTLBMiss::Blocking>(state, gpr, op, res, utlb))
                     return LogicFlow::ExitOnCurrentEIP;
             } else {
-                if (!WriteModRM<uint32_t, OpOnTLBMiss::Blocking>(state, op, res, utlb))
+                if (!WriteModRM<uint32_t, OpOnTLBMiss::Blocking>(state, gpr, op, res, utlb))
                     return LogicFlow::ExitOnCurrentEIP;
             }
             break;
@@ -498,16 +491,16 @@ FORCE_INLINE LogicFlow Helper_Group5(EmuState* state, DecodedOp* op, uint64_t& f
             // subop 2, 4, 6 do not update flags by themselves
             if (subop == 2) {  // Call
                 if constexpr (sizeof(T) == 2) {
-                    uint32_t esp = GetReg(state, ESP) - 2;
-                    if (!WriteMem<uint16_t, OpOnTLBMiss::Blocking>(state, esp, (uint16_t)op->next_eip, utlb, op))
+                    uint32_t esp = gpr.GetReg(state, ESP) - 2;
+                    if (!WriteMem<uint16_t, OpOnTLBMiss::Blocking>(state, gpr, esp, (uint16_t)op->next_eip, utlb, op))
                         return LogicFlow::ExitOnCurrentEIP;
-                    SetReg(state, ESP, esp);
+                    gpr.SetReg(state, ESP, esp);
                     *branch = val & 0xFFFF;
                 } else {
-                    uint32_t esp = GetReg(state, ESP) - 4;
-                    if (!WriteMem<uint32_t, OpOnTLBMiss::Blocking>(state, esp, op->next_eip, utlb, op))
+                    uint32_t esp = gpr.GetReg(state, ESP) - 4;
+                    if (!WriteMem<uint32_t, OpOnTLBMiss::Blocking>(state, gpr, esp, op->next_eip, utlb, op))
                         return LogicFlow::ExitOnCurrentEIP;
-                    SetReg(state, ESP, esp);
+                    gpr.SetReg(state, ESP, esp);
                     *branch = val;
                 }
             } else if (subop == 4) {  // Jmp
@@ -517,22 +510,22 @@ FORCE_INLINE LogicFlow Helper_Group5(EmuState* state, DecodedOp* op, uint64_t& f
                     *branch = val;
             } else if (subop == 6) {  // Push
                 if constexpr (sizeof(T) == 2) {
-                    uint32_t esp = GetReg(state, ESP) - 2;
-                    if (!WriteMem<uint16_t, OpOnTLBMiss::Blocking>(state, esp, (uint16_t)val, utlb, op))
+                    uint32_t esp = gpr.GetReg(state, ESP) - 2;
+                    if (!WriteMem<uint16_t, OpOnTLBMiss::Blocking>(state, gpr, esp, (uint16_t)val, utlb, op))
                         return LogicFlow::ExitOnCurrentEIP;
-                    SetReg(state, ESP, esp);
+                    gpr.SetReg(state, ESP, esp);
                 } else {
-                    uint32_t esp = GetReg(state, ESP) - 4;
-                    if (!WriteMem<uint32_t, OpOnTLBMiss::Blocking>(state, esp, val, utlb, op))
+                    uint32_t esp = gpr.GetReg(state, ESP) - 4;
+                    if (!WriteMem<uint32_t, OpOnTLBMiss::Blocking>(state, gpr, esp, val, utlb, op))
                         return LogicFlow::ExitOnCurrentEIP;
-                    SetReg(state, ESP, esp);
+                    gpr.SetReg(state, ESP, esp);
                 }
             }
             break;
         }
         default:
             state->fault_vector = 6;
-            if (!state->hooks.on_invalid_opcode(state)) {
+            if (!gpr.WithCanonical(state, [&] { return state->hooks.on_invalid_opcode(state); })) {
                 state->status = EmuStatus::Fault;
             }
             return LogicFlow::ExitOnCurrentEIP;

@@ -1,0 +1,162 @@
+[
+  {
+    "case": "gzip",
+    "variant": "wt",
+    "round": "final-holdout-0",
+    "iterations": 4,
+    "wall_seconds": 4.21153829107061,
+    "log": "final-holdout-0-wt-gzip.log",
+    "seconds": 3.9403343331068754,
+    "validated": true
+  },
+  {
+    "case": "gzip",
+    "variant": "joined",
+    "round": "final-holdout-0",
+    "iterations": 4,
+    "wall_seconds": 3.877194584114477,
+    "log": "final-holdout-0-joined-gzip.log",
+    "seconds": 3.6156641670968384,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "wt",
+    "round": "final-holdout-0",
+    "iterations": 18,
+    "wall_seconds": 2.94485962507315,
+    "log": "final-holdout-0-wt-gunzip.log",
+    "seconds": 2.6832942091859877,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "joined",
+    "round": "final-holdout-0",
+    "iterations": 18,
+    "wall_seconds": 2.9705454588402063,
+    "log": "final-holdout-0-joined-gunzip.log",
+    "seconds": 2.6922308749053627,
+    "validated": true
+  },
+  {
+    "case": "sed",
+    "variant": "wt",
+    "round": "final-holdout-0",
+    "iterations": 4,
+    "wall_seconds": 5.175406707916409,
+    "log": "final-holdout-0-wt-sed.log",
+    "seconds": 4.908786917105317,
+    "validated": true
+  },
+  {
+    "case": "sed",
+    "variant": "joined",
+    "round": "final-holdout-0",
+    "iterations": 4,
+    "wall_seconds": 4.969692084006965,
+    "log": "final-holdout-0-joined-sed.log",
+    "seconds": 4.704753042198718,
+    "validated": true
+  },
+  {
+    "case": "grep_fixed",
+    "variant": "wt",
+    "round": "final-holdout-0",
+    "iterations": 43,
+    "wall_seconds": 1.5434407079592347,
+    "log": "final-holdout-0-wt-grep_fixed.log",
+    "seconds": 1.2810850839596242,
+    "validated": true
+  },
+  {
+    "case": "grep_fixed",
+    "variant": "joined",
+    "round": "final-holdout-0",
+    "iterations": 43,
+    "wall_seconds": 1.5066542918793857,
+    "log": "final-holdout-0-joined-grep_fixed.log",
+    "seconds": 1.2408968328963965,
+    "validated": true
+  },
+  {
+    "case": "grep_regex",
+    "variant": "wt",
+    "round": "final-holdout-0",
+    "iterations": 28,
+    "wall_seconds": 2.557544582989067,
+    "log": "final-holdout-0-wt-grep_regex.log",
+    "seconds": 2.2937270840629935,
+    "validated": true
+  },
+  {
+    "case": "grep_regex",
+    "variant": "joined",
+    "round": "final-holdout-0",
+    "iterations": 28,
+    "wall_seconds": 2.5212541250512004,
+    "log": "final-holdout-0-joined-grep_regex.log",
+    "seconds": 2.257716874824837,
+    "validated": true
+  },
+  {
+    "case": "sort",
+    "variant": "wt",
+    "round": "final-holdout-0",
+    "iterations": 10,
+    "wall_seconds": 4.0851529580540955,
+    "log": "final-holdout-0-wt-sort.log",
+    "seconds": 3.8050763751380146,
+    "validated": true
+  },
+  {
+    "case": "sort",
+    "variant": "joined",
+    "round": "final-holdout-0",
+    "iterations": 10,
+    "wall_seconds": 4.05885966704227,
+    "log": "final-holdout-0-joined-sort.log",
+    "seconds": 3.7933282910380512,
+    "validated": true
+  },
+  {
+    "case": "sha256",
+    "variant": "wt",
+    "round": "final-holdout-0",
+    "iterations": 20,
+    "wall_seconds": 2.3022343749180436,
+    "log": "final-holdout-0-wt-sha256.log",
+    "seconds": 2.03822287498042,
+    "validated": true
+  },
+  {
+    "case": "sha256",
+    "variant": "joined",
+    "round": "final-holdout-0",
+    "iterations": 20,
+    "wall_seconds": 2.230987416114658,
+    "log": "final-holdout-0-joined-sha256.log",
+    "seconds": 1.9672292917966843,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "wt",
+    "round": "final-holdout-0",
+    "iterations": 45,
+    "wall_seconds": 1.7540218750946224,
+    "log": "final-holdout-0-wt-tar.log",
+    "seconds": 1.4914515418931842,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "joined",
+    "round": "final-holdout-0",
+    "iterations": 45,
+    "wall_seconds": 1.7471741251647472,
+    "log": "final-holdout-0-joined-tar.log",
+    "seconds": 1.483885708032176,
+    "validated": true
+  }
+]

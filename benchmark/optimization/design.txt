@@ -4,18 +4,30 @@ Build switches (CMake cache; independent at compile time)
   FIBERCPU_ENABLE_SUPEROPCODES=ON/OFF
   FIBERCPU_FUSION_STRATEGY=AUTO/BASE/EXTENDED/SHAPED
   FIBERCPU_OPERAND_SPECIALIZATION=AUTO/OFF/PROFILE/REGISTER/HYBRID
-  FIBERCPU_OPERAND_BUDGET=256
-  FIBERCPU_GPR_PIN=OFF/ABI_ONLY/CONSERVATIVE/EAX_ESP
-MSBuild forwards FusionStrategy, OperandSpecialization, OperandBudget, OperandScope, GprPin.
+  FIBERCPU_OPERAND_BUDGET=AUTO or 0..1024
   FIBERCPU_OPERAND_SCOPE=AUTO/ALL/ADDED_FUSIONS
-AUTO chooses SHAPED + PROFILE/256 + ADDED_FUSIONS, pin OFF, only for
-macOS ARM64 Clang shared builds. Other targets, universal builds, static/AOT,
-sequence-training and explicitly supplied fusion tables retain BASE/OFF/ALL.
-Explicit choices override AUTO. Selecting BASE with operand/scope AUTO restores
-the old base behavior. Existing nonempty cached source overrides still win;
-use -DFIBERCPU_GENERATED_SUPEROPCODES_FILE= to follow the selected strategy.
-An explicitly supplied FIBERCPU_GENERATED_SUPEROPCODES_FILE overrides strategy.
-An empty source follows the strategy, including when reconfiguring an existing tree.
+  FIBERCPU_GPR_PIN=AUTO/ON/OFF/ABI_ONLY/CONSERVATIVE/EAX_ESP/WRITE_BACK
+  FIBERCPU_GPR_WRITE_BACK=ON/OFF (default ON)
+  FIBERCPU_GPR_PIN_REGISTERS=EAX,ESP (any nonempty subset of the eight guest GPRs)
+MSBuild forwards FusionStrategy, OperandSpecialization, OperandBudget,
+OperandScope, GprPin, GprPinRegisters and GprWriteBack.
+
+AUTO enables pin in macOS ARM64 Clang shared builds with preserve_none.
+Those builds default to WRITE_BACK, SHAPED, HYBRID/704, ALL, MEMORY and the
+704-entry GNU write-back plan. Set FIBERCPU_GPR_WRITE_BACK=OFF or
+-p:GprWriteBack=OFF to select EAX_ESP write-through with the same plan.
+Set FIBERCPU_GPR_PIN=OFF or -p:GprPin=OFF to disable pin and use the
+unpinned SHAPED/PROFILE/256/ADDED_FUSIONS defaults on macOS ARM64.
+GPR_PIN=ON explicitly enables pin on a supported target. The write-back
+switch resolves AUTO and ON. Explicit cache modes keep their stated behavior.
+
+Other targets, universal builds, static/AOT, sequence training and custom
+fusion sources retain automatic BASE/OFF/ALL and pin OFF. Explicit choices
+override AUTO. An existing CMake cache with explicit pin or budget values
+retains those values. Use AUTO to resolve them again.
+An explicit generated fusion source overrides the source chosen by the
+strategy. Set FIBERCPU_GENERATED_SUPEROPCODES_FILE to an empty value to
+follow the selected strategy.
 
 BASE is the reviewed GNU 64 patterns plus 7 semantic expansions. EXTENDED
 adds 64 observed GCC CoreMark pairs and 32 four-op sequences (167 total).
@@ -52,25 +64,49 @@ handler identity; then fusion and lowering run again. This preserves matching
 without reverting an instruction specialization. The source generator remains
 the authority for semantic specialization expansion.
 
-Pin appends two uint32 arguments to the preserve_none handler signature. One
-native library has exactly one signature, shared by ordinary/fused handlers,
-sentinels, branch links, restart/retry, Step/Run and reflection declarations.
-ABI_ONLY isolates the signature cost. CONSERVATIVE caches reads and reloads
-both values at ordinary tails. EAX_ESP uses decoded static write classes to
-forward unchanged values. No runtime register-cache choice occurs in GetReg.
+Pin appends one uint32 argument per selected GPR to the preserve_none handler
+signature. CMake generates the register IDs, parameter order, lookup conditions
+and slot mapping. It accepts comma- or semicolon-separated x86 register names
+in any case, rejects duplicates, and normalizes their order to EAX, ECX, EDX,
+EBX, ESP, EBP, ESI, EDI. One native library has one signature across all handlers,
+sentinels, branch links, restart/retry, Step/Run and reflection. The resolved
+optimization configuration reports the actual list as pins=.
 
-The register file remains canonical at every instruction boundary: all writes
-are write-through. PIN_ASSUME expresses equality on entry, allowing LLVM to
-substitute register reads. Static policy guarantees which values can be kept;
-unknown/implicit writes and memory/opaque paths reload canonical state. Calls
-that can observe or modify registers, faults/retries, branch resolution and API
-reentry are conservative boundaries. This is a read cache, not dirty write-back.
-A future dirty bank would require a separate precise-state/observer design.
+Examples: -DFIBERCPU_GPR_PIN_REGISTERS=ECX,EDI with CMake or
+-p:GprPinRegisters=ECX%2CEDI on the dotnet command line. Choose GprPin=OFF to
+turn pin off. EAX_ESP is the legacy name for the static-write-through mode.
+The selected register list applies to all pin modes.
+
+The full frozen shape plan and extended pin classification apply to the
+verified EAX,ESP list. Other lists select BASE fusion with zero exact shape
+budget and only the basic ModRM MOV, integer ALU, CMP and TEST pin classification.
+The normal ISA handlers and their existing specializations still apply.
+A pin-specific destination class is instantiated only when its parent GPR is
+in the current list. Byte forms use the parent of AL/AH, CL/CH, DL/DH or BL/BH.
+Custom lists are usable but have no measured throughput guarantee.
+ABI_ONLY isolates the signature cost. CONSERVATIVE caches reads and reloads
+all selected values at ordinary tails. EAX_ESP uses decoded static write classes to
+forward unchanged values. Both write-through modes update the canonical register
+file on every write. PIN_ASSUME expresses equality on entry so LLVM can replace
+some register-file loads with the threaded values.
+
+WRITE_BACK makes the selected threaded values authoritative inside the handler
+chain. GprCache reads and writes through references to the current handler
+arguments. This includes partial register writes and address base/index reads.
+A pinned write skips ctx.regs. Dynamically selected reads can use csel on ARM64.
+Writes select the pin value or branch to a guarded register-file store.
+Compile-time operand facts eliminate these choices for known registers.
+
+Ordinary tails, fused constituents and chained blocks forward the live values.
+Host exits and memory restart/retry publish all selected pins. Blocking TLB hits
+stay in the chain. Blocking misses and explicit callbacks publish the pins before
+the observer runs, then reload them before resuming. There is no dirty bit.
 
 GPR pin is restricted to ARM64 Clang with preserve_none support. It must be
 remeasured after a compiler upgrade: preserve_none is an unstable compiler ABI.
 The public C ABI is unchanged. BuildFeatures bits 4..5 identify operand mode,
-bits 8..9 identify pin mode; bit 10 identifies ADDED_FUSIONS scope. X86_GetOptimizationConfig returns strategy, enabled
+bits 8..9 hold the low pin mode bits, and bit 11 holds the high bit (WRITE_BACK).
+Bit 10 identifies ADDED_FUSIONS scope. X86_GetOptimizationConfig returns strategy, enabled
 state, operand mode/budget, pin mode and the frozen shape-plan hash. The existing
 superopcode set hash identifies the selected generated fusion source.
 
@@ -87,10 +123,10 @@ a geomean cannot establish the absence of regressions.
 A finite corpus cannot prove non-regression for all possible guests. Promotion
 requires no repeatable regression on the measured paths, with explicit bounds.
 
-GNU pin coverage experiment (opt-in; production AUTO is unchanged)
-  FIBERCPU_PIN_SPECIALIZATION=BASE|SCALAR|MEMORY (default BASE)
-  FIBERCPU_OPERAND_PLAN_FILE=<absolute frozen JSON path> (empty: GCC v1)
-  FIBERCPU_OPERAND_BUDGET=0..1024 (default 256)
+GNU pin coverage experiment (448-entry comparison plan)
+  FIBERCPU_PIN_SPECIALIZATION=AUTO|BASE|SCALAR|MEMORY
+  FIBERCPU_OPERAND_PLAN_FILE=<absolute frozen JSON path>
+  FIBERCPU_OPERAND_BUDGET=AUTO or 0..1024
 MSBuild equivalents: PinSpecialization, OperandPlanFile, OperandBudget.
 The reviewed operand-shapes-gnu-v1.json preserves all 256 GCC entries, then
 adds 64 GNU fused and 128 GNU scalar shapes. Use HYBRID/ALL, budget 512;
@@ -106,3 +142,21 @@ The plan can be regenerated with extend_operand_plan.py from encoding-only
 per-workload dispatch estimates. Scores normalize each workload before ranking,
 so the longest workload does not consume the entire shape budget. Appending
 entries preserves the existing GCC priorities and bounded fusion admission.
+
+GNU write-back profile
+The production macOS ARM64 preset uses operand-shapes-gnu-writeback-v1.json
+with WRITE_BACK, SHAPED, HYBRID, ALL, budget 704 and MEMORY pin specialization. The 448 previous GNU plan
+entries keep their IDs and ordering. The new plan appends 48 fused and 208
+single-instruction shapes using the existing workload-balanced profile counts.
+Both base and index fields are decoded facts. No guest values or relative
+displacements are fixed by this plan. The original plan remains selectable.
+
+In ALL scope, the fusion lookup and operand lowering run in a single forward
+pass. A matcher reads only its current instruction and successors. For
+concatenated blocks, the decoded metadata marks the entries that were lowered
+so reconstruction only reverse-maps those entries before matching again.
+The metadata bit does not change the decoded record size.
+
+Regenerate the plan with extend_operand_plan.py, the original GNU plan as
+--base, the decompressed gnu-shapes.json.gz from results/pin-gnu-20261118
+as --counts, and --fused 48 --wrapper 208.

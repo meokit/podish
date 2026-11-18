@@ -13,26 +13,111 @@ using mem::MemResult;
 // Register Access
 // ------------------------------------------------------------------------------------------------
 
-FORCE_INLINE uint32_t* GetRegPtr(EmuState* state, uint8_t reg_idx) { return &state->ctx.regs[reg_idx]; }
+struct GprCache {
+#if FIBERCPU_GPR_PIN_MODE == 4
+#define FIBERCPU_CACHE_FIELD(id, reg, slot, ...) uint32_t& reg;
+    FIBERCPU_FOR_EACH_PIN(FIBERCPU_CACHE_FIELD)
+#undef FIBERCPU_CACHE_FIELD
+#endif
 
-FORCE_INLINE uint32_t GetReg(EmuState* state, uint8_t reg_idx) { return *GetRegPtr(state, reg_idx); }
+    FORCE_INLINE uint32_t GetReg(EmuState* state, unsigned index) const {
+        const uint32_t value = state->ctx.regs[index];
+#if FIBERCPU_GPR_PIN_MODE == 4
+#define FIBERCPU_CACHE_READ(id, reg, slot, ...) index == id ? reg:
+        return FIBERCPU_FOR_EACH_PIN(FIBERCPU_CACHE_READ) value;
+#undef FIBERCPU_CACHE_READ
+#else
+        return value;
+#endif
+    }
 
-FORCE_INLINE void SetReg(EmuState* state, uint8_t reg_idx, uint32_t val) { *GetRegPtr(state, reg_idx) = val; }
+    FORCE_INLINE uint32_t GetRegFromOffset(EmuState* state, unsigned offset) const {
+        // The decoder stores offsets into the GPR array, including the zero slot.
+        return GetReg(state, offset / sizeof(uint32_t));
+    }
 
-FORCE_INLINE void SetReg8(EmuState* state, uint8_t reg_idx, uint8_t val) {
-    uint32_t* rptr = GetRegPtr(state, reg_idx & 3);
-    if (reg_idx < 4)
-        *rptr = (*rptr & 0xFFFFFF00) | val;
-    else
-        *rptr = (*rptr & 0xFFFF00FF) | (val << 8);
+    FORCE_INLINE void SetReg(EmuState* state, unsigned index, uint32_t value) const {
+#if FIBERCPU_GPR_PIN_MODE == 4
+        if (FIBERCPU_PIN_CONTAINS(index)) {
+#if FIBERCPU_PIN_COUNT == 2
+            const bool second = index == FIBERCPU_PIN_ID_1;
+            FIBERCPU_PIN_FIELD_0 = second ? FIBERCPU_PIN_FIELD_0 : value;
+            FIBERCPU_PIN_FIELD_1 = second ? value : FIBERCPU_PIN_FIELD_1;
+#else
+#define FIBERCPU_CACHE_WRITE(id, reg, slot, ...) reg = index == id ? value : reg;
+            FIBERCPU_FOR_EACH_PIN(FIBERCPU_CACHE_WRITE)
+#undef FIBERCPU_CACHE_WRITE
+#endif
+            return;
+        }
+#endif
+        state->ctx.regs[index] = value;
+    }
+
+    FORCE_INLINE void SetReg8(EmuState* state, unsigned index, uint8_t value) const {
+        const unsigned parent = index & 3;
+        const uint32_t old = GetReg(state, parent);
+        if (index < 4)
+            SetReg(state, parent, (old & 0xffffff00u) | value);
+        else
+            SetReg(state, parent, (old & 0xffff00ffu) | (uint32_t(value) << 8));
+    }
+
+    FORCE_INLINE uint8_t GetReg8(EmuState* state, unsigned index) const {
+        const uint32_t value = GetReg(state, index & 3);
+        return static_cast<uint8_t>(index < 4 ? value : value >> 8);
+    }
+
+    FORCE_INLINE void Commit(EmuState* state) const {
+#if FIBERCPU_GPR_PIN_MODE == 4
+#define FIBERCPU_CACHE_COMMIT(id, reg, slot, ...) state->ctx.regs[id] = reg;
+        FIBERCPU_FOR_EACH_PIN(FIBERCPU_CACHE_COMMIT)
+#undef FIBERCPU_CACHE_COMMIT
+#endif
+    }
+
+    FORCE_INLINE void Reload(EmuState* state) const {
+#if FIBERCPU_GPR_PIN_MODE == 4
+#define FIBERCPU_CACHE_RELOAD(id, reg, slot, ...) reg = state->ctx.regs[id];
+        FIBERCPU_FOR_EACH_PIN(FIBERCPU_CACHE_RELOAD)
+#undef FIBERCPU_CACHE_RELOAD
+#endif
+    }
+
+    template <typename Callback>
+    FORCE_INLINE auto WithCanonical(EmuState* state, Callback&& callback) const {
+        Commit(state);
+        auto result = callback();
+        Reload(state);
+        return result;
+    }
+};
+
+// Keep the inline TLB hit path inside the threaded chain. On a blocking miss,
+// observers may read or change GPRs before the instruction continues.
+template <typename T, bool FailOnMiss>
+FORCE_INLINE MemResult<T> ReadGuestMem(EmuState* state, GprCache& gpr, uint32_t addr, mem::MicroTLB* utlb,
+                                       const DecodedOp* op) {
+#if FIBERCPU_GPR_PIN_MODE == 4
+    if constexpr (!FailOnMiss) {
+        if (auto result = state->mmu.read<T, true>(addr, utlb, op)) return result;
+        return gpr.WithCanonical(state, [&] { return state->mmu.read_slow<T>(addr); });
+    }
+#endif
+    return state->mmu.read<T, FailOnMiss>(addr, utlb, op);
 }
 
-FORCE_INLINE uint8_t GetReg8(EmuState* state, uint8_t reg_idx) {
-    uint32_t val = GetReg(state, reg_idx & 3);
-    if (reg_idx < 4)
-        return val & 0xFF;
-    else
-        return (val >> 8) & 0xFF;
+template <typename T, bool FailOnMiss>
+FORCE_INLINE MemResult<void> WriteGuestMem(EmuState* state, GprCache& gpr, uint32_t addr, T value, mem::MicroTLB* utlb,
+                                           const DecodedOp* op) {
+#if FIBERCPU_GPR_PIN_MODE == 4
+    if constexpr (!FailOnMiss) {
+        if (auto result = state->mmu.write_tlb_only<T>(addr, value, utlb)) return result;
+        state->sync_eip_to_op_start(op);
+        return gpr.WithCanonical(state, [&] { return state->mmu.write_slow<T>(addr, value); });
+    }
+#endif
+    return state->mmu.write<T, FailOnMiss>(addr, value, utlb, op);
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -234,14 +319,13 @@ FORCE_INLINE uint32_t GetSegmentBase(EmuState* state, const DecodedOp* op) {
     return state->ctx.seg_base[seg == 0 ? 4 : seg];
 }
 
-FORCE_INLINE uint32_t ComputeEA(EmuState* state, const DecodedOp* op) {
+FORCE_INLINE uint32_t ComputeEA(EmuState* state, GprCache& gpr, const DecodedOp* op) {
     // Computes Effective Address (no segment base)
     // Branchless calculation using pre-calculated offsets to registers (or zero register)
     const auto* ext = GetExt(op);
     uint32_t ea_desc = ext->data.ea_desc;
-    const uintptr_t regs_base = (uintptr_t)state->ctx.regs;
-    uint32_t base = *(const uint32_t*)(regs_base + memdesc::BaseOffset(ea_desc));
-    uint32_t index = *(const uint32_t*)(regs_base + memdesc::IndexOffset(ea_desc));
+    uint32_t base = gpr.GetRegFromOffset(state, memdesc::BaseOffset(ea_desc));
+    uint32_t index = gpr.GetRegFromOffset(state, memdesc::IndexOffset(ea_desc));
 
     // index is usually 0 if no index (pointing to zero reg)
     // base is usually 0 if no base (pointing to zero reg)
@@ -256,8 +340,8 @@ FORCE_INLINE uint32_t GetMemSegmentBase(EmuState* state, const DecodedOp* op) {
     return state->ctx.seg_base[seg];
 }
 
-FORCE_INLINE uint32_t ComputeLinearAddress(EmuState* state, const DecodedOp* op) {
-    uint32_t ea = ComputeEA(state, op);
+FORCE_INLINE uint32_t ComputeLinearAddress(EmuState* state, GprCache& gpr, const DecodedOp* op) {
+    uint32_t ea = ComputeEA(state, gpr, op);
     return ea + GetMemSegmentBase(state, op);
 }
 
@@ -267,13 +351,13 @@ FORCE_INLINE uint32_t ComputeLinearAddress(EmuState* state, const DecodedOp* op)
 
 // Helper: Handle Register Reads for various sizes
 template <typename T>
-inline T ReadRegGeneric(EmuState* state, uint8_t rm) {
+inline T ReadRegGeneric(EmuState* state, GprCache& gpr, uint8_t rm) {
     if constexpr (std::is_same_v<T, simde__m128>) {
         // 128-bit XMM access
         return state->ctx.xmm[rm];
     } else {
         // General Purpose Registers (8, 16, 32-bit)
-        uint32_t val = GetReg(state, rm & (std::is_same_v<T, uint8_t> ? 3 : 7));
+        uint32_t val = gpr.GetReg(state, rm & (std::is_same_v<T, uint8_t> ? 3 : 7));
 
         if constexpr (std::is_same_v<T, uint8_t>) {
             // 8-bit: Handle High byte (AH, CH, DH, BH) vs Low byte
@@ -293,7 +377,7 @@ inline T ReadRegGeneric(EmuState* state, uint8_t rm) {
 
 // Helper: Handle Register Writes (including partial register preservation)
 template <typename T>
-inline void WriteRegGeneric(EmuState* state, uint8_t rm, T val) {
+inline void WriteRegGeneric(EmuState* state, GprCache& gpr, uint8_t rm, T val) {
     if constexpr (std::is_same_v<T, simde__m128>) {
         // 128-bit XMM write
         state->ctx.xmm[rm] = val;
@@ -301,13 +385,12 @@ inline void WriteRegGeneric(EmuState* state, uint8_t rm, T val) {
         // General Purpose Registers
         if constexpr (std::is_same_v<T, uint32_t>) {
             // 32-bit: Direct overwrite
-            SetReg(state, rm, val);
+            gpr.SetReg(state, rm, val);
         } else {
             // 8-bit and 16-bit: Read-Modify-Write to preserve other bits
             // Note: For 8-bit, index logic differs (rm & 3)
             uint32_t regIdx = std::is_same_v<T, uint8_t> ? (rm & 3) : rm;
-            uint32_t* rptr = GetRegPtr(state, regIdx);
-            uint32_t curr = *rptr;
+            uint32_t curr = gpr.GetReg(state, regIdx);
 
             if constexpr (std::is_same_v<T, uint8_t>) {
                 if (rm < 4) {
@@ -321,7 +404,7 @@ inline void WriteRegGeneric(EmuState* state, uint8_t rm, T val) {
                 // 16-bit
                 curr = (curr & 0xFFFF0000) | val;
             }
-            *rptr = curr;
+            gpr.SetReg(state, regIdx, curr);
         }
     }
 }
@@ -350,16 +433,16 @@ enum class OpOnTLBMiss {
  * Supports uint8_t, uint16_t, uint32_t, and simde__m128.
  */
 template <typename T, OpOnTLBMiss Strategy, uint32_t Alignment = 1>
-FORCE_INLINE MemResult<T> ReadModRM(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE MemResult<T> ReadModRM(EmuState* state, GprCache& gpr, DecodedOp* op, mem::MicroTLB* utlb) {
     uint8_t mod = (op->modrm >> 6) & 3;
     uint8_t rm = op->modrm & 7;
 
     if (mod == 3) [[likely]] {
         // Register Operand
-        return ReadRegGeneric<T>(state, rm);
+        return ReadRegGeneric<T>(state, gpr, rm);
     } else {
         // Memory Operand
-        uint32_t addr = ComputeLinearAddress(state, op);
+        uint32_t addr = ComputeLinearAddress(state, gpr, op);
 
         if constexpr (Alignment > 1) {
             if (addr & (Alignment - 1)) [[unlikely]] {
@@ -371,7 +454,7 @@ FORCE_INLINE MemResult<T> ReadModRM(EmuState* state, DecodedOp* op, mem::MicroTL
         }
 
         if constexpr (Strategy == OpOnTLBMiss::Blocking) {
-            return state->mmu.read<T, false>(addr, utlb, op);
+            return ReadGuestMem<T, false>(state, gpr, addr, utlb, op);
         } else {
             // Restart or Retry (though Retry for Read is unusual, treating as Restart)
             auto value = state->mmu.read<T, true>(addr, utlb, op);
@@ -391,17 +474,17 @@ FORCE_INLINE MemResult<T> ReadModRM(EmuState* state, DecodedOp* op, mem::MicroTL
  * Supports uint8_t, uint16_t, uint32_t, and simde__m128.
  */
 template <typename T, OpOnTLBMiss Strategy, uint32_t Alignment = 1>
-FORCE_INLINE MemResult<void> WriteModRM(EmuState* state, DecodedOp* op, T val, mem::MicroTLB* utlb) {
+FORCE_INLINE MemResult<void> WriteModRM(EmuState* state, GprCache& gpr, DecodedOp* op, T val, mem::MicroTLB* utlb) {
     uint8_t mod = (op->modrm >> 6) & 3;
     uint8_t rm = op->modrm & 7;
 
     if (mod == 3) [[likely]] {
         // Register Operand
-        WriteRegGeneric<T>(state, rm, val);
+        WriteRegGeneric<T>(state, gpr, rm, val);
         return {};
     } else {
         // Memory Operand
-        uint32_t addr = ComputeLinearAddress(state, op);
+        uint32_t addr = ComputeLinearAddress(state, gpr, op);
 
         if constexpr (Alignment > 1) {
             if (addr & (Alignment - 1)) [[unlikely]] {
@@ -413,7 +496,7 @@ FORCE_INLINE MemResult<void> WriteModRM(EmuState* state, DecodedOp* op, T val, m
         }
 
         if constexpr (Strategy == OpOnTLBMiss::Blocking) {
-            return state->mmu.write<T, false>(addr, val, utlb, op);
+            return WriteGuestMem<T, false>(state, gpr, addr, val, utlb, op);
         } else {
             auto result = state->mmu.write<T, true>(addr, val, utlb, op);
             if (!result) [[unlikely]] {
@@ -433,9 +516,9 @@ FORCE_INLINE MemResult<void> WriteModRM(EmuState* state, DecodedOp* op, T val, m
  * Generic Helper for Direct Memory Read
  */
 template <typename T, OpOnTLBMiss Strategy>
-inline MemResult<T> ReadMem(EmuState* state, uint32_t addr, mem::MicroTLB* utlb, const DecodedOp* op) {
+inline MemResult<T> ReadMem(EmuState* state, GprCache& gpr, uint32_t addr, mem::MicroTLB* utlb, const DecodedOp* op) {
     if constexpr (Strategy == OpOnTLBMiss::Blocking) {
-        return state->mmu.read<T, false>(addr, utlb, op);
+        return ReadGuestMem<T, false>(state, gpr, addr, utlb, op);
     } else {
         auto value = state->mmu.read<T, true>(addr, utlb, op);
         if (!value) [[unlikely]] {
@@ -449,9 +532,10 @@ inline MemResult<T> ReadMem(EmuState* state, uint32_t addr, mem::MicroTLB* utlb,
  * Generic Helper for Direct Memory Write
  */
 template <typename T, OpOnTLBMiss Strategy>
-FORCE_INLINE MemResult<void> WriteMem(EmuState* state, uint32_t addr, T val, mem::MicroTLB* utlb, const DecodedOp* op) {
+FORCE_INLINE MemResult<void> WriteMem(EmuState* state, GprCache& gpr, uint32_t addr, T val, mem::MicroTLB* utlb,
+                                      const DecodedOp* op) {
     if constexpr (Strategy == OpOnTLBMiss::Blocking) {
-        return state->mmu.write<T, false>(addr, val, utlb, op);
+        return WriteGuestMem<T, false>(state, gpr, addr, val, utlb, op);
     } else {
         auto result = state->mmu.write<T, true>(addr, val, utlb, op);
         if (!result) [[unlikely]] {
@@ -471,13 +555,13 @@ FORCE_INLINE MemResult<void> WriteMem(EmuState* state, uint32_t addr, T val, mem
 // ------------------------------------------------------------------------------------------------
 
 template <typename T, bool fail_on_tlb_miss = false>
-FORCE_INLINE MemResult<void> Push(EmuState* state, T val, mem::MicroTLB* utlb, DecodedOp* op) {
+FORCE_INLINE MemResult<void> Push(EmuState* state, GprCache& gpr, T val, mem::MicroTLB* utlb, DecodedOp* op) {
     constexpr uint32_t size = sizeof(T);
-    uint32_t esp = GetReg(state, ESP);
+    uint32_t esp = gpr.GetReg(state, ESP);
     const uint32_t ss_base = state->ctx.seg_base[3];  // SS
 
     // Write to memory (ESP - size)
-    auto res = state->mmu.write<T, fail_on_tlb_miss>(ss_base + esp - size, val, utlb, op);
+    auto res = WriteGuestMem<T, fail_on_tlb_miss>(state, gpr, ss_base + esp - size, val, utlb, op);
 
     // Request a write and return
     if (!res && fail_on_tlb_miss) [[unlikely]] {
@@ -487,43 +571,43 @@ FORCE_INLINE MemResult<void> Push(EmuState* state, T val, mem::MicroTLB* utlb, D
 
     if (res) {
         // Update ESP only if memory write succeeded
-        SetReg(state, ESP, esp - size);
+        gpr.SetReg(state, ESP, esp - size);
     }
     return res;
 }
 
 template <typename T, bool fail_on_tlb_miss = false>
-FORCE_INLINE MemResult<T> Pop(EmuState* state, mem::MicroTLB* utlb, DecodedOp* op) {
+FORCE_INLINE MemResult<T> Pop(EmuState* state, GprCache& gpr, mem::MicroTLB* utlb, DecodedOp* op) {
     constexpr uint32_t size = sizeof(T);
-    uint32_t esp = GetReg(state, ESP);
+    uint32_t esp = gpr.GetReg(state, ESP);
     const uint32_t ss_base = state->ctx.seg_base[3];  // SS
 
     // Read from memory (ESP)
-    auto res = state->mmu.read<T, fail_on_tlb_miss>(ss_base + esp, utlb, op);
+    auto res = ReadGuestMem<T, fail_on_tlb_miss>(state, gpr, ss_base + esp, utlb, op);
     if (!res && fail_on_tlb_miss) [[unlikely]] {
         res = state->request_read_and_check_pending<T>(ss_base + esp, op->next_eip);
     }
 
     if (res) {
         // Update ESP only if memory read succeeded
-        SetReg(state, ESP, esp + size);
+        gpr.SetReg(state, ESP, esp + size);
     }
     return res;
 }
 
 // Explicit aliases for compatibility
 // Default to fail_on_tlb_miss = true for simple usage (ops_control)
-FORCE_INLINE MemResult<void> Push16(EmuState* s, uint16_t v, mem::MicroTLB* u, DecodedOp* o) {
-    return Push<uint16_t, true>(s, v, u, o);
+FORCE_INLINE MemResult<void> Push16(EmuState* s, GprCache& gpr, uint16_t v, mem::MicroTLB* u, DecodedOp* o) {
+    return Push<uint16_t, true>(s, gpr, v, u, o);
 }
-FORCE_INLINE MemResult<void> Push32(EmuState* s, uint32_t v, mem::MicroTLB* u, DecodedOp* o) {
-    return Push<uint32_t, true>(s, v, u, o);
+FORCE_INLINE MemResult<void> Push32(EmuState* s, GprCache& gpr, uint32_t v, mem::MicroTLB* u, DecodedOp* o) {
+    return Push<uint32_t, true>(s, gpr, v, u, o);
 }
-FORCE_INLINE MemResult<uint16_t> Pop16(EmuState* s, mem::MicroTLB* u, DecodedOp* o) {
-    return Pop<uint16_t, true>(s, u, o);
+FORCE_INLINE MemResult<uint16_t> Pop16(EmuState* s, GprCache& gpr, mem::MicroTLB* u, DecodedOp* o) {
+    return Pop<uint16_t, true>(s, gpr, u, o);
 }
-FORCE_INLINE MemResult<uint32_t> Pop32(EmuState* s, mem::MicroTLB* u, DecodedOp* o) {
-    return Pop<uint32_t, true>(s, u, o);
+FORCE_INLINE MemResult<uint32_t> Pop32(EmuState* s, GprCache& gpr, mem::MicroTLB* u, DecodedOp* o) {
+    return Pop<uint32_t, true>(s, gpr, u, o);
 }
 
 // ------------------------------------------------------------------------------------------------

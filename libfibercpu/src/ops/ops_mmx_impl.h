@@ -49,7 +49,8 @@ FORCE_INLINE void SetMmxReg(EmuState* state, int idx, simde__m64 val) {
 
 // Read 64-bit value from MMX register or memory
 template <OpOnTLBMiss Strategy>
-FORCE_INLINE mem::MemResult<simde__m64> ReadMmxModRM(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE mem::MemResult<simde__m64> ReadMmxModRM(EmuState* state, GprCache& gpr, DecodedOp* op,
+                                                     mem::MicroTLB* utlb) {
     uint8_t mod = (op->modrm >> 6) & 3;
     uint8_t rm = op->modrm & 7;
 
@@ -58,9 +59,9 @@ FORCE_INLINE mem::MemResult<simde__m64> ReadMmxModRM(EmuState* state, DecodedOp*
         return GetMmxReg(state, rm);
     } else {
         // Memory operand - read 64 bits from memory
-        uint32_t addr = ComputeLinearAddress(state, op);
+        uint32_t addr = ComputeLinearAddress(state, gpr, op);
         if constexpr (Strategy == OpOnTLBMiss::Blocking) {
-            auto result = state->mmu.read<uint64_t, false>(addr, utlb, op);
+            auto result = ReadGuestMem<uint64_t, false>(state, gpr, addr, utlb, op);
             if (!result) return std::unexpected(result.error());
             return simde_x_mm_set_pi64(static_cast<int64_t>(*result));
         } else {
@@ -76,7 +77,8 @@ FORCE_INLINE mem::MemResult<simde__m64> ReadMmxModRM(EmuState* state, DecodedOp*
 
 // Write 64-bit value to MMX register or memory
 template <OpOnTLBMiss Strategy>
-FORCE_INLINE mem::MemResult<void> WriteMmxModRM(EmuState* state, DecodedOp* op, simde__m64 val, mem::MicroTLB* utlb) {
+FORCE_INLINE mem::MemResult<void> WriteMmxModRM(EmuState* state, GprCache& gpr, DecodedOp* op, simde__m64 val,
+                                                mem::MicroTLB* utlb) {
     uint8_t mod = (op->modrm >> 6) & 3;
     uint8_t rm = op->modrm & 7;
 
@@ -86,12 +88,12 @@ FORCE_INLINE mem::MemResult<void> WriteMmxModRM(EmuState* state, DecodedOp* op, 
         return {};
     } else {
         // Memory operand - write 64 bits to memory
-        uint32_t addr = ComputeLinearAddress(state, op);
+        uint32_t addr = ComputeLinearAddress(state, gpr, op);
         simde__m64_private p = simde__m64_to_private(val);
         uint64_t raw_val = static_cast<uint64_t>(p.i64[0]);
 
         if constexpr (Strategy == OpOnTLBMiss::Blocking) {
-            return state->mmu.write<uint64_t, false>(addr, raw_val, utlb, op);
+            return WriteGuestMem<uint64_t, false>(state, gpr, addr, raw_val, utlb, op);
         } else {
             auto result = state->mmu.write<uint64_t, true>(addr, raw_val, utlb, op);
             if (!result) {
@@ -104,16 +106,17 @@ FORCE_INLINE mem::MemResult<void> WriteMmxModRM(EmuState* state, DecodedOp* op, 
 
 // Read 32-bit value for MOVD (from register or memory)
 template <OpOnTLBMiss Strategy>
-FORCE_INLINE mem::MemResult<uint32_t> ReadDwordModRM(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE mem::MemResult<uint32_t> ReadDwordModRM(EmuState* state, GprCache& gpr, DecodedOp* op,
+                                                     mem::MicroTLB* utlb) {
     uint8_t mod = (op->modrm >> 6) & 3;
     uint8_t rm = op->modrm & 7;
 
     if (mod == 3) {
-        return GetReg(state, rm);
+        return gpr.GetReg(state, rm);
     } else {
-        uint32_t addr = ComputeLinearAddress(state, op);
+        uint32_t addr = ComputeLinearAddress(state, gpr, op);
         if constexpr (Strategy == OpOnTLBMiss::Blocking) {
-            return state->mmu.read<uint32_t, false>(addr, utlb, op);
+            return ReadGuestMem<uint32_t, false>(state, gpr, addr, utlb, op);
         } else {
             auto value = state->mmu.read<uint32_t, true>(addr, utlb, op);
             if (!value) {
@@ -126,16 +129,17 @@ FORCE_INLINE mem::MemResult<uint32_t> ReadDwordModRM(EmuState* state, DecodedOp*
 
 // Read 16-bit value (from register or memory)
 template <OpOnTLBMiss Strategy>
-FORCE_INLINE mem::MemResult<uint16_t> ReadWordModRM(EmuState* state, DecodedOp* op, mem::MicroTLB* utlb) {
+FORCE_INLINE mem::MemResult<uint16_t> ReadWordModRM(EmuState* state, GprCache& gpr, DecodedOp* op,
+                                                    mem::MicroTLB* utlb) {
     uint8_t mod = (op->modrm >> 6) & 3;
     uint8_t rm = op->modrm & 7;
 
     if (mod == 3) {
-        return static_cast<uint16_t>(GetReg(state, rm) & 0xFFFF);
+        return static_cast<uint16_t>(gpr.GetReg(state, rm) & 0xFFFF);
     } else {
-        uint32_t addr = ComputeLinearAddress(state, op);
+        uint32_t addr = ComputeLinearAddress(state, gpr, op);
         if constexpr (Strategy == OpOnTLBMiss::Blocking) {
-            return state->mmu.read<uint16_t, false>(addr, utlb, op);
+            return ReadGuestMem<uint16_t, false>(state, gpr, addr, utlb, op);
         } else {
             auto value = state->mmu.read<uint16_t, true>(addr, utlb, op);
             if (!value) {
@@ -148,17 +152,18 @@ FORCE_INLINE mem::MemResult<uint16_t> ReadWordModRM(EmuState* state, DecodedOp* 
 
 // Write 32-bit value for MOVD (to register or memory)
 template <OpOnTLBMiss Strategy>
-FORCE_INLINE mem::MemResult<void> WriteDwordModRM(EmuState* state, DecodedOp* op, uint32_t val, mem::MicroTLB* utlb) {
+FORCE_INLINE mem::MemResult<void> WriteDwordModRM(EmuState* state, GprCache& gpr, DecodedOp* op, uint32_t val,
+                                                  mem::MicroTLB* utlb) {
     uint8_t mod = (op->modrm >> 6) & 3;
     uint8_t rm = op->modrm & 7;
 
     if (mod == 3) {
-        SetReg(state, rm, val);
+        gpr.SetReg(state, rm, val);
         return {};
     } else {
-        uint32_t addr = ComputeLinearAddress(state, op);
+        uint32_t addr = ComputeLinearAddress(state, gpr, op);
         if constexpr (Strategy == OpOnTLBMiss::Blocking) {
-            return state->mmu.write<uint32_t, false>(addr, val, utlb, op);
+            return WriteGuestMem<uint32_t, false>(state, gpr, addr, val, utlb, op);
         } else {
             auto result = state->mmu.write<uint32_t, true>(addr, val, utlb, op);
             if (!result) {
@@ -189,7 +194,7 @@ FORCE_INLINE LogicFlow OpEmms(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpMovd_ToMmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadDwordModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadDwordModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     // Zero-extend 32-bit value to 64-bit MMX register
@@ -208,7 +213,7 @@ FORCE_INLINE LogicFlow OpMovd_FromMmx(LogicFuncParams) {
     simde__m64_private p = simde__m64_to_private(val);
     uint32_t low_dword = static_cast<uint32_t>(p.u64[0] & 0xFFFFFFFF);
 
-    auto res = WriteDwordModRM<OpOnTLBMiss::Restart>(state, op, low_dword, utlb);
+    auto res = WriteDwordModRM<OpOnTLBMiss::Restart>(state, gpr, op, low_dword, utlb);
     if (!res) return LogicFlow::RestartMemoryOp;
     EnterMmxState(state);
     return LogicFlow::Continue;
@@ -218,7 +223,7 @@ FORCE_INLINE LogicFlow OpMovd_FromMmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpMovq_ToMmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     SetMmxReg(state, reg, *src_res);
@@ -231,7 +236,7 @@ FORCE_INLINE LogicFlow OpMovq_FromMmx(LogicFuncParams) {
 
     simde__m64 val = GetMmxReg(state, reg);
 
-    auto res = WriteMmxModRM<OpOnTLBMiss::Restart>(state, op, val, utlb);
+    auto res = WriteMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, val, utlb);
     if (!res) return LogicFlow::RestartMemoryOp;
     EnterMmxState(state);
     return LogicFlow::Continue;
@@ -245,7 +250,7 @@ FORCE_INLINE LogicFlow OpMovq_FromMmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPaddb_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64 dst = GetMmxReg(state, reg);
@@ -259,7 +264,7 @@ FORCE_INLINE LogicFlow OpPaddb_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPaddw_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64 dst = GetMmxReg(state, reg);
@@ -273,7 +278,7 @@ FORCE_INLINE LogicFlow OpPaddw_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPaddd_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64 dst = GetMmxReg(state, reg);
@@ -287,7 +292,7 @@ FORCE_INLINE LogicFlow OpPaddd_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPsubb_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64 dst = GetMmxReg(state, reg);
@@ -301,7 +306,7 @@ FORCE_INLINE LogicFlow OpPsubb_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPsubw_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64 dst = GetMmxReg(state, reg);
@@ -315,7 +320,7 @@ FORCE_INLINE LogicFlow OpPsubw_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPsubd_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64 dst = GetMmxReg(state, reg);
@@ -329,7 +334,7 @@ FORCE_INLINE LogicFlow OpPsubd_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPaddq_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64 dst = GetMmxReg(state, reg);
@@ -343,7 +348,7 @@ FORCE_INLINE LogicFlow OpPaddq_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPsubq_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64 dst = GetMmxReg(state, reg);
@@ -357,7 +362,7 @@ FORCE_INLINE LogicFlow OpPsubq_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPaddusb_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64 dst = GetMmxReg(state, reg);
@@ -371,7 +376,7 @@ FORCE_INLINE LogicFlow OpPaddusb_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPaddusw_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64 dst = GetMmxReg(state, reg);
@@ -385,7 +390,7 @@ FORCE_INLINE LogicFlow OpPaddusw_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPaddsb_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64 dst = GetMmxReg(state, reg);
@@ -399,7 +404,7 @@ FORCE_INLINE LogicFlow OpPaddsb_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPaddsw_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64 dst = GetMmxReg(state, reg);
@@ -413,7 +418,7 @@ FORCE_INLINE LogicFlow OpPaddsw_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPsubusb_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64 dst = GetMmxReg(state, reg);
@@ -427,7 +432,7 @@ FORCE_INLINE LogicFlow OpPsubusb_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPsubusw_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64 dst = GetMmxReg(state, reg);
@@ -441,7 +446,7 @@ FORCE_INLINE LogicFlow OpPsubusw_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPsubsb_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64 dst = GetMmxReg(state, reg);
@@ -455,7 +460,7 @@ FORCE_INLINE LogicFlow OpPsubsb_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPsubsw_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64 dst = GetMmxReg(state, reg);
@@ -469,7 +474,7 @@ FORCE_INLINE LogicFlow OpPsubsw_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPmullw_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64 dst = GetMmxReg(state, reg);
@@ -483,7 +488,7 @@ FORCE_INLINE LogicFlow OpPmullw_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPmulhw_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64 dst = GetMmxReg(state, reg);
@@ -497,7 +502,7 @@ FORCE_INLINE LogicFlow OpPmulhw_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPmaddwd_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64 dst = GetMmxReg(state, reg);
@@ -511,7 +516,7 @@ FORCE_INLINE LogicFlow OpPmaddwd_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPmuludq_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64_private dst = simde__m64_to_private(GetMmxReg(state, reg));
@@ -530,7 +535,7 @@ FORCE_INLINE LogicFlow OpPmuludq_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPmulhuw_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64_private dst = simde__m64_to_private(GetMmxReg(state, reg));
@@ -553,7 +558,7 @@ FORCE_INLINE LogicFlow OpPmulhuw_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPand_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64 dst = GetMmxReg(state, reg);
@@ -567,7 +572,7 @@ FORCE_INLINE LogicFlow OpPand_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPandn_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64 dst = GetMmxReg(state, reg);
@@ -581,7 +586,7 @@ FORCE_INLINE LogicFlow OpPandn_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPor_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64 dst = GetMmxReg(state, reg);
@@ -595,7 +600,7 @@ FORCE_INLINE LogicFlow OpPor_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPxor_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64 dst = GetMmxReg(state, reg);
@@ -613,7 +618,7 @@ FORCE_INLINE LogicFlow OpPxor_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPcmpeqb_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64 dst = GetMmxReg(state, reg);
@@ -627,7 +632,7 @@ FORCE_INLINE LogicFlow OpPcmpeqb_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPcmpeqw_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64 dst = GetMmxReg(state, reg);
@@ -641,7 +646,7 @@ FORCE_INLINE LogicFlow OpPcmpeqw_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPcmpeqd_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64 dst = GetMmxReg(state, reg);
@@ -655,7 +660,7 @@ FORCE_INLINE LogicFlow OpPcmpeqd_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPcmpgtb_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64 dst = GetMmxReg(state, reg);
@@ -669,7 +674,7 @@ FORCE_INLINE LogicFlow OpPcmpgtb_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPcmpgtw_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64 dst = GetMmxReg(state, reg);
@@ -683,7 +688,7 @@ FORCE_INLINE LogicFlow OpPcmpgtw_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPcmpgtd_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64 dst = GetMmxReg(state, reg);
@@ -697,7 +702,7 @@ FORCE_INLINE LogicFlow OpPcmpgtd_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPminub_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64_private dst = simde__m64_to_private(GetMmxReg(state, reg));
@@ -713,7 +718,7 @@ FORCE_INLINE LogicFlow OpPminub_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPmaxub_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64_private dst = simde__m64_to_private(GetMmxReg(state, reg));
@@ -729,7 +734,7 @@ FORCE_INLINE LogicFlow OpPmaxub_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPminsw_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64_private dst = simde__m64_to_private(GetMmxReg(state, reg));
@@ -745,7 +750,7 @@ FORCE_INLINE LogicFlow OpPminsw_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPmaxsw_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64_private dst = simde__m64_to_private(GetMmxReg(state, reg));
@@ -761,7 +766,7 @@ FORCE_INLINE LogicFlow OpPmaxsw_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPavgb_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64_private dst = simde__m64_to_private(GetMmxReg(state, reg));
@@ -780,7 +785,7 @@ FORCE_INLINE LogicFlow OpPavgb_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPavgw_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64_private dst = simde__m64_to_private(GetMmxReg(state, reg));
@@ -799,7 +804,7 @@ FORCE_INLINE LogicFlow OpPavgw_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPsadbw_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64_private dst = simde__m64_to_private(GetMmxReg(state, reg));
@@ -821,7 +826,7 @@ FORCE_INLINE LogicFlow OpPinsrw_Mmx(LogicFuncParams) {
     uint8_t mm_reg = (op->modrm >> 3) & 7;
     uint8_t lane = static_cast<uint8_t>(imm) & 0x3;
 
-    auto src_res = ReadWordModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadWordModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64_private dst = simde__m64_to_private(GetMmxReg(state, mm_reg));
@@ -833,22 +838,22 @@ FORCE_INLINE LogicFlow OpPinsrw_Mmx(LogicFuncParams) {
 
 // PEXTRW - Extract Word
 FORCE_INLINE LogicFlow OpPextrw_Mmx(LogicFuncParams) {
-    uint8_t gpr = (op->modrm >> 3) & 7;
+    uint8_t dest_reg = (op->modrm >> 3) & 7;
     uint8_t lane = static_cast<uint8_t>(imm) & 0x3;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64_private src = simde__m64_to_private(*src_res);
-    SetReg(state, gpr, static_cast<uint32_t>(src.u16[lane]));
+    gpr.SetReg(state, dest_reg, static_cast<uint32_t>(src.u16[lane]));
     EnterMmxState(state);
     return LogicFlow::Continue;
 }
 
 // PMOVMSKB - Move Byte Mask
 FORCE_INLINE LogicFlow OpPmovmskb_Mmx(LogicFuncParams) {
-    uint8_t gpr = (op->modrm >> 3) & 7;
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    uint8_t dest_reg = (op->modrm >> 3) & 7;
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64_private src = simde__m64_to_private(*src_res);
@@ -856,7 +861,7 @@ FORCE_INLINE LogicFlow OpPmovmskb_Mmx(LogicFuncParams) {
     for (int i = 0; i < 8; ++i) {
         mask |= ((src.u8[i] >> 7) & 1u) << i;
     }
-    SetReg(state, gpr, mask);
+    gpr.SetReg(state, dest_reg, mask);
     EnterMmxState(state);
     return LogicFlow::Continue;
 }
@@ -865,7 +870,7 @@ FORCE_INLINE LogicFlow OpPmovmskb_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpMovntq_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
     simde__m64 val = GetMmxReg(state, reg);
-    auto res = WriteMmxModRM<OpOnTLBMiss::Retry>(state, op, val, utlb);
+    auto res = WriteMmxModRM<OpOnTLBMiss::Retry>(state, gpr, op, val, utlb);
     if (!res) return LogicFlow::RetryMemoryOp;
     EnterMmxState(state);
     return LogicFlow::Continue;
@@ -875,14 +880,14 @@ FORCE_INLINE LogicFlow OpMovntq_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpMaskmovq_Mmx(LogicFuncParams) {
     simde__m64 val = GetMmxReg(state, (op->modrm >> 3) & 7);
     simde__m64 mask = GetMmxReg(state, op->modrm & 7);
-    uint32_t addr = GetReg(state, fiberish::EDI);
+    uint32_t addr = gpr.GetReg(state, fiberish::EDI);
 
     simde__m64_private vp = simde__m64_to_private(val);
     simde__m64_private mp = simde__m64_to_private(mask);
 
     for (int i = 0; i < 8; ++i) {
         if (mp.u8[i] & 0x80) {
-            if (!WriteMem<uint8_t, OpOnTLBMiss::Blocking>(state, addr + i, vp.u8[i], utlb, op)) {
+            if (!WriteMem<uint8_t, OpOnTLBMiss::Blocking>(state, gpr, addr + i, vp.u8[i], utlb, op)) {
                 return LogicFlow::ExitOnCurrentEIP;
             }
         }
@@ -899,7 +904,7 @@ FORCE_INLINE LogicFlow OpMaskmovq_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPsllw_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64 dst = GetMmxReg(state, reg);
@@ -913,7 +918,7 @@ FORCE_INLINE LogicFlow OpPsllw_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPslld_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64 dst = GetMmxReg(state, reg);
@@ -927,7 +932,7 @@ FORCE_INLINE LogicFlow OpPslld_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPsllq_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64 dst = GetMmxReg(state, reg);
@@ -941,7 +946,7 @@ FORCE_INLINE LogicFlow OpPsllq_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPsrlw_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64 dst = GetMmxReg(state, reg);
@@ -955,7 +960,7 @@ FORCE_INLINE LogicFlow OpPsrlw_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPsrld_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64 dst = GetMmxReg(state, reg);
@@ -969,7 +974,7 @@ FORCE_INLINE LogicFlow OpPsrld_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPsrlq_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64 dst = GetMmxReg(state, reg);
@@ -983,7 +988,7 @@ FORCE_INLINE LogicFlow OpPsrlq_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPsraw_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64 dst = GetMmxReg(state, reg);
@@ -997,7 +1002,7 @@ FORCE_INLINE LogicFlow OpPsraw_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPsrad_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64 dst = GetMmxReg(state, reg);
@@ -1148,7 +1153,7 @@ FORCE_INLINE LogicFlow OpPshufw_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
     uint8_t imm8 = static_cast<uint8_t>(imm);
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64_private src = simde__m64_to_private(*src_res);
@@ -1168,7 +1173,7 @@ FORCE_INLINE LogicFlow OpPshufw_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPacksswb_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64 dst = GetMmxReg(state, reg);
@@ -1182,7 +1187,7 @@ FORCE_INLINE LogicFlow OpPacksswb_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPackuswb_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64 dst = GetMmxReg(state, reg);
@@ -1196,7 +1201,7 @@ FORCE_INLINE LogicFlow OpPackuswb_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPackssdw_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64 dst = GetMmxReg(state, reg);
@@ -1210,7 +1215,7 @@ FORCE_INLINE LogicFlow OpPackssdw_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPunpckhbw_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64 dst = GetMmxReg(state, reg);
@@ -1224,7 +1229,7 @@ FORCE_INLINE LogicFlow OpPunpckhbw_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPunpckhwd_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64 dst = GetMmxReg(state, reg);
@@ -1238,7 +1243,7 @@ FORCE_INLINE LogicFlow OpPunpckhwd_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPunpckhdq_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64 dst = GetMmxReg(state, reg);
@@ -1252,7 +1257,7 @@ FORCE_INLINE LogicFlow OpPunpckhdq_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPunpcklbw_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64 dst = GetMmxReg(state, reg);
@@ -1266,7 +1271,7 @@ FORCE_INLINE LogicFlow OpPunpcklbw_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPunpcklwd_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64 dst = GetMmxReg(state, reg);
@@ -1280,7 +1285,7 @@ FORCE_INLINE LogicFlow OpPunpcklwd_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpPunpckldq_Mmx(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
 
-    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, op, utlb);
+    auto src_res = ReadMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
 
     simde__m64 dst = GetMmxReg(state, reg);

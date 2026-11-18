@@ -55,6 +55,7 @@ ATTR_PRESERVE_NONE int64_t MemoryOpGeneric(EmuState* RESTRICT state, DecodedOp* 
                                            mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
                                            uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
     FIBERCPU_PIN_ASSUME;
+    FIBERCPU_PIN_COMMIT(state);
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     // An architectural alignment fault has already completed fault setup and
     // must not restart the same instruction or consume an older pending read.
@@ -92,13 +93,13 @@ ATTR_PRESERVE_NONE int64_t MemoryOpGeneric(EmuState* RESTRICT state, DecodedOp* 
     if constexpr (restart) {
         // Don't clear mem_op, it's pending for restart
         ATTR_MUSTTAIL return op->handler(state, op, instr_limit, utlb_tags, utlb_addend, branch,
-                                         flags_cache FIBERCPU_PIN_RELOAD);
+                                         flags_cache FIBERCPU_PIN_RESUME);
     }
 
     state->clear_pending_mem_op();
     DecodedOp* next_op = NextOp(op);
     ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch,
-                                          flags_cache FIBERCPU_PIN_RELOAD);
+                                          flags_cache FIBERCPU_PIN_RESUME);
 }
 
 template ATTR_PRESERVE_NONE int64_t MemoryOpGeneric<true>(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
@@ -158,6 +159,7 @@ static ATTR_PRESERVE_NONE int64_t ResolveBranchTargetSlowImpl(EmuState* RESTRICT
     if (!next_block) next_block = state->mmu.invalid_code_block();
 
     if (!next_block->MatchesChainTarget(target_eip)) {
+        FIBERCPU_PIN_COMMIT(state);
         CommitFlagsCache(state, flags_cache);
         state->ctx.eip = target_eip;
         return instr_limit;

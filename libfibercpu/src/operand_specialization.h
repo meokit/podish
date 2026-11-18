@@ -36,9 +36,13 @@ HandlerFunc SelectRegisterOperand(const DecodedOp* op) {
                 return DispatchWrapper<Target, RegisterOperandPolicy<PinWriteRole::None, PinWriteClass::Other, Byte>>;
         const unsigned field = Role == PinWriteRole::Rm ? op->modrm : op->modrm >> 3;
         const unsigned parent = field & (Byte ? 3 : 7);
-        if (parent == 0) return DispatchWrapper<Target, RegisterOperandPolicy<Role, PinWriteClass::Eax, Byte>>;
-        if constexpr (!Byte)
-            if (parent == 4) return DispatchWrapper<Target, RegisterOperandPolicy<Role, PinWriteClass::Esp, Byte>>;
+#define FIBERCPU_SELECT_PIN(id, name, slot, ...)                                                               \
+    if constexpr (!Byte || id < 4) {                                                                           \
+        if (parent == id)                                                                                      \
+            return DispatchWrapper<Target, RegisterOperandPolicy<Role, static_cast<PinWriteClass>(id), Byte>>; \
+    }
+        FIBERCPU_FOR_EACH_PIN(FIBERCPU_SELECT_PIN)
+#undef FIBERCPU_SELECT_PIN
         return DispatchWrapper<Target, RegisterOperandPolicy<Role, PinWriteClass::Other, Byte>>;
     }
 }
@@ -50,11 +54,14 @@ HandlerFunc SelectEncodedOperand(const DecodedOp* op) {
     } else {
         const unsigned field = Role == PinWriteRole::Reg ? op->modrm >> 3 : op->modrm;
         const unsigned parent = field & (Byte ? 3 : 7);
-        if (parent == 0)
-            return DispatchWrapper<Target, EncodedOperandPolicy<Role, PinWriteClass::Eax, Byte, OpcodeRegister>>;
-        if constexpr (!Byte)
-            if (parent == 4)
-                return DispatchWrapper<Target, EncodedOperandPolicy<Role, PinWriteClass::Esp, Byte, OpcodeRegister>>;
+#define FIBERCPU_SELECT_PIN(id, name, slot, ...)                                                                      \
+    if constexpr (!Byte || id < 4) {                                                                                  \
+        if (parent == id)                                                                                             \
+            return DispatchWrapper<Target,                                                                            \
+                                   EncodedOperandPolicy<Role, static_cast<PinWriteClass>(id), Byte, OpcodeRegister>>; \
+    }
+        FIBERCPU_FOR_EACH_PIN(FIBERCPU_SELECT_PIN)
+#undef FIBERCPU_SELECT_PIN
         return DispatchWrapper<Target, EncodedOperandPolicy<Role, PinWriteClass::Other, Byte, OpcodeRegister>>;
     }
 }

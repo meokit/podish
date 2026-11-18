@@ -23,7 +23,7 @@ FORCE_INLINE T CalculateCarryRmw(EmuState* state, uint64_t& flags_cache, T dest,
 // the instruction's input flags intact for either an SMC rerun or a real fault.
 template <CarryRmwKind Kind, typename T, bool UpdateFlags>
 __attribute__((noinline, cold)) LogicFlow CarryRmwSlow(EmuState* state, DecodedOp* op, uint32_t addr, T dest, T src,
-                                                     uint64_t input_flags) {
+                                                       uint64_t input_flags) {
     state->sync_eip_to_op_start(op);
     state->clear_pending_mem_op();
     // Also make flags from earlier instructions visible to fault callbacks.
@@ -36,22 +36,23 @@ __attribute__((noinline, cold)) LogicFlow CarryRmwSlow(EmuState* state, DecodedO
 }
 
 template <CarryRmwKind Kind, typename T, bool UpdateFlags = true, bool RegisterOnly = false>
-FORCE_INLINE LogicFlow ExecuteCarryRmw(EmuState* state, DecodedOp* op, T dest, T src, mem::MicroTLB* utlb,
-                                       uint64_t& flags_cache) {
+FORCE_INLINE LogicFlow ExecuteCarryRmw(EmuState* state, GprCache& gpr, DecodedOp* op, T dest, T src,
+                                       mem::MicroTLB* utlb, uint64_t& flags_cache) {
     if (RegisterOnly || (op->modrm >> 6) == 3) {
         const T result = CalculateCarryRmw<Kind, T, UpdateFlags>(state, flags_cache, dest, src);
-        WriteRegGeneric<T>(state, op->modrm & 7, result);
+        WriteRegGeneric<T>(state, gpr, op->modrm & 7, result);
         return LogicFlow::Continue;
     }
 
-    const uint32_t addr = ComputeLinearAddress(state, op);
+    const uint32_t addr = ComputeLinearAddress(state, gpr, op);
     // Move, don't duplicate, the existing write-TLB check. Once this succeeds,
     // pure ALU work and a direct store cannot trigger a guest fault or callback.
     auto target = state->mmu.try_write_target_tlb<T>(addr, utlb);
     if (!target) [[unlikely]] {
         // Pass by value: taking the hot flags local's address makes clang-cl
         // spill it and insert /GS checks into every invocation of the handler.
-        const auto flow = CarryRmwSlow<Kind, T, UpdateFlags>(state, op, addr, dest, src, flags_cache);
+        const auto flow = gpr.WithCanonical(
+            state, [&] { return CarryRmwSlow<Kind, T, UpdateFlags>(state, op, addr, dest, src, flags_cache); });
         flags_cache = GetStateFlagsCache(state);
         return flow;
     }

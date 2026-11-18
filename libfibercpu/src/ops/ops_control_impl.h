@@ -43,13 +43,14 @@ FORCE_INLINE LogicFlow OpCmov_Internal(LogicFuncParams) {
     if constexpr (S != Specialized::ModReg) {
         const uint8_t reg = (op->modrm >> 3) & 7;
         if (op->prefixes.flags.opsize) {
-            auto value = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+            auto value = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
             if (!value) return LogicFlow::RestartMemoryOp;
-            if (CheckConditionFixed<Cond>(flags_cache)) SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | *value);
+            if (CheckConditionFixed<Cond>(flags_cache))
+                gpr.SetReg(state, reg, (gpr.GetReg(state, reg) & 0xFFFF0000) | *value);
         } else {
-            auto value = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+            auto value = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
             if (!value) return LogicFlow::RestartMemoryOp;
-            if (CheckConditionFixed<Cond>(flags_cache)) SetReg(state, reg, *value);
+            if (CheckConditionFixed<Cond>(flags_cache)) gpr.SetReg(state, reg, *value);
         }
         return LogicFlow::Continue;
     }
@@ -62,28 +63,28 @@ FORCE_INLINE LogicFlow OpCmov_Internal(LogicFuncParams) {
             uint8_t rm = op->modrm & 7;
             if (op->prefixes.flags.opsize) {
                 // 16-bit
-                uint16_t val = (uint16_t)(GetReg(state, rm) & 0xFFFF);
-                uint32_t current = state->ctx.regs[reg];
-                state->ctx.regs[reg] = (current & 0xFFFF0000) | val;
+                uint16_t val = (uint16_t)(gpr.GetReg(state, rm) & 0xFFFF);
+                uint32_t current = gpr.GetReg(state, reg);
+                gpr.SetReg(state, reg, (current & 0xFFFF0000) | val);
             } else {
                 // 32-bit
-                uint32_t val = GetReg(state, rm);
-                state->ctx.regs[reg] = val;
+                uint32_t val = gpr.GetReg(state, rm);
+                gpr.SetReg(state, reg, val);
             }
         } else {
             if (op->prefixes.flags.opsize) {
                 // 16-bit
-                auto val_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+                auto val_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
                 if (!val_res) return LogicFlow::RestartMemoryOp;
                 uint16_t val = *val_res;
-                uint32_t current = state->ctx.regs[reg];
-                state->ctx.regs[reg] = (current & 0xFFFF0000) | val;
+                uint32_t current = gpr.GetReg(state, reg);
+                gpr.SetReg(state, reg, (current & 0xFFFF0000) | val);
             } else {
                 // 32-bit
-                auto val_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+                auto val_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
                 if (!val_res) return LogicFlow::RestartMemoryOp;
                 uint32_t val = *val_res;
-                state->ctx.regs[reg] = val;
+                gpr.SetReg(state, reg, val);
             }
         }
     }
@@ -91,14 +92,15 @@ FORCE_INLINE LogicFlow OpCmov_Internal(LogicFuncParams) {
 }
 
 // Helper for interrupts (Traps/Interrupts - EIP points to next instruction)
-inline void RaiseInterrupt(EmuState* state, uint8_t vector, DecodedOp* op) {
+inline void RaiseInterrupt(EmuState* state, GprCache& gpr, uint8_t vector, DecodedOp* op) {
     // Sync EIP
     state->ctx.eip = op->next_eip;
 
     // Check if hook handles it
     bool handled = false;
     if (state->interrupt_handlers[vector]) {
-        handled = state->interrupt_handlers[vector](state, vector, state->interrupt_userdata[vector]);
+        handled = gpr.WithCanonical(
+            state, [&] { return state->interrupt_handlers[vector](state, vector, state->interrupt_userdata[vector]); });
     }
 
     // For now, we just fault if not handled, as we don't fully emulate IDT in user mode runner.
@@ -118,10 +120,10 @@ FORCE_INLINE LogicFlow OpJecxz(LogicFuncParams) {
     bool jump = false;
     if (op->prefixes.flags.addrsize) {
         // 16-bit address size: CX
-        jump = (GetReg(state, ECX) & 0xFFFF) == 0;
+        jump = (gpr.GetReg(state, ECX) & 0xFFFF) == 0;
     } else {
         // 32-bit address size: ECX
-        jump = GetReg(state, ECX) == 0;
+        jump = gpr.GetReg(state, ECX) == 0;
     }
 
     if (jump) {
@@ -135,13 +137,13 @@ template <bool CheckZF, bool ExpectedZF>
 FORCE_INLINE LogicFlow OpLoop_Internal(LogicFuncParams) {
     uint32_t count;
     if (op->prefixes.flags.addrsize) {
-        count = GetReg(state, ECX) & 0xFFFF;
+        count = gpr.GetReg(state, ECX) & 0xFFFF;
         count = (count - 1) & 0xFFFF;
-        uint32_t current = GetReg(state, ECX);
-        SetReg(state, ECX, (current & 0xFFFF0000u) | count);
+        uint32_t current = gpr.GetReg(state, ECX);
+        gpr.SetReg(state, ECX, (current & 0xFFFF0000u) | count);
     } else {
-        count = GetReg(state, ECX) - 1;
-        SetReg(state, ECX, count);
+        count = gpr.GetReg(state, ECX) - 1;
+        gpr.SetReg(state, ECX, count);
     }
 
     bool jump = count != 0;
@@ -191,10 +193,10 @@ FORCE_INLINE LogicFlow OpCall_Rel(LogicFuncParams) {
     // E8: CALL rel16/32
     // The operand-size prefix controls the pushed return-address width.
     if (op->prefixes.flags.opsize) {
-        if (!Push<uint16_t, true>(state, (uint16_t)op->next_eip, utlb, op)) return LogicFlow::RestartMemoryOp;
+        if (!Push<uint16_t, true>(state, gpr, (uint16_t)op->next_eip, utlb, op)) return LogicFlow::RestartMemoryOp;
         *branch = GetControlTargetEip(op) & 0xFFFFu;
     } else {
-        if (!Push<uint32_t, true>(state, op->next_eip, utlb, op)) return LogicFlow::RestartMemoryOp;
+        if (!Push<uint32_t, true>(state, gpr, op->next_eip, utlb, op)) return LogicFlow::RestartMemoryOp;
         *branch = GetControlTargetEip(op);
     }
     return LogicFlow::ExitToBranch;
@@ -203,11 +205,11 @@ FORCE_INLINE LogicFlow OpCall_Rel(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpRet(LogicFuncParams) {
     // C3: RET
     if (op->prefixes.flags.opsize) {
-        auto val_res = Pop<uint16_t, true>(state, utlb, op);
+        auto val_res = Pop<uint16_t, true>(state, gpr, utlb, op);
         if (!val_res) return LogicFlow::RestartMemoryOp;
         *branch = *val_res;
     } else {
-        auto val_res = Pop<uint32_t, true>(state, utlb, op);
+        auto val_res = Pop<uint32_t, true>(state, gpr, utlb, op);
         if (!val_res) return LogicFlow::RestartMemoryOp;
         *branch = *val_res;
     }
@@ -217,19 +219,19 @@ FORCE_INLINE LogicFlow OpRet(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpRet_Imm16(LogicFuncParams) {
     // C2: RET imm16
     if (op->prefixes.flags.opsize) {
-        auto val_res = Pop<uint16_t, true>(state, utlb, op);
+        auto val_res = Pop<uint16_t, true>(state, gpr, utlb, op);
         if (!val_res) return LogicFlow::RestartMemoryOp;
         *branch = *val_res;
     } else {
-        auto val_res = Pop<uint32_t, true>(state, utlb, op);
+        auto val_res = Pop<uint32_t, true>(state, gpr, utlb, op);
         if (!val_res) return LogicFlow::RestartMemoryOp;
         *branch = *val_res;
     }
 
     // Pop imm16 bytes from stack
-    uint32_t esp = GetReg(state, ESP);
+    uint32_t esp = gpr.GetReg(state, ESP);
     esp += (uint16_t)imm;
-    SetReg(state, ESP, esp);
+    gpr.SetReg(state, ESP, esp);
     return LogicFlow::ExitToBranch;
 }
 
@@ -237,10 +239,10 @@ template <Specialized SizeSpec>
 FORCE_INLINE LogicFlow OpPushf_Internal(LogicFuncParams) {
     CommitFlagsCache(state, flags_cache);
     if constexpr (SizeSpec == Specialized::Opsize16) {
-        if (!Push<uint16_t, true>(state, (uint16_t)GetArchitecturalEflags(state), utlb, op))
+        if (!Push<uint16_t, true>(state, gpr, (uint16_t)GetArchitecturalEflags(state), utlb, op))
             return LogicFlow::RestartMemoryOp;
     } else {
-        if (!Push<uint32_t, true>(state, GetArchitecturalEflags(state) & 0x00FCFFFF, utlb, op))
+        if (!Push<uint32_t, true>(state, gpr, GetArchitecturalEflags(state) & 0x00FCFFFF, utlb, op))
             return LogicFlow::RestartMemoryOp;
     }
     return LogicFlow::Continue;
@@ -249,7 +251,7 @@ FORCE_INLINE LogicFlow OpPushf_Internal(LogicFuncParams) {
 template <Specialized SizeSpec>
 FORCE_INLINE LogicFlow OpPopf_Internal(LogicFuncParams) {
     if constexpr (SizeSpec == Specialized::Opsize16) {
-        auto val_res = Pop<uint16_t, true>(state, utlb, op);
+        auto val_res = Pop<uint16_t, true>(state, gpr, utlb, op);
         if (!val_res) return LogicFlow::RestartMemoryOp;
         uint16_t val = *val_res;
 
@@ -260,7 +262,7 @@ FORCE_INLINE LogicFlow OpPopf_Internal(LogicFuncParams) {
         SetArchitecturalEflags(state, new_flags);
         flags_cache = InitFlagsCache(new_flags);
     } else {
-        auto val_res = Pop<uint32_t, true>(state, utlb, op);
+        auto val_res = Pop<uint32_t, true>(state, gpr, utlb, op);
         if (!val_res) return LogicFlow::RestartMemoryOp;
         uint32_t val = *val_res;
 
@@ -335,8 +337,8 @@ FORCE_INLINE LogicFlow OpCli(LogicFuncParams) {
 
 FORCE_INLINE LogicFlow OpCpuid(LogicFuncParams) {
     // 0F A2: CPUID
-    uint32_t leaf = GetReg(state, EAX);
-    uint32_t ecx_in = GetReg(state, ECX);
+    uint32_t leaf = gpr.GetReg(state, EAX);
+    uint32_t ecx_in = gpr.GetReg(state, ECX);
 
     uint32_t eax = 0, ebx = 0, ecx = 0, edx = 0;
 
@@ -389,10 +391,10 @@ FORCE_INLINE LogicFlow OpCpuid(LogicFuncParams) {
             break;
     }
 
-    SetReg(state, EAX, eax);
-    SetReg(state, EBX, ebx);
-    SetReg(state, ECX, ecx);
-    SetReg(state, EDX, edx);
+    gpr.SetReg(state, EAX, eax);
+    gpr.SetReg(state, EBX, ebx);
+    gpr.SetReg(state, ECX, ecx);
+    gpr.SetReg(state, EDX, edx);
     return LogicFlow::Continue;
 }
 
@@ -415,8 +417,8 @@ FORCE_INLINE LogicFlow OpRdtsc(LogicFuncParams) {
     uint32_t low = (uint32_t)tsc;
     uint32_t high = (uint32_t)(tsc >> 32);
 
-    SetReg(state, EAX, low);
-    SetReg(state, EDX, high);
+    gpr.SetReg(state, EAX, low);
+    gpr.SetReg(state, EDX, high);
     return LogicFlow::Continue;
 }
 
@@ -458,7 +460,7 @@ FORCE_INLINE LogicFlow OpFxState(LogicFuncParams, bool restore) {
         state->fault_vector = 6;
         return LogicFlow::ExitOnCurrentEIP;
     }
-    const uint32_t address = ComputeLinearAddress(state, op);
+    const uint32_t address = ComputeLinearAddress(state, gpr, op);
     if (address & 15) {
         state->status = EmuStatus::Fault;
         state->fault_vector = 13;
@@ -470,7 +472,8 @@ FORCE_INLINE LogicFlow OpFxState(LogicFuncParams, bool restore) {
         // Blocking, bounded reads avoid partial architectural updates and the
         // single pending-memory slot used by restartable scalar operations.
         for (uint32_t offset = 0; offset < image.bytes.size(); offset += 16) {
-            auto value = ReadMem<std::array<uint8_t, 16>, OpOnTLBMiss::Blocking>(state, address + offset, utlb, op);
+            auto value =
+                ReadMem<std::array<uint8_t, 16>, OpOnTLBMiss::Blocking>(state, gpr, address + offset, utlb, op);
             if (!value) return LogicFlow::ExitOnCurrentEIP;
             std::memcpy(image.bytes.data() + offset, value->data(), 16);
         }
@@ -529,7 +532,8 @@ FORCE_INLINE LogicFlow OpFxState(LogicFuncParams, bool restore) {
         for (uint32_t offset = 0; offset < 464; offset += 16) {
             std::array<uint8_t, 16> value;
             std::memcpy(value.data(), image.bytes.data() + offset, 16);
-            if (!WriteMem<std::array<uint8_t, 16>, OpOnTLBMiss::Blocking>(state, address + offset, value, utlb, op)) {
+            if (!WriteMem<std::array<uint8_t, 16>, OpOnTLBMiss::Blocking>(state, gpr, address + offset, value, utlb,
+                                                                          op)) {
                 return LogicFlow::ExitOnCurrentEIP;
             }
         }
@@ -550,8 +554,8 @@ FORCE_INLINE LogicFlow OpGroup_0FAE(LogicFuncParams) {
             return OpFxState(LogicPassParams, true);
         case 2:  // LDMXCSR m32
             if (mod != 3) {
-                uint32_t addr = ComputeLinearAddress(state, op);
-                auto val_res = ReadMem<uint32_t, OpOnTLBMiss::Restart>(state, addr, utlb, op);
+                uint32_t addr = ComputeLinearAddress(state, gpr, op);
+                auto val_res = ReadMem<uint32_t, OpOnTLBMiss::Restart>(state, gpr, addr, utlb, op);
                 if (!val_res) return LogicFlow::RestartMemoryOp;
                 if (*val_res & ~kFxMxcsrMask) {
                     state->status = EmuStatus::Fault;
@@ -567,8 +571,8 @@ FORCE_INLINE LogicFlow OpGroup_0FAE(LogicFuncParams) {
             break;
         case 3:  // STMXCSR m32
             if (mod != 3) {
-                uint32_t addr = ComputeLinearAddress(state, op);
-                if (!WriteMem<uint32_t, OpOnTLBMiss::Retry>(state, addr, state->ctx.mxcsr, utlb, op))
+                uint32_t addr = ComputeLinearAddress(state, gpr, op);
+                if (!WriteMem<uint32_t, OpOnTLBMiss::Retry>(state, gpr, addr, state->ctx.mxcsr, utlb, op))
                     return LogicFlow::RetryMemoryOp;
             }
             break;
@@ -605,8 +609,10 @@ FORCE_INLINE LogicFlow OpNop(LogicFuncParams) {
 
 FORCE_INLINE LogicFlow OpHlt(LogicFuncParams) {
     // HLT
+    gpr.Commit(state);
     LogMsgState(state, 4, "[ABORT] USER ABORT DETECTED: HLT instruction executed at EIP: 0x%08X",
                 op->next_eip - op->len);
+    gpr.Reload(state);
     state->status = EmuStatus::Fault;
     state->fault_vector = 13;  // #GP
     return LogicFlow::ExitOnCurrentEIP;
@@ -621,7 +627,7 @@ FORCE_INLINE LogicFlow OpInt(LogicFuncParams) {
     // Set EIP to next instruction (return address)
     state->ctx.eip = op->next_eip;
 
-    RaiseInterrupt(state, vector, op);
+    RaiseInterrupt(state, gpr, vector, op);
 
     // A handler may replace the image (execve) and reset EFLAGS. The local
     // flags_cache still describes the caller; reload it before this block can
@@ -639,7 +645,7 @@ FORCE_INLINE LogicFlow OpInt3(LogicFuncParams) {
     // CC: INT 3
     mem::InvalidateMicroTLB(utlb);
     CommitFlagsCache(state, flags_cache);
-    RaiseInterrupt(state, 3, op);
+    RaiseInterrupt(state, gpr, 3, op);
     if (state->eip_dirty || state->status != EmuStatus::Running) {
         return LogicFlow::ExitOnNextEIP;
     }
@@ -651,7 +657,7 @@ FORCE_INLINE LogicFlow OpInto(LogicFuncParams) {
     if (TestFlagBits(flags_cache, OF_MASK)) {
         mem::InvalidateMicroTLB(utlb);
         CommitFlagsCache(state, flags_cache);
-        RaiseInterrupt(state, 4, op);
+        RaiseInterrupt(state, gpr, 4, op);
     }
     if (state->eip_dirty || state->status != EmuStatus::Running) {
         return LogicFlow::ExitOnNextEIP;
@@ -692,17 +698,17 @@ FORCE_INLINE LogicFlow OpBound(LogicFuncParams) {
     // Signed check!
 
     // Bounds are [Lower, Upper] at effective address
-    uint32_t addr = ComputeLinearAddress(state, op);
+    uint32_t addr = ComputeLinearAddress(state, gpr, op);
 
     if (op->prefixes.flags.opsize) {
         // 16-bit
-        int16_t val = (int16_t)GetReg(state, (op->modrm >> 3) & 7);
+        int16_t val = (int16_t)gpr.GetReg(state, (op->modrm >> 3) & 7);
 
-        auto low_res = ReadMem<int16_t, OpOnTLBMiss::Restart>(state, addr, utlb, op);
+        auto low_res = ReadMem<int16_t, OpOnTLBMiss::Restart>(state, gpr, addr, utlb, op);
         if (!low_res) return LogicFlow::RestartMemoryOp;
         int16_t lower = *low_res;
 
-        auto high_res = ReadMem<int16_t, OpOnTLBMiss::Restart>(state, addr + 2, utlb, op);
+        auto high_res = ReadMem<int16_t, OpOnTLBMiss::Restart>(state, gpr, addr + 2, utlb, op);
         if (!high_res) return LogicFlow::RestartMemoryOp;
         int16_t upper = *high_res;
 
@@ -714,13 +720,13 @@ FORCE_INLINE LogicFlow OpBound(LogicFuncParams) {
         }
     } else {
         // 32-bit
-        int32_t val = (int32_t)GetReg(state, (op->modrm >> 3) & 7);
+        int32_t val = (int32_t)gpr.GetReg(state, (op->modrm >> 3) & 7);
 
-        auto low_res = ReadMem<int32_t, OpOnTLBMiss::Restart>(state, addr, utlb, op);
+        auto low_res = ReadMem<int32_t, OpOnTLBMiss::Restart>(state, gpr, addr, utlb, op);
         if (!low_res) return LogicFlow::RestartMemoryOp;
         int32_t lower = *low_res;
 
-        auto high_res = ReadMem<int32_t, OpOnTLBMiss::Restart>(state, addr + 4, utlb, op);
+        auto high_res = ReadMem<int32_t, OpOnTLBMiss::Restart>(state, gpr, addr + 4, utlb, op);
         if (!high_res) return LogicFlow::RestartMemoryOp;
         int32_t upper = *high_res;
 

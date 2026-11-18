@@ -111,8 +111,8 @@ FORCE_INLINE LogicFlow OpMaxMin_Sse_Impl(LogicFuncParams) {
         if (op->modrm >= 0xC0) {
             b = ((double*)&state->ctx.xmm[op->modrm & 7])[0];
         } else {
-            uint32_t addr = ComputeLinearAddress(state, op);
-            auto b_res = ReadMem<double, OpOnTLBMiss::Restart>(state, addr, utlb, op);
+            uint32_t addr = ComputeLinearAddress(state, gpr, op);
+            auto b_res = ReadMem<double, OpOnTLBMiss::Restart>(state, gpr, addr, utlb, op);
             if (!b_res) return LogicFlow::RestartMemoryOp;
             b = *b_res;
         }
@@ -129,8 +129,8 @@ FORCE_INLINE LogicFlow OpMaxMin_Sse_Impl(LogicFuncParams) {
         if (op->modrm >= 0xC0) {
             b = ((float*)&state->ctx.xmm[op->modrm & 7])[0];
         } else {
-            uint32_t addr = ComputeLinearAddress(state, op);
-            auto b_res = ReadMem<float, OpOnTLBMiss::Restart>(state, addr, utlb, op);
+            uint32_t addr = ComputeLinearAddress(state, gpr, op);
+            auto b_res = ReadMem<float, OpOnTLBMiss::Restart>(state, gpr, addr, utlb, op);
             if (!b_res) return LogicFlow::RestartMemoryOp;
             b = *b_res;
         }
@@ -143,7 +143,7 @@ FORCE_INLINE LogicFlow OpMaxMin_Sse_Impl(LogicFuncParams) {
         // High 96 bits unmodified
 
     } else if (op->prefixes.flags.opsize) {  // 66: Packed Double
-        auto val_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, op, utlb);
+        auto val_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, gpr, op, utlb);
         if (!val_res) return LogicFlow::RestartMemoryOp;
         simde__m128d a = simde_mm_castps_pd(state->ctx.xmm[reg_idx]);
         simde__m128d b = simde_mm_castps_pd(*val_res);
@@ -154,7 +154,7 @@ FORCE_INLINE LogicFlow OpMaxMin_Sse_Impl(LogicFuncParams) {
         state->ctx.xmm[reg_idx] = simde_mm_castpd_ps(res);
 
     } else {  // None: Packed Single
-        auto val_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, op, utlb);
+        auto val_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, gpr, op, utlb);
         if (!val_res) return LogicFlow::RestartMemoryOp;
         simde__m128 a = state->ctx.xmm[reg_idx];
         state->ctx.xmm[reg_idx] = IsMin ? simde_mm_min_ps(a, *val_res) : simde_mm_max_ps(a, *val_res);
@@ -174,7 +174,7 @@ FORCE_INLINE LogicFlow OpAdd_Sse(LogicFuncParams) {
     simde__m128 src_val;
 
     if (op->prefixes.flags.opsize) {  // 66: ADDPD (Packed Double)
-        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, op, utlb);
+        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, gpr, op, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         src_val = *src_res;
         state->ctx.xmm[reg] =
@@ -184,8 +184,8 @@ FORCE_INLINE LogicFlow OpAdd_Sse(LogicFuncParams) {
         if ((op->modrm >> 6) == 3) {
             src_val = state->ctx.xmm[rm];
         } else {
-            uint32_t addr = ComputeLinearAddress(state, op);
-            auto mem_res = ReadMem<uint64_t, OpOnTLBMiss::Restart>(state, addr, utlb, op);
+            uint32_t addr = ComputeLinearAddress(state, gpr, op);
+            auto mem_res = ReadMem<uint64_t, OpOnTLBMiss::Restart>(state, gpr, addr, utlb, op);
             if (!mem_res) return LogicFlow::RestartMemoryOp;
             uint64_t mem_val = *mem_res;
             double d_val;
@@ -199,8 +199,8 @@ FORCE_INLINE LogicFlow OpAdd_Sse(LogicFuncParams) {
         if ((op->modrm >> 6) == 3) {
             src_val = state->ctx.xmm[rm];
         } else {
-            uint32_t addr = ComputeLinearAddress(state, op);
-            auto mem_res = ReadMem<uint32_t, OpOnTLBMiss::Restart>(state, addr, utlb, op);
+            uint32_t addr = ComputeLinearAddress(state, gpr, op);
+            auto mem_res = ReadMem<uint32_t, OpOnTLBMiss::Restart>(state, gpr, addr, utlb, op);
             if (!mem_res) return LogicFlow::RestartMemoryOp;
             uint32_t mem_val = *mem_res;
             float f_val;
@@ -209,7 +209,7 @@ FORCE_INLINE LogicFlow OpAdd_Sse(LogicFuncParams) {
         }
         state->ctx.xmm[reg] = simde_mm_add_ss(dst_val, src_val);
     } else {  // None: ADDPS (Packed Single)
-        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, op, utlb);
+        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, gpr, op, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         src_val = *src_res;
         state->ctx.xmm[reg] = simde_mm_add_ps(dst_val, src_val);
@@ -226,7 +226,7 @@ FORCE_INLINE LogicFlow OpSub_Sse(LogicFuncParams) {
     simde__m128 src_val;
 
     if (op->prefixes.flags.opsize) {  // 66: SUBPD
-        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, op, utlb);
+        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, gpr, op, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         src_val = *src_res;
         state->ctx.xmm[reg] =
@@ -235,8 +235,8 @@ FORCE_INLINE LogicFlow OpSub_Sse(LogicFuncParams) {
         if ((op->modrm >> 6) == 3) {
             src_val = state->ctx.xmm[rm];
         } else {
-            uint32_t addr = ComputeLinearAddress(state, op);
-            auto mem_res = ReadMem<uint64_t, OpOnTLBMiss::Restart>(state, addr, utlb, op);
+            uint32_t addr = ComputeLinearAddress(state, gpr, op);
+            auto mem_res = ReadMem<uint64_t, OpOnTLBMiss::Restart>(state, gpr, addr, utlb, op);
             if (!mem_res) return LogicFlow::RestartMemoryOp;
             uint64_t mem_val = *mem_res;
             double d_val;
@@ -249,8 +249,8 @@ FORCE_INLINE LogicFlow OpSub_Sse(LogicFuncParams) {
         if ((op->modrm >> 6) == 3) {
             src_val = state->ctx.xmm[rm];
         } else {
-            uint32_t addr = ComputeLinearAddress(state, op);
-            auto mem_res = ReadMem<uint32_t, OpOnTLBMiss::Restart>(state, addr, utlb, op);
+            uint32_t addr = ComputeLinearAddress(state, gpr, op);
+            auto mem_res = ReadMem<uint32_t, OpOnTLBMiss::Restart>(state, gpr, addr, utlb, op);
             if (!mem_res) return LogicFlow::RestartMemoryOp;
             uint32_t mem_val = *mem_res;
             float f_val;
@@ -259,7 +259,7 @@ FORCE_INLINE LogicFlow OpSub_Sse(LogicFuncParams) {
         }
         state->ctx.xmm[reg] = simde_mm_sub_ss(dst_val, src_val);
     } else {  // None: SUBPS
-        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, op, utlb);
+        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, gpr, op, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         src_val = *src_res;
         state->ctx.xmm[reg] = simde_mm_sub_ps(dst_val, src_val);
@@ -276,7 +276,7 @@ FORCE_INLINE LogicFlow OpMul_Sse(LogicFuncParams) {
     simde__m128 src_val;
 
     if (op->prefixes.flags.opsize) {  // 66: MULPD
-        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, op, utlb);
+        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, gpr, op, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         src_val = *src_res;
         state->ctx.xmm[reg] =
@@ -285,8 +285,8 @@ FORCE_INLINE LogicFlow OpMul_Sse(LogicFuncParams) {
         if ((op->modrm >> 6) == 3) {
             src_val = state->ctx.xmm[rm];
         } else {
-            uint32_t addr = ComputeLinearAddress(state, op);
-            auto mem_res = ReadMem<uint64_t, OpOnTLBMiss::Restart>(state, addr, utlb, op);
+            uint32_t addr = ComputeLinearAddress(state, gpr, op);
+            auto mem_res = ReadMem<uint64_t, OpOnTLBMiss::Restart>(state, gpr, addr, utlb, op);
             if (!mem_res) return LogicFlow::RestartMemoryOp;
             uint64_t mem_val = *mem_res;
             double d_val;
@@ -299,8 +299,8 @@ FORCE_INLINE LogicFlow OpMul_Sse(LogicFuncParams) {
         if ((op->modrm >> 6) == 3) {
             src_val = state->ctx.xmm[rm];
         } else {
-            uint32_t addr = ComputeLinearAddress(state, op);
-            auto mem_res = ReadMem<uint32_t, OpOnTLBMiss::Restart>(state, addr, utlb, op);
+            uint32_t addr = ComputeLinearAddress(state, gpr, op);
+            auto mem_res = ReadMem<uint32_t, OpOnTLBMiss::Restart>(state, gpr, addr, utlb, op);
             if (!mem_res) return LogicFlow::RestartMemoryOp;
             uint32_t mem_val = *mem_res;
             float f_val;
@@ -309,7 +309,7 @@ FORCE_INLINE LogicFlow OpMul_Sse(LogicFuncParams) {
         }
         state->ctx.xmm[reg] = simde_mm_mul_ss(dst_val, src_val);
     } else {  // None: MULPS
-        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, op, utlb);
+        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, gpr, op, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         src_val = *src_res;
         state->ctx.xmm[reg] = simde_mm_mul_ps(dst_val, src_val);
@@ -326,7 +326,7 @@ FORCE_INLINE LogicFlow OpDiv_Sse(LogicFuncParams) {
     simde__m128 src_val;
 
     if (op->prefixes.flags.opsize) {  // 66: DIVPD
-        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, op, utlb);
+        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, gpr, op, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         src_val = *src_res;
         state->ctx.xmm[reg] =
@@ -335,8 +335,8 @@ FORCE_INLINE LogicFlow OpDiv_Sse(LogicFuncParams) {
         if ((op->modrm >> 6) == 3) {
             src_val = state->ctx.xmm[rm];
         } else {
-            uint32_t addr = ComputeLinearAddress(state, op);
-            auto mem_res = ReadMem<uint64_t, OpOnTLBMiss::Restart>(state, addr, utlb, op);
+            uint32_t addr = ComputeLinearAddress(state, gpr, op);
+            auto mem_res = ReadMem<uint64_t, OpOnTLBMiss::Restart>(state, gpr, addr, utlb, op);
             if (!mem_res) return LogicFlow::RestartMemoryOp;
             uint64_t mem_val = *mem_res;
             double d_val;
@@ -349,8 +349,8 @@ FORCE_INLINE LogicFlow OpDiv_Sse(LogicFuncParams) {
         if ((op->modrm >> 6) == 3) {
             src_val = state->ctx.xmm[rm];
         } else {
-            uint32_t addr = ComputeLinearAddress(state, op);
-            auto mem_res = ReadMem<uint32_t, OpOnTLBMiss::Restart>(state, addr, utlb, op);
+            uint32_t addr = ComputeLinearAddress(state, gpr, op);
+            auto mem_res = ReadMem<uint32_t, OpOnTLBMiss::Restart>(state, gpr, addr, utlb, op);
             if (!mem_res) return LogicFlow::RestartMemoryOp;
             uint32_t mem_val = *mem_res;
             float f_val;
@@ -359,7 +359,7 @@ FORCE_INLINE LogicFlow OpDiv_Sse(LogicFuncParams) {
         }
         state->ctx.xmm[reg] = simde_mm_div_ss(dst_val, src_val);
     } else {  // None: DIVPS
-        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, op, utlb);
+        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, gpr, op, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         src_val = *src_res;
         state->ctx.xmm[reg] = simde_mm_div_ps(dst_val, src_val);
@@ -371,7 +371,7 @@ FORCE_INLINE LogicFlow OpAnd_Sse(LogicFuncParams) {
     // 0F 54: ANDPS/ANDPD
     uint8_t reg = (op->modrm >> 3) & 7;
     simde__m128 dst_val = state->ctx.xmm[reg];
-    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, op, utlb);
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128 src_val = *src_res;
 
@@ -388,7 +388,7 @@ FORCE_INLINE LogicFlow OpAndn_Sse(LogicFuncParams) {
     // 0F 55: ANDNPS/ANDNPD
     uint8_t reg = (op->modrm >> 3) & 7;
     simde__m128 dst_val = state->ctx.xmm[reg];
-    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, op, utlb);
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128 src_val = *src_res;
 
@@ -405,7 +405,7 @@ FORCE_INLINE LogicFlow OpOr_Sse(LogicFuncParams) {
     // 0F 56: ORPS/ORPD
     uint8_t reg = (op->modrm >> 3) & 7;
     simde__m128 dst_val = state->ctx.xmm[reg];
-    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, op, utlb);
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128 src_val = *src_res;
 
@@ -422,7 +422,7 @@ FORCE_INLINE LogicFlow OpXor_Sse(LogicFuncParams) {
     // 0F 57: XORPS/XORPD
     uint8_t reg = (op->modrm >> 3) & 7;
     simde__m128 dst_val = state->ctx.xmm[reg];
-    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, op, utlb);
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128 src_val = *src_res;
 
@@ -443,7 +443,7 @@ FORCE_INLINE LogicFlow OpCmp_Sse(LogicFuncParams) {
     if (op->prefixes.flags.opsize) {
         // 66 0F C2: CMPPD
         simde__m128d dest_pd = simde_mm_castps_pd(*dest_ptr);
-        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, op, utlb);
+        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, gpr, op, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         simde__m128d src_pd = simde_mm_castps_pd(*src_res);
 
@@ -458,8 +458,8 @@ FORCE_INLINE LogicFlow OpCmp_Sse(LogicFuncParams) {
         if ((op->modrm >> 6) == 3) {
             src_pd = simde_mm_castps_pd(state->ctx.xmm[op->modrm & 7]);
         } else {
-            uint32_t addr = ComputeLinearAddress(state, op);
-            auto val_res = ReadMem<uint64_t, OpOnTLBMiss::Restart>(state, addr, utlb, op);
+            uint32_t addr = ComputeLinearAddress(state, gpr, op);
+            auto val_res = ReadMem<uint64_t, OpOnTLBMiss::Restart>(state, gpr, addr, utlb, op);
             if (!val_res) return LogicFlow::RestartMemoryOp;
             src_pd = simde_mm_set_sd(*(double*)&(*val_res));
         }
@@ -473,8 +473,8 @@ FORCE_INLINE LogicFlow OpCmp_Sse(LogicFuncParams) {
         if ((op->modrm >> 6) == 3) {
             src = state->ctx.xmm[op->modrm & 7];
         } else {
-            uint32_t addr = ComputeLinearAddress(state, op);
-            auto val_res = ReadMem<uint32_t, OpOnTLBMiss::Restart>(state, addr, utlb, op);
+            uint32_t addr = ComputeLinearAddress(state, gpr, op);
+            auto val_res = ReadMem<uint32_t, OpOnTLBMiss::Restart>(state, gpr, addr, utlb, op);
             if (!val_res) return LogicFlow::RestartMemoryOp;
             src = simde_mm_set_ss(*(float*)&(*val_res));
         }
@@ -482,7 +482,7 @@ FORCE_INLINE LogicFlow OpCmp_Sse(LogicFuncParams) {
 
     } else {
         // 0F C2: CMPPS
-        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, op, utlb);
+        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, gpr, op, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         *dest_ptr = Helper_CmpPS(*dest_ptr, *src_res, pred);
     }
@@ -495,7 +495,7 @@ FORCE_INLINE LogicFlow OpMax_Sse(LogicFuncParams) { return OpMaxMin_Sse_Impl<fal
 
 FORCE_INLINE LogicFlow OpMovAp_Load(LogicFuncParams) {
     // 0F 28: MOVAPS xmm1, xmm2/m128 (Load/Move)
-    auto val_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, op, utlb);
+    auto val_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, gpr, op, utlb);
     if (!val_res) return LogicFlow::RestartMemoryOp;
     uint8_t reg = (op->modrm >> 3) & 7;
     state->ctx.xmm[reg] = *val_res;
@@ -506,7 +506,7 @@ FORCE_INLINE LogicFlow OpMovAp_Store(LogicFuncParams) {
     // 0F 29: MOVAPS xmm2/m128, xmm1 (Store)
     uint8_t reg = (op->modrm >> 3) & 7;
     simde__m128 val = state->ctx.xmm[reg];
-    if (!WriteModRM<simde__m128, OpOnTLBMiss::Retry, 16>(state, op, val, utlb)) return LogicFlow::RetryMemoryOp;
+    if (!WriteModRM<simde__m128, OpOnTLBMiss::Retry, 16>(state, gpr, op, val, utlb)) return LogicFlow::RetryMemoryOp;
     return LogicFlow::Continue;
 }
 
@@ -525,8 +525,8 @@ FORCE_INLINE LogicFlow OpSqrt_Sse(LogicFuncParams) {
         if ((op->modrm >> 6) == 3) {
             src = simde_mm_castps_pd(state->ctx.xmm[op->modrm & 7]);
         } else {
-            uint32_t addr = ComputeLinearAddress(state, op);
-            auto val_res = ReadMem<uint64_t, OpOnTLBMiss::Restart>(state, addr, utlb, op);
+            uint32_t addr = ComputeLinearAddress(state, gpr, op);
+            auto val_res = ReadMem<uint64_t, OpOnTLBMiss::Restart>(state, gpr, addr, utlb, op);
             if (!val_res) return LogicFlow::RestartMemoryOp;
             double d;
             std::memcpy(&d, &(*val_res), 8);
@@ -543,8 +543,8 @@ FORCE_INLINE LogicFlow OpSqrt_Sse(LogicFuncParams) {
         if ((op->modrm >> 6) == 3) {
             src = state->ctx.xmm[op->modrm & 7];
         } else {
-            uint32_t addr = ComputeLinearAddress(state, op);
-            auto val_res = ReadMem<uint32_t, OpOnTLBMiss::Restart>(state, addr, utlb, op);
+            uint32_t addr = ComputeLinearAddress(state, gpr, op);
+            auto val_res = ReadMem<uint32_t, OpOnTLBMiss::Restart>(state, gpr, addr, utlb, op);
             if (!val_res) return LogicFlow::RestartMemoryOp;
             float f;
             std::memcpy(&f, &(*val_res), 4);
@@ -555,14 +555,14 @@ FORCE_INLINE LogicFlow OpSqrt_Sse(LogicFuncParams) {
         state->ctx.xmm[reg] = simde_mm_move_ss(dest, sqrt_val);
 
     } else if (op->prefixes.flags.opsize) {  // 66: SQRTPD
-        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, op, utlb);
+        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, gpr, op, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         simde__m128d src = simde_mm_castps_pd(*src_res);
         simde__m128d res = simde_mm_sqrt_pd(src);
         state->ctx.xmm[reg] = simde_mm_castpd_ps(res);
 
     } else {  // None: SQRTPS
-        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, op, utlb);
+        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, gpr, op, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         simde__m128 src = *src_res;
         simde__m128 res = simde_mm_sqrt_ps(src);
@@ -590,8 +590,8 @@ FORCE_INLINE LogicFlow OpUcomis_Unified(LogicFuncParams) {
             simde__m128d vb = simde_mm_castps_pd(state->ctx.xmm[op->modrm & 7]);
             b = simde_mm_cvtsd_f64(vb);
         } else {
-            uint32_t addr = ComputeLinearAddress(state, op);
-            auto val_res = ReadMem<uint64_t, OpOnTLBMiss::Restart>(state, addr, utlb, op);
+            uint32_t addr = ComputeLinearAddress(state, gpr, op);
+            auto val_res = ReadMem<uint64_t, OpOnTLBMiss::Restart>(state, gpr, addr, utlb, op);
             if (!val_res) return LogicFlow::RestartMemoryOp;
             std::memcpy(&b, &(*val_res), 8);
         }
@@ -609,8 +609,8 @@ FORCE_INLINE LogicFlow OpUcomis_Unified(LogicFuncParams) {
         if ((op->modrm >> 6) == 3) {
             b = simde_mm_cvtss_f32(state->ctx.xmm[op->modrm & 7]);
         } else {
-            uint32_t addr = ComputeLinearAddress(state, op);
-            auto val_res = ReadMem<uint32_t, OpOnTLBMiss::Restart>(state, addr, utlb, op);
+            uint32_t addr = ComputeLinearAddress(state, gpr, op);
+            auto val_res = ReadMem<uint32_t, OpOnTLBMiss::Restart>(state, gpr, addr, utlb, op);
             if (!val_res) return LogicFlow::RestartMemoryOp;
             std::memcpy(&b, &(*val_res), 4);
         }
@@ -650,14 +650,14 @@ FORCE_INLINE LogicFlow OpRcp_Sse(LogicFuncParams) {
         if ((op->modrm >> 6) == 3) {
             src = state->ctx.xmm[op->modrm & 7];
         } else {
-            uint32_t addr = ComputeLinearAddress(state, op);
-            auto val_res = ReadMem<uint32_t, OpOnTLBMiss::Restart>(state, addr, utlb, op);
+            uint32_t addr = ComputeLinearAddress(state, gpr, op);
+            auto val_res = ReadMem<uint32_t, OpOnTLBMiss::Restart>(state, gpr, addr, utlb, op);
             if (!val_res) return LogicFlow::RestartMemoryOp;
             src = simde_mm_set_ss(*(float*)&(*val_res));
         }
         state->ctx.xmm[reg] = simde_mm_move_ss(dst, simde_mm_rcp_ss(src));
     } else {  // RCPPS
-        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, op, utlb);
+        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, gpr, op, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         state->ctx.xmm[reg] = simde_mm_rcp_ps(*src_res);
     }
@@ -673,14 +673,14 @@ FORCE_INLINE LogicFlow OpRsqrt_Sse(LogicFuncParams) {
         if ((op->modrm >> 6) == 3) {
             src = state->ctx.xmm[op->modrm & 7];
         } else {
-            uint32_t addr = ComputeLinearAddress(state, op);
-            auto val_res = ReadMem<uint32_t, OpOnTLBMiss::Restart>(state, addr, utlb, op);
+            uint32_t addr = ComputeLinearAddress(state, gpr, op);
+            auto val_res = ReadMem<uint32_t, OpOnTLBMiss::Restart>(state, gpr, addr, utlb, op);
             if (!val_res) return LogicFlow::RestartMemoryOp;
             src = simde_mm_set_ss(*(float*)&(*val_res));
         }
         state->ctx.xmm[reg] = simde_mm_move_ss(dst, simde_mm_rsqrt_ss(src));
     } else {  // RSQRTPS
-        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, op, utlb);
+        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, gpr, op, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         state->ctx.xmm[reg] = simde_mm_rsqrt_ps(*src_res);
     }
@@ -694,7 +694,7 @@ FORCE_INLINE LogicFlow OpShuf_Unified(LogicFuncParams) {
 
     if (op->prefixes.flags.opsize) {  // 66: SHUFPD
         double* dest_arr = (double*)&state->ctx.xmm[reg];
-        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, op, utlb);
+        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, gpr, op, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         double* src_arr = (double*)&(*src_res);
 
@@ -706,7 +706,7 @@ FORCE_INLINE LogicFlow OpShuf_Unified(LogicFuncParams) {
 
     } else {  // None: SHUFPS
         float* dest_arr = (float*)&state->ctx.xmm[reg];
-        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, op, utlb);
+        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, gpr, op, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         float* src_arr = (float*)&(*src_res);
 
@@ -728,14 +728,14 @@ FORCE_INLINE LogicFlow OpUnpckl_Unified(LogicFuncParams) {
 
     if (op->prefixes.flags.opsize) {  // 66: UNPCKLPD
         simde__m128d dest = simde_mm_castps_pd(state->ctx.xmm[reg]);
-        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, op, utlb);
+        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, gpr, op, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         simde__m128d src = simde_mm_castps_pd(*src_res);
         simde__m128d res = simde_mm_unpacklo_pd(dest, src);
         state->ctx.xmm[reg] = simde_mm_castpd_ps(res);
     } else {  // None: UNPCKLPS
         simde__m128 dest = state->ctx.xmm[reg];
-        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, op, utlb);
+        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, gpr, op, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         simde__m128 src = *src_res;
         simde__m128 res = simde_mm_unpacklo_ps(dest, src);
@@ -751,14 +751,14 @@ FORCE_INLINE LogicFlow OpUnpckh_Unified(LogicFuncParams) {
 
     if (op->prefixes.flags.opsize) {  // 66: UNPCKHPD
         simde__m128d dest = simde_mm_castps_pd(state->ctx.xmm[reg]);
-        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, op, utlb);
+        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, gpr, op, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         simde__m128d src = simde_mm_castps_pd(*src_res);
         simde__m128d res = simde_mm_unpackhi_pd(dest, src);
         state->ctx.xmm[reg] = simde_mm_castpd_ps(res);
     } else {  // None: UNPCKHPS
         simde__m128 dest = state->ctx.xmm[reg];
-        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, op, utlb);
+        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, gpr, op, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         simde__m128 src = *src_res;
         simde__m128 res = simde_mm_unpackhi_ps(dest, src);

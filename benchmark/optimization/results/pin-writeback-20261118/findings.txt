@@ -1,0 +1,44 @@
+GNU write-back specialization, macOS/ARM64, 2026-11-18
+
+The baseline is EAX_ESP write-through with the 448-entry GNU plan and budget
+512. The candidate is WRITE_BACK with the 704-entry GNU write-back plan and
+a single forward decode pass. Both use SHAPED fusion, HYBRID/ALL lowering,
+MEMORY pin specialization, AppleClang Release ThinLTO, the same managed CLI
+and the same guest executable/input per case. Timing is serialized and the
+variant order rotates each round. No benchmark binary is rebuilt.
+
+Candidate changes: retain the entire 448-entry plan and append 48 fused
+plus 208 single-instruction shapes. Two added ADD reg,[ESP] shapes reached
+262144 estimated executions each in the earlier SHA256 count profile. The
+intermediate 704-entry candidate gained speed in gzip, gunzip, SHA256 and
+sed, but left tar at -0.716% after three rounds. The final candidate does
+fusion matching and operand lowering in one pass and only reverse-maps
+entries marked as lowered before rebuilding concatenated blocks.
+
+Values are throughput deltas versus the original write-through reference.
+Development input: seed 987654, about 2 MiB, three paired rounds.
+Independent input: seed 314159265, about 4 MiB, one paired round for all
+cases followed by three longer gunzip pairs to resolve a small negative.
+
+case             development median   development pair range   independent first pair
+gzip               +8.335%            +7.111..  +9.270%        +8.980%
+gunzip             +2.278%            -0.037..  +3.195%        -0.332%
+sed                +2.153%            +1.008..  +3.736%        +4.337%
+grep_fixed         +0.384%            -0.118..  +0.882%        +3.239%
+grep_regex         +2.304%            +1.900..  +3.003%        +1.595%
+sort               +0.283%            -0.049..  +0.283%        +0.310%
+sha256             +0.901%            -0.051..  +2.180%        +3.609%
+tar                +1.261%            -0.726..  +2.822%        +0.510%
+
+Independent gunzip confirmation: +0.718% median, paired -0.292..+1.856%.
+GCC CoreMark with the existing i386 ELF and fixed 60000 iterations:
+5251.641 -> 5299.885 (+0.919%, CRC and minimum run duration validated).
+All GNU output checks and all 3167 CPU tests passed. The data are limited
+to these inputs and host. This tested preset is now the macOS ARM64 shared
+Clang build default when preserve_none is available.
+
+Native __text: write-through 1402684 bytes; original WRITE_BACK 1688524
+bytes; final WRITE_BACK 1744348 bytes. The expanded plan plus the decode
+pass increases __text by 3.31% over the original WRITE_BACK binary and
+24.36% over write-through. The comparison measures the whole optimized
+configuration, including its larger plan and decoder change.

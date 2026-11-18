@@ -1,0 +1,482 @@
+[
+  {
+    "case": "gzip",
+    "variant": "wt",
+    "round": "final-gnu-0",
+    "iterations": 7,
+    "wall_seconds": 3.7397297921124846,
+    "log": "final-gnu-0-wt-gzip.log",
+    "seconds": 3.463593333028257,
+    "validated": true
+  },
+  {
+    "case": "gzip",
+    "variant": "joined",
+    "round": "final-gnu-0",
+    "iterations": 7,
+    "wall_seconds": 3.492462750058621,
+    "log": "final-gnu-0-joined-gzip.log",
+    "seconds": 3.233646458014846,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "wt",
+    "round": "final-gnu-0",
+    "iterations": 33,
+    "wall_seconds": 2.8003476669546217,
+    "log": "final-gnu-0-wt-gunzip.log",
+    "seconds": 2.5407243750523776,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "joined",
+    "round": "final-gnu-0",
+    "iterations": 33,
+    "wall_seconds": 2.7458812498953193,
+    "log": "final-gnu-0-joined-gunzip.log",
+    "seconds": 2.4878702498972416,
+    "validated": true
+  },
+  {
+    "case": "sed",
+    "variant": "wt",
+    "round": "final-gnu-0",
+    "iterations": 7,
+    "wall_seconds": 4.576123292092234,
+    "log": "final-gnu-0-wt-sed.log",
+    "seconds": 4.314589584013447,
+    "validated": true
+  },
+  {
+    "case": "sed",
+    "variant": "joined",
+    "round": "final-gnu-0",
+    "iterations": 7,
+    "wall_seconds": 4.421778958057985,
+    "log": "final-gnu-0-joined-sed.log",
+    "seconds": 4.159189667087048,
+    "validated": true
+  },
+  {
+    "case": "grep_fixed",
+    "variant": "wt",
+    "round": "final-gnu-0",
+    "iterations": 79,
+    "wall_seconds": 1.6251566249411553,
+    "log": "final-gnu-0-wt-grep_fixed.log",
+    "seconds": 1.3643765421584249,
+    "validated": true
+  },
+  {
+    "case": "grep_fixed",
+    "variant": "joined",
+    "round": "final-gnu-0",
+    "iterations": 79,
+    "wall_seconds": 1.610959667013958,
+    "log": "final-gnu-0-joined-grep_fixed.log",
+    "seconds": 1.3524542080704123,
+    "validated": true
+  },
+  {
+    "case": "grep_regex",
+    "variant": "wt",
+    "round": "final-gnu-0",
+    "iterations": 51,
+    "wall_seconds": 2.517152499873191,
+    "log": "final-gnu-0-wt-grep_regex.log",
+    "seconds": 2.256071750074625,
+    "validated": true
+  },
+  {
+    "case": "grep_regex",
+    "variant": "joined",
+    "round": "final-gnu-0",
+    "iterations": 51,
+    "wall_seconds": 2.4518529588822275,
+    "log": "final-gnu-0-joined-grep_regex.log",
+    "seconds": 2.1903076248709112,
+    "validated": true
+  },
+  {
+    "case": "sort",
+    "variant": "wt",
+    "round": "final-gnu-0",
+    "iterations": 19,
+    "wall_seconds": 3.9388374590780586,
+    "log": "final-gnu-0-wt-sort.log",
+    "seconds": 3.6778510420117527,
+    "validated": true
+  },
+  {
+    "case": "sort",
+    "variant": "joined",
+    "round": "final-gnu-0",
+    "iterations": 19,
+    "wall_seconds": 3.9373093750327826,
+    "log": "final-gnu-0-joined-sort.log",
+    "seconds": 3.6747158330399543,
+    "validated": true
+  },
+  {
+    "case": "sha256",
+    "variant": "wt",
+    "round": "final-gnu-0",
+    "iterations": 36,
+    "wall_seconds": 2.208803500048816,
+    "log": "final-gnu-0-wt-sha256.log",
+    "seconds": 1.9473638329654932,
+    "validated": true
+  },
+  {
+    "case": "sha256",
+    "variant": "joined",
+    "round": "final-gnu-0",
+    "iterations": 36,
+    "wall_seconds": 2.166954250074923,
+    "log": "final-gnu-0-joined-sha256.log",
+    "seconds": 1.9058212090749294,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "wt",
+    "round": "final-gnu-0",
+    "iterations": 82,
+    "wall_seconds": 1.908337000058964,
+    "log": "final-gnu-0-wt-tar.log",
+    "seconds": 1.645792624913156,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "joined",
+    "round": "final-gnu-0",
+    "iterations": 82,
+    "wall_seconds": 1.9108154168352485,
+    "log": "final-gnu-0-joined-tar.log",
+    "seconds": 1.6483670419547707,
+    "validated": true
+  },
+  {
+    "case": "gzip",
+    "variant": "joined",
+    "round": "final-gnu-1",
+    "iterations": 7,
+    "wall_seconds": 3.4369692080654204,
+    "log": "final-gnu-1-joined-gzip.log",
+    "seconds": 3.174448624951765,
+    "validated": true
+  },
+  {
+    "case": "gzip",
+    "variant": "wt",
+    "round": "final-gnu-1",
+    "iterations": 7,
+    "wall_seconds": 3.7312661670148373,
+    "log": "final-gnu-1-wt-gzip.log",
+    "seconds": 3.4687348341103643,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "joined",
+    "round": "final-gnu-1",
+    "iterations": 33,
+    "wall_seconds": 2.8106043750885874,
+    "log": "final-gnu-1-joined-gunzip.log",
+    "seconds": 2.550955415936187,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "wt",
+    "round": "final-gnu-1",
+    "iterations": 33,
+    "wall_seconds": 2.812519542174414,
+    "log": "final-gnu-1-wt-gunzip.log",
+    "seconds": 2.550021917093545,
+    "validated": true
+  },
+  {
+    "case": "sed",
+    "variant": "joined",
+    "round": "final-gnu-1",
+    "iterations": 7,
+    "wall_seconds": 4.518597000045702,
+    "log": "final-gnu-1-joined-sed.log",
+    "seconds": 4.256574916886166,
+    "validated": true
+  },
+  {
+    "case": "sed",
+    "variant": "wt",
+    "round": "final-gnu-1",
+    "iterations": 7,
+    "wall_seconds": 4.647909041959792,
+    "log": "final-gnu-1-wt-sed.log",
+    "seconds": 4.384316917043179,
+    "validated": true
+  },
+  {
+    "case": "grep_fixed",
+    "variant": "joined",
+    "round": "final-gnu-1",
+    "iterations": 79,
+    "wall_seconds": 1.6227764170616865,
+    "log": "final-gnu-1-joined-grep_fixed.log",
+    "seconds": 1.3557609589770436,
+    "validated": true
+  },
+  {
+    "case": "grep_fixed",
+    "variant": "wt",
+    "round": "final-gnu-1",
+    "iterations": 79,
+    "wall_seconds": 1.61593975010328,
+    "log": "final-gnu-1-wt-grep_fixed.log",
+    "seconds": 1.3541546668857336,
+    "validated": true
+  },
+  {
+    "case": "grep_regex",
+    "variant": "joined",
+    "round": "final-gnu-1",
+    "iterations": 51,
+    "wall_seconds": 2.467196458019316,
+    "log": "final-gnu-1-joined-grep_regex.log",
+    "seconds": 2.2052697078324854,
+    "validated": true
+  },
+  {
+    "case": "grep_regex",
+    "variant": "wt",
+    "round": "final-gnu-1",
+    "iterations": 51,
+    "wall_seconds": 2.511614999966696,
+    "log": "final-gnu-1-wt-grep_regex.log",
+    "seconds": 2.2494629588909447,
+    "validated": true
+  },
+  {
+    "case": "sort",
+    "variant": "joined",
+    "round": "final-gnu-1",
+    "iterations": 19,
+    "wall_seconds": 3.9418537081219256,
+    "log": "final-gnu-1-joined-sort.log",
+    "seconds": 3.6806072909384966,
+    "validated": true
+  },
+  {
+    "case": "sort",
+    "variant": "wt",
+    "round": "final-gnu-1",
+    "iterations": 19,
+    "wall_seconds": 3.954084957949817,
+    "log": "final-gnu-1-wt-sort.log",
+    "seconds": 3.691040667006746,
+    "validated": true
+  },
+  {
+    "case": "sha256",
+    "variant": "joined",
+    "round": "final-gnu-1",
+    "iterations": 36,
+    "wall_seconds": 2.1858986250590533,
+    "log": "final-gnu-1-joined-sha256.log",
+    "seconds": 1.9239557080436498,
+    "validated": true
+  },
+  {
+    "case": "sha256",
+    "variant": "wt",
+    "round": "final-gnu-1",
+    "iterations": 36,
+    "wall_seconds": 2.1848954169545323,
+    "log": "final-gnu-1-wt-sha256.log",
+    "seconds": 1.9229832079727203,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "joined",
+    "round": "final-gnu-1",
+    "iterations": 82,
+    "wall_seconds": 1.8741780838463455,
+    "log": "final-gnu-1-joined-tar.log",
+    "seconds": 1.613292207941413,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "wt",
+    "round": "final-gnu-1",
+    "iterations": 82,
+    "wall_seconds": 1.9190522499848157,
+    "log": "final-gnu-1-wt-tar.log",
+    "seconds": 1.6588249169290066,
+    "validated": true
+  },
+  {
+    "case": "gzip",
+    "variant": "wt",
+    "round": "final-gnu-2",
+    "iterations": 7,
+    "wall_seconds": 3.733784625073895,
+    "log": "final-gnu-2-wt-gzip.log",
+    "seconds": 3.4717711668927222,
+    "validated": true
+  },
+  {
+    "case": "gzip",
+    "variant": "joined",
+    "round": "final-gnu-2",
+    "iterations": 7,
+    "wall_seconds": 3.4644243749789894,
+    "log": "final-gnu-2-joined-gzip.log",
+    "seconds": 3.201866624876857,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "wt",
+    "round": "final-gnu-2",
+    "iterations": 33,
+    "wall_seconds": 2.8361338330432773,
+    "log": "final-gnu-2-wt-gunzip.log",
+    "seconds": 2.5728943329304457,
+    "validated": true
+  },
+  {
+    "case": "gunzip",
+    "variant": "joined",
+    "round": "final-gnu-2",
+    "iterations": 33,
+    "wall_seconds": 2.7596717081032693,
+    "log": "final-gnu-2-joined-gunzip.log",
+    "seconds": 2.493227417115122,
+    "validated": true
+  },
+  {
+    "case": "sed",
+    "variant": "wt",
+    "round": "final-gnu-2",
+    "iterations": 7,
+    "wall_seconds": 4.610441124998033,
+    "log": "final-gnu-2-wt-sed.log",
+    "seconds": 4.3482327500823885,
+    "validated": true
+  },
+  {
+    "case": "sed",
+    "variant": "joined",
+    "round": "final-gnu-2",
+    "iterations": 7,
+    "wall_seconds": 4.565045375144109,
+    "log": "final-gnu-2-joined-sed.log",
+    "seconds": 4.30483229085803,
+    "validated": true
+  },
+  {
+    "case": "grep_fixed",
+    "variant": "wt",
+    "round": "final-gnu-2",
+    "iterations": 79,
+    "wall_seconds": 1.6240312908776104,
+    "log": "final-gnu-2-wt-grep_fixed.log",
+    "seconds": 1.3606541671324521,
+    "validated": true
+  },
+  {
+    "case": "grep_fixed",
+    "variant": "joined",
+    "round": "final-gnu-2",
+    "iterations": 79,
+    "wall_seconds": 1.6165151249151677,
+    "log": "final-gnu-2-joined-grep_fixed.log",
+    "seconds": 1.3554502909537405,
+    "validated": true
+  },
+  {
+    "case": "grep_regex",
+    "variant": "wt",
+    "round": "final-gnu-2",
+    "iterations": 51,
+    "wall_seconds": 2.5247689590323716,
+    "log": "final-gnu-2-wt-grep_regex.log",
+    "seconds": 2.262058542110026,
+    "validated": true
+  },
+  {
+    "case": "grep_regex",
+    "variant": "joined",
+    "round": "final-gnu-2",
+    "iterations": 51,
+    "wall_seconds": 2.4874883331358433,
+    "log": "final-gnu-2-joined-grep_regex.log",
+    "seconds": 2.2198760001920164,
+    "validated": true
+  },
+  {
+    "case": "sort",
+    "variant": "wt",
+    "round": "final-gnu-2",
+    "iterations": 19,
+    "wall_seconds": 3.9736457499675453,
+    "log": "final-gnu-2-wt-sort.log",
+    "seconds": 3.7092238750774413,
+    "validated": true
+  },
+  {
+    "case": "sort",
+    "variant": "joined",
+    "round": "final-gnu-2",
+    "iterations": 19,
+    "wall_seconds": 3.9748816250357777,
+    "log": "final-gnu-2-joined-sort.log",
+    "seconds": 3.711036041844636,
+    "validated": true
+  },
+  {
+    "case": "sha256",
+    "variant": "wt",
+    "round": "final-gnu-2",
+    "iterations": 36,
+    "wall_seconds": 2.152575750136748,
+    "log": "final-gnu-2-wt-sha256.log",
+    "seconds": 1.8895671251229942,
+    "validated": true
+  },
+  {
+    "case": "sha256",
+    "variant": "joined",
+    "round": "final-gnu-2",
+    "iterations": 36,
+    "wall_seconds": 2.133386875037104,
+    "log": "final-gnu-2-joined-sha256.log",
+    "seconds": 1.8691184588242322,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "wt",
+    "round": "final-gnu-2",
+    "iterations": 82,
+    "wall_seconds": 1.8745867079123855,
+    "log": "final-gnu-2-wt-tar.log",
+    "seconds": 1.6134965000674129,
+    "validated": true
+  },
+  {
+    "case": "tar",
+    "variant": "joined",
+    "round": "final-gnu-2",
+    "iterations": 82,
+    "wall_seconds": 1.8864848338998854,
+    "log": "final-gnu-2-joined-tar.log",
+    "seconds": 1.625296707963571,
+    "validated": true
+  }
+]

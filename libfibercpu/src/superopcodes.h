@@ -33,11 +33,13 @@ void ApplySuperOpcodesToBlockOps(DecodedOp* ops, uint32_t op_count, bool previou
                 __builtin_unreachable();                                                                               \
             case LogicFlow::ExitOnCurrentEIP:                                                                          \
                 RecordBlockHandlersThrough(state, flow_op);                                                            \
+                FIBERCPU_PIN_COMMIT(state);                                                                            \
                 CommitFlagsCache(state, flags_cache);                                                                  \
                 if (!(state)->eip_dirty) (state)->sync_eip_to_op_start(flow_op);                                       \
                 return instr_limit;                                                                                    \
             case LogicFlow::ExitOnNextEIP:                                                                             \
                 RecordBlockHandlersThrough(state, flow_op);                                                            \
+                FIBERCPU_PIN_COMMIT(state);                                                                            \
                 CommitFlagsCache(state, flags_cache);                                                                  \
                 if (!(state)->eip_dirty) (state)->sync_eip_to_op_end(flow_op);                                         \
                 return instr_limit;                                                                                    \
@@ -57,6 +59,7 @@ void ApplySuperOpcodesToBlockOps(DecodedOp* ops, uint32_t op_count, bool previou
                 ATTR_MUSTTAIL return ResolveBranchTargetInline<ExtKind::ControlFlow>(                                  \
                     state, flow_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);     \
             default:                                                                                                   \
+                FIBERCPU_PIN_COMMIT(state);                                                                            \
                 CommitFlagsCache(state, flags_cache);                                                                  \
                 return instr_limit;                                                                                    \
         }                                                                                                              \
@@ -64,7 +67,7 @@ void ApplySuperOpcodesToBlockOps(DecodedOp* ops, uint32_t op_count, bool previou
 
 #define RUN_SUPEROPCODE_OP(target, state, cur_op, instr_limit, utlb, branch, flags_cache)                   \
     do {                                                                                                    \
-        auto flow = target(state, cur_op, &utlb, GetImm(cur_op), &branch, flags_cache);                     \
+        auto flow = target(state, cur_op, &utlb, GetImm(cur_op), &branch, flags_cache, FIBERCPU_GPR_CACHE); \
         if (flow != LogicFlow::Continue) [[unlikely]] {                                                     \
             HANDLE_SUPEROPCODE_FLOW(flow, state, cur_op, instr_limit, utlb, utlb_tags, utlb_addend, branch, \
                                     flags_cache);                                                           \

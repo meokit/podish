@@ -20,24 +20,24 @@ FORCE_INLINE LogicFlow OpImul_GvEv_T_Internal(LogicFuncParams) {
 
     T val1;
     if constexpr (sizeof(T) == 2)
-        val1 = (T)GetReg(state, reg);
+        val1 = (T)gpr.GetReg(state, reg);
     else
-        val1 = (T)GetReg(state, reg);
+        val1 = (T)gpr.GetReg(state, reg);
 
     T val2;
     if constexpr (sizeof(T) == 2) {
-        auto res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        auto res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
         if (!res) return LogicFlow::RestartMemoryOp;
         val2 = *res;
     } else {
-        auto res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        auto res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
         if (!res) return LogicFlow::RestartMemoryOp;
         val2 = *res;
     }
 
     if constexpr (sizeof(T) == 2) {
         int32_t res = (int32_t)(int16_t)val1 * (int32_t)(int16_t)val2;
-        SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | (uint16_t)res);
+        gpr.SetReg(state, reg, (gpr.GetReg(state, reg) & 0xFFFF0000) | (uint16_t)res);
 
         if (res != (int32_t)(int16_t)res)
             SetFlagBits(flags_cache, OF_MASK | CF_MASK);
@@ -45,7 +45,7 @@ FORCE_INLINE LogicFlow OpImul_GvEv_T_Internal(LogicFuncParams) {
             ClearFlagBits(flags_cache, OF_MASK | CF_MASK);
     } else {
         int64_t res = (int64_t)(int32_t)val1 * (int64_t)(int32_t)val2;
-        SetReg(state, reg, (uint32_t)res);
+        gpr.SetReg(state, reg, (uint32_t)res);
 
         if (res != (int64_t)(int32_t)res)
             SetFlagBits(flags_cache, OF_MASK | CF_MASK);
@@ -63,11 +63,11 @@ FORCE_INLINE LogicFlow OpImul_GvEvI_T_Internal(LogicFuncParams) {
 
     T val1;  // r/m value
     if constexpr (sizeof(T) == 2) {
-        auto res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        auto res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
         if (!res) return LogicFlow::RestartMemoryOp;
         val1 = *res;
     } else {
-        auto res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+        auto res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
         if (!res) return LogicFlow::RestartMemoryOp;
         val1 = *res;
     }
@@ -81,7 +81,7 @@ FORCE_INLINE LogicFlow OpImul_GvEvI_T_Internal(LogicFuncParams) {
 
     if constexpr (sizeof(T) == 2) {
         int32_t res = (int32_t)(int16_t)val1 * (int32_t)(int16_t)val2;
-        SetReg(state, reg, (GetReg(state, reg) & 0xFFFF0000) | (uint16_t)res);
+        gpr.SetReg(state, reg, (gpr.GetReg(state, reg) & 0xFFFF0000) | (uint16_t)res);
 
         if (res != (int32_t)(int16_t)res)
             SetFlagBits(flags_cache, OF_MASK | CF_MASK);
@@ -89,7 +89,7 @@ FORCE_INLINE LogicFlow OpImul_GvEvI_T_Internal(LogicFuncParams) {
             ClearFlagBits(flags_cache, OF_MASK | CF_MASK);
     } else {
         int64_t res = (int64_t)(int32_t)val1 * (int64_t)(int32_t)val2;
-        SetReg(state, reg, (uint32_t)res);
+        gpr.SetReg(state, reg, (uint32_t)res);
 
         if (res != (int64_t)(int32_t)res)
             SetFlagBits(flags_cache, OF_MASK | CF_MASK);

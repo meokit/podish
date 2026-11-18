@@ -51,14 +51,14 @@ FORCE_INLINE bool Match4(const DecodedOp* ops) {
         __builtin_unreachable();                                                                                       \
     }
 
-#define RUN_HANDWRITTEN_SUPEROPCODE_OP_WITH_UNIFIED_EXIT(target, current_op, exit_flow, exit_op) \
-    do {                                                                                         \
-        auto flow = target(state, current_op, &utlb, GetImm(current_op), &branch, flags_cache);  \
-        if (flow != LogicFlow::Continue) [[unlikely]] {                                          \
-            exit_flow = flow;                                                                    \
-            exit_op = current_op;                                                                \
-            goto superopcode_exit;                                                               \
-        }                                                                                        \
+#define RUN_HANDWRITTEN_SUPEROPCODE_OP_WITH_UNIFIED_EXIT(target, current_op, exit_flow, exit_op)                    \
+    do {                                                                                                            \
+        auto flow = target(state, current_op, &utlb, GetImm(current_op), &branch, flags_cache, FIBERCPU_GPR_CACHE); \
+        if (flow != LogicFlow::Continue) [[unlikely]] {                                                             \
+            exit_flow = flow;                                                                                       \
+            exit_op = current_op;                                                                                   \
+            goto superopcode_exit;                                                                                  \
+        }                                                                                                           \
     } while (false)
 
 #define DEFINE_HANDWRITTEN_SUPEROPCODE_3(Name, Op0, Op1, Op2)                                                          \
@@ -431,23 +431,37 @@ HandlerFunc FindSuperOpcode(const DecodedOp* ops) {
 void ApplySuperOpcodesToBlockOps(DecodedOp* ops, uint32_t op_count, bool previously_lowered) {
 #if FIBERCPU_LOWER_OPERANDS && !FIBERCPU_OPERAND_FUSIONS_ONLY
     if (!ops) return;
-    if (previously_lowered)
-        for (uint32_t i = 0; i < op_count; ++i)
-            if (ops[i].len) ops[i].handler = CanonicalOperandHandler(ops[i].handler);
-#endif
-#if FIBERCPU_ENABLE_SUPEROPCODES
-    if (!ops) return;
-
-    for (uint32_t i = 0; i + 1 < op_count; ++i) {
-        if (HandlerFunc superopcode = FindSuperOpcode(&ops[i])) {
-            ops[i].handler = superopcode;
+    if (previously_lowered) {
+        for (uint32_t i = 0; i < op_count; ++i) {
+            auto& op = ops[i];
+            if (op.meta.flags.operand_lowered) {
+                op.handler = CanonicalOperandHandler(op.handler);
+                op.meta.flags.operand_lowered = 0;
+            }
         }
     }
+
+    for (uint32_t i = 0; i < op_count; ++i) {
+        auto& op = ops[i];
+#if FIBERCPU_ENABLE_SUPEROPCODES
+        if (i + 1 < op_count) {
+            if (auto handler = FindSuperOpcode(&op)) op.handler = handler;
+        }
 #endif
-#if FIBERCPU_LOWER_OPERANDS && !FIBERCPU_OPERAND_FUSIONS_ONLY
-    for (uint32_t i = 0; i < op_count; ++i)
-        if (ops[i].len)
-            if (auto handler = LowerOperandHandler(&ops[i])) ops[i].handler = handler;
+        // Fusion matching only looks forward, so lowering this entry cannot
+        // hide the canonical identities needed at the next offset.
+        if (op.len) {
+            if (auto handler = LowerOperandHandler(&op)) {
+                op.handler = handler;
+                op.meta.flags.operand_lowered = 1;
+            }
+        }
+    }
+#elif FIBERCPU_ENABLE_SUPEROPCODES
+    if (!ops) return;
+    for (uint32_t i = 0; i + 1 < op_count; ++i) {
+        if (auto handler = FindSuperOpcode(&ops[i])) ops[i].handler = handler;
+    }
 #endif
 }
 

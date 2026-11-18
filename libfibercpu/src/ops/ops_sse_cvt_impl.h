@@ -100,14 +100,15 @@ FORCE_INLINE uint32_t SseInt32ToSingleBits(uint32_t bits, uint32_t mxcsr, uint32
     return (negative ? 0x80000000u : 0) | (static_cast<uint32_t>(power + 127) << 23) | (significand & 0x7FFFFF);
 }
 
-FORCE_INLINE bool SseCommitConversionExceptions(EmuState* state, uint32_t exceptions) {
+FORCE_INLINE bool SseCommitConversionExceptions(EmuState* state, GprCache& gpr, uint32_t exceptions) {
     const uint32_t masks = (state->ctx.mxcsr >> 7) & 0x3F;
     // Unmasked invalid has priority over precision from other packed lanes.
     if ((exceptions & 1) && !(masks & 1)) exceptions &= ~0x20u;
     state->ctx.mxcsr |= exceptions;
     if ((exceptions & ~masks) == 0) return true;
     state->fault_vector = 19;  // #XM: do not commit any destination lane/register.
-    if (!state->hooks.on_interrupt(state, 19)) state->status = EmuStatus::Fault;
+    if (!gpr.WithCanonical(state, [&] { return state->hooks.on_interrupt(state, 19); }))
+        state->status = EmuStatus::Fault;
     return false;
 }
 
@@ -116,7 +117,7 @@ FORCE_INLINE LogicFlow OpCvt_2A(LogicFuncParams) {
     uint8_t reg = (op->modrm >> 3) & 7;
     simde__m128* dest_ptr = &state->ctx.xmm[reg];
 
-    auto val_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, op, utlb);
+    auto val_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!val_res) return LogicFlow::RestartMemoryOp;
     int32_t val = (int32_t)*val_res;
 
@@ -129,11 +130,11 @@ FORCE_INLINE LogicFlow OpCvt_2A(LogicFuncParams) {
         // F3: CVTSI2SS
         uint32_t exceptions = 0;
         const uint32_t result = SseInt32ToSingleBits(*val_res, state->ctx.mxcsr, exceptions);
-        if (!SseCommitConversionExceptions(state, exceptions)) return LogicFlow::ExitOnCurrentEIP;
+        if (!SseCommitConversionExceptions(state, gpr, exceptions)) return LogicFlow::ExitOnCurrentEIP;
         std::memcpy(dest_ptr, &result, sizeof(result));
     } else {
         state->fault_vector = 6;
-        if (!state->hooks.on_invalid_opcode(state)) {
+        if (!gpr.WithCanonical(state, [&] { return state->hooks.on_invalid_opcode(state); })) {
             state->status = EmuStatus::Fault;
         }
         return LogicFlow::ExitOnCurrentEIP;
@@ -144,14 +145,14 @@ FORCE_INLINE LogicFlow OpCvt_2A(LogicFuncParams) {
 template <bool Truncate>
 FORCE_INLINE LogicFlow OpCvtScalarToInt32(LogicFuncParams) {
     uint32_t addr = 0;
-    if (op->modrm < 0xC0) addr = ComputeLinearAddress(state, op);
+    if (op->modrm < 0xC0) addr = ComputeLinearAddress(state, gpr, op);
     uint32_t result = 0, exceptions = 0;
     if (op->prefixes.flags.repne) {  // F2: CVT[T]SD2SI
         uint64_t bits;
         if (op->modrm >= 0xC0) {
             std::memcpy(&bits, &state->ctx.xmm[op->modrm & 7], sizeof(bits));
         } else {
-            auto value = ReadMem<uint64_t, OpOnTLBMiss::Restart>(state, addr, utlb, op);
+            auto value = ReadMem<uint64_t, OpOnTLBMiss::Restart>(state, gpr, addr, utlb, op);
             if (!value) return LogicFlow::RestartMemoryOp;
             bits = *value;
         }
@@ -161,20 +162,20 @@ FORCE_INLINE LogicFlow OpCvtScalarToInt32(LogicFuncParams) {
         if (op->modrm >= 0xC0) {
             std::memcpy(&bits, &state->ctx.xmm[op->modrm & 7], sizeof(bits));
         } else {
-            auto value = ReadMem<uint32_t, OpOnTLBMiss::Restart>(state, addr, utlb, op);
+            auto value = ReadMem<uint32_t, OpOnTLBMiss::Restart>(state, gpr, addr, utlb, op);
             if (!value) return LogicFlow::RestartMemoryOp;
             bits = *value;
         }
         result = SseFloatBitsToInt32<23, 8>(bits, state->ctx.mxcsr, Truncate, exceptions);
     } else {
         state->fault_vector = 6;
-        if (!state->hooks.on_invalid_opcode(state)) {
+        if (!gpr.WithCanonical(state, [&] { return state->hooks.on_invalid_opcode(state); })) {
             state->status = EmuStatus::Fault;
         }
         return LogicFlow::ExitOnCurrentEIP;
     }
-    if (!SseCommitConversionExceptions(state, exceptions)) return LogicFlow::ExitOnCurrentEIP;
-    SetReg(state, (op->modrm >> 3) & 7, result);
+    if (!SseCommitConversionExceptions(state, gpr, exceptions)) return LogicFlow::ExitOnCurrentEIP;
+    gpr.SetReg(state, (op->modrm >> 3) & 7, result);
     return LogicFlow::Continue;
 }
 
@@ -189,7 +190,7 @@ FORCE_INLINE LogicFlow OpCvt_5A(LogicFuncParams) {
 
     if (op->prefixes.flags.opsize) {
         // 66: CVTPD2PS (xmm/m128 -> xmm)
-        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, op, utlb);
+        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, gpr, op, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         simde__m128d src_pd = simde_mm_castps_pd(*src_res);
         *dest_ptr = simde_mm_cvtpd_ps(src_pd);
@@ -200,8 +201,8 @@ FORCE_INLINE LogicFlow OpCvt_5A(LogicFuncParams) {
         if ((op->modrm >> 6) == 3) {
             src_pd = simde_mm_castps_pd(state->ctx.xmm[op->modrm & 7]);
         } else {
-            uint32_t addr = ComputeLinearAddress(state, op);
-            auto val_res = ReadMem<uint64_t, OpOnTLBMiss::Restart>(state, addr, utlb, op);
+            uint32_t addr = ComputeLinearAddress(state, gpr, op);
+            auto val_res = ReadMem<uint64_t, OpOnTLBMiss::Restart>(state, gpr, addr, utlb, op);
             if (!val_res) return LogicFlow::RestartMemoryOp;
             src_pd = simde_mm_set_sd(*(double*)&(*val_res));
         }
@@ -213,8 +214,8 @@ FORCE_INLINE LogicFlow OpCvt_5A(LogicFuncParams) {
         if ((op->modrm >> 6) == 3) {
             src_ss = state->ctx.xmm[op->modrm & 7];
         } else {
-            uint32_t addr = ComputeLinearAddress(state, op);
-            auto val_res = ReadMem<uint32_t, OpOnTLBMiss::Restart>(state, addr, utlb, op);
+            uint32_t addr = ComputeLinearAddress(state, gpr, op);
+            auto val_res = ReadMem<uint32_t, OpOnTLBMiss::Restart>(state, gpr, addr, utlb, op);
             if (!val_res) return LogicFlow::RestartMemoryOp;
             src_ss = simde_mm_set_ss(*(float*)&(*val_res));
         }
@@ -229,8 +230,8 @@ FORCE_INLINE LogicFlow OpCvt_5A(LogicFuncParams) {
         if ((op->modrm >> 6) == 3) {
             src = state->ctx.xmm[op->modrm & 7];
         } else {
-            uint32_t addr = ComputeLinearAddress(state, op);
-            auto val_res = ReadMem<uint64_t, OpOnTLBMiss::Restart>(state, addr, utlb, op);
+            uint32_t addr = ComputeLinearAddress(state, gpr, op);
+            auto val_res = ReadMem<uint64_t, OpOnTLBMiss::Restart>(state, gpr, addr, utlb, op);
             if (!val_res) return LogicFlow::RestartMemoryOp;
             uint64_t val = *val_res;
             uint32_t v0 = (uint32_t)val;
@@ -247,7 +248,7 @@ FORCE_INLINE LogicFlow OpCvt_5B(LogicFuncParams) {
     // 0F 5B: CVTDQ2PS / CVTPS2DQ (66) / CVTTPS2DQ (F3)
     uint8_t reg = (op->modrm >> 3) & 7;
     simde__m128* dest_ptr = &state->ctx.xmm[reg];
-    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, op, utlb);
+    auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, gpr, op, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
     simde__m128 src = *src_res;
 
@@ -263,7 +264,7 @@ FORCE_INLINE LogicFlow OpCvt_5B(LogicFuncParams) {
         for (int lane = 0; lane < 4; ++lane)
             result[lane] = SseInt32ToSingleBits(input[lane], state->ctx.mxcsr, exceptions);
     }
-    if (!SseCommitConversionExceptions(state, exceptions)) return LogicFlow::ExitOnCurrentEIP;
+    if (!SseCommitConversionExceptions(state, gpr, exceptions)) return LogicFlow::ExitOnCurrentEIP;
     std::memcpy(dest_ptr, result, sizeof(result));
     return LogicFlow::Continue;
 }
@@ -275,14 +276,14 @@ FORCE_INLINE LogicFlow OpCvt_E6(LogicFuncParams) {
 
     if (op->prefixes.flags.opsize) {
         // 66: CVTTPD2DQ (Truncate xmm/m128 -> xmm)
-        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, op, utlb);
+        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, gpr, op, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         uint64_t input[2];
         uint32_t result[4] = {}, exceptions = 0;
         std::memcpy(input, &*src_res, sizeof(input));
         for (int lane = 0; lane < 2; ++lane)
             result[lane] = SseFloatBitsToInt32<52, 11>(input[lane], state->ctx.mxcsr, true, exceptions);
-        if (!SseCommitConversionExceptions(state, exceptions)) return LogicFlow::ExitOnCurrentEIP;
+        if (!SseCommitConversionExceptions(state, gpr, exceptions)) return LogicFlow::ExitOnCurrentEIP;
         std::memcpy(dest_ptr, result, sizeof(result));
 
     } else if (op->prefixes.flags.rep) {
@@ -293,8 +294,8 @@ FORCE_INLINE LogicFlow OpCvt_E6(LogicFuncParams) {
             simde__m128 src = state->ctx.xmm[op->modrm & 7];
             isrc = simde_mm_castps_si128(src);
         } else {
-            uint32_t addr = ComputeLinearAddress(state, op);
-            auto val_res = ReadMem<uint64_t, OpOnTLBMiss::Restart>(state, addr, utlb, op);
+            uint32_t addr = ComputeLinearAddress(state, gpr, op);
+            auto val_res = ReadMem<uint64_t, OpOnTLBMiss::Restart>(state, gpr, addr, utlb, op);
             if (!val_res) return LogicFlow::RestartMemoryOp;
             uint64_t val = *val_res;
             uint32_t v0 = (uint32_t)val;
@@ -307,18 +308,18 @@ FORCE_INLINE LogicFlow OpCvt_E6(LogicFuncParams) {
 
     } else if (op->prefixes.flags.repne) {
         // F2: CVTPD2DQ (xmm/m128 -> xmm)
-        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, op, utlb);
+        auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart, 16>(state, gpr, op, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         uint64_t input[2];
         uint32_t result[4] = {}, exceptions = 0;
         std::memcpy(input, &*src_res, sizeof(input));
         for (int lane = 0; lane < 2; ++lane)
             result[lane] = SseFloatBitsToInt32<52, 11>(input[lane], state->ctx.mxcsr, false, exceptions);
-        if (!SseCommitConversionExceptions(state, exceptions)) return LogicFlow::ExitOnCurrentEIP;
+        if (!SseCommitConversionExceptions(state, gpr, exceptions)) return LogicFlow::ExitOnCurrentEIP;
         std::memcpy(dest_ptr, result, sizeof(result));
     } else {
         state->fault_vector = 6;
-        if (!state->hooks.on_invalid_opcode(state)) {
+        if (!gpr.WithCanonical(state, [&] { return state->hooks.on_invalid_opcode(state); })) {
             state->status = EmuStatus::Fault;
         }
         return LogicFlow::ExitOnCurrentEIP;
