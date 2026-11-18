@@ -842,6 +842,48 @@ public class EngineMmuTransferTests
         RunAbsoluteAlByteReader(parent, readerAddr, 0x5A);
     }
 
+    [Theory]
+    [InlineData(33u)]
+    [InlineData(1024u)]
+    [InlineData(1025u)]
+    public void SharedClone_ReprotectRangeFlushesSiblingAfterAliasShootdown(uint pages)
+    {
+        var runtime = new TestRuntimeFactory();
+        using var parent = runtime.CreateEngine();
+        using var codePage = new UnmanagedPageFixture(IncEaxTwice());
+
+        const uint rangeStart = 0x00600000;
+        const uint aliasAddr = rangeStart + LinuxConstants.PageSize;
+        const uint writerAddr = 0x00410000;
+        var rangeLength = pages * LinuxConstants.PageSize;
+        var lastPage = rangeStart + rangeLength - LinuxConstants.PageSize;
+
+        MapExternalPage(parent, rangeStart, codePage.Pointer, Protection.Read | Protection.Exec);
+        MapExternalPage(parent, aliasAddr, codePage.Pointer, Protection.Read | Protection.Write);
+        Assert.NotEqual(IntPtr.Zero,
+            parent.AllocatePage(lastPage, (byte)(Protection.Read | Protection.Write)));
+        InstallAbsoluteAlByteWriter(parent, writerAddr, lastPage);
+
+        using var child = parent.Clone(true);
+        RunPair(parent, rangeStart, 10, 12);
+        Assert.True(child.HasSlowWrite(aliasAddr));
+        RunAbsoluteAlByteWriter(child, writerAddr, 0x5A);
+
+        // Dropping execute permission disarms the writable alias during the
+        // range update. The sibling must also invalidate the range's last page.
+        parent.ReprotectMappedRange(rangeStart, rangeLength, (byte)Protection.Read);
+        Assert.False(child.HasSlowWrite(aliasAddr));
+
+        child.RegWrite(Reg.EAX, 0xA5);
+        child.Eip = writerAddr;
+        child.Run(writerAddr + 5, 16);
+        Assert.Equal(EmuStatus.Fault, child.Status);
+
+        Span<byte> result = stackalloc byte[1];
+        Assert.True(parent.CopyFromUser(lastPage, result));
+        Assert.Equal((byte)0x5A, result[0]);
+    }
+
     [Fact]
     public void SamePageSelfModifyingRun_SecondPatchMustNotExecuteStaleTailBytes()
     {

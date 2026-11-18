@@ -2,6 +2,7 @@
 #include <ankerl/unordered_dense.h>
 #include <algorithm>
 #include <atomic>
+#include <bitset>
 #include <cstring>
 #include <iostream>
 #include <memory>
@@ -1042,15 +1043,43 @@ private:
     void publish_runtime_tlb_flush_range_or_all(uint32_t start, uint32_t end_addr) {
         if (!core_ || end_addr <= start) return;
 
-        const uint64_t span_pages = (static_cast<uint64_t>(end_addr) - static_cast<uint64_t>(start)) / PAGE_SIZE;
-        if (span_pages > MmuCore::RuntimeTlbShootdownRing::kCapacity) {
+        constexpr size_t capacity = MmuCore::RuntimeTlbShootdownRing::kCapacity;
+        const uint64_t span_pages = (static_cast<uint64_t>(end_addr) - start) / PAGE_SIZE;
+        if (span_pages > capacity) {
             publish_runtime_tlb_flush_all();
             return;
         }
-
-        for (uint32_t guest_page = start; guest_page < end_addr; guest_page += PAGE_SIZE) {
-            publish_runtime_tlb_flush_deduped(guest_page);
+        if (span_pages == 1) {
+            publish_runtime_tlb_flush_deduped(start);
+            return;
         }
+
+        // Apply sibling invalidations before advancing the local read cursor.
+        // The range itself is unique. Mark overlaps with any earlier alias
+        // invalidations once instead of rescanning the ring for every page.
+        sync_runtime_tlb_shootdowns();
+        auto& ring = core_->runtime_tlb_shootdown_ring;
+        auto write_seq = ring.write_seq;
+        std::bitset<capacity> already_published;
+        if (runtime_tlb_publish_batch_depth != 0) {
+            const auto ring_begin = write_seq > capacity ? write_seq - capacity : 0;
+            const auto begin = std::max(runtime_tlb_publish_begin_seq, ring_begin);
+            for (auto seq = begin; seq < write_seq; ++seq) {
+                const auto page = ring.guest_pages[seq % capacity];
+                if (page >= start && page < end_addr) already_published[(page - start) / PAGE_SIZE] = true;
+            }
+        }
+
+        // If these entries overwrite a marked event, siblings that have not
+        // consumed it are more than capacity entries behind and flush all.
+        for (size_t index = 0; index < span_pages; ++index) {
+            if (!already_published[index]) {
+                ring.guest_pages[write_seq % capacity] = start + static_cast<uint32_t>(index) * PAGE_SIZE;
+                ++write_seq;
+            }
+        }
+        ring.write_seq = write_seq;
+        runtime_tlb_read_seq = write_seq;
     }
 
     void bind_core(MmuCore* core, bool add_ref) {
@@ -1372,8 +1401,7 @@ public:
         MmuCore* old_core = core_;
         if (old_core != nullptr && old_core->execution_active) {
             retain_core(old_core);
-            if (deferred_exec_core_ != nullptr && deferred_exec_core_ != old_core)
-                release_core(deferred_exec_core_);
+            if (deferred_exec_core_ != nullptr && deferred_exec_core_ != old_core) release_core(deferred_exec_core_);
             deferred_exec_core_ = old_core;
         }
 
@@ -1785,8 +1813,9 @@ public:
     [[nodiscard]] FORCE_INLINE MemResult<HostAddr> try_write_target_tlb(GuestAddr addr, MicroTLB* utlb);
 
     template <typename T, bool Store, bool FlushOnMiss = true>
-    [[nodiscard]] FORCE_INLINE MemResult<std::conditional_t<Store, void, HostAddr>> write_tlb_impl(
-        GuestAddr addr, T val, MicroTLB* utlb);
+    [[nodiscard]] FORCE_INLINE MemResult<std::conditional_t<Store, void, HostAddr>> write_tlb_impl(GuestAddr addr,
+                                                                                                   T val,
+                                                                                                   MicroTLB* utlb);
 
     template <typename T>
     [[nodiscard]] FORCE_INLINE MemResult<void> write_tlb_only(GuestAddr addr, T val, MicroTLB* utlb);
