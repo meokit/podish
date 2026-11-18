@@ -278,6 +278,29 @@ public class MknodAndXattrSyscallTests
         }
     }
 
+    [Fact]
+    public async Task BindMountSubtree_FollowsSymlinkInTargetParent()
+    {
+        using var env = new TestEnv();
+        env.SyscallManager.WriteGuestFile("/usr/lib/marker", [1]);
+        env.MapUserPage(0x19000);
+        env.MapUserPage(0x1A000);
+        env.WriteCString(0x19000, "/usr/lib");
+        env.WriteCString(0x1A000, "/lib");
+        Assert.Equal(0, await env.Call("SysSymlink", 0x19000, 0x1A000));
+
+        using var source = new MountFile(env.SyscallManager.CreateDetachedTmpfsMount("test-bind"));
+        env.SyscallManager.WriteFileInDetachedMount(source.Mount!, "guest.so", [2]);
+        env.SyscallManager.BindMountSubtree(source.Mount!, "guest.so", "/lib/guest.so", readOnly: true);
+
+        var canonical = env.SyscallManager.PathWalkWithFlags("/usr/lib/guest.so", LookupFlags.FollowSymlink);
+        var throughSymlink = env.SyscallManager.PathWalkWithFlags("/lib/guest.so", LookupFlags.FollowSymlink);
+        Assert.True(canonical.IsValid);
+        Assert.Same(canonical.Dentry, throughSymlink.Dentry);
+        Assert.Same(canonical.Mount, throughSymlink.Mount);
+        Assert.Equal("none", canonical.Mount!.FsType);
+    }
+
     private static MountFile CreateBoundGeneratedFile(TestEnv env)
     {
         var handle = new MountFile(env.SyscallManager.CreateDetachedTmpfsMount("podish-config"));
