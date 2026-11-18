@@ -18,7 +18,9 @@ internal sealed class WaylandDisplayServerState : IDisposable
 {
     private readonly WaylandSdlDisplayHost _host;
     private readonly ConcurrentQueue<WaylandDisplayCommand> _commands = [];
+    private readonly object _commandLock = new();
     private readonly HashSet<uint> _suppressedImeKeys = [];
+    private bool _disposed;
 
     public WaylandDisplayServerState(ILoggerFactory loggerFactory, WaylandDesktopOptions desktopOptions)
     {
@@ -28,7 +30,7 @@ internal sealed class WaylandDisplayServerState : IDisposable
         _host = new WaylandSdlDisplayHost(loggerFactory, desktopOptions);
         Presenter = new WaylandSdlFramePresenter(
             desktopOptions,
-            command => _commands.Enqueue(command),
+            EnqueueCommand,
             loggerFactory.CreateLogger<WaylandSdlFramePresenter>());
     }
 
@@ -88,9 +90,30 @@ internal sealed class WaylandDisplayServerState : IDisposable
 
     public void Dispose()
     {
+        lock (_commandLock)
+        {
+            _disposed = true;
+        }
+
+        while (_commands.TryDequeue(out WaylandDisplayCommand command))
+            command.SharedMemoryFile?.Close();
+
         if (Presenter is IDisposable disposablePresenter)
             disposablePresenter.Dispose();
         _host.Dispose();
+    }
+
+    private void EnqueueCommand(WaylandDisplayCommand command)
+    {
+        lock (_commandLock)
+        {
+            if (_disposed)
+                return;
+
+            // A client can destroy its surface before the display thread finishes uploading it.
+            command.SharedMemoryFile?.Get();
+            _commands.Enqueue(command);
+        }
     }
 
     private bool DrainCommands(out List<ulong> consumed, out bool shutdownRequested)
@@ -102,7 +125,15 @@ internal sealed class WaylandDisplayServerState : IDisposable
         while (_commands.TryDequeue(out WaylandDisplayCommand command))
             batch.Add(command);
 
-        return _host.DrainCommands(batch, consumed, out shutdownRequested);
+        try
+        {
+            return _host.DrainCommands(batch, consumed, out shutdownRequested);
+        }
+        finally
+        {
+            foreach (WaylandDisplayCommand command in batch)
+                command.SharedMemoryFile?.Close();
+        }
     }
 
     private IEnumerable<DisplayInputEvent> OrderInputEventsForIme(IReadOnlyList<DisplayInputEvent> inputEvents)

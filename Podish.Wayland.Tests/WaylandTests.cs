@@ -384,7 +384,8 @@ public sealed class WaylandRuntimeTests
         await env.InvokeOnSchedulerAsync(async () =>
         {
             var sent = new List<WaylandOutgoingMessage>();
-            var server = new WaylandServer();
+            var presenter = new RecordingFramePresenter();
+            var server = new WaylandServer(framePresenter: presenter);
             var client = server.CreateClient(message =>
             {
                 sent.Add(Clone(message));
@@ -459,6 +460,7 @@ public sealed class WaylandRuntimeTests
                 writer.WriteInt(16);
                 writer.WriteUInt((uint)WlShmFormat.Argb8888);
             });
+            await SendRequestAsync(client, 9, 1, static _ => { });
             await SendRequestAsync(client, 6, 3, writer => writer.WriteNewId(11));
             await SendRequestAsync(client, 6, 1, writer =>
             {
@@ -472,13 +474,17 @@ public sealed class WaylandRuntimeTests
             Assert.Equal(2, sent.Count);
             Assert.Equal<uint>(8, DecodeHeader(sent[0]).ObjectId);
             Assert.Equal<uint>(7, DecodeHeader(sent[1]).ObjectId);
+            var frame = Assert.IsType<WaylandShmFrame>(presenter.LastFrame);
+            var pixels = new byte[frame.Height * frame.Stride];
+            Assert.Equal(pixels.Length, frame.File.OpenedInode!.ReadToHost(null, frame.File, pixels, frame.Offset));
+            Assert.All(pixels, value => Assert.Equal((byte)'a', value));
 
             sent.Clear();
             await server.HandlePresentationTickAsync(1234);
             Assert.Equal(2, sent.Count);
             Assert.Equal<uint>(11, DecodeHeader(sent[0]).ObjectId);
             Assert.Equal<uint>(1, DecodeHeader(sent[1]).ObjectId);
-            fd.Close();
+            await server.DisconnectClientAsync(client);
         });
     }
 

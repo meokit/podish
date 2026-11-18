@@ -502,18 +502,31 @@ public sealed class WaylandServer
 
         _pendingFrameCallbacks.RemoveAll(callback => ReferenceEquals(callback.Client, client));
 
-        foreach (WlSurfaceResource surface in client.Objects.All.OfType<WlSurfaceResource>().ToList())
+        var surfaces = client.Objects.All.OfType<WlSurfaceResource>().ToArray();
+        try
         {
-            if (surface.IsCursorRole && FramePresenter is IWaylandCursorPresenter cursorPresenter)
-                await cursorPresenter.UpdateCursorAsync(surface.SceneSurfaceId, null);
-            else if (FramePresenter != null)
-                await FramePresenter.PresentSurfaceAsync(surface.SceneSurfaceId, null);
+            foreach (WlSurfaceResource surface in surfaces)
+            {
+                if (surface.IsCursorRole && FramePresenter is IWaylandCursorPresenter cursorPresenter)
+                    await cursorPresenter.UpdateCursorAsync(surface.SceneSurfaceId, null);
+                else if (FramePresenter != null)
+                    await FramePresenter.PresentSurfaceAsync(surface.SceneSurfaceId, null);
 
-            UnregisterSceneSurface(surface);
-            await Focus.HandleSurfaceDestroyedAsync(surface.SceneSurfaceId);
+                UnregisterSceneSurface(surface);
+                await Focus.HandleSurfaceDestroyedAsync(surface.SceneSurfaceId);
+            }
         }
+        finally
+        {
+            foreach (WlSurfaceResource surface in surfaces)
+                surface.ReleaseBuffers();
 
-        client.HandleClosed();
+            foreach (WaylandResource resource in client.Objects.All
+                         .Where(static resource => resource is WlBufferResource or WlShmPoolResource).ToArray())
+                resource.Destroy();
+
+            client.HandleClosed();
+        }
     }
 
     public async ValueTask ShutdownAsync()

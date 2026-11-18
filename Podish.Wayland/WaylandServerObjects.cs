@@ -133,7 +133,23 @@ internal sealed class WlCompositorResource : WaylandResource
 
 internal sealed class WlSurfaceState
 {
-    public WlBufferResource? Buffer { get; set; }
+    private WlBufferResource? _buffer;
+
+    public WlBufferResource? Buffer
+    {
+        get => _buffer;
+        set
+        {
+            if (ReferenceEquals(_buffer, value))
+                return;
+
+            value?.File.Get();
+            var previous = _buffer;
+            _buffer = value;
+            previous?.File.Close();
+        }
+    }
+
     public List<WaylandRect> Damages { get; } = [];
     public List<WlCallbackResource> FrameCallbacks { get; } = [];
 }
@@ -372,7 +388,14 @@ internal sealed class WlSurfaceResource : WaylandResource
             Client.Server.FramePresenter.PresentSurfaceAsync(SceneSurfaceId, null).AsTask().GetAwaiter().GetResult();
         Client.Server.Focus.HandleSurfaceDestroyedAsync(SceneSurfaceId).AsTask().GetAwaiter().GetResult();
         Client.Server.UnregisterSceneSurface(this);
+        ReleaseBuffers();
         base.Destroy();
+    }
+
+    internal void ReleaseBuffers()
+    {
+        _pending.Buffer = null;
+        _current.Buffer = null;
     }
 }
 
@@ -1328,6 +1351,8 @@ internal sealed class WlShmPoolResource : WaylandResource
                     WaylandShmDebug.DescribeLinuxFile(Fd));
                 Client.Register(new WlBufferResource(Client, request.Id, 1, this, request.Offset, request.Width,
                     request.Height, request.Stride, request.Format));
+                // wl_buffer retains the pool's backing after wl_shm_pool.destroy.
+                Fd.Get();
                 break;
             }
             case 1:
@@ -1350,6 +1375,9 @@ internal sealed class WlShmPoolResource : WaylandResource
 
     public override void Destroy()
     {
+        if (Destroyed)
+            return;
+
         base.Destroy();
         Fd.Close();
     }
@@ -1372,6 +1400,7 @@ internal sealed class WlBufferResource : WaylandResource
     }
 
     public WlShmPoolResource Pool { get; }
+    public LinuxFile File => Pool.Fd;
     public int Offset { get; }
     public int Width { get; }
     public int Height { get; }
@@ -1394,8 +1423,8 @@ internal sealed class WlBufferResource : WaylandResource
             Height,
             Stride,
             Format,
-            WaylandShmDebug.DescribeLinuxFile(Pool.Fd));
-        return new WaylandShmFrame(sceneSurfaceId, leaseToken, Pool.Fd, Offset, Width, Height, Stride, Format);
+            WaylandShmDebug.DescribeLinuxFile(File));
+        return new WaylandShmFrame(sceneSurfaceId, leaseToken, File, Offset, Width, Height, Stride, Format);
     }
 
     public ValueTask SendReleaseAsync()
@@ -1422,6 +1451,15 @@ internal sealed class WlBufferResource : WaylandResource
     {
         Destroy();
         return ValueTask.CompletedTask;
+    }
+
+    public override void Destroy()
+    {
+        if (Destroyed)
+            return;
+
+        base.Destroy();
+        File.Close();
     }
 }
 
