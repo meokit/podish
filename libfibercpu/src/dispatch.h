@@ -120,7 +120,7 @@ ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState* RESTRICT state, DecodedOp* 
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     OperandPolicy::Assume(op);
     // Execute Logic
-    auto flow = Target(state, op, &utlb, GetImm(op), &branch, flags_cache, FIBERCPU_GPR_CACHE);
+    auto flow = Target(state, op, &utlb, OperandPolicy::Immediate(op), &branch, flags_cache, FIBERCPU_GPR_CACHE);
     mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
 
     switch (flow) {

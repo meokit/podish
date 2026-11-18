@@ -65,13 +65,16 @@ void ApplySuperOpcodesToBlockOps(DecodedOp* ops, uint32_t op_count, bool previou
         }                                                                                                              \
     } while (false)
 
-#define RUN_SUPEROPCODE_OP(target, state, cur_op, instr_limit, utlb, branch, flags_cache)                   \
+#define RUN_SUPEROPCODE_OP_IMM(target, state, cur_op, instr_limit, utlb, branch, flags_cache, imm)          \
     do {                                                                                                    \
-        auto flow = target(state, cur_op, &utlb, GetImm(cur_op), &branch, flags_cache, FIBERCPU_GPR_CACHE); \
+        auto flow = target(state, cur_op, &utlb, imm, &branch, flags_cache, FIBERCPU_GPR_CACHE);            \
         if (flow != LogicFlow::Continue) [[unlikely]] {                                                     \
             HANDLE_SUPEROPCODE_FLOW(flow, state, cur_op, instr_limit, utlb, utlb_tags, utlb_addend, branch, \
                                     flags_cache);                                                           \
         }                                                                                                   \
     } while (false)
+
+#define RUN_SUPEROPCODE_OP(target, state, cur_op, instr_limit, utlb, branch, flags_cache) \
+    RUN_SUPEROPCODE_OP_IMM(target, state, cur_op, instr_limit, utlb, branch, flags_cache, GetImm(cur_op))
 
 }  // namespace fiberish

@@ -46,6 +46,7 @@
         <NativeBuildInput Include="$(LibFibercpuSourceDir)/CMakeLists.txt" />
         <NativeBuildInput Include="$(MSBuildProjectFullPath)" />
         <NativeBuildInput Include="$(MSBuildThisFileDirectory)../scripts/gen_operand_specializations.py" />
+        <NativeBuildInput Include="$(MSBuildThisFileDirectory)../scripts/operand_specialization_data.py" />
         <NativeBuildInput Include="$(MSBuildThisFileDirectory)../benchmark/optimization/manifests/*" />
         <NativeBuildInput Include="$(SuperOpcodeGenerationDir)/native-options.txt" />
         <NativeBuildInput Include="$(LibFibercpuSourceDir)/src/**/*" />

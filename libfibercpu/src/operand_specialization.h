@@ -12,12 +12,15 @@ HandlerFunc LowerOperandHandler(const DecodedOp* op);
 HandlerFunc CanonicalOperandHandler(HandlerFunc handler);
 bool AcceptFusionOperandShape(const DecodedOp* op, HandlerFunc handler);
 HandlerFunc LowerFusionOperandHandler(const DecodedOp* op, HandlerFunc handler);
-struct OperandShapeEntry {
+template <typename Shape>
+struct BasicOperandShapeEntry {
     HandlerFunc original;
     HandlerFunc replacement;
-    uint64_t shapes[4];
+    Shape shapes[4];
     uint8_t width;
 };
+using OperandShapeEntry = BasicOperandShapeEntry<uint64_t>;
+using ProfileOperandShapeEntry = BasicOperandShapeEntry<DecodedOperandShape>;
 using RegisterOperandSelector = HandlerFunc (*)(const DecodedOp*);
 enum class PinOperandForm : uint8_t { Register, Opcode, Address };
 struct RegisterOperandEntry {
@@ -71,20 +74,37 @@ FORCE_INLINE uint64_t OperandShape(const DecodedOp* op) {
     return op->modrm | (uint64_t(op->prefixes.all) << 8) | (uint64_t(ea) << 16);
 }
 
-template <bool HasRegisters, bool HasEncoded = false>
+template <bool HasRegisters, bool HasEncoded = false, typename Shape = uint64_t>
 class OperandIndex {
+    using Entry = BasicOperandShapeEntry<Shape>;
+
+    static FORCE_INLINE Shape ReadShape(const DecodedOp* op) {
+        if constexpr (std::is_same_v<Shape, uint64_t>) {
+            return OperandShape(op);
+        } else {
+            return Shape::Read(op);
+        }
+    }
+
     struct Key {
         HandlerFunc handler;
-        uint64_t shape;
+        Shape shape;
         bool operator==(const Key&) const = default;
     };
     struct KeyHash {
         uint64_t operator()(const Key& key) const {
-            return ankerl::unordered_dense::hash<uint64_t>{}(reinterpret_cast<uintptr_t>(key.handler) ^
-                                                             std::rotl(key.shape, 17));
+            const auto handler = reinterpret_cast<uintptr_t>(key.handler);
+            if constexpr (std::is_same_v<Shape, uint64_t>) {
+                return ankerl::unordered_dense::hash<uint64_t>{}(handler ^ std::rotl(key.shape, 17));
+            } else {
+                const uint64_t layout = (uint64_t(key.shape.ea_desc) << 32) | key.shape.encoding;
+                const uint64_t values = (uint64_t(key.shape.displacement) << 32) | key.shape.immediate;
+                auto hash = ankerl::unordered_dense::hash<uint64_t>{};
+                return hash(handler ^ std::rotl(layout, 17) ^ hash(values));
+            }
         }
     };
-    ankerl::unordered_dense::map<Key, std::vector<const OperandShapeEntry*>, KeyHash> shapes_;
+    ankerl::unordered_dense::map<Key, std::vector<const Entry*>, KeyHash> shapes_;
     ankerl::unordered_dense::map<HandlerFunc, RegisterOperandSelector> registers_;
     std::array<uint64_t, 16> bits_{};
     struct NoEncodedOperands {};
@@ -99,7 +119,7 @@ class OperandIndex {
     }
 
 public:
-    OperandIndex(const OperandShapeEntry* shapes, size_t shape_count, const RegisterOperandEntry* registers,
+    OperandIndex(const Entry* shapes, size_t shape_count, const RegisterOperandEntry* registers,
                  size_t register_count) {
         shapes_.reserve(shape_count);
         for (size_t i = 0; i < shape_count; ++i) {
@@ -128,12 +148,12 @@ public:
         const auto handler = original ? original : op->handler;
         const auto h = HandlerHash(handler);
         if (!(bits_[(h >> 6) & 15] & (uint64_t{1} << (h & 63)))) return nullptr;
-        const auto found = shapes_.find({handler, OperandShape(op)});
+        const auto found = shapes_.find({handler, ReadShape(op)});
         if (found != shapes_.end()) {
             for (const auto* candidate : found->second) {
                 bool match = true;
                 for (unsigned i = 1; i < candidate->width; ++i)
-                    if (OperandShape(op + i) != candidate->shapes[i]) {
+                    if (ReadShape(op + i) != candidate->shapes[i]) {
                         match = false;
                         break;
                     }

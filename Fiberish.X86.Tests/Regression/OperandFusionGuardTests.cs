@@ -21,7 +21,7 @@ public sealed class OperandFusionGuardTests
         Assert.Equal(0x1234u, cpu[Reg.EDI]);
         Assert.Equal(1u, cpu[Reg.ECX]);
         Assert.Equal(1u, cpu[Reg.EDX]);
-        if (!HasShapedOperands(37)) return;
+        if (!HasShapedOperands(X86Native.GetOptimizationConfig(), 37)) return;
         int count = X86Native.GetBlockCount(cpu.State);
         var blocks = new IntPtr[count];
         fixed (IntPtr* p = blocks) X86Native.GetBlockList(cpu.State, p, count);
@@ -56,7 +56,7 @@ public sealed class OperandFusionGuardTests
         Assert.Equal(uncovered ? 29u : 13u, cpu[Reg.EDX]);
         Assert.Equal(uncovered ? 38u : 22u, cpu[Reg.EBX]);
         Assert.Equal(1u, cpu[Reg.ECX]);
-        if (!HasShapedOperands(6)) return;
+        if (!HasStockShapedOperands(6)) return;
         int count = X86Native.GetBlockCount(cpu.State);
         var blocks = new IntPtr[count];
         fixed (IntPtr* p = blocks) X86Native.GetBlockList(cpu.State, p, count);
@@ -71,11 +71,14 @@ public sealed class OperandFusionGuardTests
         }
         Assert.Fail("Root block was not retained");
     }
-    private static bool HasShapedOperands(uint minimumBudget)
+    private static bool HasStockShapedOperands(uint minimumBudget)
     {
         var config = X86Native.GetOptimizationConfig();
-        return (X86Native.GetBuildFeatures() & 1) != 0 && config.Contains("fusion=SHAPED;") &&
-            uint.Parse(config.Split(';').Single(part => part.StartsWith("budget="))[7..]) >= minimumBudget;
+        // The fixtures assume the stock plans' coverage and clone indices.
+        return !config.Contains("plan_source=explicit;") && HasShapedOperands(config, minimumBudget);
     }
 
+    private static bool HasShapedOperands(string config, uint minimumBudget) =>
+        (X86Native.GetBuildFeatures() & 1) != 0 && config.Contains("fusion=SHAPED;") &&
+        uint.Parse(config.Split(';').Single(part => part.StartsWith("budget="))[7..]) >= minimumBudget;
 }

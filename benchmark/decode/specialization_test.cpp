@@ -1,3 +1,4 @@
+#include "operand_specialization.h"
 #include "specialization.h"
 #include <cstdio>
 #include <random>
@@ -14,7 +15,61 @@ bool ValidateGeneratedSequenceLookup();
 #endif
 } // namespace fiberish
 
+static bool ValidateProfileOperands() {
+    using namespace fiberish;
+    DecodedOp ops[2]{};
+    ops[0].handler = g_Handlers[0x81];
+    ops[1].handler = g_Handlers[0x83];
+    ops[0].len = 8;
+    ops[0].modrm = 0x44;
+    ops[0].prefixes.all = 0x64;
+    ops[0].meta.all = 7;
+    ops[0].ext.data = {0x10203040, memdesc::PackEA(4, 0, 2, 4), 0xffffff80, 0};
+    ops[1].len = 3;
+    ops[1].modrm = 0xc0;
+    ops[1].meta.all = 5;
+    ops[1].ext.data.imm = 7;
+    const auto first = DecodedOperandShape::Read(ops);
+    const auto second = DecodedOperandShape::Read(ops + 1);
+    auto different_immediate = first;
+    different_immediate.immediate++;
+    const auto exact = g_Handlers[0x05];
+    const auto alternate = g_Handlers[0x0d];
+    const ProfileOperandShapeEntry entries[] = {
+        {ops[0].handler, exact, {first, second}, 2},
+        {ops[0].handler, alternate, {different_immediate, second}, 2},
+    };
+    const OperandIndex<false, false, DecodedOperandShape> index(entries, 2, nullptr, 0);
+    if (index.Find(ops) != exact)
+        return false;
+    ops[0].meta.flags.operand_lowered = 1;
+    ops[0].next_eip = 0x10005000;
+    if (index.Find(ops) != exact)
+        return false;
+    ops[0].ext.data.imm++;
+    if (index.Find(ops) != alternate)
+        return false;
+    ops[1].ext.data.imm++;
+    if (index.Find(ops) != nullptr)
+        return false;
+    ops[1].ext.data.imm--;
+
+    const auto original = ops[0];
+    const auto rejects = [&](auto mutate) {
+        ops[0] = original;
+        mutate(ops[0]);
+        return index.Find(ops) == nullptr;
+    };
+    return rejects([](auto& op) { op.ext.data.disp++; }) && rejects([](auto& op) { op.ext.data.ea_desc++; }) &&
+           rejects([](auto& op) { op.prefixes.all ^= 0x40; }) && rejects([](auto& op) { op.modrm ^= 1; }) &&
+           rejects([](auto& op) { op.len++; }) && rejects([](auto& op) { op.meta.flags.no_flags = 1; });
+}
+
 int main() {
+    if (!ValidateProfileOperands()) {
+        std::fprintf(stderr, "Full operand specialization index mismatch\n");
+        return 1;
+    }
     if (!fiberish::ValidateSpecializationWildcardIndex()) {
         std::fprintf(stderr, "Wildcard liveness/memory specialization index mismatch\n");
         return 1;

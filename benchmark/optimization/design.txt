@@ -39,11 +39,10 @@ from splitting an existing CMP/Jcc pair; a four-op fusion may still subsume an
 entire two-op comparison/branch. This limits the impact on operand paths outside the training
 coverage; it never reverts a canonical instruction specialization.
 Frozen manifests are checked in. Ordinary builds never execute a training guest.
-PROFILE partially evaluates at most the first budget entries in the selected
-frozen plan. Only ModRM, prefix and effective-address descriptors
-are specialized. Guest addresses, immediates, memory contents and validation
-results remain runtime inputs. Each clone still uses the ordinary instruction
-logic, precise fault/restart flow and constituent boundaries.
+PROFILE partially evaluates up to the configured budget in the selected plan.
+The stock version 1 lists specialize ModRM, prefixes and effective-address
+descriptors. Each clone uses the ordinary instruction logic, precise
+fault/restart flow and constituent boundaries.
 ADDED_FUSIONS instantiates only the fused shapes in that budget. The fusion
 matcher returns their lowered entry directly. It
 performs no separate per-instruction lowering pass or reverse normalization:
@@ -61,6 +60,39 @@ operand lowering. Only before concatenation, lowerings map back to their origina
 handler identity; then fusion and lowering run again. This preserves matching
 without reverting an instruction specialization. The source generator remains
 the authority for semantic specialization expansion.
+
+Workload-specific decoded operand plans
+
+Build the CLI with block profiling and run the workload with guest stats:
+
+  dotnet build Podish.Cli/Podish.Cli.csproj -c Release -p:EnableBlockProfile=true
+  dotnet Podish.Cli/bin/Release/net10.0/Podish.Cli.dll run --rm \
+    --rootfs /path/to/rootfs --guest-stats-dir /tmp/guest-stats /path/to/guest
+
+Export from the new guest stats directory or from existing BLK2 v2 dumps:
+
+  python3 scripts/collect_operand_specializations.py /tmp/guest-stats \
+    --output /tmp/operand-plan.json
+  cmake -S libfibercpu -B build/operand-profile -DCMAKE_BUILD_TYPE=Release \
+    -DFIBERCPU_OPERAND_PLAN_FILE=/tmp/operand-plan.json
+  cmake --build build/operand-profile
+
+Pass several profile paths to combine their counts. Each input can be a
+blocks.bin file or its containing directory. Pass --fusions to the collector
+when profiling with BASE or a custom generated fusion source. CMake also accepts
+the plan through MSBuild's -p:OperandPlanFile=/tmp/operand-plan.json.
+
+The version 2 plan saves all observed decoded shapes by default. --limit trims
+the exported list. CMake's FIBERCPU_OPERAND_BUDGET controls how many rows become
+handlers, up to 1024. Ranking starts with estimated dispatch count. Block entry
+counts are estimates for constituent execution when a block can exit early.
+
+Each match includes canonical handler identity, instruction length, ModRM
+(also used for opcode-encoded registers), prefixes, decoder metadata, decoded
+base/index/scale/segment, displacement and immediate. It guards every constituent
+of a generated fusion. Addresses after relocation, resolved branch targets and
+guest memory values are runtime inputs. The existing version 1 shape lists
+remain supported by FIBERCPU_OPERAND_PLAN_FILE.
 
 Pin appends one uint32 argument per selected GPR to the preserve_none handler
 signature. CMake generates the register IDs, parameter order, lookup conditions
