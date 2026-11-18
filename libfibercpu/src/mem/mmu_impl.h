@@ -221,6 +221,57 @@ template <typename T>
     return write_slow<T>(addr, val);
 }
 
+// Both pages must already be accessible. Write hits also guarantee Dirty
+// and exclude ForceWriteSlow. Memory hooks flush and disable TLB fills.
+template <bool Store>
+bool Mmu::try_cross_page_dword_tlb(GuestAddr addr, std::byte* value) {
+    constexpr size_t Width = sizeof(uint32_t);
+    const uint32_t first_size = PAGE_SIZE - (addr & PAGE_MASK);
+    if (first_size >= Width) return false;
+
+    const uint32_t first_tag = addr & ~PAGE_MASK;
+    const uint32_t second_tag = first_tag + PAGE_SIZE;
+    const auto& entries = Store ? tlb.write_tlb : tlb.read_tlb;
+    const auto& first = entries[(first_tag >> PAGE_SHIFT) & TLB_INDEX_MASK];
+    const auto& second = entries[(second_tag >> PAGE_SHIFT) & TLB_INDEX_MASK];
+    if (first.tag != first_tag || second.tag != second_tag) return false;
+
+    auto* first_ptr = reinterpret_cast<std::byte*>(first.addend + addr);
+    auto* second_ptr = reinterpret_cast<std::byte*>(second.addend + second_tag);
+    auto transfer = [&]<size_t First>() {
+        if constexpr (Store) {
+            std::memcpy(first_ptr, value, First);
+            std::memcpy(second_ptr, value + First, Width - First);
+        } else {
+            std::memcpy(value, first_ptr, First);
+            std::memcpy(value + First, second_ptr, Width - First);
+        }
+    };
+    switch (first_size) {
+        case 1:
+            transfer.template operator()<1>();
+            break;
+        case 2:
+            transfer.template operator()<2>();
+            break;
+        case 3:
+            transfer.template operator()<3>();
+            break;
+        default:
+            return false;
+    }
+#ifdef ENABLE_TLB_STATS
+    if constexpr (Store) {
+        stats.l2_write_hits++;
+        stats.total_writes++;
+    } else {
+        stats.l2_read_hits++;
+        stats.total_reads++;
+    }
+#endif
+    return true;
+}
+
 template <typename T>
 MemResult<T> Mmu::read_tlb_only(GuestAddr addr, MicroTLB* utlb) {
     const GuestAddr end_addr = addr + sizeof(T) - 1;

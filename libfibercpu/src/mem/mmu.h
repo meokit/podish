@@ -1810,6 +1810,10 @@ public:
     template <typename T>
     [[nodiscard]] MemResult<void> write_slow(GuestAddr addr, T val);
 
+    // Replay-only access when both pages already have valid L2 entries.
+    template <bool Store>
+    [[nodiscard]] bool try_cross_page_dword_tlb(GuestAddr addr, std::byte* value);
+
     // Optimized Cross-Page Access
     template <typename T>
     [[nodiscard]] MemResult<T> read_cross_page(GuestAddr addr);

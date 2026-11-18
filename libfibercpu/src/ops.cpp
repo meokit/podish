@@ -37,6 +37,12 @@ static inline bool PerformMemOp(EmuState* state, DecodedOp* op, mem::MicroTLB& u
         case 2:
             return ExecuteMemOp(state, op, utlb, addr, reinterpret_cast<uint16_t*>(value), is_write);
         case 4:
+            // Replay can serve a straddle from two warm pages before a
+            // blocking write flushes the first page's entry.
+            if (is_write ? state->mmu.try_cross_page_dword_tlb<true>(addr, value)
+                         : state->mmu.try_cross_page_dword_tlb<false>(addr, value)) {
+                return false;
+            }
             return ExecuteMemOp(state, op, utlb, addr, reinterpret_cast<uint32_t*>(value), is_write);
         case 8:
             return ExecuteMemOp(state, op, utlb, addr, reinterpret_cast<uint64_t*>(value), is_write);
