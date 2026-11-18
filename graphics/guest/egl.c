@@ -10,6 +10,7 @@
 
 #define PG_PLATFORM_GBM 0x31D7
 #define PG_GBM_ARGB8888 0x34325241
+#define PG_GBM_XRGB8888 0x34325258
 #define PG_PLATFORM_WAYLAND 0x31D8
 #define PG_PLATFORM_DEVICE 0x313F
 #define PG_DEVICE_ATTRIBUTE 0x322C
@@ -18,6 +19,12 @@
 #define PG_PLATFORM_SURFACELESS 0x31DD
 #define PG_CONFIG ((EGLConfig)(uintptr_t)1)
 #define PG_MAX_SIZE 4096
+#define PG_LINUX_DMA_BUF 0x3270
+#define PG_DMA_FOURCC 0x3271
+#define PG_DMA_FD 0x3272
+#define PG_DMA_OFFSET 0x3273
+#define PG_DMA_PITCH 0x3274
+#define PG_IMAGE_PRESERVED 0x30D2
 
 enum surface_kind { PBUFFER, FBDEV, WAYLAND, FBDEV_PBUFFER, GBM };
 struct context {
@@ -33,12 +40,18 @@ struct surface {
     void* gbm_window;
     struct surface* next;
 };
+struct image {
+    uint32_t id;
+    struct image* next;
+};
 struct display {
     EGLenum platform;
     void* native;
+    int managed_gbm;
     int initialized;
     struct context* contexts;
     struct surface* surfaces;
+    struct image* images;
     struct display* next;
 };
 
@@ -78,7 +91,7 @@ static void load_gbm(void) {
 
 static int gbm_device(void* native) {
     pthread_once(&gbm_once, load_gbm);
-    return gbm.ready && gbm.is_device(native);
+    return gbm.ready ? gbm.is_device(native) : 0;
 }
 
 static void release_binding(void* bound) {
@@ -189,6 +202,7 @@ static EGLDisplay get_display(EGLenum platform, void* native) {
     }
     d->platform = platform;
     d->native = native;
+    d->managed_gbm = platform == PG_PLATFORM_GBM && (gbm_device(native) & 2);
     d->next = displays;
     displays = d;
     return d;
@@ -294,6 +308,12 @@ EGLBoolean eglTerminate(EGLDisplay display) {
     struct display* d = lookup(display, 0);
     if (!d)
         return EGL_FALSE;
+    while (d->images) {
+        struct image* image = d->images;
+        d->images = image->next;
+        pg_gl(PG_DESTROY_IMAGE, image->id);
+        free(image);
+    }
     while (d->contexts) {
         struct context* c = d->contexts;
         d->contexts = c->next;
@@ -321,7 +341,8 @@ const char* eglQueryString(EGLDisplay display, EGLint name) {
                                        : PG_CLIENT_EXTENSIONS;
 #undef PG_CLIENT_EXTENSIONS
     WITH_LOCK;
-    if (!lookup(display, 1))
+    struct display* d = lookup(display, 1);
+    if (!d)
         return NULL;
     switch (name) {
     case EGL_VENDOR:
@@ -331,6 +352,9 @@ const char* eglQueryString(EGLDisplay display, EGLint name) {
     case EGL_CLIENT_APIS:
         return "OpenGL_ES";
     case EGL_EXTENSIONS:
+        if (d->managed_gbm)
+            return "EGL_KHR_surfaceless_context EGL_KHR_no_config_context EGL_KHR_image_base "
+                   "EGL_EXT_image_dma_buf_import EGL_EXT_image_dma_buf_import_modifiers";
         return "EGL_KHR_surfaceless_context";
     default:
         fail(EGL_BAD_PARAMETER);
@@ -483,7 +507,8 @@ EGLContext eglCreateContext(EGLDisplay display, EGLConfig config, EGLContext sha
     struct display* d = lookup(display, 1);
     if (!d)
         return EGL_NO_CONTEXT;
-    if (config != PG_CONFIG)
+    int managed = config == NULL && d->managed_gbm;
+    if (config != PG_CONFIG && !managed)
         return (fail(EGL_BAD_CONFIG), EGL_NO_CONTEXT);
     if (share && !lookup_context(d, share))
         return EGL_NO_CONTEXT;
@@ -500,7 +525,7 @@ EGLContext eglCreateContext(EGLDisplay display, EGLConfig config, EGLContext sha
     struct context* c = calloc(1, sizeof(*c));
     if (!c)
         return (fail(EGL_BAD_ALLOC), EGL_NO_CONTEXT);
-    int id = pg_gl(PG_CREATE_CONTEXT, pg_ptr(share));
+    int id = pg_gl(PG_CREATE_CONTEXT, pg_ptr(share), managed);
     if (!called(id)) {
         free(c);
         return EGL_NO_CONTEXT;
@@ -902,11 +927,130 @@ EGLSurface eglCreatePbufferFromClientBuffer(EGLDisplay d, EGLenum type, EGLClien
     return (fail(EGL_BAD_PARAMETER), EGL_NO_SURFACE);
 }
 
+PODISH_EXPORT EGLImage eglCreateImageKHR(EGLDisplay display, EGLContext ctx, EGLenum target, EGLClientBuffer buffer,
+                                         const EGLint* attrs) {
+    WITH_LOCK;
+    struct display* d = lookup(display, 1);
+    if (!d)
+        return EGL_NO_IMAGE;
+    if (ctx || buffer || !d->managed_gbm || target != PG_LINUX_DMA_BUF)
+        return (fail(EGL_BAD_PARAMETER), EGL_NO_IMAGE);
+
+    int width = 0, height = 0, pitch = 0, format = 0, offset = -1, fd = -1;
+    unsigned i = 0;
+    if (!attrs)
+        return (fail(EGL_BAD_PARAMETER), EGL_NO_IMAGE);
+    for (; i < 16 && attrs[i * 2] != EGL_NONE; i++) {
+        const EGLint value = attrs[i * 2 + 1];
+        switch (attrs[i * 2]) {
+        case EGL_WIDTH:
+            width = value;
+            break;
+        case EGL_HEIGHT:
+            height = value;
+            break;
+        case PG_DMA_FOURCC:
+            format = value;
+            break;
+        case PG_DMA_PITCH:
+            pitch = value;
+            break;
+        case PG_DMA_OFFSET:
+            offset = value;
+            break;
+        case PG_DMA_FD:
+            fd = value;
+            break;
+        case PG_IMAGE_PRESERVED:
+            if (value == EGL_TRUE || value == EGL_FALSE)
+                break;
+            return (fail(EGL_BAD_ATTRIBUTE), EGL_NO_IMAGE);
+        default:
+            return (fail(EGL_BAD_ATTRIBUTE), EGL_NO_IMAGE);
+        }
+    }
+    if (i == 16 || fd < 0 || offset != 0 || pitch <= 0 || width <= 0 || height <= 0 ||
+        (format != PG_GBM_XRGB8888 && format != PG_GBM_ARGB8888))
+        return (fail(EGL_BAD_PARAMETER), EGL_NO_IMAGE);
+
+    struct image* image = malloc(sizeof(*image));
+    if (!image)
+        return (fail(EGL_BAD_ALLOC), EGL_NO_IMAGE);
+    int id = pg_gl(PG_IMPORT_IMAGE, fd, width, height, pitch, format);
+    if (!called(id)) {
+        free(image);
+        return EGL_NO_IMAGE;
+    }
+    *image = (struct image){(uint32_t)id, d->images};
+    d->images = image;
+    return (EGLImage)(uintptr_t)id;
+}
+
+PODISH_EXPORT EGLBoolean eglDestroyImageKHR(EGLDisplay display, EGLImage image) {
+    WITH_LOCK;
+    struct display* d = lookup(display, 1);
+    if (!d)
+        return EGL_FALSE;
+    struct image** link = &d->images;
+    while (*link && (*link)->id != pg_ptr(image))
+        link = &(*link)->next;
+    if (!*link)
+        return fail(EGL_BAD_PARAMETER);
+    if (!called(pg_gl(PG_DESTROY_IMAGE, pg_ptr(image))))
+        return EGL_FALSE;
+    struct image* found = *link;
+    *link = found->next;
+    free(found);
+    return EGL_TRUE;
+}
+
+PODISH_EXPORT EGLBoolean eglQueryDmaBufFormatsEXT(EGLDisplay display, EGLint max, EGLint* formats, EGLint* count) {
+    WITH_LOCK;
+    struct display* d = lookup(display, 1);
+    if (!d)
+        return EGL_FALSE;
+    if (!d->managed_gbm || !count || max < 0 || (max && !formats))
+        return fail(EGL_BAD_PARAMETER);
+    if (max > 0)
+        formats[0] = PG_GBM_XRGB8888;
+    if (max > 1)
+        formats[1] = PG_GBM_ARGB8888;
+    *count = max == 1 ? 1 : 2;
+    return EGL_TRUE;
+}
+
+PODISH_EXPORT EGLBoolean eglQueryDmaBufModifiersEXT(EGLDisplay display, EGLint format, EGLint max, uint64_t* modifiers,
+                                                    EGLBoolean* external, EGLint* count) {
+    WITH_LOCK;
+    struct display* d = lookup(display, 1);
+    if (!d)
+        return EGL_FALSE;
+    if (!d->managed_gbm || !count || max < 0 || (max && !modifiers) ||
+        (format != PG_GBM_XRGB8888 && format != PG_GBM_ARGB8888))
+        return fail(EGL_BAD_PARAMETER);
+    // The GPU layout is opaque to the guest and uses implicit DRM modifiers.
+    if (max > 0) {
+        modifiers[0] = 0x00ffffffffffffffull;
+        if (external)
+            external[0] = EGL_FALSE;
+    }
+    *count = 1;
+    return EGL_TRUE;
+}
+
+EGLImage eglCreateImage(EGLDisplay display, EGLContext ctx, EGLenum target, EGLClientBuffer buffer,
+                        const EGLAttrib* attrs) {
+    _Static_assert(sizeof(EGLAttrib) == sizeof(EGLint), "IA-32 EGL image attributes");
+    return eglCreateImageKHR(display, ctx, target, buffer, (const EGLint*)attrs);
+}
+
+EGLBoolean eglDestroyImage(EGLDisplay display, EGLImage image) {
+    return eglDestroyImageKHR(display, image);
+}
+
 __eglMustCastToProperFunctionPointerType eglGetProcAddress(const char* name) {
     if (!name)
         return NULL;
-    if (strncmp(name, "gl", 2) == 0)
-        return (__eglMustCastToProperFunctionPointerType)pg_get_gl_proc(name);
 #define PROC(f)                                                                                                        \
     if (strcmp(name, #f) == 0)                                                                                         \
     return (__eglMustCastToProperFunctionPointerType)f
@@ -916,6 +1060,15 @@ __eglMustCastToProperFunctionPointerType eglGetProcAddress(const char* name) {
     PROC(eglQueryDeviceStringEXT);
     PROC(eglQueryDeviceAttribEXT);
     PROC(eglQueryDisplayAttribEXT);
+    PROC(eglCreateImageKHR);
+    PROC(eglDestroyImageKHR);
+    PROC(eglCreateImage);
+    PROC(eglDestroyImage);
+    PROC(eglQueryDmaBufFormatsEXT);
+    PROC(eglQueryDmaBufModifiersEXT);
+    PROC(glEGLImageTargetRenderbufferStorageOES);
 #undef PROC
+    if (strncmp(name, "gl", 2) == 0)
+        return (__eglMustCastToProperFunctionPointerType)pg_get_gl_proc(name);
     return NULL;
 }

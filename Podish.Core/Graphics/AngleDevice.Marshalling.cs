@@ -65,8 +65,15 @@ internal sealed unsafe partial class AngleDevice
         if (width == 0 || height == 0) return 0;
         var row = Count(width, (uint)pixelSize);
         var align = GetInteger(alignment);
-        var stride = (row + align - 1) & -align;
-        return Count(height - 1, (uint)stride) + row;
+        var unpack = context.Managed != null && alignment == 0x0CF5;
+        var rowLength = unpack ? GetInteger(0x0CF2) : 0;
+        var storedRow = rowLength == 0 ? row : Count((uint)rowLength, (uint)pixelSize);
+        var stride = (storedRow + align - 1) & -align;
+        var skipRows = unpack ? (uint)GetInteger(0x0CF3) : 0;
+        var skipPixels = unpack ? (uint)GetInteger(0x0CF4) : 0;
+        var bytes = (ulong)(height - 1 + skipRows) * (uint)stride + (ulong)skipPixels * (uint)pixelSize + (uint)row;
+        if (bytes > GuestMemory.MaxTransfer) throw new GuestTransferException(Errno.E2BIG);
+        return (int)bytes;
     }
 
     private int StateCount(Context context, uint name) => name switch
@@ -129,7 +136,8 @@ internal sealed unsafe partial class AngleDevice
 
     private int PixelStorei(Context context, nint proc, Span<uint> a, GuestMemory guest)
     {
-        if (a[0] is not (0x0D05 or 0x0CF5)) return Flag(context, InvalidEnum);
+        if (a[0] is not (0x0D05 or 0x0CF5) && (context.Managed == null || a[0] is not (0x0CF2 or 0x0CF3 or 0x0CF4)))
+            return Flag(context, InvalidEnum);
         ((delegate* unmanaged[Cdecl]<uint, int, void>)proc)(a[0], (int)a[1]);
         return 0;
     }
@@ -147,8 +155,10 @@ internal sealed unsafe partial class AngleDevice
         if (a[2] == 0) return -(int)Errno.EINVAL;
         if (a[0] == 0x1F03)
         {
-            // Only the marshalled core entry points are advertised.
-            guest.Write(a[1], "\0"u8);
+            ReadOnlySpan<byte> extensions = context.Managed == null ? "\0"u8
+                : "GL_OES_EGL_image GL_EXT_texture_format_BGRA8888 GL_EXT_unpack_subimage\0"u8;
+            if (a[2] < extensions.Length) return -(int)Errno.EINVAL;
+            guest.Write(a[1], extensions);
             return 0;
         }
         var text = ((delegate* unmanaged[Cdecl]<uint, byte*>)proc)(a[0]);

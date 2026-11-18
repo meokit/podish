@@ -30,10 +30,12 @@ public sealed partial class DrmCardInode : Inode, ITaskWaitSource, IPollNotifica
 
     // Podish-only ioctls used by the guest GBM library. Standard libdrm is unmodified.
     private const uint QueryGpuBuffers = 0x800464F0, LockGpuBuffer = 0x400864F1;
+    private const uint CreateGpuBo = 0xc01464f3;
 
     private readonly KernelScheduler _scheduler;
     private readonly bool _gpuBuffers;
     private readonly FramebufferDevice? _cpuOutput;
+    private readonly Func<uint, uint, uint, DrmScanoutBuffer?>? _allocateGpu;
     private readonly byte[] _mode = CreateMode();
     private Session? _master;
     private Session? _scanoutOwner;
@@ -43,11 +45,12 @@ public sealed partial class DrmCardInode : Inode, ITaskWaitSource, IPollNotifica
     private uint _nextId = DpmsProperty + 1;
 
     public DrmCardInode(SuperBlock superBlock, KernelScheduler scheduler, bool gpuBuffers,
-        FramebufferDevice? cpuOutput = null)
+        FramebufferDevice? cpuOutput = null, Func<uint, uint, uint, DrmScanoutBuffer?>? allocateGpu = null)
     {
         _scheduler = scheduler;
         _gpuBuffers = gpuBuffers;
         _cpuOutput = cpuOutput;
+        _allocateGpu = allocateGpu;
         SuperBlock = superBlock;
         Type = InodeType.CharDev;
         Ino = 0x22600;
@@ -61,6 +64,8 @@ public sealed partial class DrmCardInode : Inode, ITaskWaitSource, IPollNotifica
     private sealed record Buffer(LinuxFile? File, uint Width, uint Height, uint Pitch, uint Size,
         DrmScanoutBuffer? Gpu = null)
     {
+        internal uint ObjectId { get; init; }
+
         internal void Retain()
         {
             File?.Get();
@@ -112,11 +117,14 @@ public sealed partial class DrmCardInode : Inode, ITaskWaitSource, IPollNotifica
 
     public uint RegisterGpuBuffer(LinuxFile file, DrmScanoutBuffer buffer)
     {
-        if (!_gpuBuffers || file.OpenedInode != this || file.PrivateData is not Session session ||
+        if (!_gpuBuffers || (file.OpenedInode != this &&
+                             (file.OpenedInode is not RenderNode render || render.Card != this)) ||
+            file.PrivateData is not Session session ||
             (file.Flags & FileFlags.O_RDWR) == 0 || session.Buffers.Count >= MaxObjects)
             return 0;
         var id = _nextId++;
-        var backing = new Buffer(null, buffer.Width, buffer.Height, buffer.Pitch, 0, buffer);
+        var backing = new Buffer(null, buffer.Width, buffer.Height, buffer.Pitch, buffer.Pitch * buffer.Height, buffer)
+            { ObjectId = id };
         backing.Retain();
         session.Buffers.Add(id, backing);
         return id;
@@ -149,7 +157,7 @@ public sealed partial class DrmCardInode : Inode, ITaskWaitSource, IPollNotifica
         if (request == QueryGpuBuffers)
         {
             Span<byte> flags = stackalloc byte[4];
-            Put(flags, 0, _gpuBuffers ? 1u : 0);
+            Put(flags, 0, file.OpenedInode is RenderNode ? (_allocateGpu != null ? 2u : 0) : (_gpuBuffers ? 1u : 0));
             return arg != 0 && (ulong)arg + 4 <= 1UL << 32 && task.CPU.CopyToUser(arg, flags)
                 ? 0 : -(int)Errno.EFAULT;
         }
@@ -174,7 +182,7 @@ public sealed partial class DrmCardInode : Inode, ITaskWaitSource, IPollNotifica
                 GetConnector or AddFb or AddFb2 or RemoveFb or PageFlip or CreateDumb or MapDumb or DestroyDumb or
                 GetProperties or LockGpuBuffer or GetMagic or SetClientCap or PrimeExport or PrimeImport or
                 GetPlaneResources or GetPlane or GetProperty or SetConnectorProperty or SetCursor or
-                ListLessees or ImportGbmBo => (int)((request >> 16) & 0x3fff),
+                ListLessees or ImportGbmBo or CreateGpuBo => (int)((request >> 16) & 0x3fff),
             _ => 0
         };
         if (size == 0) return -(int)Errno.ENOTTY;
@@ -206,6 +214,7 @@ public sealed partial class DrmCardInode : Inode, ITaskWaitSource, IPollNotifica
                 ListLessees => ListNoLessees(data),
                 PrimeImport or ImportGbmBo => ImportPrime(session, task, arg, data, request == ImportGbmBo),
                 PrimeExport => ExportPrime(session, task, arg, data),
+                CreateGpuBo => AllocateGpuBuffer(file, task, arg, data),
                 CreateDumb => AllocateBuffer(session, task, arg, data),
                 MapDumb => GetBufferOffset(session, data),
                 DestroyDumb or GemClose => CloseBuffer(session, U32(data, 0)),
@@ -218,7 +227,7 @@ public sealed partial class DrmCardInode : Inode, ITaskWaitSource, IPollNotifica
             // Mutations returning identifiers validate their writeback before publishing the object.
             if (rc != 0 || request is CreateDumb or AddFb or AddFb2 or GemClose or DestroyDumb or RemoveFb
                 or SetCrtc or PageFlip or LockGpuBuffer or SetClientCap or AuthMagic or SetConnectorProperty
-                or SetCursor or PrimeExport or PrimeImport or ImportGbmBo)
+                or SetCursor or PrimeExport or PrimeImport or ImportGbmBo or CreateGpuBo)
                 return rc;
             return cpu.CopyToUser(arg, data) ? 0 : -(int)Errno.EFAULT;
         }
@@ -390,7 +399,9 @@ public sealed partial class DrmCardInode : Inode, ITaskWaitSource, IPollNotifica
             // One linear plane. The format and plane count are part of the framebuffer, not the BO handle.
             if (U32(data, 12) is not (Xrgb8888 or Argb8888) || (U32(data, 16) & ~2u) != 0 ||
                 U32(data, 36) != buffer.Pitch || data[24..36].ContainsAnyExcept((byte)0) ||
-                data[40..].ContainsAnyExcept((byte)0)) return -(int)Errno.EINVAL;
+                data[40..].ContainsAnyExcept((byte)0) ||
+                (buffer.Gpu is { PrimeFormat: not 0 } gpu && gpu.PrimeFormat != U32(data, 12)))
+                return -(int)Errno.EINVAL;
         }
         else if (U32(data, 12) != buffer.Pitch || U32(data, 16) != 32 || U32(data, 20) is not (24 or 32))
             return -(int)Errno.EINVAL;

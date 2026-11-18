@@ -176,7 +176,7 @@ public sealed partial class DrmCardInode
         var flags = U32(data, 4);
         if ((flags & ~(PrimeCloseOnExec | PrimeReadWrite)) != 0) return -(int)Errno.EINVAL;
         if (!session.Buffers.TryGetValue(U32(data, 0), out var buffer)) return -(int)Errno.ENOENT;
-        if (buffer.File == null) return -(int)Errno.EOPNOTSUPP;
+        if (buffer.File == null && buffer.Gpu?.PrimeFormat is not > 0) return -(int)Errno.EOPNOTSUPP;
 
         var syscalls = task.Process.Syscalls;
         var inode = new PrimeInode(this, buffer);
@@ -191,6 +191,39 @@ public sealed partial class DrmCardInode
         return -(int)Errno.EFAULT;
     }
 
+    private int AllocateGpuBuffer(LinuxFile file, FiberTask task, uint arg, Span<byte> data)
+    {
+        if (_allocateGpu == null || file.OpenedInode is not RenderNode) return -(int)Errno.EOPNOTSUPP;
+        if (U32(data, 8) is not (Xrgb8888 or Argb8888)) return -(int)Errno.EINVAL;
+        var buffer = _allocateGpu(U32(data, 0), U32(data, 4), U32(data, 8));
+        if (buffer == null) return -(int)Errno.ENOMEM;
+
+        try
+        {
+            var handle = RegisterGpuBuffer(file, buffer);
+            if (handle == 0) return -(int)Errno.ENOSPC;
+            Put(data, 12, handle);
+            Put(data, 16, buffer.Pitch);
+            if (task.CPU.CopyToUser(arg, data)) return 0;
+            UnregisterGpuBuffer(file, handle);
+            return -(int)Errno.EFAULT;
+        }
+        finally
+        {
+            buffer.Release();
+        }
+    }
+
+    public static DrmScanoutBuffer? GetGpuPrimeBuffer(LinuxFile? file, uint width, uint height, uint pitch, uint format)
+    {
+        if (file?.OpenedInode is not PrimeInode { Buffer.Gpu: { } buffer } ||
+            buffer.Width != width || buffer.Height != height || buffer.Pitch != pitch ||
+            buffer.PrimeFormat != format || format == 0)
+            return null;
+
+        return buffer;
+    }
+
     private int ImportPrime(Session session, FiberTask task, uint arg, Span<byte> data, bool gbm)
     {
         if (!gbm && U32(data, 4) != 0) return -(int)Errno.EINVAL;
@@ -202,6 +235,7 @@ public sealed partial class DrmCardInode
         // The standard PRIME ioctl, in contrast, returns an existing GEM handle.
         if (gbm)
         {
+            if (prime.Buffer.File == null) return -(int)Errno.EOPNOTSUPP;
             var width = U32(data, 4);
             var height = U32(data, 8);
             if (width == 0 || height == 0 || width > prime.Buffer.Width || height > prime.Buffer.Height ||
@@ -236,7 +270,7 @@ public sealed partial class DrmCardInode
             Card = card;
             Buffer = buffer;
             SuperBlock = card.SuperBlock;
-            Ino = buffer.File!.OpenedInode!.Ino;
+            Ino = buffer.File?.OpenedInode?.Ino ?? (0x100000000UL + buffer.ObjectId);
             Type = InodeType.File;
             Mode = 0x180;
             Size = buffer.Size;
@@ -245,7 +279,7 @@ public sealed partial class DrmCardInode
 
         internal DrmCardInode Card { get; }
         internal Buffer Buffer { get; }
-        public override bool SupportsMmap => true;
+        public override bool SupportsMmap => Buffer.File != null;
 
         public override void Open(LinuxFile file) => Buffer.Retain();
 
@@ -264,6 +298,7 @@ public sealed partial class DrmCardInode
         public override int Ioctl(LinuxFile file, FiberTask task, uint request, uint arg)
         {
             if (request != 0x40086200) return -(int)Errno.ENOTTY; // DMA_BUF_IOCTL_SYNC
+            if (Buffer.File == null) return -(int)Errno.EOPNOTSUPP;
             Span<byte> data = stackalloc byte[8];
             if (!task.CPU.CopyFromUser(arg, data)) return -(int)Errno.EFAULT;
             var flags = U64(data, 0);
@@ -278,6 +313,7 @@ public sealed partial class DrmCardInode
     private sealed class RenderNode : Inode
     {
         private readonly DrmCardInode _card;
+        internal DrmCardInode Card => _card;
 
         internal RenderNode(DrmCardInode card)
         {
@@ -306,7 +342,7 @@ public sealed partial class DrmCardInode
         public override int Ioctl(LinuxFile file, FiberTask task, uint request, uint arg) => request switch
         {
             Version or GetCap or PrimeImport or PrimeExport or GemClose or ImportGbmBo or
-                CreateDumb or MapDumb or DestroyDumb
+                CreateDumb or MapDumb or DestroyDumb or QueryGpuBuffers or CreateGpuBo
                 => _card.Ioctl(file, task, request, arg),
             _ => -(int)Errno.EACCES
         };

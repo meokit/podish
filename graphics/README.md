@@ -90,7 +90,21 @@ dotnet "$cli" run --rm --kmsdrm --fbdev --rootfs "$rootfs" --user 1000:1000 \
 
 The probe reports eight changing frames from the KMS scanout preview. Mesa's software DRI driver allocates GBM buffers on `renderD128`, and wlroots imports them on `card0` for scanout. Use `--static /usr/bin/weston-simple-dmabuf-feedback` in place of `/usr/bin/weston-simple-shm` to verify a client that sends its GBM buffers over `zwp_linux_dmabuf_v1`.
 
-To exercise Pixman, set `WLR_RENDERER=pixman` and omit the Mesa variables and preload. For either renderer, `--fbdev` displays the CPU-backed KMS scanout in the host preview window. The virtual card currently uses a fixed connector and legacy modesetting. ANGLE-backed compositor rendering requires EGLImage import and GPU-backed GBM BOs.
+To exercise Pixman, set `WLR_RENDERER=pixman` and omit the Mesa variables and preload. For either software renderer, `--fbdev` displays the CPU-backed KMS scanout in the host preview window.
+
+### ANGLE compositor output
+
+On macOS, Cage can render into Podish-managed textures using the guest GBM and EGL libraries. The render node exports opaque PRIME fds for single-plane XRGB8888 and ARGB8888 BOs. Podish's EGLImage and guest renderbuffer references attach the texture to the compositor FBO. KMS waits for the producer fence and blits that same GPU resource to the host window.
+
+```sh
+dotnet "$cli" run --rm --kmsdrm --gles --rootfs "$rootfs" --user 1000:1000 \
+    -e XDG_RUNTIME_DIR=/run/user/1000 -e LIBSEAT_BACKEND=builtin -e SEATD_VTBOUND=0 \
+    -e WLR_BACKENDS=drm -e WLR_DRM_DEVICES=/dev/dri/card0 -e WLR_RENDERER=gles2 \
+    -- /usr/bin/cage -d -- /usr/bin/weston-simple-shm
+dotnet "$cli" run --rm --kmsdrm --gles --rootfs "$rootfs" -- /usr/local/bin/podish-kmsdrm-image-probe
+```
+
+This path supports one managed compositor context and client `wl_shm` surfaces. Guest EGLImage texture sampling and client GPU dma-buf imports are outside this path. The image probe tests the lifetime of an FBO after destroying its EGLImage and closing the PRIME fd and GEM handles.
 
 For the packaged game tests, use the Debian rootfs from the earlier smoke-test instructions. The launch fixtures set the GLES profile before the first SDL window and check the engine's GPU swap log.
 

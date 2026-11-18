@@ -21,7 +21,8 @@ internal sealed unsafe partial class AngleDevice : IDisposable
     private enum EglOperation : uint
     {
         Initialize = 1, CreateContext, DestroyContext, CreateSurface, DestroySurface,
-        MakeCurrent, Present, ResizeSurface, FramebufferSize, ReleaseThread, SwapBuffers, CreateGbmSurface
+        MakeCurrent, Present, ResizeSurface, FramebufferSize, ReleaseThread, SwapBuffers, CreateGbmSurface,
+        ImportImage, DestroyImage, ImageRenderbuffer
     }
 
     private readonly AngleLibrary _angle;
@@ -92,6 +93,7 @@ internal sealed unsafe partial class AngleDevice : IDisposable
         internal readonly Dictionary<uint, Context> Contexts = [];
         internal readonly Dictionary<uint, Surface> Surfaces = [];
         internal readonly Dictionary<FiberTask, Binding> Bindings = [];
+        internal readonly Dictionary<uint, KmsEglOutput.TextureBo> Images = [];
         internal Process? Owner;
         internal uint NextId = 1;
     }
@@ -102,6 +104,7 @@ internal sealed unsafe partial class AngleDevice : IDisposable
         internal readonly Dictionary<uint, Attribute> Attributes = [];
         internal uint Error;
         internal bool Deleted;
+        internal ManagedFramebufferState? Managed;
     }
 
     private sealed class Surface(nint handle, int width, int height, uint kind)
@@ -144,7 +147,8 @@ internal sealed unsafe partial class AngleDevice : IDisposable
                         context.Error = 0;
                     }
                     else
-                        value = DispatchGl(context, op, args, guest);
+                        value = context.Managed != null && DispatchManagedGl(context, op, args, guest, out var managed)
+                            ? managed : DispatchGl(context, op, args, guest);
                 }
                 catch (GuestTransferException ex) when (ex.Errno != Errno.EFAULT)
                 {
@@ -170,7 +174,7 @@ internal sealed unsafe partial class AngleDevice : IDisposable
         {
             case EglOperation.Initialize: // Initialize and negotiate the wire ABI.
                 return a[0] == Abi ? (int)Abi : -(int)Errno.EINVAL;
-            case EglOperation.CreateContext: return CreateContext(session, a[0]);
+            case EglOperation.CreateContext: return CreateContext(session, a[0], a[1] != 0);
             case EglOperation.DestroyContext: return DeleteContext(session, a[0]);
             case EglOperation.CreateSurface: return CreateSurface(session, (int)a[0], (int)a[1], a[2]);
             case EglOperation.DestroySurface: return DeleteSurface(session, a[0]);
@@ -189,27 +193,38 @@ internal sealed unsafe partial class AngleDevice : IDisposable
             case EglOperation.SwapBuffers: return Present(session, task, a[0], 0, 0, guest);
             case EglOperation.CreateGbmSurface:
                 return CreateGbmSurface(session, task, (int)a[0], (int)a[1], (int)a[2], a[3], guest);
+            case EglOperation.ImportImage: return ImportImage(session, task, a);
+            case EglOperation.DestroyImage: return DestroyImage(session, a[0]);
+            case EglOperation.ImageRenderbuffer: return BindImageRenderbuffer(session, task, a[0], a[1]);
             default: return -(int)Errno.ENOTTY;
         }
     }
 
-    private int CreateContext(Session session, uint share)
+    private int CreateContext(Session session, uint share, bool managed)
     {
         if (session.Contexts.Count >= MaxObjects) return -0x3003; // EGL_BAD_ALLOC
         nint shared = 0;
         if (share != 0)
         {
             if (!session.Contexts.TryGetValue(share, out var other) || other.Deleted) return -0x3006;
+            if (managed || other.Managed != null) return -0x3009;
             shared = other.Handle;
+        }
+        if (managed)
+        {
+            if (_managedOwner != null) return -0x3002;
+            shared = _kms?.TextureContext() ?? 0;
+            if (shared == 0) return -0x3009;
         }
         int* attributes = stackalloc int[]
         {
-            0x3098, 2, 0x3483, 0, 0x3453, 1, 0x3038, // GLES2 only, initialized resources.
+            0x3098, managed ? 3 : 2, 0x3483, 0, 0x3453, 1, 0x3038,
         };
         var handle = _angle.CreateContext(_angle.Display, Config, shared, attributes);
         if (handle == 0) return AngleError();
         var id = session.NextId++;
-        session.Contexts.Add(id, new Context(handle));
+        session.Contexts.Add(id, new Context(handle) { Managed = managed ? new ManagedFramebufferState() : null });
+        if (managed) _managedOwner = session;
         return (int)id;
     }
 
@@ -247,7 +262,10 @@ internal sealed unsafe partial class AngleDevice : IDisposable
     private void FreeContext(Session session, uint id)
     {
         if (session.Contexts.Remove(id, out var ctx))
+        {
             _angle.DestroyContext(_angle.Display, ctx.Handle);
+            ctx.Managed?.Dispose();
+        }
     }
 
     private void FreeSurface(Session session, uint id)
@@ -478,8 +496,11 @@ internal sealed unsafe partial class AngleDevice : IDisposable
     {
         if (!_sessions.Remove(session)) return;
         if (_hostSession == session) Unbind();
-        foreach (var context in session.Contexts.Values)
-            _angle.DestroyContext(_angle.Display, context.Handle);
+        foreach (var id in session.Contexts.Keys.ToArray())
+            FreeContext(session, id);
+        foreach (var image in session.Images.Values)
+            image.Release();
+        session.Images.Clear();
         foreach (var id in session.Surfaces.Keys.ToArray())
             FreeSurface(session, id);
         session.Contexts.Clear();

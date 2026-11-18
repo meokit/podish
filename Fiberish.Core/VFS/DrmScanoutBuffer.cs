@@ -9,6 +9,7 @@ public abstract class DrmScanoutBuffer(uint width, uint height, uint pitch)
     public uint Width { get; } = width;
     public uint Height { get; } = height;
     public uint Pitch { get; } = pitch;
+    public virtual uint PrimeFormat => 0;
     public bool InUse => _scanoutPins != 0 || GuestLocked;
     internal bool GuestLocked { get; set; }
 
@@ -17,7 +18,7 @@ public abstract class DrmScanoutBuffer(uint width, uint height, uint pitch)
     public abstract bool Present();
     protected abstract void Destroy();
 
-    internal void Retain() => _references++;
+    public void Retain() => _references++;
     public void Release()
     {
         if (--_references == 0) Destroy();

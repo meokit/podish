@@ -18,6 +18,11 @@ SPECIAL = {
     "glBindBuffer", "glDrawArrays", "glDrawElements", "glGetString", "glGetVertexAttribPointerv",
     "glPixelStorei", "glShaderSource", "glVertexAttribPointer",
 }
+NAMED_OPS = (
+    "glBindTexture", "glDeleteFramebuffers", "glDeleteRenderbuffers", "glDeleteTextures", "glFinish", "glFlush",
+    "glFramebufferRenderbuffer", "glFramebufferTexture2D", "glGetError", "glGetFramebufferAttachmentParameteriv",
+    "glGetRenderbufferParameteriv", "glIsTexture", "glRenderbufferStorage",
+)
 
 
 def pointer_rule(name, arg, index):
@@ -146,9 +151,9 @@ def generate():
               "        if (!strcmp(name, procs[i].name)) return procs[i].address;",
               "    return NULL;", "}", ""]
     host += ["            default: return -(int)Errno.ENOTTY;", "        }", "    }", "",
-             "    internal const int GlFirst = 64;",
-             f"    private const int GlGetError = {64 + symbols.index('glGetError')};", "",
-             "    internal static readonly string[] GlNames =", "    ["]
+             "    internal const int GlFirst = 64;"]
+    host.extend(f"    private const int Gl{name[2:]} = {64 + symbols.index(name)};" for name in NAMED_OPS)
+    host += ["", "    internal static readonly string[] GlNames =", "    ["]
     host.extend(f'        "{name}",' for name in symbols)
     host += ["    ];", "}", ""]
     return {

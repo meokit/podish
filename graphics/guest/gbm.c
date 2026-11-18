@@ -52,6 +52,7 @@ struct drm_import_bo {
 #define DRM_QUERY_GPU _IOR('d', 0xf0, uint32_t)
 #define DRM_LOCK_GPU_BO _IOW('d', 0xf1, uint32_t[2])
 #define DRM_IMPORT_GBM_BO _IOWR('d', 0xf2, struct drm_import_bo)
+#define DRM_CREATE_GPU_BO _IOWR('d', 0xf3, uint32_t[5])
 
 _Static_assert(sizeof(struct drm_version) == 36, "IA-32 drm_version");
 _Static_assert(sizeof(struct drm_create_dumb) == 32, "IA-32 drm_mode_create_dumb");
@@ -105,6 +106,7 @@ struct gbm_bo {
     void* user;
     void (*destroy_user)(struct gbm_bo*, void*);
     int locked;
+    int managed;
 };
 
 struct gbm_surface {
@@ -179,7 +181,9 @@ GBM_EXPORT int gbm_device_get_format_modifier_plane_count(struct gbm_device* dev
 
 GBM_EXPORT struct gbm_bo* gbm_bo_create(struct gbm_device* device, uint32_t width, uint32_t height, uint32_t format,
                                         uint32_t usage) {
-    if (!gbm_device_is_format_supported(device, format, usage) || usage & GBM_BO_USE_RENDERING) {
+    const int managed = (usage & GBM_BO_USE_RENDERING) != 0;
+    if (!gbm_device_is_format_supported(device, format, usage) ||
+        (managed && (!(device->gpu & 2) || (usage & GBM_BO_USE_LINEAR)))) {
         errno = EINVAL;
         return NULL;
     }
@@ -187,7 +191,10 @@ GBM_EXPORT struct gbm_bo* gbm_bo_create(struct gbm_device* device, uint32_t widt
     if (!bo)
         return NULL;
     struct drm_create_dumb request = {.height = height, .width = width, .bpp = 32};
-    if (ioctl(device->fd, DRM_CREATE_DUMB, &request) < 0) {
+    uint32_t texture[5] = {width, height, format};
+    int created =
+        managed ? ioctl(device->fd, DRM_CREATE_GPU_BO, texture) : ioctl(device->fd, DRM_CREATE_DUMB, &request);
+    if (created < 0) {
         int error = errno;
         free(bo);
         errno = error;
@@ -197,9 +204,10 @@ GBM_EXPORT struct gbm_bo* gbm_bo_create(struct gbm_device* device, uint32_t widt
                           .width = width,
                           .height = height,
                           .format = format,
-                          .stride = request.pitch,
-                          .handle = request.handle,
-                          .bytes = (size_t)request.size};
+                          .stride = managed ? texture[4] : request.pitch,
+                          .handle = managed ? texture[3] : request.handle,
+                          .bytes = managed ? (size_t)texture[4] * height : (size_t)request.size,
+                          .managed = managed};
     atomic_fetch_add(&device->refs, 1);
     return bo;
 }
@@ -208,6 +216,10 @@ GBM_EXPORT struct gbm_bo* gbm_bo_create_with_modifiers2(struct gbm_device* devic
                                                         uint32_t format, const uint64_t* modifiers, unsigned count,
                                                         uint32_t usage) {
     if (modifiers) {
+        if (device->gpu & 2)
+            for (unsigned i = 0; i < count; i++)
+                if (modifiers[i] == DRM_FORMAT_MOD_INVALID)
+                    return gbm_bo_create(device, width, height, format, usage | GBM_BO_USE_RENDERING);
         for (unsigned i = 0; i < count; i++) {
             if (modifiers[i] == DRM_FORMAT_MOD_LINEAR)
                 return gbm_bo_create(device, width, height, format, usage | GBM_BO_USE_LINEAR);
@@ -313,8 +325,7 @@ GBM_EXPORT int gbm_bo_get_fd(struct gbm_bo* bo) {
 }
 
 GBM_EXPORT uint64_t gbm_bo_get_modifier(struct gbm_bo* bo) {
-    (void)bo;
-    return 0;
+    return bo->managed ? DRM_FORMAT_MOD_INVALID : DRM_FORMAT_MOD_LINEAR;
 }
 GBM_EXPORT int gbm_bo_get_plane_count(struct gbm_bo* bo) {
     (void)bo;
@@ -360,7 +371,7 @@ GBM_EXPORT void* gbm_bo_map(struct gbm_bo* bo, uint32_t x, uint32_t y, uint32_t 
         errno = EINVAL;
         return NULL;
     }
-    if (bo->bytes == 0) {
+    if (bo->bytes == 0 || bo->managed) {
         errno = ENOTSUP;
         return NULL;
     }
@@ -400,8 +411,8 @@ GBM_EXPORT int gbm_bo_write(struct gbm_bo* bo, const void* data, size_t count) {
 
 GBM_EXPORT struct gbm_surface* gbm_surface_create(struct gbm_device* device, uint32_t width, uint32_t height,
                                                   uint32_t format, uint32_t flags) {
-    if (!device->gpu || !(flags & GBM_BO_USE_RENDERING) || !gbm_device_is_format_supported(device, format, flags) ||
-        !width || !height || width > 4096 || height > 4096) {
+    if (!(device->gpu & 1) || !(flags & GBM_BO_USE_RENDERING) ||
+        !gbm_device_is_format_supported(device, format, flags) || !width || !height || width > 4096 || height > 4096) {
         errno = EINVAL;
         return NULL;
     }
@@ -455,7 +466,7 @@ GBM_EXPORT int podish_gbm_is_device(void* candidate) {
     pthread_mutex_lock(&registry_lock);
     for (struct gbm_device* device = devices; device; device = device->next)
         if (device == candidate && device->gpu) {
-            found = 1;
+            found = (int)device->gpu;
             break;
         }
     pthread_mutex_unlock(&registry_lock);

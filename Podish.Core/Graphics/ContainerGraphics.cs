@@ -49,7 +49,8 @@ internal static class ContainerGraphics
                 {
                     DrmCardInode? card = null;
                     syscalls.RegisterVirtualCharacterDevice("dri/card0",
-                        sb => card = new DrmCardInode(sb, scheduler, device?.HasKmsOutput == true, framebuffer));
+                        sb => card = new DrmCardInode(sb, scheduler, device?.HasKmsOutput == true, framebuffer,
+                            device is { HasKmsOutput: true } ? device.AllocateTextureBo : null));
                     syscalls.RegisterVirtualCharacterDevice("dri/renderD128", _ => card!.CreateRenderNode());
                     MountDrmSysfs(syscalls);
                 }

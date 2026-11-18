@@ -3,7 +3,7 @@ using Microsoft.Extensions.Logging;
 namespace Podish.Core.Graphics;
 
 /// <summary>Samples an ANGLE pbuffer into a native window without copying pixels to the CPU.</summary>
-internal sealed unsafe class KmsEglOutput : IDisposable
+internal sealed unsafe partial class KmsEglOutput : IDisposable
 {
     private const int BackBuffer = 0x3084;
     private const int Texture2D = 0x0DE1;
@@ -215,8 +215,9 @@ internal sealed unsafe class KmsEglOutput : IDisposable
     {
         // The context has its own share group and owns the pipeline objects.
         _angle.MakeCurrent(_angle.Display, 0, 0, 0);
+        if (_textureContext != 0) _angle.DestroyContext(_angle.Display, _textureContext);
         if (_context != 0) _angle.DestroyContext(_angle.Display, _context);
         if (_surface != 0) _angle.DestroySurface(_angle.Display, _surface);
-        _context = _surface = 0;
+        _textureContext = _context = _surface = 0;
     }
 }

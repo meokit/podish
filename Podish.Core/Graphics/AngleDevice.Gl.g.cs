@@ -1006,7 +1006,19 @@ internal sealed unsafe partial class AngleDevice
     }
 
     internal const int GlFirst = 64;
+    private const int GlBindTexture = 70;
+    private const int GlDeleteFramebuffers = 93;
+    private const int GlDeleteRenderbuffers = 95;
+    private const int GlDeleteTextures = 97;
+    private const int GlFinish = 108;
+    private const int GlFlush = 109;
+    private const int GlFramebufferRenderbuffer = 110;
+    private const int GlFramebufferTexture2D = 111;
     private const int GlGetError = 124;
+    private const int GlGetFramebufferAttachmentParameteriv = 126;
+    private const int GlGetRenderbufferParameteriv = 130;
+    private const int GlIsTexture = 151;
+    private const int GlRenderbufferStorage = 158;
 
     internal static readonly string[] GlNames =
     [
