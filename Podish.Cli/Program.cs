@@ -157,6 +157,7 @@ internal class Program
         var fbdevOption = new Option<bool>(
             "--fbdev",
             "Expose /dev/fb0 and display the guest framebuffer in an SDL window");
+        var glesOption = new Option<bool>("--gles", "Expose ANGLE-backed EGL and OpenGL ES 2.0 to the IA-32 guest");
         var fbdevSizeOption = new Option<string>(
             "--fbdev-size",
             () => "640x480",
@@ -191,6 +192,7 @@ internal class Program
         runCommand.AddOption(waylandServerOption);
         runCommand.AddOption(waylandDesktopSizeOption);
         runCommand.AddOption(fbdevOption);
+        runCommand.AddOption(glesOption);
         runCommand.AddOption(fbdevSizeOption);
         runCommand.AddArgument(runArgsArgument);
 
@@ -445,6 +447,7 @@ internal class Program
                 WaylandDesktopWidth = waylandDesktopSize.Width,
                 WaylandDesktopHeight = waylandDesktopSize.Height,
                 Fbdev = enableFbdev,
+                Gles = context.ParseResult.GetValueForOption(glesOption),
                 FbdevWidth = fbdevSize.Width,
                 FbdevHeight = fbdevSize.Height,
                 MemoryQuotaBytes = memoryQuotaBytes,
@@ -517,7 +520,7 @@ internal class Program
                 spec.PulseServer,
                 spec.WaylandServer,
                 new WaylandDesktopOptions(spec.WaylandDesktopWidth, spec.WaylandDesktopHeight),
-                spec.Fbdev ? new DisplaySize(spec.FbdevWidth, spec.FbdevHeight) : null));
+                spec.Fbdev ? new DisplaySize(spec.FbdevWidth, spec.FbdevHeight) : null, spec.Gles));
             metadata.State = "exited";
             metadata.Running = false;
             metadata.ExitCode = exitCode;
@@ -725,7 +728,7 @@ internal class Program
                 spec.PulseServer,
                 spec.WaylandServer,
                 new WaylandDesktopOptions(spec.WaylandDesktopWidth, spec.WaylandDesktopHeight),
-                spec.Fbdev ? new DisplaySize(spec.FbdevWidth, spec.FbdevHeight) : null));
+                spec.Fbdev ? new DisplaySize(spec.FbdevWidth, spec.FbdevHeight) : null, spec.Gles));
             metadata.State = "exited";
             metadata.Running = false;
             metadata.ExitCode = exitCode;
@@ -1348,7 +1351,8 @@ internal class Program
             "--virt-pulse",
             "--wayland-server",
             "--virt-wayland",
-            "--fbdev"
+            "--fbdev",
+            "--gles"
         };
 
         var hasRootfs = false;
@@ -1376,6 +1380,7 @@ internal class Program
                 token.StartsWith("--publish=", StringComparison.Ordinal) ||
                 token.StartsWith("--guest-stats-dir=", StringComparison.Ordinal) ||
                 token.StartsWith("--wayland-desktop-size=", StringComparison.Ordinal) ||
+                token.StartsWith("--gles=", StringComparison.Ordinal) ||
                 token.StartsWith("--fbdev=", StringComparison.Ordinal) ||
                 token.StartsWith("--fbdev-size=", StringComparison.Ordinal))
                 continue;
@@ -1607,7 +1612,7 @@ internal class Program
         string containerDir, ContainerLogDriver logDriver,
         ContainerEventStore eventStore, IReadOnlyList<PublishedPortSpec> publishedPorts, string? guestStatsExportDir,
         long? memoryQuotaBytes, bool enablePulseServer, bool enableWaylandServer,
-        WaylandDesktopOptions waylandDesktopOptions, DisplaySize? fbdevSize)
+        WaylandDesktopOptions waylandDesktopOptions, DisplaySize? fbdevSize, bool enableGles)
     {
         using var _logScope = Logging.BeginScope(ProgramLoggerFactory);
         using var runtimeThread = new ContainerRuntimeThread(Logger, ProgramLoggerFactory);
@@ -1648,6 +1653,7 @@ internal class Program
                 PublishedPorts = publishedPorts,
                 GuestStatsExportDir = guestStatsExportDir,
                 Framebuffer = framebuffer,
+                EnableGles = enableGles,
                 ProcessController = processController,
                 MemoryQuotaBytes = memoryQuotaBytes,
                 EnablePulseServer = enablePulseServer,

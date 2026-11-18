@@ -71,6 +71,74 @@ public sealed class FramebufferDevice
         Input.Detach();
     }
 
+    public (int Width, int Height) VisibleSize
+    {
+        get { lock (_gate) return (_mode.Width, _mode.Height); }
+    }
+
+    /// <summary>Writes a bottom-up RGBA frame to the visible portion of video memory.</summary>
+    public bool TryPresentRgba(ReadOnlySpan<byte> rgba, int width, int height, bool scale)
+    {
+        lock (_gate)
+        {
+            var mode = _mode;
+            if (_inode == null || width <= 0 || height <= 0 || rgba.Length < (long)width * height * 4 ||
+                (!scale && (width != mode.Width || height != mode.Height)))
+                return false;
+
+            if (mode.Depth == 8)
+            {
+                // Install an RGB332 palette for the indexed scanout.
+                for (var i = 0; i < 256; i++)
+                {
+                    _palette[0][i] = (ushort)((i >> 5) * 65535 / 7);
+                    _palette[1][i] = (ushort)(((i >> 2) & 7) * 65535 / 7);
+                    _palette[2][i] = (ushort)((i & 3) * 65535 / 3);
+                }
+            }
+
+            var row = _row.AsSpan(0, mode.Width * mode.PixelBytes);
+            Span<int> columns = stackalloc int[mode.Width];
+            for (var x = 0; x < mode.Width; x++)
+                columns[x] = x * width / mode.Width * 4;
+
+            for (var y = 0; y < mode.Height; y++)
+            {
+                var source = rgba.Slice((height - 1 - y * height / mode.Height) * width * 4, width * 4);
+                for (var x = 0; x < mode.Width; x++)
+                {
+                    var r = source[columns[x]];
+                    var g = source[columns[x] + 1];
+                    var b = source[columns[x] + 2];
+                    var offset = x * mode.PixelBytes;
+                    switch (mode.Depth)
+                    {
+                        case 8:
+                            row[offset] = (byte)((r & 0xE0) | ((g >> 3) & 0x1C) | (b >> 6));
+                            break;
+                        case 15:
+                            BinaryPrimitives.WriteUInt16LittleEndian(row[offset..],
+                                (ushort)(((r >> 3) << 10) | ((g >> 3) << 5) | (b >> 3)));
+                            break;
+                        case 16:
+                            BinaryPrimitives.WriteUInt16LittleEndian(row[offset..],
+                                (ushort)(((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3)));
+                            break;
+                        default:
+                            row[offset] = b;
+                            row[offset + 1] = g;
+                            row[offset + 2] = r;
+                            if (mode.Depth == 32) row[offset + 3] = 0xff;
+                            break;
+                    }
+                }
+                var position = (y + mode.YOffset) * mode.Stride + mode.XOffset * mode.PixelBytes;
+                if (_inode.WriteVideoMemory(null, row, position) != row.Length) return false;
+            }
+            return true;
+        }
+    }
+
     /// <summary>Copies the visible framebuffer as tightly packed, little-endian XRGB8888.</summary>
     public bool TryCopyFrame(Span<byte> xrgb8888, out int width, out int height)
     {
@@ -403,7 +471,10 @@ internal sealed class FramebufferInode : MappingBackedInode
         return length;
     }
 
-    public override unsafe int WriteFromHost(FiberTask? task, LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset)
+    public override int WriteFromHost(FiberTask? task, LinuxFile linuxFile, ReadOnlySpan<byte> buffer, long offset) =>
+        WriteVideoMemory(linuxFile, buffer, offset);
+
+    internal unsafe int WriteVideoMemory(LinuxFile? linuxFile, ReadOnlySpan<byte> buffer, long offset)
     {
         if (offset < 0) return -(int)Errno.EINVAL;
         if (buffer.IsEmpty) return 0;

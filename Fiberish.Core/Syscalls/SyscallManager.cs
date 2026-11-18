@@ -433,6 +433,17 @@ public partial class SyscallManager
         }
     }
 
+    public void RegisterVirtualCharacterDevice(string name, Func<SuperBlock, Inode> createInode)
+    {
+        var dev = PathWalk("/dev");
+        if (dev.Mount?.FsType != "devtmpfs" || dev.Dentry?.Inode is not TmpfsInode root)
+            throw new IOException("Virtual character devices require a mounted /dev devtmpfs.");
+        var fsName = FsName.FromString(name);
+        var superBlock = dev.Dentry.SuperBlock;
+        var entry = new Dentry(fsName, createInode(superBlock), dev.Dentry, superBlock);
+        root.RegisterChild(dev.Dentry, fsName, entry);
+    }
+
     private FileSystemType CreateDevPtsFileSystemType(ISignalBroadcaster signalBroadcaster)
     {
         return new FileSystemType

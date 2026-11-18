@@ -2,6 +2,14 @@
 
 This document lists all third-party libraries used in this project along with their authors and licenses.
 
+## Guest graphics headers
+
+The EGL, GLES2 and KHR headers under `graphics/guest/include` come from the Khronos EGL and OpenGL registries and retain their MIT and Apache 2.0 notices. [Apache 2.0 license](licenses/Apache-2.0.txt) [MIT license for gl2.h](graphics/guest/include/GLES2/LICENSE) [EGL Registry](https://github.com/KhronosGroup/EGL-Registry) · [OpenGL Registry](https://github.com/KhronosGroup/OpenGL-Registry)
+
+The bundled Wayland EGL backend header is from Wayland 1.22.0 and retains its MIT license notice. [Wayland EGL header](https://gitlab.freedesktop.org/wayland/wayland/-/blob/1.22.0/egl/wayland-egl-backend.h)
+
+Podish loads a host-provided ANGLE build for the optional GLES bridge. [ANGLE license](https://chromium.googlesource.com/angle/angle/+/main/LICENSE)
+
 ## C++ Third-Party Libraries
 
 ### simde

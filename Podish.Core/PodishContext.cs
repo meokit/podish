@@ -38,6 +38,7 @@ public sealed class PodishRunSpec
     public int WaylandDesktopWidth { get; init; } = 1024;
     public int WaylandDesktopHeight { get; init; } = 768;
     public bool Fbdev { get; init; }
+    public bool Gles { get; init; }
     public int FbdevWidth { get; init; } = 640;
     public int FbdevHeight { get; init; } = 480;
     public long? MemoryQuotaBytes { get; init; }
@@ -511,6 +512,7 @@ public sealed class PodishContext : IDisposable
             WaylandDesktopWidth = spec.WaylandDesktopWidth,
             WaylandDesktopHeight = spec.WaylandDesktopHeight,
             Fbdev = spec.Fbdev,
+            Gles = spec.Gles,
             FbdevWidth = spec.FbdevWidth,
             FbdevHeight = spec.FbdevHeight,
             MemoryQuotaBytes = spec.MemoryQuotaBytes,
@@ -624,6 +626,7 @@ public sealed class PodishContext : IDisposable
             EnableWaylandServer = effectiveSpec.WaylandServer,
             WaylandDesktopWidth = effectiveSpec.WaylandDesktopWidth,
             WaylandDesktopHeight = effectiveSpec.WaylandDesktopHeight,
+            EnableGles = effectiveSpec.Gles,
             Framebuffer = effectiveSpec.Fbdev ? new FramebufferDevice(effectiveSpec.FbdevWidth, effectiveSpec.FbdevHeight) : null,
             TerminalRows = effectiveSpec.TerminalRows,
             TerminalCols = effectiveSpec.TerminalCols,
