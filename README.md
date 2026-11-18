@@ -59,6 +59,7 @@ Podish is roughly **2× iSH** and roughly **9× QEMU TCI** on the same class of 
 | Build toolchain | `gcc`, `make` | Verified | CoreMark tree compiles end-to-end |
 | Networking tools | `git`, `OpenSSH` | Verified | `git clone` works; validates VFS / DNS / TLS paths |
 | Framebuffer games | PrBoom (DOOM shareware), SuperTux | Verified | Debian i386 SDL 1.2 fbcon with sound and music through PulseAudio |
+| ANGLE-backed GLES 2.0 | Chocolate Doom, SuperTux | Verified on macOS/Metal | IA-32 EGL over ioctls with [fbdev and Wayland output](graphics/README.md) |
 | X11 desktop | X.Org, Openbox, xeyes, xclock, xterm | Verified | Guest fbdev driver with host SDL2 output |
 | Heavy modern runtime | `Node.js` | Starts | Usable for simple scripts; V8 JIT can trigger occasional crashes. Disabling V8 JIT stabilizes it at a steep performance cost. |
 

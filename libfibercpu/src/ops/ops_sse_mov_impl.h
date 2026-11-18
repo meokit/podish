@@ -28,6 +28,21 @@ FORCE_INLINE bool CheckAlignedSseMemoryOperand(EmuState* state, GprCache& gpr, c
     return false;
 }
 
+FORCE_INLINE LogicFlow OpMovss_LoadMemory(LogicFuncParams) {
+    const uint32_t address = ComputeLinearAddress(state, gpr, op);
+    const auto value = ReadMem<float, OpOnTLBMiss::Restart>(state, gpr, address, utlb, op);
+    if (!value) return LogicFlow::RestartMemoryOp;
+    state->ctx.xmm[(op->modrm >> 3) & 7] = simde_mm_set_ss(*value);
+    return LogicFlow::Continue;
+}
+
+FORCE_INLINE LogicFlow OpMovss_StoreMemory(LogicFuncParams) {
+    const uint32_t address = ComputeLinearAddress(state, gpr, op);
+    const float value = simde_mm_cvtss_f32(state->ctx.xmm[(op->modrm >> 3) & 7]);
+    if (!WriteMem<float, OpOnTLBMiss::Retry>(state, gpr, address, value, utlb, op)) return LogicFlow::RetryMemoryOp;
+    return LogicFlow::Continue;
+}
+
 FORCE_INLINE LogicFlow OpMov_Sse_Load(LogicFuncParams) {
     // 0F 10: MOVUPS/MOVUPD/MOVSS/MOVSD
     uint8_t reg = (op->modrm >> 3) & 7;
@@ -55,13 +70,7 @@ FORCE_INLINE LogicFlow OpMov_Sse_Load(LogicFuncParams) {
             simde__m128 src_val = state->ctx.xmm[rm];
             state->ctx.xmm[reg] = simde_mm_move_ss(dst_val, src_val);
         } else {
-            // Mem->Reg: Load float, zero high
-            uint32_t addr = ComputeLinearAddress(state, gpr, op);
-            auto val_res = ReadMem<float, OpOnTLBMiss::Restart>(state, gpr, addr, utlb, op);
-            if (!val_res) return LogicFlow::RestartMemoryOp;
-            float val = *val_res;
-            // set_ss sets low float, zeroes high
-            state->ctx.xmm[reg] = simde_mm_set_ss(val);
+            return OpMovss_LoadMemory(LogicPassParams);
         }
     } else {  // (None: MOVUPS) or (66: MOVUPD) -> Load 128
         auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
@@ -96,11 +105,7 @@ FORCE_INLINE LogicFlow OpMov_Sse_Store(LogicFuncParams) {
             uint8_t dst_reg = op->modrm & 7;
             state->ctx.xmm[dst_reg] = simde_mm_move_ss(state->ctx.xmm[dst_reg], src_val);
         } else {
-            // Reg->Mem: Store 32 bits
-            uint32_t addr = ComputeLinearAddress(state, gpr, op);
-            float val;
-            simde_mm_store_ss(&val, src_val);
-            if (!WriteMem<float, OpOnTLBMiss::Retry>(state, gpr, addr, val, utlb, op)) return LogicFlow::RetryMemoryOp;
+            return OpMovss_StoreMemory(LogicPassParams);
         }
     } else {  // MOVUPS/MOVUPD
         // Store 128

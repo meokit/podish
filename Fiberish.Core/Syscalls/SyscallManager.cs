@@ -433,6 +433,23 @@ public partial class SyscallManager
         }
     }
 
+    public void RegisterVirtualCharacterDevice(string path, Func<SuperBlock, Inode> createInode)
+    {
+        var dev = PathWalk("/dev");
+        if (dev.Mount?.FsType != "devtmpfs" || dev.Dentry?.Inode is not TmpfsInode)
+            throw new IOException("Virtual character devices require a mounted /dev devtmpfs.");
+        var parts = path.Split('/');
+        if (parts.Any(part => part is "" or "." or ".."))
+            throw new ArgumentException("Expected a relative device path under /dev.", nameof(path));
+        for (var i = 0; i < parts.Length - 1; i++)
+            dev = EnsureDirectory(dev, FsName.FromString(parts[i]));
+
+        var name = FsName.FromString(parts[^1]);
+        var superBlock = dev.Dentry!.SuperBlock;
+        var entry = new Dentry(name, createInode(superBlock), dev.Dentry, superBlock);
+        ((TmpfsInode)dev.Dentry.Inode!).RegisterChild(dev.Dentry, name, entry);
+    }
+
     private FileSystemType CreateDevPtsFileSystemType(ISignalBroadcaster signalBroadcaster)
     {
         return new FileSystemType
@@ -796,6 +813,20 @@ public partial class SyscallManager
         {
             file.Close();
         }
+    }
+
+    public void CreateSymlinkInDetachedMount(Mount sourceMount, string relativePath, string target)
+    {
+        var parts = relativePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 0) throw new ArgumentException("Cannot replace the mount root", nameof(relativePath));
+
+        var current = new PathLocation(sourceMount.Root, sourceMount);
+        for (var i = 0; i < parts.Length - 1; i++) current = EnsureDirectory(current, FsName.FromString(parts[i]));
+
+        var parent = current.Dentry!;
+        var link = new Dentry(FsName.FromString(parts[^1]), null, parent, parent.SuperBlock);
+        var rc = parent.Inode!.Symlink(link, target, 0, 0);
+        if (rc != 0) throw new IOException($"Could not create detached mount link {relativePath}: rc={rc}");
     }
 
     public void BindMountSubtree(Mount sourceMount, string relativePath, string guestPath, bool readOnly = false)

@@ -914,3 +914,10 @@ V	515	op::OpMov_Load_Eax	0	0	7	0	0	0	0	0	0	0	0	0	0	0	0	0	0
 V	515	op::OpMov_Load_Ebx	0	0	7	3	0	0	0	0	0	0	0	0	0	0	0	0	0
 V	515	op::OpMov_Load_Esp	0	0	7	4	0	0	0	0	0	0	0	0	0	0	0	0	0
 V	515	op::OpMov_Load_Ecx	0	0	7	1	0	0	0	0	0	0	0	0	0	0	0	0	0
+# Scalar SSE forms added after the original capture.
+V	272	op::OpMovss_LoadMemory	0	0	0	0	0	0	70	2	0	0	0	0	0	0	0	0	0
+V	273	op::OpMovss_StoreMemory	0	0	0	0	0	0	70	2	0	0	0	0	0	0	0	0	0
+V	344	op::OpAddss_Reg	3	3	0	0	0	0	70	2	0	0	0	0	0	0	0	0	0
+V	344	op::OpAddss_Mem	0	0	0	0	0	0	70	2	0	0	0	0	0	0	0	0	0
+V	345	op::OpMulss_Reg	3	3	0	0	0	0	70	2	0	0	0	0	0	0	0	0	0
+V	345	op::OpMulss_Mem	0	0	0	0	0	0	70	2	0	0	0	0	0	0	0	0	0

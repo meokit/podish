@@ -7,6 +7,58 @@ namespace Fiberish.X86.Tests.Simd;
 public sealed class ScalarPageBoundaryTests
 {
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public unsafe void ScalarMultiplyAddAndLoadKeepRoundingAndFaultAtTheLoad(bool loadFirst)
+    {
+        using var cpu = SimdTestSupport.Create();
+        const uint missing = 0x00500000;
+        cpu[Reg.EAX] = missing;
+        cpu.WriteXmm(0, SimdTestSupport.Lanes(32, 0x3F800001, 1, 2, 3)); // 1 + 2^-23
+        cpu.WriteXmm(1, SimdTestSupport.Lanes(32, 0x3F7FFFFE)); // 1 - 2^-23
+        cpu.WriteXmm(2, SimdTestSupport.Lanes(32, 0xBF800000)); // -1
+        byte[] code =
+        [
+            0xF3, 0x0F, 0x59, 0xC1, // MULSS xmm0, xmm1
+            0xF3, 0x0F, 0x58, 0xC2, // ADDSS xmm0, xmm2
+            0xF3, 0x0F, 0x10, 0x18  // MOVSS xmm3, [eax]
+        ];
+        if (loadFirst)
+        {
+            cpu[Reg.EBX] = CpuSandbox.DataAddress;
+            cpu.WriteMemory(CpuSandbox.DataAddress, [0, 0, 0, 0x40]);
+            code = [0xF3, 0x0F, 0x10, 0x23, .. code]; // MOVSS xmm4, [ebx]
+        }
+        cpu.WriteCode(code);
+        var end = CpuSandbox.CodeAddress + (uint)code.Length;
+        cpu.Run(end);
+        Assert.Equal(EmuStatus.Fault, cpu.Status);
+        Assert.Equal(14, cpu.FaultVector);
+        Assert.Equal(end - 4, cpu.Eip);
+        var rounded = SimdTestSupport.Lanes(32, 0, 1, 2, 3);
+        Assert.Equal(rounded, cpu.ReadXmm(0)); // A single FMA would produce -2^-46.
+
+        var count = X86Native.GetBlockCount(cpu.State);
+        var blocks = new IntPtr[count];
+        fixed (IntPtr* pointer = blocks) Assert.Equal(count, X86Native.GetBlockList(cpu.State, pointer, count));
+        var head = Assert.Single(blocks.Where(p => ((X86Native.BasicBlock*)p)->start_eip == CpuSandbox.CodeAddress));
+        var block = (X86Native.BasicBlock*)head;
+        Assert.Equal(code.Length / 4, block->inst_count);
+        if ((X86Native.GetBuildFeatures() & 1) != 0)
+            Assert.Contains(loadFirst ? "HandWrittenSuperOpcode_MovssMulssRegAddssMovss"
+                    : "HandWrittenSuperOpcode_MulssAddssMovss",
+                X86Native.GetHandlerSymbolById(X86Native.GetHandlerId(block->entry)));
+        if (loadFirst) Assert.Equal(SimdTestSupport.Lanes(32, 0x40000000), cpu.ReadXmm(4));
+
+        cpu.MapMemory(missing, CpuSandbox.PageSize);
+        cpu.WriteMemory(missing, [0, 0, 0x80, 0x3F]);
+        cpu.Run(end);
+        Assert.Equal(EmuStatus.Stopped, cpu.Status);
+        Assert.Equal(rounded, cpu.ReadXmm(0));
+        Assert.Equal(SimdTestSupport.Lanes(32, 0x3F800000), cpu.ReadXmm(3));
+    }
+
+    [Theory]
     [InlineData(4, false)]
     [InlineData(8, false)]
     [InlineData(4, true)]

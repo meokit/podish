@@ -14,6 +14,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Win32.SafeHandles;
 using Podish.Core.Networking;
+using Podish.Core.Graphics;
 
 namespace Podish.Core;
 
@@ -60,6 +61,9 @@ public sealed class ContainerRunRequest
     public int WaylandDesktopWidth { get; init; } = 1024;
     public int WaylandDesktopHeight { get; init; } = 768;
     public FramebufferDevice? Framebuffer { get; init; }
+    public bool EnableGles { get; init; }
+    public bool EnableKmsDrm { get; init; }
+    public KmsEglWindow? KmsWindow { get; init; }
     public ushort? TerminalRows { get; init; }
     public ushort? TerminalCols { get; init; }
     public Action<KernelRuntime, KernelScheduler, UTSNamespace?, int>? ConfigureVirtualDaemons { get; init; }
@@ -220,6 +224,7 @@ public sealed class ContainerRuntimeService
             : request.Exe;
         var initProcessStarted = false;
         var startupPhase = "bootstrap";
+        AngleDevice? gles = null;
         try
         {
             if (request.RootFileSystemFactory == null && !Directory.Exists(request.RootfsPath))
@@ -385,6 +390,13 @@ public sealed class ContainerRuntimeService
                 runtime.Syscalls.MountHostfs(hostPath, guestPath, readOnly);
             }
 
+            if (request.EnableGles || request.EnableKmsDrm)
+            {
+                startupPhase = "mount-graphics";
+                gles = ContainerGraphics.Mount(runtime.Syscalls, scheduler, request.Framebuffer,
+                    request.EnableGles, request.EnableKmsDrm, request.KmsWindow, _logger);
+            }
+
             try
             {
                 _logger.LogInformation("Building hidden config tmpfs for generated network configuration.");
@@ -464,6 +476,16 @@ public sealed class ContainerRuntimeService
             {
                 autoEnvs.Add($"{ContainerRunRequest.WaylandDisplayEnvVar}=wayland-0");
                 autoEnvs.Add($"{ContainerRunRequest.XdgRuntimeDirEnvVar}=/run");
+            }
+
+            if (request.KmsWindow != null) autoEnvs.Add("PODISH_KMSDRM=1");
+
+            if (request.EnableGles || request.EnableKmsDrm)
+            {
+                const string prefix = "LD_LIBRARY_PATH=";
+                var previous = request.GuestEnvs.LastOrDefault(env => env.StartsWith(prefix, StringComparison.Ordinal));
+                autoEnvs.Add(prefix + ContainerGraphics.GuestPath +
+                             (previous?.Length > prefix.Length ? ":" + previous[prefix.Length..] : ""));
             }
 
             var finalEnvs = ContainerLaunchSpecResolver.MergeEnvironmentEntries(baseEnvs, request.GuestEnvs, autoEnvs);
@@ -650,6 +672,8 @@ public sealed class ContainerRuntimeService
             {
                 _logger.LogWarning(ex, "Failed to close guest syscall managers during container teardown");
             }
+
+            gles?.Dispose();
 
             if (processExitHandler != null)
                 AppDomain.CurrentDomain.ProcessExit -= processExitHandler;

@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Threading;
+using Fiberish.VFS;
 using Microsoft.Extensions.Logging;
 using Podish.Display;
 using Podish.Wayland;
@@ -46,7 +47,15 @@ internal readonly record struct WaylandDisplayCommand(
     WaylandSystemCursorShape? SystemCursor = null,
     WaylandRect? TextInputRect = null,
     WaylandDecorationSceneState Decoration = default,
-    bool Hidden = false);
+    bool Hidden = false)
+{
+    public LinuxFile? SharedMemoryFile => Kind switch
+    {
+        WaylandDisplayCommandKind.PresentSurface => Frame.File,
+        WaylandDisplayCommandKind.SetCursor => Cursor.Frame.File,
+        _ => null
+    };
+}
 
 internal sealed class WaylandSdlDisplayThread : IDisposable
 {

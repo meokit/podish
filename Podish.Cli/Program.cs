@@ -35,9 +35,9 @@ internal class Program
         return command.GetAwaiter().GetResult();
     }
 
-    private static Task<int> RunContainerOnDisplayThread(bool enableFbdev, Func<int> run)
+    private static Task<int> RunContainerOnDisplayThread(bool needsDisplayThread, Func<int> run)
     {
-        if (!enableFbdev || Environment.CurrentManagedThreadId == _mainThreadId)
+        if (!needsDisplayThread || Environment.CurrentManagedThreadId == _mainThreadId)
             return Task.FromResult(run());
 
         var completion = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -157,6 +157,8 @@ internal class Program
         var fbdevOption = new Option<bool>(
             "--fbdev",
             "Expose /dev/fb0 and display the guest framebuffer in an SDL window");
+        var glesOption = new Option<bool>("--gles", "Expose ANGLE-backed EGL and OpenGL ES 2.0 to the IA-32 guest");
+        var kmsDrmOption = new Option<bool>("--kmsdrm", "Expose virtual DRM and libgbm. Combine with --gles for GPU output");
         var fbdevSizeOption = new Option<string>(
             "--fbdev-size",
             () => "640x480",
@@ -191,6 +193,8 @@ internal class Program
         runCommand.AddOption(waylandServerOption);
         runCommand.AddOption(waylandDesktopSizeOption);
         runCommand.AddOption(fbdevOption);
+        runCommand.AddOption(glesOption);
+        runCommand.AddOption(kmsDrmOption);
         runCommand.AddOption(fbdevSizeOption);
         runCommand.AddArgument(runArgsArgument);
 
@@ -445,6 +449,8 @@ internal class Program
                 WaylandDesktopWidth = waylandDesktopSize.Width,
                 WaylandDesktopHeight = waylandDesktopSize.Height,
                 Fbdev = enableFbdev,
+                Gles = context.ParseResult.GetValueForOption(glesOption),
+                KmsDrm = context.ParseResult.GetValueForOption(kmsDrmOption),
                 FbdevWidth = fbdevSize.Width,
                 FbdevHeight = fbdevSize.Height,
                 MemoryQuotaBytes = memoryQuotaBytes,
@@ -488,7 +494,7 @@ internal class Program
             metadata.UpdatedAt = DateTimeOffset.UtcNow;
             PodishContainerMetadataStore.Write(containersDir, metadata);
 
-            var exitCode = await RunContainerOnDisplayThread(spec.Fbdev, () => RunContainer(
+            var exitCode = await RunContainerOnDisplayThread(spec.Fbdev || (spec.KmsDrm && spec.Gles), () => RunContainer(
                 rootfsPath,
                 spec.Exe ?? string.Empty,
                 spec.ExeArgs,
@@ -517,7 +523,7 @@ internal class Program
                 spec.PulseServer,
                 spec.WaylandServer,
                 new WaylandDesktopOptions(spec.WaylandDesktopWidth, spec.WaylandDesktopHeight),
-                spec.Fbdev ? new DisplaySize(spec.FbdevWidth, spec.FbdevHeight) : null));
+                spec.Fbdev ? new DisplaySize(spec.FbdevWidth, spec.FbdevHeight) : null, spec.Gles, spec.KmsDrm));
             metadata.State = "exited";
             metadata.Running = false;
             metadata.ExitCode = exitCode;
@@ -696,7 +702,7 @@ internal class Program
             metadata.ExitCode = null;
             metadata.UpdatedAt = DateTimeOffset.UtcNow;
             PodishContainerMetadataStore.Write(containersDir, metadata);
-            var exitCode = await RunContainerOnDisplayThread(spec.Fbdev, () => RunContainer(
+            var exitCode = await RunContainerOnDisplayThread(spec.Fbdev || (spec.KmsDrm && spec.Gles), () => RunContainer(
                 rootfsPath,
                 exeOverride ?? spec.Exe ?? string.Empty,
                 hasEntrypointOverride ? exeArgsOverride : spec.ExeArgs,
@@ -725,7 +731,7 @@ internal class Program
                 spec.PulseServer,
                 spec.WaylandServer,
                 new WaylandDesktopOptions(spec.WaylandDesktopWidth, spec.WaylandDesktopHeight),
-                spec.Fbdev ? new DisplaySize(spec.FbdevWidth, spec.FbdevHeight) : null));
+                spec.Fbdev ? new DisplaySize(spec.FbdevWidth, spec.FbdevHeight) : null, spec.Gles, spec.KmsDrm));
             metadata.State = "exited";
             metadata.Running = false;
             metadata.ExitCode = exitCode;
@@ -1348,7 +1354,9 @@ internal class Program
             "--virt-pulse",
             "--wayland-server",
             "--virt-wayland",
-            "--fbdev"
+            "--fbdev",
+            "--gles",
+            "--kmsdrm"
         };
 
         var hasRootfs = false;
@@ -1376,6 +1384,8 @@ internal class Program
                 token.StartsWith("--publish=", StringComparison.Ordinal) ||
                 token.StartsWith("--guest-stats-dir=", StringComparison.Ordinal) ||
                 token.StartsWith("--wayland-desktop-size=", StringComparison.Ordinal) ||
+                token.StartsWith("--kmsdrm=", StringComparison.Ordinal) ||
+                token.StartsWith("--gles=", StringComparison.Ordinal) ||
                 token.StartsWith("--fbdev=", StringComparison.Ordinal) ||
                 token.StartsWith("--fbdev-size=", StringComparison.Ordinal))
                 continue;
@@ -1607,7 +1617,8 @@ internal class Program
         string containerDir, ContainerLogDriver logDriver,
         ContainerEventStore eventStore, IReadOnlyList<PublishedPortSpec> publishedPorts, string? guestStatsExportDir,
         long? memoryQuotaBytes, bool enablePulseServer, bool enableWaylandServer,
-        WaylandDesktopOptions waylandDesktopOptions, DisplaySize? fbdevSize)
+        WaylandDesktopOptions waylandDesktopOptions, DisplaySize? fbdevSize, bool enableGles,
+        bool enableKmsDrm)
     {
         using var _logScope = Logging.BeginScope(ProgramLoggerFactory);
         using var runtimeThread = new ContainerRuntimeThread(Logger, ProgramLoggerFactory);
@@ -1617,10 +1628,26 @@ internal class Program
             : null;
         var waylandIngressBridge = enableWaylandServer ? new WaylandDisplayIngressBridge() : null;
         var framebuffer = fbdevSize is DisplaySize size ? new FramebufferDevice(size.Width, size.Height) : null;
-        var processController = framebuffer != null ? new ContainerProcessController() : null;
+        var enableKmsOutput = enableKmsDrm && enableGles && framebuffer == null && !enableWaylandServer;
+        var processController = framebuffer != null || enableKmsOutput ? new ContainerProcessController() : null;
         var framebufferHost = framebuffer != null ? new FramebufferDisplayHost(ProgramLoggerFactory, framebuffer) : null;
         try
         {
+            using var kmsBackend = enableKmsOutput
+                ? new SdlDisplayBackend(ProgramLoggerFactory.CreateLogger<SdlDisplayBackend>()) : null;
+            SdlDisplayOutput? kmsWindow;
+            try
+            {
+                kmsWindow = kmsBackend?.CreateEglOutput(new DisplayOutputOptions(
+                    DrmCardInode.ModeWidth, DrmCardInode.ModeHeight, "Podish KMSDRM",
+                    DisplayVSyncMode.Disabled, Resizable: false));
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or DllNotFoundException or EntryPointNotFoundException)
+            {
+                Logger.LogError("KMSDRM display initialization failed. {Message}", ex.Message);
+                return 125;
+            }
+            using var kmsOutput = kmsWindow;
             var runtimeTask = runtimeThread.Start(new ContainerRunRequest
             {
                 RootfsPath = rootfsPath,
@@ -1648,6 +1675,9 @@ internal class Program
                 PublishedPorts = publishedPorts,
                 GuestStatsExportDir = guestStatsExportDir,
                 Framebuffer = framebuffer,
+                EnableGles = enableGles,
+                EnableKmsDrm = enableKmsDrm,
+                KmsWindow = kmsOutput?.KmsWindow,
                 ProcessController = processController,
                 MemoryQuotaBytes = memoryQuotaBytes,
                 EnablePulseServer = enablePulseServer,
@@ -1671,6 +1701,26 @@ internal class Program
                 {
                     Logger.LogError(ex, "Framebuffer display failed");
                     return 125;
+                }
+                finally
+                {
+                    if (!runtimeTask.IsCompleted)
+                    {
+                        processController!.TrySignalInitProcess((int)LinuxSignal.SIGKILL);
+                        runtimeTask.GetAwaiter().GetResult();
+                    }
+                }
+            }
+            else if (kmsOutput != null)
+            {
+                try
+                {
+                    while (!runtimeTask.IsCompleted && !kmsOutput.IsClosed)
+                    {
+                        kmsOutput.PumpEvents();
+                        kmsOutput.DrainInputEvents();
+                        Thread.Sleep(8);
+                    }
                 }
                 finally
                 {

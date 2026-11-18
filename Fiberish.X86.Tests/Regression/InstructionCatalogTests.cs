@@ -20,7 +20,7 @@ public sealed unsafe class InstructionCatalogTests
     {
         var entries = Catalog();
         Assert.Equal(411, entries.Count(x => x.is_fallback != 0));
-        Assert.Equal(503, entries.Count(x => x.is_fallback == 0));
+        Assert.Equal(509, entries.Count(x => x.is_fallback == 0));
         Assert.Equal(entries.Length, entries.Select(x => x.variant_key).Distinct().Count());
         foreach (var v in entries)
         {

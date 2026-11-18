@@ -747,6 +747,12 @@ public abstract class Inode : IAddressSpaceOperations, IBackingPageHandleRelease
     /// </summary>
     public virtual bool SupportsMmap => false;
 
+    public virtual int ResolveMmapBacking(LinuxFile file, uint length, ref long offset, out LinuxFile backing)
+    {
+        backing = file;
+        return 0;
+    }
+
     public virtual int ReadPage(LinuxFile? linuxFile, PageIoRequest request, Span<byte> pageBuffer)
     {
         return AopsReadPage(linuxFile, request, pageBuffer);

@@ -2178,6 +2178,7 @@ LocResolvedUtimens64:
             "devtmpfs" => 0x01021994,
             "devpts" => 0x00001CD1,
             "proc" => 0x00009FA0,
+            "sysfs" => 0x62656572,
             "overlay" => unchecked(0x794C7630),
             "hostfs" => 0x0000EF53,
             _ => 0x0000EF53

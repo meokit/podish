@@ -1,6 +1,7 @@
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using Podish.Display;
+using Podish.Core.Graphics;
 using Podish.Wayland;
 using Silk.NET.Maths;
 using Silk.NET.SDL;
@@ -25,6 +26,12 @@ internal sealed unsafe class SdlDisplayBackend : IDisplayBackend
     {
         EnsureInitialized();
         return new SdlDisplayOutput(_sdl, _logger, options);
+    }
+
+    internal SdlDisplayOutput CreateEglOutput(DisplayOutputOptions options)
+    {
+        EnsureInitialized();
+        return new SdlDisplayOutput(_sdl, _logger, options, egl: true);
     }
 
     public void Dispose()
@@ -58,7 +65,12 @@ internal sealed unsafe class SdlDisplayOutput : IDisplayOutput
     private readonly Sdl _sdl;
     private readonly ILogger _logger;
     private readonly Window* _window;
-    private readonly SdlDisplayRenderer _renderer;
+    private readonly SdlDisplayRenderer? _renderer;
+    private void* _metalView;
+    private nint _waylandLibrary;
+    private nint _waylandWindow;
+    private int _visible = 1;
+    internal KmsEglWindow KmsWindow { get; }
     private readonly List<DisplayInputEvent> _pendingInputEvents = [];
     private readonly Queue<DisplaySize> _pendingResizeEvents = [];
     private Cursor* _cursor;
@@ -68,7 +80,7 @@ internal sealed unsafe class SdlDisplayOutput : IDisplayOutput
     private bool _isClosed;
     private readonly bool _restoreCursorVisibility;
 
-    public SdlDisplayOutput(Sdl sdl, ILogger logger, DisplayOutputOptions options)
+    public SdlDisplayOutput(Sdl sdl, ILogger logger, DisplayOutputOptions options, bool egl = false)
     {
         _sdl = sdl;
         _logger = logger;
@@ -76,9 +88,9 @@ internal sealed unsafe class SdlDisplayOutput : IDisplayOutput
         Width = options.Width;
         Height = options.Height;
 
-        WindowFlags flags = WindowFlags.Shown;
-        if (options.Hidden)
-            flags = WindowFlags.Hidden;
+        WindowFlags flags = options.Hidden ? WindowFlags.Hidden : WindowFlags.Shown;
+        _visible = options.Hidden ? 0 : 1;
+        if (egl && OperatingSystem.IsMacOS()) flags |= WindowFlags.Metal;
         if (options.AllowHighDpi)
             flags |= WindowFlags.AllowHighdpi;
         if (options.Resizable)
@@ -91,10 +103,12 @@ internal sealed unsafe class SdlDisplayOutput : IDisplayOutput
 
         try
         {
-            _renderer = new SdlDisplayRenderer(_sdl, _logger, _window, options.Width, options.Height, options.VSyncMode);
+            if (egl) KmsWindow = CreateNativeEglWindow();
+            else _renderer = new SdlDisplayRenderer(_sdl, _logger, _window, options.Width, options.Height, options.VSyncMode);
         }
         catch
         {
+            DestroyNativeEglWindow();
             _sdl.DestroyWindow(_window);
             throw;
         }
@@ -111,7 +125,7 @@ internal sealed unsafe class SdlDisplayOutput : IDisplayOutput
     public int Height { get; private set; }
     public bool IsClosed => _isClosed;
     public DisplayVSyncMode VSyncMode { get; }
-    public IDisplayRenderer Renderer => _renderer;
+    public IDisplayRenderer Renderer => _renderer ?? throw new InvalidOperationException("This window has an EGL renderer.");
 
     public void PumpEvents()
     {
@@ -214,7 +228,17 @@ internal sealed unsafe class SdlDisplayOutput : IDisplayOutput
                         (WindowEventID)ev.Window.Event, ev.Window.Data1, ev.Window.Data2, ev.Window.Timestamp);
                     switch ((WindowEventID)ev.Window.Event)
                     {
+                        case WindowEventID.Hidden:
+                        case WindowEventID.Minimized:
+                            Volatile.Write(ref _visible, 0);
+                            break;
+                        case WindowEventID.Shown:
+                        case WindowEventID.Restored:
+                        case WindowEventID.Maximized:
+                            Volatile.Write(ref _visible, 1);
+                            break;
                         case WindowEventID.Close:
+                            Volatile.Write(ref _visible, 0);
                             _isClosed = true;
                             break;
                         case WindowEventID.Leave:
@@ -230,7 +254,7 @@ internal sealed unsafe class SdlDisplayOutput : IDisplayOutput
                         case WindowEventID.SizeChanged:
                             Width = ev.Window.Data1;
                             Height = ev.Window.Data2;
-                            _renderer.SetLogicalSize(Width, Height);
+                            _renderer?.SetLogicalSize(Width, Height);
                             _pendingResizeEvents.Enqueue(new DisplaySize(Width, Height));
                             break;
                     }
@@ -349,7 +373,7 @@ internal sealed unsafe class SdlDisplayOutput : IDisplayOutput
 
     public void Present()
     {
-        _renderer.Present();
+        Renderer.Present();
     }
 
     public void Dispose()
@@ -359,10 +383,55 @@ internal sealed unsafe class SdlDisplayOutput : IDisplayOutput
 
         ClearCursor();
         if (_restoreCursorVisibility) _sdl.ShowCursor(1);
-        _renderer.Dispose();
+        _renderer?.Dispose();
+        DestroyNativeEglWindow();
         if (_window != null)
             _sdl.DestroyWindow(_window);
         _disposed = true;
+    }
+
+    private KmsEglWindow CreateNativeEglWindow()
+    {
+        var canPresent = () => Volatile.Read(ref _visible) != 0;
+        if (OperatingSystem.IsMacOS())
+        {
+            _metalView = _sdl.MetalCreateView(_window);
+            var layer = _metalView == null ? 0 : (nint)_sdl.MetalGetLayer(_metalView);
+            if (layer == 0) throw new InvalidOperationException($"SDL Metal view failed: {GetError()}");
+            return new KmsEglWindow(layer, CanPresent: canPresent);
+        }
+
+        SysWMInfo wm = default;
+        _sdl.GetVersion(&wm.Version);
+        if (!_sdl.GetWindowWMInfo(_window, &wm))
+            throw new InvalidOperationException($"SDL native window lookup failed: {GetError()}");
+        if (wm.Subsystem == SysWMType.Windows)
+            return new KmsEglWindow(wm.Info.Win.Hwnd, CanPresent: canPresent);
+        if (wm.Subsystem == SysWMType.X11)
+            return new KmsEglWindow((nint)wm.Info.X11.Window, (nint)wm.Info.X11.Display, 0x31D5, canPresent);
+        if (wm.Subsystem == SysWMType.Wayland)
+        {
+            _waylandLibrary = NativeLibrary.Load("libwayland-egl.so.1");
+            var create = (delegate* unmanaged[Cdecl]<void*, int, int, nint>)
+                NativeLibrary.GetExport(_waylandLibrary, "wl_egl_window_create");
+            _waylandWindow = create(wm.Info.Wayland.Surface, Width, Height);
+            if (_waylandWindow == 0) throw new InvalidOperationException("Could not create the native Wayland EGL window.");
+            return new KmsEglWindow(_waylandWindow, (nint)wm.Info.Wayland.Display, 0x31D8, canPresent);
+        }
+        throw new InvalidOperationException($"SDL window system {wm.Subsystem} has no ANGLE window adapter.");
+    }
+
+    private void DestroyNativeEglWindow()
+    {
+        if (_metalView != null) _sdl.MetalDestroyView(_metalView);
+        if (_waylandLibrary == 0) return;
+        if (_waylandWindow != 0)
+        {
+            var destroy = (delegate* unmanaged[Cdecl]<nint, void>)
+                NativeLibrary.GetExport(_waylandLibrary, "wl_egl_window_destroy");
+            destroy(_waylandWindow);
+        }
+        NativeLibrary.Free(_waylandLibrary);
     }
 
     private string GetError()
