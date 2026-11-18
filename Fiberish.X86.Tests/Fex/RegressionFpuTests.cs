@@ -40,10 +40,12 @@ public sealed class RegressionFpuTests
             using var cpu = new CpuSandbox();
             cpu.Fcw = (ushort)(0x037F | (rounding << 10));
             cpu.Ftw = 0xFFF0;
+            cpu.Fsw = 0x0400; // A prior x87 instruction can leave C2 set.
             cpu.WriteFpu(0, Ext(0xE000000000000000, 0x4001)); // 7
             cpu.WriteFpu(1, Ext(0x8000000000000000, 0x4000)); // 2
             Step(cpu, 0xD9, nearest ? (byte)0xF5 : (byte)0xF8);
             Assert.Equal(Ext(0x8000000000000000, (ushort)(nearest ? 0xBFFF : 0x3FFF)), cpu.ReadFpu(0)); // -1 or +1
+            Assert.Equal(0, cpu.Fsw & 0x0400); // Guest reduction loops poll C2 for completion.
         }
     }
 
