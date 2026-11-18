@@ -13,14 +13,11 @@ MSBuild forwards FusionStrategy, OperandSpecialization, OperandBudget,
 OperandScope, GprPin, GprPinRegisters and GprWriteBack.
 
 Ordinary builds, including static/NativeAOT and Wasm, default to SHAPED,
-HYBRID/704, ALL, MEMORY and the 704-entry GNU write-back operand plan.
-AUTO enables EAX/ESP WRITE_BACK when the target Clang can compile the
-preserve_none tail-call signature. That applies to supported x64 and ARM64
-targets. Wasm and compilers without this ABI use the same fusion and operand
-plan with pin OFF. Linux CI and release builds use Clang 20.
-Set FIBERCPU_GPR_WRITE_BACK=OFF or -p:GprWriteBack=OFF to select EAX_ESP
-write-through. Set FIBERCPU_GPR_PIN=OFF or -p:GprPin=OFF to disable pin while
-keeping the portable defaults. GPR_PIN=ON requires a supported target.
+HYBRID/776, ALL, MEMORY and one shared operand plan. AUTO enables EAX/ESP
+WRITE_BACK on ARM64 when Clang supports the required handler ABI. It leaves
+pinning OFF on x64 and Wasm; x64 can still opt in with GPR_PIN=ON.
+With pinning enabled by AUTO or ON, GPR_WRITE_BACK=OFF selects EAX_ESP
+write-through. Turning pinning OFF does not change the shared operand plan.
 
 Sequence training and custom fusion sources default to BASE, operand
 lowering OFF and pin OFF. Explicit choices override AUTO. An existing
@@ -146,9 +143,11 @@ entries preserves the existing GCC priorities and bounded fusion admission.
 
 GNU write-back profile
 The production preset uses operand-shapes-gnu-writeback-v1.json
-with WRITE_BACK, SHAPED, HYBRID, ALL, budget 704 and MEMORY pin specialization. The 448 previous GNU plan
-entries keep their IDs and ordering. The new plan appends 48 fused and 208
-single-instruction shapes using the existing workload-balanced profile counts.
+with SHAPED, HYBRID, ALL, budget 776 and MEMORY pin specialization. The first 704
+entries preserve the original GNU write-back plan, which appended 48 fused and
+208 single-instruction shapes to the earlier 448-entry GNU plan. Entries
+705–776 cover the 32-bit GCC 13 CoreMark workload; see coremark-gcc13-coverage.txt.
+Budget 704 selects the original GNU write-back prefix for comparisons.
 Both base and index fields are decoded facts. No guest values or relative
 displacements are fixed by this plan. The original plan remains selectable.
 

@@ -1,0 +1,46 @@
+GCC 13 CoreMark operand coverage, Windows x64 and macOS ARM64
+
+The 776-entry production plan keeps all 704 original entries in order and
+appends the 8 most frequent missing fused shapes and 64 single-op shapes
+from the static GCC 13.3 i686 ELF documented in ../coremark-static.md.
+These are encoding facts only (ModRM, prefix, address descriptor), not guest
+addresses, displacements, immediate values, or data. All targets share the
+same plan; the default GPR pinning policy is unchanged.
+
+Coverage was estimated by weighting decoded shapes in a WRITE_BACK block
+dump by their block-entry execution counts. This is not a retired guest
+instruction counter. The original plan covered 48.84% of the old guest
+and 90.11% of the Alpine GCC 15.2 guest. The expanded plan covers 92.19%
+and 92.33% respectively. Coverage of MOVSX/MOVZX/IMUL shapes rises from
+21.37% to 88.57% on the GCC 13 guest (94.54% unchanged on GCC 15).
+In the previous x64 sample, generic MOVSX loaded pinned values via stack
+temporaries and tested the register index at runtime before address/operand
+selection. The new OpMovsx_Word_32_Edx handler for shape 34494742547 has
+no stack spill or dynamic pin checks on its TLB hit path; it uses fixed
+state offsets and a word load followed by cwde. The TLB/redo checks remain.
+
+Windows x64 Release (same managed CLI and fusion source), three paired
+45,000-iteration runs for GCC 13, two 60,000-iteration runs for GCC 15,
+all CRC validated:
+
+Guest   Plan       OFF median    WRITE_BACK median    Median paired pin delta
+GCC 13  original     2738.89             2488.39                     -8.84%
+GCC 13  expanded     3401.87             3348.46                     -1.54%
+GCC 15  original     4149.68             4328.54                     +4.32%
+GCC 15  expanded     4143.73             4309.02                     +3.99%
+
+The increased coverage explains most of the GCC 13 pin penalty but does
+not eliminate it. The plan improves the unpinned GCC 13 build too.
+
+On M5 Max/ARM64 WRITE_BACK the initial GCC 15 score declined 1.30% (median
+of three paired runs). A separate three-pair libproc check reproduced
++0.89% cycles and -0.05% retired instructions, but not a consistent score
+drop (paired throughput median +0.16%). On a separate Time Profiler pair,
+the share at typical next-handler pointer loads went from 26.32% to 27.73%;
+load/store PCs went from 55.34% to 57.69%. Existing TEST/Jcc and MOV fusion
+handlers gained sample share, even where their instruction addresses
+stayed the same. The .text section grew from 1,745,572 to 1,754,640 bytes.
+The signal is extra cycles around existing threaded dispatch/loads, not
+additional retired work. PC samples cannot establish cache-miss, branch
+prediction, or alignment causality. The standard Instruments template
+does not supply the needed per-event hardware counts without configuration.
