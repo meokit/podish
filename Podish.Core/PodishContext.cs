@@ -37,6 +37,9 @@ public sealed class PodishRunSpec
     public bool WaylandServer { get; init; }
     public int WaylandDesktopWidth { get; init; } = 1024;
     public int WaylandDesktopHeight { get; init; } = 768;
+    public bool Fbdev { get; init; }
+    public int FbdevWidth { get; init; } = 640;
+    public int FbdevHeight { get; init; } = 480;
     public long? MemoryQuotaBytes { get; init; }
     public string LogDriver { get; init; } = "json-file";
     public ushort? TerminalRows { get; init; }
@@ -507,6 +510,9 @@ public sealed class PodishContext : IDisposable
             WaylandServer = spec.WaylandServer,
             WaylandDesktopWidth = spec.WaylandDesktopWidth,
             WaylandDesktopHeight = spec.WaylandDesktopHeight,
+            Fbdev = spec.Fbdev,
+            FbdevWidth = spec.FbdevWidth,
+            FbdevHeight = spec.FbdevHeight,
             MemoryQuotaBytes = spec.MemoryQuotaBytes,
             LogDriver = spec.LogDriver,
             PublishedPorts = spec.PublishedPorts
@@ -618,6 +624,7 @@ public sealed class PodishContext : IDisposable
             EnableWaylandServer = effectiveSpec.WaylandServer,
             WaylandDesktopWidth = effectiveSpec.WaylandDesktopWidth,
             WaylandDesktopHeight = effectiveSpec.WaylandDesktopHeight,
+            Framebuffer = effectiveSpec.Fbdev ? new FramebufferDevice(effectiveSpec.FbdevWidth, effectiveSpec.FbdevHeight) : null,
             TerminalRows = effectiveSpec.TerminalRows,
             TerminalCols = effectiveSpec.TerminalCols,
             TestSuperBlockObserver = effectiveSpec.TestSuperBlockObserver

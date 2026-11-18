@@ -392,6 +392,8 @@ public partial class SyscallManager
         });
     }
 
+    public FramebufferDevice? Framebuffer { get; set; }
+
     public void MountStandardDev(TtyDiscipline? tty = null, bool ensureMountPoint = true)
     {
         var devLoc = ensureMountPoint ? EnsureDirectory(Root, FsName.FromString("dev")) : PathWalk("/dev");
@@ -1252,6 +1254,14 @@ public partial class SyscallManager
         zeroInode.Rdev = 0x0105;
         var zeroDentry = new Dentry(FsName.FromString("zero"), zeroInode, devRoot, devSb);
         RegisterDev("zero", zeroDentry);
+
+        if (Framebuffer is { } framebuffer)
+        {
+            var framebufferInode = framebuffer.Attach(devSb);
+            var framebufferDentry = new Dentry(FsName.FromString("fb0"), framebufferInode, devRoot, devSb);
+            RegisterDev("fb0", framebufferDentry);
+            framebuffer.Input.Register(devSb, tty);
+        }
     }
 
     public void RegisterEngine(Engine engine)

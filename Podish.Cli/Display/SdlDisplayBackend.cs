@@ -66,6 +66,7 @@ internal sealed unsafe class SdlDisplayOutput : IDisplayOutput
     private bool _cursorIsSystem;
     private bool _disposed;
     private bool _isClosed;
+    private readonly bool _restoreCursorVisibility;
 
     public SdlDisplayOutput(Sdl sdl, ILogger logger, DisplayOutputOptions options)
     {
@@ -88,7 +89,20 @@ internal sealed unsafe class SdlDisplayOutput : IDisplayOutput
         if (_window == null)
             throw new InvalidOperationException($"SDL create window failed: {GetError()}");
 
-        _renderer = new SdlDisplayRenderer(_sdl, _logger, _window, options.Width, options.Height, options.VSyncMode);
+        try
+        {
+            _renderer = new SdlDisplayRenderer(_sdl, _logger, _window, options.Width, options.Height, options.VSyncMode);
+        }
+        catch
+        {
+            _sdl.DestroyWindow(_window);
+            throw;
+        }
+        if (options.HideSystemCursor && _sdl.ShowCursor(-1) == 1)
+        {
+            _sdl.ShowCursor(0);
+            _restoreCursorVisibility = true;
+        }
         _logger.LogInformation("Opened SDL display output {Width}x{Height} vsync={VSync}", options.Width, options.Height,
             options.VSyncMode);
     }
@@ -117,7 +131,11 @@ internal sealed unsafe class SdlDisplayOutput : IDisplayOutput
                         DisplayInputEventKind.PointerMotion,
                         ev.Motion.X,
                         ev.Motion.Y,
-                        ev.Motion.Timestamp));
+                        ev.Motion.Timestamp)
+                    {
+                        DeltaX = ev.Motion.Xrel,
+                        DeltaY = ev.Motion.Yrel
+                    });
                     break;
                 case EventType.Mousebuttondown:
                 case EventType.Mousebuttonup:
@@ -196,6 +214,9 @@ internal sealed unsafe class SdlDisplayOutput : IDisplayOutput
                         (WindowEventID)ev.Window.Event, ev.Window.Data1, ev.Window.Data2, ev.Window.Timestamp);
                     switch ((WindowEventID)ev.Window.Event)
                     {
+                        case WindowEventID.Close:
+                            _isClosed = true;
+                            break;
                         case WindowEventID.Leave:
                             _pendingInputEvents.Add(new DisplayInputEvent(DisplayInputEventKind.PointerLeave, Timestamp: ev.Window.Timestamp));
                             break;
@@ -337,6 +358,7 @@ internal sealed unsafe class SdlDisplayOutput : IDisplayOutput
             return;
 
         ClearCursor();
+        if (_restoreCursorVisibility) _sdl.ShowCursor(1);
         _renderer.Dispose();
         if (_window != null)
             _sdl.DestroyWindow(_window);
@@ -393,6 +415,12 @@ internal sealed unsafe class SdlDisplayRenderer : IDisplayRenderer
             flags |= RendererFlags.Presentvsync;
 
         _renderer = _sdl.CreateRenderer(window, -1, (uint)flags);
+        if (_renderer == null && vSyncMode == DisplayVSyncMode.Disabled)
+        {
+            flags = RendererFlags.Software;
+            _renderer = _sdl.CreateRenderer(window, -1, (uint)flags);
+        }
+
         if (_renderer == null)
             throw new InvalidOperationException($"SDL create renderer failed: {GetError()}");
 

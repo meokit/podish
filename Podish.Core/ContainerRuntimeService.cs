@@ -59,6 +59,7 @@ public sealed class ContainerRunRequest
     public bool EnableWaylandServer { get; init; }
     public int WaylandDesktopWidth { get; init; } = 1024;
     public int WaylandDesktopHeight { get; init; } = 768;
+    public FramebufferDevice? Framebuffer { get; init; }
     public ushort? TerminalRows { get; init; }
     public ushort? TerminalCols { get; init; }
     public Action<KernelRuntime, KernelScheduler, UTSNamespace?, int>? ConfigureVirtualDaemons { get; init; }
@@ -248,6 +249,7 @@ public sealed class ContainerRuntimeService
                 memoryContext.MemoryQuotaBytes = request.MemoryQuotaBytes.Value;
 
             runtime = KernelRuntime.BootstrapBare(request.Strace, ttyDiag, memoryContext);
+            runtime.Syscalls.Framebuffer = request.Framebuffer;
             scheduler.Runtime = runtime;
             runtime.EnableGuestStatsCollection = !string.IsNullOrWhiteSpace(request.GuestStatsExportDir);
 

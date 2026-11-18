@@ -60,7 +60,11 @@ public readonly record struct DisplayInputEvent(
     uint Key = 0,
     string? Text = null,
     int CursorBegin = 0,
-    int CursorEnd = 0);
+    int CursorEnd = 0)
+{
+    public int DeltaX { get; init; }
+    public int DeltaY { get; init; }
+}
 
 public readonly record struct DisplayOutputOptions(
     int Width,
@@ -69,7 +73,8 @@ public readonly record struct DisplayOutputOptions(
     DisplayVSyncMode VSyncMode = DisplayVSyncMode.Enabled,
     bool AllowHighDpi = false,
     bool Resizable = true,
-    bool Hidden = false);
+    bool Hidden = false,
+    bool HideSystemCursor = false);
 
 public readonly record struct DisplayTextureDescriptor(
     int Width,

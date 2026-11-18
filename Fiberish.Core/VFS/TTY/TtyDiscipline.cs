@@ -128,6 +128,10 @@ public class TtyDiscipline
     // InputLoop writes to this device, Read() processes it on scheduler thread
     public TtyDevice Device { get; }
 
+    internal KernelScheduler Scheduler => _scheduler;
+
+    internal TtyDiscipline CreateVirtualTerminal() => new(_driver, _broadcaster, _logger, _scheduler);
+
     // Foreground process group
     public int ForegroundPgrp { get; set; }
 

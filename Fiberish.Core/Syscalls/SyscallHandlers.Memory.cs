@@ -157,6 +157,8 @@ public partial class SyscallManager
             if ((f.Flags & (FileFlags.O_WRONLY | FileFlags.O_RDWR)) == FileFlags.O_WRONLY)
                 return -(int)Errno.EACCES;
             if (!inode.SupportsMmap) return -(int)Errno.ENODEV;
+            if (inode is FramebufferInode framebuffer && !framebuffer.CanMap(offset, mapLen))
+                return -(int)Errno.EINVAL;
             if (isShared && (prot & (int)Protection.Write) != 0)
             {
                 if (inode is TmpfsInode { HasWriteSeal: true }) return -(int)Errno.EPERM;
@@ -255,15 +257,26 @@ public partial class SyscallManager
     {
         var addr = a1;
         var len = a2;
-        var prot = (Protection)a3;
+        const uint protGrowsDown = 0x01000000;
+        var prot = (Protection)(a3 & 7);
 
         if (len == 0) return 0;
         if ((addr & LinuxConstants.PageOffsetMask) != 0) return -(int)Errno.EINVAL;
-        if ((a3 & ~7u) != 0) return -(int)Errno.EINVAL;
+        if ((a3 & ~(protGrowsDown | 7u)) != 0) return -(int)Errno.EINVAL;
         var roundedLength = ((ulong)len + LinuxConstants.PageOffsetMask) & ~(ulong)LinuxConstants.PageOffsetMask;
         var endLong = (ulong)addr + roundedLength;
         if (endLong > (Mem.Layout?.TaskSize ?? LinuxConstants.TaskSize32))
             return -(int)Errno.ENOMEM;
+
+        if ((a3 & protGrowsDown) != 0)
+        {
+            if (!Mem.TryGetVmaWindowForSyscall(addr, (uint)endLong, out var first, out _))
+                return -(int)Errno.ENOMEM;
+            var vma = Mem.VMAs[first];
+            if ((vma.Flags & MapFlags.GrowDown) == 0) return -(int)Errno.EINVAL;
+            addr = vma.Start;
+            roundedLength = endLong - addr;
+        }
 
         if (Mem.TryGetVmaWindowForSyscall(addr, (uint)endLong, out var startIndex, out var endIndexExclusive))
         {

@@ -682,45 +682,10 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
 
     private void NotifyAsyncReadersLocked()
     {
-        const int O_ASYNC = 0x2000;
-        const int O_ACCMODE = 3;
-        if (_asyncReaders == null || _asyncReaders.Count == 0)
-            return;
-
+        if (_asyncReaders == null) return;
         var scheduler = _waitQueues.Scheduler;
         foreach (var file in _asyncReaders)
-        {
-            if (((int)file.Flags & O_ASYNC) == 0)
-                continue;
-            var mode = (int)file.Flags & O_ACCMODE;
-            if (mode == (int)FileFlags.O_WRONLY)
-                continue;
-
-            var ownerId = file.AsyncOwnerId;
-            if (ownerId <= 0)
-                continue;
-
-            var sig = file.AsyncSignal > 0 ? file.AsyncSignal : (int)Signal.SIGIO;
-            var info = new SigInfo { Signo = sig, Code = -4 /* SI_ASYNCIO */, Pid = 0, Uid = 0 };
-            switch (file.AsyncOwnerType)
-            {
-                case 0: // F_OWNER_TID
-                {
-                    var targetTask = scheduler.GetTask(ownerId);
-                    if (targetTask != null)
-                        targetTask.PostSignal(sig);
-                    break;
-                }
-                case 1: // F_OWNER_PID
-                    scheduler.SignalProcessInfo(ownerId, sig, info);
-                    break;
-                case 2: // F_OWNER_PGRP
-                    foreach (var proc in scheduler.GetProcessesSnapshot())
-                        if (proc.PGID == ownerId)
-                            scheduler.SignalProcessInfo(proc.TGID, sig, info);
-                    break;
-            }
-        }
+            file.NotifyAsyncReadable(scheduler);
     }
 
     internal void RefreshAsyncReader(LinuxFile file)

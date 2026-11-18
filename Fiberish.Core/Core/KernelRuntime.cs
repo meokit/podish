@@ -36,6 +36,8 @@ public sealed class KernelRuntime : IDisposable
 
     public void Dispose()
     {
+        // Host presentation can still be reading guest pages while the runtime exits.
+        Syscalls.Framebuffer?.StopPresentation();
         while (RetiredEngines.TryDequeue(out var engine)) engine.Dispose();
         Engine.Dispose();
         MemoryContext.Dispose();

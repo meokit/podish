@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.CommandLine;
 using System.Text.Json;
 using Fiberish.Core;
@@ -6,8 +7,11 @@ using Fiberish.Diagnostics;
 using Fiberish.VFS;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Podish.Cli.Display;
 using Podish.Cli.Wayland;
 using Podish.Core;
+using Podish.Display;
+using LinuxSignal = Fiberish.Native.Signal;
 
 namespace Podish.Cli;
 
@@ -16,7 +20,41 @@ internal class Program
     private static ILogger Logger = null!;
     private static ILoggerFactory ProgramLoggerFactory = NullLoggerFactory.Instance;
 
-    private static async Task<int> Main(string[] args)
+    private static readonly BlockingCollection<Action> MainThreadWork = new();
+    private static int _mainThreadId;
+
+    private static int Main(string[] args)
+    {
+        // SDL video needs the original application thread even when image loading resumes on a worker.
+        _mainThreadId = Environment.CurrentManagedThreadId;
+        var command = InvokeCommandAsync(args);
+        _ = command.ContinueWith(_ => MainThreadWork.CompleteAdding(), TaskScheduler.Default);
+        foreach (var work in MainThreadWork.GetConsumingEnumerable())
+            work();
+        return command.GetAwaiter().GetResult();
+    }
+
+    private static Task<int> RunContainerOnDisplayThread(bool enableFbdev, Func<int> run)
+    {
+        if (!enableFbdev || Environment.CurrentManagedThreadId == _mainThreadId)
+            return Task.FromResult(run());
+
+        var completion = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+        MainThreadWork.Add(() =>
+        {
+            try
+            {
+                completion.SetResult(run());
+            }
+            catch (Exception ex)
+            {
+                completion.SetException(ex);
+            }
+        });
+        return completion.Task;
+    }
+
+    private static async Task<int> InvokeCommandAsync(string[] args)
     {
         var rootCommand = new RootCommand("Podish.Cli - Podman-like CLI for x86emu");
 
@@ -115,6 +153,13 @@ internal class Program
             new[] { "--wayland-desktop-size" },
             () => "1024x768",
             "Virtual Wayland desktop size as WIDTHxHEIGHT");
+        var fbdevOption = new Option<bool>(
+            "--fbdev",
+            "Expose /dev/fb0 and display the guest framebuffer in an SDL window");
+        var fbdevSizeOption = new Option<string>(
+            "--fbdev-size",
+            () => "640x480",
+            "Guest framebuffer size as WIDTHxHEIGHT");
         var runArgsArgument = new Argument<string[]>(
             "run-args",
             () => Array.Empty<string>(),
@@ -144,6 +189,8 @@ internal class Program
         runCommand.AddOption(pulseServerOption);
         runCommand.AddOption(waylandServerOption);
         runCommand.AddOption(waylandDesktopSizeOption);
+        runCommand.AddOption(fbdevOption);
+        runCommand.AddOption(fbdevSizeOption);
         runCommand.AddArgument(runArgsArgument);
 
         runCommand.SetHandler(async context =>
@@ -169,6 +216,24 @@ internal class Program
             var enablePulseServer = context.ParseResult.GetValueForOption(pulseServerOption);
             var enableWaylandServer = context.ParseResult.GetValueForOption(waylandServerOption);
             var waylandDesktopSizeRaw = context.ParseResult.GetValueForOption(waylandDesktopSizeOption) ?? "1024x768";
+            var enableFbdev = context.ParseResult.GetValueForOption(fbdevOption);
+            var fbdevSizeRaw = context.ParseResult.GetValueForOption(fbdevSizeOption) ?? "640x480";
+            if (enableFbdev && enableWaylandServer)
+            {
+                Console.Error.WriteLine("[Podish.Cli] Use one display option per container. Pick --fbdev or --wayland-server.");
+                context.ExitCode = 125;
+                return;
+            }
+
+            if (!TryParseDisplaySize(fbdevSizeRaw, out var fbdevSize) ||
+                fbdevSize.Width > FramebufferDevice.DimensionLimit || fbdevSize.Height > FramebufferDevice.DimensionLimit)
+            {
+                Console.Error.WriteLine(
+                    $"[Podish.Cli] invalid --fbdev-size value: {fbdevSizeRaw}. Use WIDTHxHEIGHT with dimensions up to {FramebufferDevice.DimensionLimit}");
+                context.ExitCode = 125;
+                return;
+            }
+
             var runArgs = context.ParseResult.GetValueForArgument(runArgsArgument) ?? Array.Empty<string>();
             var useRootfs = !string.IsNullOrWhiteSpace(rootfs);
             if (!TryParseFileSystemBackend(fsBackendRaw, useRootfs, out var fsBackend, out var fsBackendError))
@@ -219,7 +284,7 @@ internal class Program
             var logLevelRaw = context.ParseResult.GetValueForOption(logLevelOption) ?? "warn";
             var logFile = context.ParseResult.GetValueForOption(logFileOption);
 
-            if (!TryParseDesktopSize(waylandDesktopSizeRaw, out var waylandDesktopSize))
+            if (!TryParseDisplaySize(waylandDesktopSizeRaw, out var waylandDesktopSize))
             {
                 Console.Error.WriteLine(
                     $"[Podish.Cli] invalid --wayland-desktop-size value: {waylandDesktopSizeRaw}. Use WIDTHxHEIGHT");
@@ -378,6 +443,9 @@ internal class Program
                 WaylandServer = enableWaylandServer,
                 WaylandDesktopWidth = waylandDesktopSize.Width,
                 WaylandDesktopHeight = waylandDesktopSize.Height,
+                Fbdev = enableFbdev,
+                FbdevWidth = fbdevSize.Width,
+                FbdevHeight = fbdevSize.Height,
                 MemoryQuotaBytes = memoryQuotaBytes,
                 LogDriver = containerLogDriver.ToCliValue(),
                 PublishedPorts = publishedPorts
@@ -419,7 +487,7 @@ internal class Program
             metadata.UpdatedAt = DateTimeOffset.UtcNow;
             PodishContainerMetadataStore.Write(containersDir, metadata);
 
-            var exitCode = await RunContainer(
+            var exitCode = await RunContainerOnDisplayThread(spec.Fbdev, () => RunContainer(
                 rootfsPath,
                 spec.Exe ?? string.Empty,
                 spec.ExeArgs,
@@ -447,7 +515,8 @@ internal class Program
                 spec.MemoryQuotaBytes,
                 spec.PulseServer,
                 spec.WaylandServer,
-                new WaylandDesktopOptions(spec.WaylandDesktopWidth, spec.WaylandDesktopHeight));
+                new WaylandDesktopOptions(spec.WaylandDesktopWidth, spec.WaylandDesktopHeight),
+                spec.Fbdev ? new DisplaySize(spec.FbdevWidth, spec.FbdevHeight) : null));
             metadata.State = "exited";
             metadata.Running = false;
             metadata.ExitCode = exitCode;
@@ -626,7 +695,7 @@ internal class Program
             metadata.ExitCode = null;
             metadata.UpdatedAt = DateTimeOffset.UtcNow;
             PodishContainerMetadataStore.Write(containersDir, metadata);
-            var exitCode = await RunContainer(
+            var exitCode = await RunContainerOnDisplayThread(spec.Fbdev, () => RunContainer(
                 rootfsPath,
                 exeOverride ?? spec.Exe ?? string.Empty,
                 hasEntrypointOverride ? exeArgsOverride : spec.ExeArgs,
@@ -654,7 +723,8 @@ internal class Program
                 spec.MemoryQuotaBytes,
                 spec.PulseServer,
                 spec.WaylandServer,
-                new WaylandDesktopOptions(spec.WaylandDesktopWidth, spec.WaylandDesktopHeight));
+                new WaylandDesktopOptions(spec.WaylandDesktopWidth, spec.WaylandDesktopHeight),
+                spec.Fbdev ? new DisplaySize(spec.FbdevWidth, spec.FbdevHeight) : null));
             metadata.State = "exited";
             metadata.Running = false;
             metadata.ExitCode = exitCode;
@@ -1260,7 +1330,8 @@ internal class Program
             "-p",
             "--publish",
             "--guest-stats-dir",
-            "--wayland-desktop-size"
+            "--wayland-desktop-size",
+            "--fbdev-size"
         };
         var optionsNoValue = new HashSet<string>(StringComparer.Ordinal)
         {
@@ -1275,7 +1346,8 @@ internal class Program
             "--pulse-server",
             "--virt-pulse",
             "--wayland-server",
-            "--virt-wayland"
+            "--virt-wayland",
+            "--fbdev"
         };
 
         var hasRootfs = false;
@@ -1302,7 +1374,9 @@ internal class Program
                 token.StartsWith("--network=", StringComparison.Ordinal) ||
                 token.StartsWith("--publish=", StringComparison.Ordinal) ||
                 token.StartsWith("--guest-stats-dir=", StringComparison.Ordinal) ||
-                token.StartsWith("--wayland-desktop-size=", StringComparison.Ordinal))
+                token.StartsWith("--wayland-desktop-size=", StringComparison.Ordinal) ||
+                token.StartsWith("--fbdev=", StringComparison.Ordinal) ||
+                token.StartsWith("--fbdev-size=", StringComparison.Ordinal))
                 continue;
 
             if (token.StartsWith("-", StringComparison.Ordinal))
@@ -1480,9 +1554,9 @@ internal class Program
         return true;
     }
 
-    private static bool TryParseDesktopSize(string raw, out WaylandDesktopOptions desktopOptions)
+    private static bool TryParseDisplaySize(string raw, out DisplaySize size)
     {
-        desktopOptions = WaylandDesktopOptions.Default;
+        size = default;
         if (string.IsNullOrWhiteSpace(raw))
             return false;
 
@@ -1494,7 +1568,7 @@ internal class Program
             height <= 0)
             return false;
 
-        desktopOptions = new WaylandDesktopOptions(width, height);
+        size = new DisplaySize(width, height);
         return true;
     }
 
@@ -1524,7 +1598,7 @@ internal class Program
         return containerId;
     }
 
-    private static Task<int> RunContainer(string rootfsPath, string exe, string[] exeArgs, string? workingDir, string[] volumes,
+    private static int RunContainer(string rootfsPath, string exe, string[] exeArgs, string? workingDir, string[] volumes,
         string[] guestEnvs, string? user, string[] dnsServers, bool rootfsMode, bool useTty, bool strace, bool useEngineInit,
         ContainerFileSystemBackend fsBackend,
         string containersDir,
@@ -1532,7 +1606,7 @@ internal class Program
         string containerDir, ContainerLogDriver logDriver,
         ContainerEventStore eventStore, IReadOnlyList<PublishedPortSpec> publishedPorts, string? guestStatsExportDir,
         long? memoryQuotaBytes, bool enablePulseServer, bool enableWaylandServer,
-        WaylandDesktopOptions waylandDesktopOptions)
+        WaylandDesktopOptions waylandDesktopOptions, DisplaySize? fbdevSize)
     {
         using var _logScope = Logging.BeginScope(ProgramLoggerFactory);
         using var runtimeThread = new ContainerRuntimeThread(Logger, ProgramLoggerFactory);
@@ -1540,6 +1614,9 @@ internal class Program
             ? new WaylandDisplayServerState(ProgramLoggerFactory, waylandDesktopOptions)
             : null;
         var waylandIngressBridge = enableWaylandServer ? new WaylandDisplayIngressBridge() : null;
+        var framebuffer = fbdevSize is DisplaySize size ? new FramebufferDevice(size.Width, size.Height) : null;
+        var processController = framebuffer != null ? new ContainerProcessController() : null;
+        var framebufferHost = framebuffer != null ? new FramebufferDisplayHost(ProgramLoggerFactory, framebuffer) : null;
         try
         {
             var runtimeTask = runtimeThread.Start(new ContainerRunRequest
@@ -1568,6 +1645,8 @@ internal class Program
                 EventStore = eventStore,
                 PublishedPorts = publishedPorts,
                 GuestStatsExportDir = guestStatsExportDir,
+                Framebuffer = framebuffer,
+                ProcessController = processController,
                 MemoryQuotaBytes = memoryQuotaBytes,
                 EnablePulseServer = enablePulseServer,
                 EnableWaylandServer = enableWaylandServer,
@@ -1580,18 +1659,32 @@ internal class Program
                     : null
             });
 
-            int exitCode;
-            if (waylandDisplayState != null && waylandIngressBridge != null)
+            if (framebufferHost != null)
+            {
+                try
+                {
+                    framebufferHost.RunMainLoop(runtimeTask);
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogError(ex, "Framebuffer display failed");
+                    return 125;
+                }
+                finally
+                {
+                    if (!runtimeTask.IsCompleted)
+                    {
+                        processController!.TrySignalInitProcess((int)LinuxSignal.SIGKILL);
+                        runtimeTask.GetAwaiter().GetResult();
+                    }
+                }
+            }
+            else if (waylandDisplayState != null && waylandIngressBridge != null)
             {
                 waylandDisplayState.RunMainLoop(runtimeTask, waylandIngressBridge);
-                exitCode = runtimeTask.GetAwaiter().GetResult();
-            }
-            else
-            {
-                exitCode = runtimeTask.GetAwaiter().GetResult();
             }
 
-            return Task.FromResult(exitCode);
+            return runtimeTask.GetAwaiter().GetResult();
         }
         finally
         {

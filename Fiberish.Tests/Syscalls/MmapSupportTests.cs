@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Reflection;
 using System.Text;
 using Fiberish.Core;
@@ -236,6 +237,24 @@ public class MmapSupportTests
 
         var rc = await env.Call("SysMprotect", baseAddr, LinuxConstants.PageSize * 3, (uint)Protection.Read);
         Assert.Equal(-(int)Errno.ENOMEM, rc);
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task Mprotect_GrowsDownRequiresStackAndIncludesLowerPages(bool growsDown)
+    {
+        using var env = new TestEnv();
+        const uint address = 0x54000000;
+        const uint page = LinuxConstants.PageSize;
+        var flags = MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous;
+        if (growsDown) flags |= MapFlags.GrowDown;
+        Assert.Equal(address, (uint)await env.Call("SysMmap2", address, 3 * page, 3, (uint)flags));
+
+        var rc = await env.Call("SysMprotect", address + page, page, 0x01000001);
+        Assert.Equal(growsDown ? 0 : -(int)Errno.EINVAL, rc);
+        Assert.Equal(!growsDown, env.Vma.FindVmArea(address)!.Perms.HasFlag(Protection.Write));
+        Assert.True(env.Vma.FindVmArea(address + 2 * page)!.Perms.HasFlag(Protection.Write));
     }
 
     [Fact]
@@ -736,6 +755,110 @@ public class MmapSupportTests
         Assert.True(openedFd >= 0);
         Assert.Equal(0, await env.Call("SysClose", (uint)openedFd));
         Assert.Equal(0, await env.Call("SysClose", (uint)backingFd));
+    }
+
+    [Fact]
+    public async Task Framebuffer_MmapAndDeviceIoShareVideoMemoryAfterClose()
+    {
+        using var env = new TestEnv();
+        var framebuffer = new FramebufferDevice(64, 32, 32);
+        env.SyscallManager.Framebuffer = framebuffer;
+        env.SyscallManager.MountStandardDev();
+        const uint user = 0x18000;
+        env.MapUserPage(user);
+        env.WriteCString(user, "/dev/fb0");
+
+        var fd = await env.Call("SysOpen", user, (uint)FileFlags.O_RDWR);
+        Assert.True(fd >= 0);
+        var fixedInfo = new byte[68];
+        Assert.Equal(0, framebuffer.Ioctl(env.Engine, 0x4602, user));
+        Assert.True(env.Engine.CopyFromUser(user, fixedInfo));
+        Assert.Equal(16384, BinaryPrimitives.ReadInt32LittleEndian(fixedInfo.AsSpan(20)));
+        Assert.Equal(256, BinaryPrimitives.ReadInt32LittleEndian(fixedInfo.AsSpan(44)));
+
+        var first = (uint)await env.Call("SysMmap2", 0, 8192, (uint)(Protection.Read | Protection.Write),
+            (uint)MapFlags.Shared, (uint)fd);
+        var second = (uint)await env.Call("SysMmap2", 0, 4096, (uint)Protection.Read, (uint)MapFlags.Shared,
+            (uint)fd, 1);
+        Assert.True(first < 0xfffff000);
+        Assert.True(second < 0xfffff000);
+        Assert.Equal(-(int)Errno.EINVAL, await env.Call("SysMmap2", 0, 4097, (uint)Protection.Read,
+            (uint)MapFlags.Shared, (uint)fd, 3));
+
+        byte[] pixel = [0x25, 0x53, 0xa9, 0];
+        Assert.True(env.Engine.CopyToUser(user, pixel));
+        Assert.Equal(4, await env.Call("SysPWrite", (uint)fd, user, 4, 4096));
+        var result = new byte[4];
+        Assert.True(env.Engine.CopyFromUser(second, result));
+        Assert.Equal(pixel, result);
+
+        pixel = [0xf0, 0x82, 0x18, 0];
+        Assert.Equal(0, await env.Call("SysClose", (uint)fd));
+        Assert.True(env.Engine.CopyToUser(first + 4096, pixel));
+        Assert.True(env.Engine.CopyFromUser(second, result));
+        Assert.Equal(pixel, result);
+        var frame = new byte[64 * 32 * 4];
+        Assert.True(framebuffer.TryCopyFrame(frame, out var width, out var height));
+        Assert.Equal((64, 32), (width, height));
+        Assert.Equal(pixel, frame.AsSpan(4096, 4).ToArray());
+    }
+
+    [Fact]
+    public async Task Framebuffer_UsesIndexedPaletteAndVisibleFramebufferOffset()
+    {
+        using var env = new TestEnv();
+        var framebuffer = new FramebufferDevice(16, 16, 32);
+        env.SyscallManager.Framebuffer = framebuffer;
+        env.SyscallManager.MountStandardDev();
+        const uint user = 0x18000;
+        env.MapUserPage(user);
+        env.WriteCString(user, "/dev/fb0");
+        var fd = await env.Call("SysOpen", user, (uint)FileFlags.O_RDWR);
+        Assert.True(fd >= 0);
+
+        var varInfo = new byte[160];
+        BinaryPrimitives.WriteInt32LittleEndian(varInfo, 16);
+        BinaryPrimitives.WriteInt32LittleEndian(varInfo.AsSpan(4), 16);
+        BinaryPrimitives.WriteInt32LittleEndian(varInfo.AsSpan(8), 16);
+        BinaryPrimitives.WriteInt32LittleEndian(varInfo.AsSpan(12), 32);
+        BinaryPrimitives.WriteInt32LittleEndian(varInfo.AsSpan(24), 8);
+        BinaryPrimitives.WriteInt32LittleEndian(varInfo.AsSpan(84), 2); // FB_ACTIVATE_TEST
+        Assert.True(env.Engine.CopyToUser(user, varInfo));
+        Assert.Equal(0, framebuffer.Ioctl(env.Engine, 0x4601, user));
+        Assert.Equal(0, framebuffer.Ioctl(env.Engine, 0x4600, user));
+        var reported = new byte[160];
+        Assert.True(env.Engine.CopyFromUser(user, reported));
+        Assert.Equal(32, BinaryPrimitives.ReadInt32LittleEndian(reported.AsSpan(24)));
+
+        BinaryPrimitives.WriteInt32LittleEndian(varInfo.AsSpan(84), 0);
+        Assert.True(env.Engine.CopyToUser(user, varInfo));
+        Assert.Equal(0, framebuffer.Ioctl(env.Engine, 0x4601, user));
+        BinaryPrimitives.WriteInt32LittleEndian(varInfo.AsSpan(20), 16);
+        Assert.True(env.Engine.CopyToUser(user, varInfo));
+        Assert.Equal(0, framebuffer.Ioctl(env.Engine, 0x4606, user));
+
+        var cmap = new byte[24];
+        BinaryPrimitives.WriteInt32LittleEndian(cmap, 7);
+        BinaryPrimitives.WriteInt32LittleEndian(cmap.AsSpan(4), 1);
+        BinaryPrimitives.WriteUInt32LittleEndian(cmap.AsSpan(8), user + 24);
+        BinaryPrimitives.WriteUInt32LittleEndian(cmap.AsSpan(12), user + 26);
+        BinaryPrimitives.WriteUInt32LittleEndian(cmap.AsSpan(16), user + 28);
+        Assert.True(env.Engine.CopyToUser(user, cmap));
+        Assert.True(env.Engine.CopyToUser(user + 24, [0, 0x98, 0, 0x32, 0, 0x12]));
+        Assert.Equal(0, framebuffer.Ioctl(env.Engine, 0x4605, user));
+        Assert.True(env.Engine.CopyToUser(user + 24, new byte[6]));
+        Assert.Equal(0, framebuffer.Ioctl(env.Engine, 0x4604, user));
+        var palette = new byte[6];
+        Assert.True(env.Engine.CopyFromUser(user + 24, palette));
+        Assert.Equal(new byte[] { 0, 0x98, 0, 0x32, 0, 0x12 }, palette);
+
+        var mapped = (uint)await env.Call("SysMmap2", 0, 4096, (uint)(Protection.Read | Protection.Write),
+            (uint)MapFlags.Shared, (uint)fd);
+        Assert.True(mapped < 0xfffff000);
+        Assert.True(env.Engine.CopyToUser(mapped + 16 * 16, [7]));
+        var frame = new byte[16 * 16 * 4];
+        Assert.True(framebuffer.TryCopyFrame(frame, out _, out _));
+        Assert.Equal(new byte[] { 0x12, 0x32, 0x98, 0 }, frame.AsSpan(0, 4).ToArray());
     }
 
     private sealed class TestEnv : IDisposable

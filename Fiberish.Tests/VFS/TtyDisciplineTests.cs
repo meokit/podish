@@ -28,6 +28,75 @@ public class TtyDisciplineTests
         _task = _taskContext.Task;
     }
 
+    [Fact]
+    public void FramebufferConsole_KeyboardModeAndPs2PacketsReachTheirOwnReaders()
+    {
+        var input = new VirtualConsoleInput();
+        var sb = _taskContext.SyscallManager.MemfdSuperBlock;
+        input.Register(sb, _tty);
+        var mount = _taskContext.SyscallManager.AnonMount;
+        using var keyboard = new LinuxFile(sb.Root.Inode!.Lookup("tty1")!, FileFlags.O_RDWR, mount);
+        var tty = Assert.IsType<TtyDiscipline>(keyboard.PrivateData);
+        var raw = new byte[LinuxConstants.TERMIOS_SIZE_I386];
+        raw[17 + 6] = 1; // VMIN
+        Assert.Equal(0, tty.SetAttr(0, raw));
+        Assert.Equal(0, keyboard.IoInode!.Ioctl(keyboard, _task, 0x4b45, 2)); // K_MEDIUMRAW
+        var mouse = sb.Root.Inode.Lookup("input")!.Inode!.Lookup("mice")!;
+        using var first = new LinuxFile(mouse, FileFlags.O_RDWR | FileFlags.O_NONBLOCK, mount);
+        using var second = new LinuxFile(mouse, FileFlags.O_RDONLY | FileFlags.O_NONBLOCK, mount);
+        input.PublishKey(103, true);
+        input.PublishKey(103, false);
+        input.PublishPointer(10, 15, 1);
+        _taskContext.DrainEvents();
+
+        var keyBytes = new byte[2];
+        Assert.Equal(2, keyboard.IoInode.ReadToHost(_task, keyboard, keyBytes, 0));
+        Assert.Equal(new byte[] { 0x67, 0xe7 }, keyBytes);
+        foreach (var reader in new[] { first, second })
+        {
+            var packet = new byte[3];
+            Assert.Equal(3, reader.IoInode!.ReadToHost(_task, reader, packet, 0));
+            Assert.Equal(new byte[] { 0x29, 10, 241 }, packet);
+            Assert.Equal(0, reader.IoInode.Poll(reader, LinuxConstants.POLLIN));
+        }
+
+        Assert.Equal(1, first.IoInode!.WriteFromHost(_task, first, [0xf2], 0)); // PS/2 identify
+        Assert.Equal(LinuxConstants.POLLIN, first.IoInode.Poll(first, LinuxConstants.POLLIN));
+        Assert.Equal(0, second.IoInode!.Poll(second, LinuxConstants.POLLIN));
+        Assert.False(_tty.HasDataAvailable);
+    }
+
+    [Fact]
+    public void FramebufferMouse_AsyncOwnerReceivesMotionAndCommandReadiness()
+    {
+        const FileFlags asyncFlag = (FileFlags)0x2000;
+        const int sigio = (int)Signal.SIGIO;
+        var input = new VirtualConsoleInput();
+        var sb = _taskContext.SyscallManager.MemfdSuperBlock;
+        input.Register(sb, _tty);
+        var mouse = sb.Root.Inode!.Lookup("input")!.Inode!.Lookup("mice")!;
+        using var file = new LinuxFile(mouse, FileFlags.O_RDWR | FileFlags.O_NONBLOCK,
+            _taskContext.SyscallManager.AnonMount);
+        file.AsyncOwnerType = 1; // F_OWNER_PID
+        file.AsyncOwnerId = _taskContext.Process.TGID;
+
+        input.PublishPointer(1, 0, 0);
+        _taskContext.DrainEvents();
+        Assert.Null(_taskContext.Process.DequeueProcessSignalUnsafe(sigio));
+
+        file.Flags |= asyncFlag;
+        input.PublishPointer(1, 0, 1);
+        _taskContext.DrainEvents();
+        Assert.NotNull(_taskContext.Process.DequeueProcessSignalUnsafe(sigio));
+        Assert.Equal(1, file.IoInode!.WriteFromHost(_task, file, [0xf2], 0));
+        Assert.NotNull(_taskContext.Process.DequeueProcessSignalUnsafe(sigio));
+
+        file.Flags &= ~asyncFlag;
+        input.PublishPointer(0, 0, 0);
+        _taskContext.DrainEvents();
+        Assert.Null(_taskContext.Process.DequeueProcessSignalUnsafe(sigio));
+    }
+
     #region VREPRINT Tests
 
     [Fact]

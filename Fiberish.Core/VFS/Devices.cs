@@ -295,7 +295,7 @@ public class ConsoleInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDisp
     }
 }
 
-public sealed class ControllingTtyInode : Inode, ITaskWaitSource, ITaskPollSource, IDispatcherWaitSource,
+public class ControllingTtyInode : Inode, ITaskWaitSource, ITaskPollSource, IDispatcherWaitSource,
     IDispatcherEdgeWaitSource
 {
     public ControllingTtyInode(SuperBlock sb)

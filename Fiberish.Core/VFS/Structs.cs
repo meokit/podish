@@ -4777,6 +4777,31 @@ public class LinuxFile : IDisposable
     public object? PrivateData { get; set; }
     public bool IsTmpFile { get; set; }
     public ReferenceKind Kind { get; }
+    internal void NotifyAsyncReadable(KernelScheduler scheduler)
+    {
+        const FileFlags asyncFlag = (FileFlags)0x2000;
+        if ((Flags & asyncFlag) == 0 || (Flags & FileFlags.O_ACCMODE) == FileFlags.O_WRONLY ||
+            AsyncOwnerId <= 0)
+            return;
+
+        var signal = AsyncSignal > 0 ? AsyncSignal : (int)Signal.SIGIO;
+        var info = new SigInfo { Signo = signal, Code = -4 /* SI_ASYNCIO */, Pid = 0, Uid = 0 };
+        switch (AsyncOwnerType)
+        {
+            case 0: // F_OWNER_TID
+                scheduler.GetTask(AsyncOwnerId)?.PostSignal(signal);
+                break;
+            case 1: // F_OWNER_PID
+                scheduler.SignalProcessInfo(AsyncOwnerId, signal, info);
+                break;
+            case 2: // F_OWNER_PGRP
+                foreach (var process in scheduler.GetProcessesSnapshot())
+                    if (process.PGID == AsyncOwnerId)
+                        scheduler.SignalProcessInfo(process.TGID, signal, info);
+                break;
+        }
+    }
+
     public int AsyncOwnerType { get; set; }
     public int AsyncOwnerId { get; set; }
     public int AsyncSignal { get; set; }
