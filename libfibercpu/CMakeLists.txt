@@ -48,7 +48,7 @@ if(MSVC AND FIBERCPU_BUILD_STATIC)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>" CACHE STRING "MSVC runtime library" FORCE)
 endif()
 
-# Independent compile-time choices; AUTO uses the full production configuration.
+# Independent compile-time choices; AUTO selects the production defaults for the target.
 set(FIBERCPU_FUSION_STRATEGY "AUTO" CACHE STRING "Reviewed fusion set (AUTO, BASE, EXTENDED, SHAPED)")
 set_property(CACHE FIBERCPU_FUSION_STRATEGY PROPERTY STRINGS AUTO BASE EXTENDED SHAPED)
 set(FIBERCPU_OPERAND_SPECIALIZATION "AUTO" CACHE STRING "Operand lowering (AUTO, OFF, PROFILE, REGISTER, HYBRID)")
@@ -57,7 +57,7 @@ set(FIBERCPU_OPERAND_BUDGET "AUTO" CACHE STRING "Maximum frozen operand shapes (
 set(FIBERCPU_OPERAND_PLAN_FILE "" CACHE FILEPATH "Explicit frozen operand plan (empty uses the default plan)")
 set(FIBERCPU_OPERAND_SCOPE "AUTO" CACHE STRING "Operand lowering scope (AUTO, ALL, ADDED_FUSIONS)")
 set_property(CACHE FIBERCPU_OPERAND_SCOPE PROPERTY STRINGS AUTO ALL ADDED_FUSIONS)
-set(FIBERCPU_GPR_PIN "AUTO" CACHE STRING "Guest GPR pin (AUTO, ON, OFF, ABI_ONLY, CONSERVATIVE, EAX_ESP, WRITE_BACK)")
+set(FIBERCPU_GPR_PIN "AUTO" CACHE STRING "Guest GPR pin (AUTO: supported ARM64 only; ON, OFF, ABI_ONLY, CONSERVATIVE, EAX_ESP, WRITE_BACK)")
 set_property(CACHE FIBERCPU_GPR_PIN PROPERTY STRINGS AUTO ON OFF ABI_ONLY CONSERVATIVE EAX_ESP WRITE_BACK)
 option(FIBERCPU_GPR_WRITE_BACK "Use delayed GPR write-back when GPR pin is AUTO or ON" ON)
 set(FIBERCPU_GPR_PIN_REGISTERS "EAX,ESP" CACHE STRING "Pinned guest GPRs (comma- or semicolon-separated)")
@@ -74,7 +74,7 @@ set(_can_pin_gprs OFF)
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND NOT EMSCRIPTEN AND NOT FIBERCPU_GPR_PIN STREQUAL "OFF" AND
    (NOT FIBERCPU_GPR_PIN STREQUAL "AUTO" OR _production_optimizations))
     include(CheckCXXSourceCompiles)
-    check_cxx_source_compiles([=[
+    set(_pin_abi_probe [=[
 #if !(defined(__aarch64__) || defined(_M_ARM64) || defined(__x86_64__) || defined(_M_X64)) || !__has_attribute(preserve_none) || !__has_cpp_attribute(clang::musttail)
 #error Native handler pin ABI unavailable
 #endif
@@ -86,8 +86,21 @@ __attribute__((preserve_none)) U64 dispatch(void* state, void* op, U64 limit, U6
     [[clang::musttail]] return (*static_cast<Handler*>(op))(state, op, limit, tags, addend, branch, flags, eax, esp);
 }
 int main() { return 0; }
-]=] FIBERCPU_HAS_PIN_ABI)
-    set(_can_pin_gprs ${FIBERCPU_HAS_PIN_ABI})
+]=])
+    if(FIBERCPU_GPR_PIN STREQUAL "AUTO")
+        # CoreMark regressed with pinning on Windows and Linux x86-64. Keep
+        # x86-64 opt-in. Use the compiler target so cross/universal builds
+        # don't accidentally enable pinning for an x86-64 slice.
+        check_cxx_source_compiles("
+#if !(defined(__aarch64__) || defined(_M_ARM64))
+#error Automatic guest GPR pinning is only enabled on ARM64
+#endif
+${_pin_abi_probe}" FIBERCPU_HAS_AUTO_PIN_ABI)
+        set(_can_pin_gprs ${FIBERCPU_HAS_AUTO_PIN_ABI})
+    else()
+        check_cxx_source_compiles("${_pin_abi_probe}" FIBERCPU_HAS_PIN_ABI)
+        set(_can_pin_gprs ${FIBERCPU_HAS_PIN_ABI})
+    endif()
 endif()
 
 if(FIBERCPU_GPR_PIN STREQUAL "AUTO" AND NOT _can_pin_gprs)

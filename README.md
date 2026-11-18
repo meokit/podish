@@ -145,6 +145,11 @@ This automatically triggers:
 - CMake build of `libfibercpu` (via `Fiberish.X86`)
 - Cargo build of `Fiberish.Netstack` (via `Fiberish.Core`)
 
+Guest GPR pinning defaults to off on x86-64 and WebAssembly. On ARM64,
+the production build enables it when Clang supports the required handler ABI.
+To opt in on supported x86-64 builds, use `-p:GprPin=ON` with `dotnet build`
+or `-DFIBERCPU_GPR_PIN=ON` with CMake.
+
 ### Run
 
 Show help:
