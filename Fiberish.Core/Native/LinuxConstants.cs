@@ -74,6 +74,7 @@ public enum Errno
     EHOSTUNREACH = 113, /* No route to host */
     EALREADY = 114, /* Operation already in progress */
     EINPROGRESS = 115, /* Operation now in progress */
+    EDQUOT = 122, /* Disk quota exceeded */
     ERESTARTSYS = 512,
     ERESTARTNOINTR = 513,
     ERESTARTNOHAND = 514,

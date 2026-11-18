@@ -3204,6 +3204,61 @@ public partial class HostInode : MappingBackedInode, IHostMappedCacheDropper
         }
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    private readonly struct HostWriteVector(nint address, nuint length)
+    {
+        private readonly nint _address = address;
+        private readonly nuint _length = length;
+    }
+
+    [LibraryImport("libc", EntryPoint = "pwritev", SetLastError = true)]
+    private static unsafe partial nint Pwritev(int fd, HostWriteVector* vectors, int count, long offset);
+
+    internal override unsafe int? TryWriteUnmappedFile(LinuxFile file, ReadOnlySpan<ResolvedBufferSegment> segments,
+        long offset)
+    {
+        if (!OperatingSystem.IsMacOSVersionAtLeast(11) || Type != InodeType.File ||
+            (file.Flags & FileFlags.O_APPEND) != 0 || offset != CachedSizeForShrinkCoordinator ||
+            segments.Length > 32 || GetOpenState(file)?.DirectHandle is not { } handle)
+            return null;
+
+        // Let a positioned write extend EOF. The mapping lock prevents a guest
+        // reader or mmap from installing pages until the new length is visible.
+        var vectors = stackalloc HostWriteVector[segments.Length];
+        for (var i = 0; i < segments.Length; i++)
+            vectors[i] = new HostWriteVector(segments[i].Pointer, (nuint)segments[i].Length);
+
+        var retained = false;
+        try
+        {
+            handle.DangerousAddRef(ref retained);
+            nint result;
+            int error;
+            do
+            {
+                result = Pwritev(handle.DangerousGetHandle().ToInt32(), vectors, segments.Length, offset);
+                error = Marshal.GetLastPInvokeError();
+            } while (result < 0 && error == (int)Errno.EINTR);
+
+            if (result >= 0)
+                return checked((int)result);
+
+            return error switch
+            {
+                35 => -(int)Errno.EAGAIN,
+                69 => -(int)Errno.EDQUOT,
+                84 => -(int)Errno.EOVERFLOW,
+                > 0 and < 35 => -error,
+                _ => -(int)Errno.EIO
+            };
+        }
+        finally
+        {
+            if (retained)
+                handle.DangerousRelease();
+        }
+    }
+
     protected override int PrepareHostMappedWrite(LinuxFile? linuxFile, long bufferLength, long offset)
     {
         if (bufferLength == 0) return 0;

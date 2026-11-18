@@ -19,6 +19,71 @@ public class HostfsPageCacheWritebackTests
         Environment.GetEnvironmentVariable("FIBERISH_DEBUG_BLOCKING_HOST_OP") == "1";
 
     [Fact]
+    public async Task MacHostfs_UnmappedVectorWrite_StopsAtGuestFaultAndSharedMapSeesData()
+    {
+        if (!OperatingSystem.IsMacOSVersionAtLeast(11))
+            return;
+
+        var root = Path.Combine(Path.GetTempPath(), "hostfs-unmapped-write-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        var hostFile = Path.Combine(root, "data.bin");
+        File.WriteAllText(hostFile, "initial:");
+
+        try
+        {
+            using var engine = _runtime.CreateEngine();
+            var mm = _runtime.CreateAddressSpace();
+            engine.PageFaultResolver = (address, isWrite) => mm.HandleFault(address, isWrite, engine);
+            var file = OpenHostFile(root, "data.bin", _runtime.MemoryContext);
+            try
+            {
+                var inode = Assert.IsType<HostInode>(file.OpenedInode);
+                file.Position = 8;
+                const uint guestBuffer = 0x41000000;
+                const uint pageSize = LinuxConstants.PageSize;
+                mm.Mmap(guestBuffer, pageSize, Protection.Read | Protection.Write,
+                    MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, "test buffer", engine);
+                Assert.True(engine.CopyToUser(guestBuffer, "AB"u8));
+                Assert.True(engine.CopyToUser(guestBuffer + pageSize - 2, "CD"u8));
+                Assert.Null(inode.Mapping);
+                Assert.Equal(4, await inode.WriteV(engine, file, null, new Iovec[]
+                {
+                    new() { BaseAddr = guestBuffer, Len = 2 },
+                    new() { BaseAddr = guestBuffer + pageSize - 2, Len = 4 }
+                }, -1, 0));
+                Assert.Null(inode.Mapping);
+                Assert.Equal(12, file.Position);
+                Assert.Equal(12UL, inode.Size);
+                Assert.Equal("initial:ABCD", ReadAllTextWithUnixCompatibleSharing(hostFile));
+                Assert.Equal(-(int)Errno.EFAULT, await inode.WriteV(engine, file, null,
+                    new Iovec[] { new() { BaseAddr = guestBuffer + pageSize, Len = 1 } }, -1, 0));
+                Assert.Equal(12, file.Position);
+
+                const uint mapAddr = 0x42000000;
+                mm.Mmap(mapAddr, pageSize, Protection.Read | Protection.Write,
+                    MapFlags.Shared | MapFlags.Fixed, file, 0, "shared file", engine);
+                Assert.True(mm.HandleFault(mapAddr, false, engine));
+                Assert.NotNull(inode.Mapping);
+                Assert.Equal(2, await inode.WriteV(engine, file, null,
+                    new Iovec[] { new() { BaseAddr = guestBuffer, Len = 2 } }, -1, 0));
+
+                var mapped = new byte[14];
+                Assert.True(engine.CopyFromUser(mapAddr, mapped));
+                Assert.Equal("initial:ABCDAB", Encoding.ASCII.GetString(mapped));
+                mm.Munmap(mapAddr, pageSize, engine);
+            }
+            finally
+            {
+                file.Close();
+            }
+        }
+        finally
+        {
+            Directory.Delete(root, true);
+        }
+    }
+
+    [Fact]
     public void MapShared_SyncVma_WritesBackPageCacheToHostFile()
     {
         var root = Path.Combine(Path.GetTempPath(), "hostfs-writeback-" + Guid.NewGuid().ToString("N"));

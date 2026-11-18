@@ -3535,9 +3535,26 @@ public abstract class MappingBackedInode : Inode
         return totalRead;
     }
 
+    internal virtual int? TryWriteUnmappedFile(LinuxFile file, ReadOnlySpan<ResolvedBufferSegment> segments,
+        long offset) => null;
+
+    private int? TryWriteBeforeMapping(LinuxFile file, ReadOnlySpan<ResolvedBufferSegment> segments, long offset)
+    {
+        lock (_mappingLock)
+        {
+            if (Mapping != null)
+                return null;
+
+            var written = TryWriteUnmappedFile(file, segments, offset);
+            if (written is > 0)
+                CachedSizeForShrinkCoordinator = Math.Max(CachedSizeForShrinkCoordinator, offset + written.Value);
+            return written;
+        }
+    }
+
     private int WriteVHostMapped(Engine engine, LinuxFile file, ArraySegment<Iovec> iovs, ref long currentOffset)
     {
-        var mapping = EnsureMapping();
+        var mapping = Mapping;
         var scratch = GetMappingIoScratch(1024, 0);
         var guestSegments = scratch.GuestSegments;
         var totalWritten = 0;
@@ -3558,8 +3575,33 @@ public abstract class MappingBackedInode : Inode
                 out var nextIovIndex,
                 out var nextIovOffset);
             if (bytesResolved == 0)
-                return nextIovIndex >= iovs.Count ? totalWritten : totalWritten > 0 ? totalWritten : -(int)Errno.EFAULT;
+            {
+                if (totalWritten == 0 && nextIovIndex < iovs.Count)
+                    return -(int)Errno.EFAULT;
+                break;
+            }
 
+            if (mapping == null && currentOffset <= long.MaxValue - bytesResolved &&
+                TryWriteBeforeMapping(file, guestSegments.AsSpan(0, guestSegmentCount), currentOffset) is { } written)
+            {
+                if (written <= 0)
+                {
+                    if (totalWritten == 0)
+                        return written;
+                    break;
+                }
+
+                totalWritten += written;
+                currentOffset += written;
+                if (written < bytesResolved)
+                    break;
+
+                iovIndex = nextIovIndex;
+                iovOffset = nextIovOffset;
+                continue;
+            }
+
+            mapping ??= EnsureMapping();
             var prepareRc = PrepareHostMappedWrite(file, bytesResolved, currentOffset);
             if (prepareRc < 0)
             {
