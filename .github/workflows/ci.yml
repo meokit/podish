@@ -44,7 +44,8 @@ jobs:
       - name: Install native build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang cmake ninja-build libc++-dev libc++abi-dev
+          sudo apt-get install -y clang-20 cmake ninja-build libc++-20-dev libc++abi-20-dev
+          echo /usr/lib/llvm-20/bin >> "$GITHUB_PATH"
 
       - name: Build Linux-compatible projects
         run: |
@@ -125,7 +126,8 @@ jobs:
       - name: Install native build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang cmake ninja-build libc++-dev libc++abi-dev
+          sudo apt-get install -y clang-20 cmake ninja-build libc++-20-dev libc++abi-20-dev
+          echo /usr/lib/llvm-20/bin >> "$GITHUB_PATH"
 
       - name: Publish Linux PodishCli NativeAOT
         run: dotnet publish Podish.Cli/Podish.Cli.csproj -c Release -r linux-x64 -p:PublishAot=true -m:1

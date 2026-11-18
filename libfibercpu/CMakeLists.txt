@@ -48,7 +48,7 @@ if(MSVC AND FIBERCPU_BUILD_STATIC)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>" CACHE STRING "MSVC runtime library" FORCE)
 endif()
 
-# Independent compile-time choices; AUTO promotes only the measured host/build.
+# Independent compile-time choices; AUTO uses the full production configuration.
 set(FIBERCPU_FUSION_STRATEGY "AUTO" CACHE STRING "Reviewed fusion set (AUTO, BASE, EXTENDED, SHAPED)")
 set_property(CACHE FIBERCPU_FUSION_STRATEGY PROPERTY STRINGS AUTO BASE EXTENDED SHAPED)
 set(FIBERCPU_OPERAND_SPECIALIZATION "AUTO" CACHE STRING "Operand lowering (AUTO, OFF, PROFILE, REGISTER, HYBRID)")
@@ -57,39 +57,40 @@ set(FIBERCPU_OPERAND_BUDGET "AUTO" CACHE STRING "Maximum frozen operand shapes (
 set(FIBERCPU_OPERAND_PLAN_FILE "" CACHE FILEPATH "Explicit frozen operand plan (empty uses the default plan)")
 set(FIBERCPU_OPERAND_SCOPE "AUTO" CACHE STRING "Operand lowering scope (AUTO, ALL, ADDED_FUSIONS)")
 set_property(CACHE FIBERCPU_OPERAND_SCOPE PROPERTY STRINGS AUTO ALL ADDED_FUSIONS)
-set(FIBERCPU_GPR_PIN "AUTO" CACHE STRING "ARM64 guest GPR pin (AUTO, ON, OFF, ABI_ONLY, CONSERVATIVE, EAX_ESP, WRITE_BACK)")
+set(FIBERCPU_GPR_PIN "AUTO" CACHE STRING "Guest GPR pin (AUTO, ON, OFF, ABI_ONLY, CONSERVATIVE, EAX_ESP, WRITE_BACK)")
 set_property(CACHE FIBERCPU_GPR_PIN PROPERTY STRINGS AUTO ON OFF ABI_ONLY CONSERVATIVE EAX_ESP WRITE_BACK)
 option(FIBERCPU_GPR_WRITE_BACK "Use delayed GPR write-back when GPR pin is AUTO or ON" ON)
 set(FIBERCPU_GPR_PIN_REGISTERS "EAX,ESP" CACHE STRING "Pinned guest GPRs (comma- or semicolon-separated)")
 set(FIBERCPU_PIN_SPECIALIZATION "AUTO" CACHE STRING "Pin access coverage (AUTO, BASE, SCALAR, MEMORY)")
 set_property(CACHE FIBERCPU_PIN_SPECIALIZATION PROPERTY STRINGS AUTO BASE SCALAR MEMORY)
 
-set(_arm64_clang OFF)
-if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(arm64|aarch64|ARM64)$" AND CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND
-   (NOT APPLE OR NOT CMAKE_OSX_ARCHITECTURES OR CMAKE_OSX_ARCHITECTURES STREQUAL "arm64") AND NOT EMSCRIPTEN)
-    set(_arm64_clang ON)
-endif()
-set(_tuned_macos_build OFF)
-if(_arm64_clang AND APPLE AND CMAKE_SYSTEM_NAME STREQUAL "Darwin" AND NOT FIBERCPU_BUILD_STATIC AND
-   NOT FIBERCPU_ENABLE_SEQUENCE_PROFILE AND NOT FIBERCPU_GENERATED_SUPEROPCODES_FILE)
-    set(_tuned_macos_build ON)
+# Sequence training and external fusion tables use their own configuration.
+set(_production_optimizations ON)
+if(FIBERCPU_ENABLE_SEQUENCE_PROFILE OR FIBERCPU_GENERATED_SUPEROPCODES_FILE)
+    set(_production_optimizations OFF)
 endif()
 
-if(_arm64_clang AND NOT FIBERCPU_GPR_PIN STREQUAL "OFF" AND
-   (NOT FIBERCPU_GPR_PIN STREQUAL "AUTO" OR _tuned_macos_build))
+set(_can_pin_gprs OFF)
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND NOT EMSCRIPTEN AND NOT FIBERCPU_GPR_PIN STREQUAL "OFF" AND
+   (NOT FIBERCPU_GPR_PIN STREQUAL "AUTO" OR _production_optimizations))
     include(CheckCXXSourceCompiles)
-    check_cxx_source_compiles("
-#if !defined(__aarch64__) && !defined(_M_ARM64)
-#error ARM64 target required
+    check_cxx_source_compiles([=[
+#if !(defined(__aarch64__) || defined(_M_ARM64) || defined(__x86_64__) || defined(_M_X64)) || !__has_attribute(preserve_none) || !__has_cpp_attribute(clang::musttail)
+#error Native handler pin ABI unavailable
 #endif
-#if !__has_attribute(preserve_none)
-#error preserve_none required
-#endif
-__attribute__((preserve_none)) int pin_target(int value) { return value + 1; }
-int main() { return pin_target(1); }" FIBERCPU_CAN_PIN_GPRS)
+#pragma clang diagnostic error "-Wignored-attributes"
+using U64 = unsigned long long;
+using Handler = U64(__attribute__((preserve_none)) *)(void*, void*, U64, U64, U64, unsigned, U64, unsigned, unsigned);
+__attribute__((preserve_none)) U64 dispatch(void* state, void* op, U64 limit, U64 tags, U64 addend, unsigned branch,
+                                           U64 flags, unsigned eax, unsigned esp) {
+    [[clang::musttail]] return (*static_cast<Handler*>(op))(state, op, limit, tags, addend, branch, flags, eax, esp);
+}
+int main() { return 0; }
+]=] FIBERCPU_HAS_PIN_ABI)
+    set(_can_pin_gprs ${FIBERCPU_HAS_PIN_ABI})
 endif()
 
-if(FIBERCPU_GPR_PIN STREQUAL "AUTO" AND (NOT _tuned_macos_build OR NOT FIBERCPU_CAN_PIN_GPRS))
+if(FIBERCPU_GPR_PIN STREQUAL "AUTO" AND NOT _can_pin_gprs)
     set(FIBERCPU_GPR_PIN "OFF")
 elseif(FIBERCPU_GPR_PIN MATCHES "^(AUTO|ON)$")
     if(FIBERCPU_GPR_WRITE_BACK)
@@ -189,15 +190,20 @@ if(_basic_pin)
     set(FIBERCPU_PIN_SPECIALIZATION "BASE")
     set(FIBERCPU_OPERAND_SCOPE "ALL")
 endif()
+set(_full_operand_plan OFF)
+if(_tuned_pin OR (_production_optimizations AND NOT _basic_pin))
+    set(_full_operand_plan ON)
+endif()
 if(FIBERCPU_FUSION_STRATEGY STREQUAL "AUTO")
-    if(_tuned_macos_build AND NOT _basic_pin)
+    if(_production_optimizations AND NOT _basic_pin AND
+       NOT FIBERCPU_OPERAND_SPECIALIZATION MATCHES "^(OFF|REGISTER)$")
         set(FIBERCPU_FUSION_STRATEGY "SHAPED")
     else()
         set(FIBERCPU_FUSION_STRATEGY "BASE")
     endif()
 endif()
 if(FIBERCPU_OPERAND_SPECIALIZATION STREQUAL "AUTO")
-    if(_tuned_pin)
+    if(_full_operand_plan)
         set(FIBERCPU_OPERAND_SPECIALIZATION "HYBRID")
     elseif(FIBERCPU_FUSION_STRATEGY STREQUAL "SHAPED")
         set(FIBERCPU_OPERAND_SPECIALIZATION "PROFILE")
@@ -206,14 +212,14 @@ if(FIBERCPU_OPERAND_SPECIALIZATION STREQUAL "AUTO")
     endif()
 endif()
 if(FIBERCPU_OPERAND_BUDGET STREQUAL "AUTO")
-    if(_tuned_pin)
+    if(_full_operand_plan)
         set(FIBERCPU_OPERAND_BUDGET "704")
     else()
         set(FIBERCPU_OPERAND_BUDGET "256")
     endif()
 endif()
 if(FIBERCPU_PIN_SPECIALIZATION STREQUAL "AUTO")
-    if(_tuned_pin)
+    if(_full_operand_plan)
         set(FIBERCPU_PIN_SPECIALIZATION "MEMORY")
     else()
         set(FIBERCPU_PIN_SPECIALIZATION "BASE")
@@ -221,7 +227,7 @@ if(FIBERCPU_PIN_SPECIALIZATION STREQUAL "AUTO")
 endif()
 if(FIBERCPU_OPERAND_SCOPE STREQUAL "AUTO")
     set(FIBERCPU_OPERAND_SCOPE "ALL")
-    if(FIBERCPU_FUSION_STRATEGY STREQUAL "SHAPED" AND FIBERCPU_GPR_PIN STREQUAL "OFF")
+    if(NOT _full_operand_plan AND FIBERCPU_FUSION_STRATEGY STREQUAL "SHAPED" AND FIBERCPU_GPR_PIN STREQUAL "OFF")
         set(FIBERCPU_OPERAND_SCOPE "ADDED_FUSIONS")
     endif()
 endif()
@@ -247,8 +253,8 @@ endif()
 if(NOT FIBERCPU_FUSION_STRATEGY MATCHES "^(BASE|EXTENDED|SHAPED)$")
     message(FATAL_ERROR "Unknown FIBERCPU_FUSION_STRATEGY")
 endif()
-if(FIBERCPU_GPR_PIN_MODE GREATER 0 AND (NOT _arm64_clang OR NOT FIBERCPU_CAN_PIN_GPRS))
-    message(FATAL_ERROR "GPR pin requires an ARM64 Clang target with preserve_none support")
+if(FIBERCPU_GPR_PIN_MODE GREATER 0 AND NOT _can_pin_gprs)
+    message(FATAL_ERROR "GPR pin requires a Clang target that supports the preserve_none tail-call handler ABI")
 endif()
 set(FIBERCPU_LOWER_OPERANDS OFF)
 if(FIBERCPU_OPERAND_MODE GREATER 0 OR FIBERCPU_GPR_PIN_MODE GREATER_EQUAL 3)
@@ -340,7 +346,7 @@ if(FIBERCPU_LOWER_OPERANDS)
     set(_plan "${FIBERCPU_OPERAND_PLAN_FILE}")
     if(NOT _plan)
         set(_plan_name operand-shapes-v1.json)
-        if(_tuned_pin)
+        if(_full_operand_plan)
             set(_plan_name operand-shapes-gnu-writeback-v1.json)
         endif()
         set(_plan "${CMAKE_CURRENT_SOURCE_DIR}/../benchmark/optimization/manifests/${_plan_name}")
@@ -372,8 +378,11 @@ if(NOT MSVC AND NOT EMSCRIPTEN)
         "$<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebugInfo>>:-O3>"
         "$<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebugInfo>>:-fomit-frame-pointer>"
         "$<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebugInfo>>:-fno-stack-protector>"
-        "$<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebugInfo>>:-march=native>"
     )
+    if(NOT CMAKE_CROSSCOMPILING AND
+       (NOT CMAKE_OSX_ARCHITECTURES OR CMAKE_OSX_ARCHITECTURES STREQUAL CMAKE_HOST_SYSTEM_PROCESSOR))
+        add_compile_options("$<$<OR:$<CONFIG:Release>,$<CONFIG:RelWithDebugInfo>>:-march=native>")
+    endif()
 endif()
 
 # Fingerprint the semantic catalog independently of host addresses/compiler ABI.

@@ -37,7 +37,8 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y clang cmake ninja-build libc++-dev libc++abi-dev
+          sudo apt-get install -y clang-20 cmake ninja-build libc++-20-dev libc++abi-20-dev
+          echo /usr/lib/llvm-20/bin >> "$GITHUB_PATH"
       - name: Install macOS native dependencies
         if: runner.os == 'macOS'
         run: brew install cmake ninja

@@ -1,4 +1,4 @@
-Bounded fusion / operand lowering / ARM64 EAX-ESP pin
+Bounded fusion / operand lowering / EAX-ESP pin
 
 Build switches (CMake cache; independent at compile time)
   FIBERCPU_ENABLE_SUPEROPCODES=ON/OFF
@@ -12,19 +12,20 @@ Build switches (CMake cache; independent at compile time)
 MSBuild forwards FusionStrategy, OperandSpecialization, OperandBudget,
 OperandScope, GprPin, GprPinRegisters and GprWriteBack.
 
-AUTO enables pin in macOS ARM64 Clang shared builds with preserve_none.
-Those builds default to WRITE_BACK, SHAPED, HYBRID/704, ALL, MEMORY and the
-704-entry GNU write-back plan. Set FIBERCPU_GPR_WRITE_BACK=OFF or
--p:GprWriteBack=OFF to select EAX_ESP write-through with the same plan.
-Set FIBERCPU_GPR_PIN=OFF or -p:GprPin=OFF to disable pin and use the
-unpinned SHAPED/PROFILE/256/ADDED_FUSIONS defaults on macOS ARM64.
-GPR_PIN=ON explicitly enables pin on a supported target. The write-back
-switch resolves AUTO and ON. Explicit cache modes keep their stated behavior.
+Ordinary builds, including static/NativeAOT and Wasm, default to SHAPED,
+HYBRID/704, ALL, MEMORY and the 704-entry GNU write-back operand plan.
+AUTO enables EAX/ESP WRITE_BACK when the target Clang can compile the
+preserve_none tail-call signature. That applies to supported x64 and ARM64
+targets. Wasm and compilers without this ABI use the same fusion and operand
+plan with pin OFF. Linux CI and release builds use Clang 20.
+Set FIBERCPU_GPR_WRITE_BACK=OFF or -p:GprWriteBack=OFF to select EAX_ESP
+write-through. Set FIBERCPU_GPR_PIN=OFF or -p:GprPin=OFF to disable pin while
+keeping the portable defaults. GPR_PIN=ON requires a supported target.
 
-Other targets, universal builds, static/AOT, sequence training and custom
-fusion sources retain automatic BASE/OFF/ALL and pin OFF. Explicit choices
-override AUTO. An existing CMake cache with explicit pin or budget values
-retains those values. Use AUTO to resolve them again.
+Sequence training and custom fusion sources default to BASE, operand
+lowering OFF and pin OFF. Explicit choices override AUTO. An existing
+CMake cache with explicit pin or budget values retains those values.
+Use AUTO to resolve them again.
 An explicit generated fusion source overrides the source chosen by the
 strategy. Set FIBERCPU_GENERATED_SUPEROPCODES_FILE to an empty value to
 follow the selected strategy.
@@ -41,13 +42,13 @@ from splitting an existing CMP/Jcc pair; a four-op fusion may still subsume an
 entire two-op comparison/branch. This limits the impact on operand paths outside the training
 coverage; it never reverts a canonical instruction specialization.
 Frozen manifests are checked in. Ordinary builds never execute a training guest.
-PROFILE partially evaluates at most the first budget entries in the frozen
-256-shape coverage plan. Only ModRM, prefix and effective-address descriptors
+PROFILE partially evaluates at most the first budget entries in the selected
+frozen plan. Only ModRM, prefix and effective-address descriptors
 are specialized. Guest addresses, immediates, memory contents and validation
 results remain runtime inputs. Each clone still uses the ordinary instruction
 logic, precise fault/restart flow and constituent boundaries.
-ADDED_FUSIONS instantiates only the fused shapes in that budget (64 of the
-256 candidates). The fusion matcher returns their lowered entry directly. It
+ADDED_FUSIONS instantiates only the fused shapes in that budget. The fusion
+matcher returns their lowered entry directly. It
 performs no separate per-instruction lowering pass or reverse normalization:
 ordinary instructions retain canonical identity, and fused entries cannot be
 constituents of these ordinary-logic-only patterns. This keeps cold decoder
@@ -102,8 +103,8 @@ Host exits and memory restart/retry publish all selected pins. Blocking TLB hits
 stay in the chain. Blocking misses and explicit callbacks publish the pins before
 the observer runs, then reload them before resuming. There is no dirty bit.
 
-GPR pin is restricted to ARM64 Clang with preserve_none support. It must be
-remeasured after a compiler upgrade: preserve_none is an unstable compiler ABI.
+GPR pin requires Clang support for the native preserve_none tail-call ABI.
+Remeasure after a compiler upgrade: preserve_none is an unstable compiler ABI.
 The public C ABI is unchanged. BuildFeatures bits 4..5 identify operand mode,
 bits 8..9 hold the low pin mode bits, and bit 11 holds the high bit (WRITE_BACK).
 Bit 10 identifies ADDED_FUSIONS scope. X86_GetOptimizationConfig returns strategy, enabled
@@ -144,7 +145,7 @@ so the longest workload does not consume the entire shape budget. Appending
 entries preserves the existing GCC priorities and bounded fusion admission.
 
 GNU write-back profile
-The production macOS ARM64 preset uses operand-shapes-gnu-writeback-v1.json
+The production preset uses operand-shapes-gnu-writeback-v1.json
 with WRITE_BACK, SHAPED, HYBRID, ALL, budget 704 and MEMORY pin specialization. The 448 previous GNU plan
 entries keep their IDs and ordering. The new plan appends 48 fused and 208
 single-instruction shapes using the existing workload-balanced profile counts.
