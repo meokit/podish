@@ -32,28 +32,28 @@ struct RegisterOperandEntry {
 template <LogicFunc Target, PinWriteRole Role, bool Byte, bool Group1>
 HandlerFunc SelectRegisterOperand(const DecodedOp* op) {
     if constexpr (Role == PinWriteRole::None) {
-        return DispatchWrapper<Target, RegisterOperandPolicy<PinWriteRole::None, PinWriteClass::Other, Byte>>;
+        return DispatchWrapper<Target, OperandSpec::Register<PinWriteRole::None, PinWriteClass::Other, Byte>>;
     } else {
         if constexpr (Group1)
             if (((op->modrm >> 3) & 7) == 7)
-                return DispatchWrapper<Target, RegisterOperandPolicy<PinWriteRole::None, PinWriteClass::Other, Byte>>;
+                return DispatchWrapper<Target, OperandSpec::Register<PinWriteRole::None, PinWriteClass::Other, Byte>>;
         const unsigned field = Role == PinWriteRole::Rm ? op->modrm : op->modrm >> 3;
         const unsigned parent = field & (Byte ? 3 : 7);
 #define FIBERCPU_SELECT_PIN(id, name, slot, ...)                                                               \
     if constexpr (!Byte || id < 4) {                                                                           \
         if (parent == id)                                                                                      \
-            return DispatchWrapper<Target, RegisterOperandPolicy<Role, static_cast<PinWriteClass>(id), Byte>>; \
+            return DispatchWrapper<Target, OperandSpec::Register<Role, static_cast<PinWriteClass>(id), Byte>>; \
     }
         FIBERCPU_FOR_EACH_PIN(FIBERCPU_SELECT_PIN)
 #undef FIBERCPU_SELECT_PIN
-        return DispatchWrapper<Target, RegisterOperandPolicy<Role, PinWriteClass::Other, Byte>>;
+        return DispatchWrapper<Target, OperandSpec::Register<Role, PinWriteClass::Other, Byte>>;
     }
 }
 
 template <LogicFunc Target, PinWriteRole Role, bool Byte, bool OpcodeRegister>
 HandlerFunc SelectEncodedOperand(const DecodedOp* op) {
     if constexpr (Role == PinWriteRole::None) {
-        return DispatchWrapper<Target, EncodedOperandPolicy<Role, PinWriteClass::Other, Byte, OpcodeRegister>>;
+        return DispatchWrapper<Target, OperandSpec::Encoded<Role, PinWriteClass::Other, Byte, OpcodeRegister>>;
     } else {
         const unsigned field = Role == PinWriteRole::Reg ? op->modrm >> 3 : op->modrm;
         const unsigned parent = field & (Byte ? 3 : 7);
@@ -61,11 +61,11 @@ HandlerFunc SelectEncodedOperand(const DecodedOp* op) {
     if constexpr (!Byte || id < 4) {                                                                                  \
         if (parent == id)                                                                                             \
             return DispatchWrapper<Target,                                                                            \
-                                   EncodedOperandPolicy<Role, static_cast<PinWriteClass>(id), Byte, OpcodeRegister>>; \
+                                   OperandSpec::Encoded<Role, static_cast<PinWriteClass>(id), Byte, OpcodeRegister>>; \
     }
         FIBERCPU_FOR_EACH_PIN(FIBERCPU_SELECT_PIN)
 #undef FIBERCPU_SELECT_PIN
-        return DispatchWrapper<Target, EncodedOperandPolicy<Role, PinWriteClass::Other, Byte, OpcodeRegister>>;
+        return DispatchWrapper<Target, OperandSpec::Encoded<Role, PinWriteClass::Other, Byte, OpcodeRegister>>;
     }
 }
 

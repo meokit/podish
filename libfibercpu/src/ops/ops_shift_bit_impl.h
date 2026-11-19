@@ -13,15 +13,10 @@
 namespace fiberish {
 
 // Returns LogicFlow to propagate Restart/Retry
-template <uint8_t FixedSubOp = 0xFF>
+template <GroupOpSpec FixedSubOp = GroupOpSpec::Dynamic>
 FORCE_INLINE LogicFlow Helper_Group2_Internal(EmuState* state, GprCache& gpr, DecodedOp* op, uint32_t dest,
                                               uint8_t count, bool is_byte, mem::MicroTLB* utlb, uint64_t& flags_cache) {
-    uint8_t subop;
-    if constexpr (FixedSubOp != 0xFF) {
-        subop = FixedSubOp;
-    } else {
-        subop = (op->modrm >> 3) & 7;
-    }
+    const uint8_t subop = GroupOperation<FixedSubOp>(op);
     uint32_t res = dest;
 
     // IA-32 masks every Group 2 count before any modulo-width reduction,
@@ -131,12 +126,12 @@ FORCE_INLINE LogicFlow Helper_Group2_Internal(EmuState* state, GprCache& gpr, De
     return LogicFlow::Continue;
 }
 
-template <bool IsByte, uint8_t FixedSubOp = 0xFF, Specialized S = Specialized::None>
+template <bool IsByte, GroupOpSpec FixedSubOp = GroupOpSpec::Dynamic, RmOperandSpec S = RmOperandSpec::Dynamic>
 FORCE_INLINE LogicFlow OpGroup2_EvIb_Internal(LogicFuncParams) {
     // C0: r/m8, imm8
     // C1: r/m32, imm8
     uint32_t dest;
-    if constexpr (S == Specialized::ModReg) {
+    if constexpr (S == RmOperandSpec::ModReg) {
         // Optimization: Skip ReadModRM call for Reg
         uint8_t rm = op->modrm & 7;
         if constexpr (IsByte) {
@@ -173,7 +168,7 @@ FORCE_INLINE LogicFlow OpGroup2_EvIb_Internal(LogicFuncParams) {
     return Helper_Group2_Internal<FixedSubOp>(state, gpr, op, dest, count, IsByte, utlb, flags_cache);
 }
 
-template <bool IsByte, uint8_t FixedSubOp = 0xFF, Specialized S = Specialized::None>
+template <bool IsByte, GroupOpSpec FixedSubOp = GroupOpSpec::Dynamic, RmOperandSpec S = RmOperandSpec::Dynamic>
 FORCE_INLINE LogicFlow OpGroup2_Ev1_Internal(LogicFuncParams) {
     // D0: Shift r/m8, 1
     // D1: Shift r/m16/32, 1
@@ -204,12 +199,12 @@ FORCE_INLINE LogicFlow OpGroup2_Ev1_Internal(LogicFuncParams) {
     return Helper_Group2_Internal<FixedSubOp>(state, gpr, op, dest, 1, IsByte, utlb, flags_cache);
 }
 
-template <bool IsByte, uint8_t FixedSubOp = 0xFF, Specialized S = Specialized::None>
+template <bool IsByte, GroupOpSpec FixedSubOp = GroupOpSpec::Dynamic, RmOperandSpec S = RmOperandSpec::Dynamic>
 FORCE_INLINE LogicFlow OpGroup2_EvCl_Internal(LogicFuncParams) {
     // D2: r/m8, CL
     // D3: r/m32, CL
     uint32_t dest;
-    if constexpr (S == Specialized::ModReg) {
+    if constexpr (S == RmOperandSpec::ModReg) {
         uint8_t rm = op->modrm & 7;
         if constexpr (IsByte) {
             if (rm < 4)
@@ -275,63 +270,9 @@ FORCE_INLINE LogicFlow OpRotateRegImmediate(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-inline constexpr LogicFunc OpRol_RegImm16_Live = OpRotateRegImmediate<uint16_t, false, true>;
-inline constexpr LogicFunc OpRol_RegImm16_Dead = OpRotateRegImmediate<uint16_t, false, false>;
-inline constexpr LogicFunc OpRor_RegImm16_Live = OpRotateRegImmediate<uint16_t, true, true>;
-inline constexpr LogicFunc OpRor_RegImm16_Dead = OpRotateRegImmediate<uint16_t, true, false>;
-inline constexpr LogicFunc OpRol_RegImm32_Live = OpRotateRegImmediate<uint32_t, false, true>;
-inline constexpr LogicFunc OpRol_RegImm32_Dead = OpRotateRegImmediate<uint32_t, false, false>;
-inline constexpr LogicFunc OpRor_RegImm32_Live = OpRotateRegImmediate<uint32_t, true, true>;
-inline constexpr LogicFunc OpRor_RegImm32_Dead = OpRotateRegImmediate<uint32_t, true, false>;
-
-FORCE_INLINE LogicFlow OpGroup2_EbIb(LogicFuncParams) { return OpGroup2_EvIb_Internal<true>(LogicPassParams); }
-FORCE_INLINE LogicFlow OpGroup2_EvIb(LogicFuncParams) { return OpGroup2_EvIb_Internal<false>(LogicPassParams); }
-FORCE_INLINE LogicFlow OpGroup2_Eb1(LogicFuncParams) { return OpGroup2_Ev1_Internal<true>(LogicPassParams); }
-FORCE_INLINE LogicFlow OpGroup2_Ev1(LogicFuncParams) { return OpGroup2_Ev1_Internal<false>(LogicPassParams); }
-FORCE_INLINE LogicFlow OpGroup2_EbCl(LogicFuncParams) { return OpGroup2_EvCl_Internal<true>(LogicPassParams); }
-FORCE_INLINE LogicFlow OpGroup2_EvCl(LogicFuncParams) { return OpGroup2_EvCl_Internal<false>(LogicPassParams); }
-
-// SHL Wrappers
-FORCE_INLINE LogicFlow OpGroup2_EvIb_Shl(LogicFuncParams) { return OpGroup2_EvIb_Internal<false, 4>(LogicPassParams); }
-FORCE_INLINE LogicFlow OpGroup2_Ev1_Shl(LogicFuncParams) { return OpGroup2_Ev1_Internal<false, 4>(LogicPassParams); }
-FORCE_INLINE LogicFlow OpGroup2_EvCl_Shl(LogicFuncParams) { return OpGroup2_EvCl_Internal<false, 4>(LogicPassParams); }
-FORCE_INLINE LogicFlow OpGroup2_EvIb_Shl_ModReg(LogicFuncParams) {
-    return OpGroup2_EvIb_Internal<false, 4, Specialized::ModReg>(LogicPassParams);
-}
-FORCE_INLINE LogicFlow OpGroup2_Ev1_Shl_ModReg(LogicFuncParams) {
-    return OpGroup2_Ev1_Internal<false, 4, Specialized::ModReg>(LogicPassParams);
-}
-FORCE_INLINE LogicFlow OpGroup2_EvCl_Shl_ModReg(LogicFuncParams) {
-    return OpGroup2_EvCl_Internal<false, 4, Specialized::ModReg>(LogicPassParams);
-}
-
-// SHR Wrappers
-FORCE_INLINE LogicFlow OpGroup2_EvIb_Shr(LogicFuncParams) { return OpGroup2_EvIb_Internal<false, 5>(LogicPassParams); }
-FORCE_INLINE LogicFlow OpGroup2_Ev1_Shr(LogicFuncParams) { return OpGroup2_Ev1_Internal<false, 5>(LogicPassParams); }
-FORCE_INLINE LogicFlow OpGroup2_EvCl_Shr(LogicFuncParams) { return OpGroup2_EvCl_Internal<false, 5>(LogicPassParams); }
-FORCE_INLINE LogicFlow OpGroup2_EvIb_Shr_ModReg(LogicFuncParams) {
-    return OpGroup2_EvIb_Internal<false, 5, Specialized::ModReg>(LogicPassParams);
-}
-FORCE_INLINE LogicFlow OpGroup2_Ev1_Shr_ModReg(LogicFuncParams) {
-    return OpGroup2_Ev1_Internal<false, 5, Specialized::ModReg>(LogicPassParams);
-}
-FORCE_INLINE LogicFlow OpGroup2_EvCl_Shr_ModReg(LogicFuncParams) {
-    return OpGroup2_EvCl_Internal<false, 5, Specialized::ModReg>(LogicPassParams);
-}
-
-// SAR Wrappers
-FORCE_INLINE LogicFlow OpGroup2_EvIb_Sar(LogicFuncParams) { return OpGroup2_EvIb_Internal<false, 7>(LogicPassParams); }
-FORCE_INLINE LogicFlow OpGroup2_Ev1_Sar(LogicFuncParams) { return OpGroup2_Ev1_Internal<false, 7>(LogicPassParams); }
-FORCE_INLINE LogicFlow OpGroup2_EvCl_Sar(LogicFuncParams) { return OpGroup2_EvCl_Internal<false, 7>(LogicPassParams); }
-FORCE_INLINE LogicFlow OpGroup2_EvIb_Sar_ModReg(LogicFuncParams) {
-    return OpGroup2_EvIb_Internal<false, 7, Specialized::ModReg>(LogicPassParams);
-}
-FORCE_INLINE LogicFlow OpGroup2_Ev1_Sar_ModReg(LogicFuncParams) {
-    return OpGroup2_Ev1_Internal<false, 7, Specialized::ModReg>(LogicPassParams);
-}
-FORCE_INLINE LogicFlow OpGroup2_EvCl_Sar_ModReg(LogicFuncParams) {
-    return OpGroup2_EvCl_Internal<false, 7, Specialized::ModReg>(LogicPassParams);
-}
+#define FIBERCPU_BIND_OPS_SHIFT_BIT_IMPL_0
+#include "instruction_kernel_bindings.inc"
+#undef FIBERCPU_BIND_OPS_SHIFT_BIT_IMPL_0
 
 FORCE_INLINE LogicFlow OpBt_Reg(LogicFuncParams) {
     // 0F A3: BT r/m16/32, r16/32

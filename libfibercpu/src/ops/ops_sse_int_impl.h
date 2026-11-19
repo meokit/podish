@@ -574,23 +574,9 @@ FORCE_INLINE LogicFlow OpPminsw_Sse(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpPsllw_Sse(LogicFuncParams) { return OpPsllw_Sse_Internal<false>(LogicPassParams); }
-FORCE_INLINE LogicFlow OpPslld_Sse(LogicFuncParams) { return OpPslld_Sse_Internal<false>(LogicPassParams); }
-FORCE_INLINE LogicFlow OpPsllq_Sse(LogicFuncParams) { return OpPsllq_Sse_Internal<false>(LogicPassParams); }
-FORCE_INLINE LogicFlow OpPsraw_Sse(LogicFuncParams) { return OpPsraw_Sse_Internal<false>(LogicPassParams); }
-FORCE_INLINE LogicFlow OpPsrad_Sse(LogicFuncParams) { return OpPsrad_Sse_Internal<false>(LogicPassParams); }
-FORCE_INLINE LogicFlow OpPsrlw_Sse(LogicFuncParams) { return OpPsrlw_Sse_Internal<false>(LogicPassParams); }
-FORCE_INLINE LogicFlow OpPsrld_Sse(LogicFuncParams) { return OpPsrld_Sse_Internal<false>(LogicPassParams); }
-FORCE_INLINE LogicFlow OpPsrlq_Sse(LogicFuncParams) { return OpPsrlq_Sse_Internal<false>(LogicPassParams); }
-
-FORCE_INLINE LogicFlow OpPsllw_Sse_Group(LogicFuncParams) { return OpPsllw_Sse_Internal<true>(LogicPassParams); }
-FORCE_INLINE LogicFlow OpPslld_Sse_Group(LogicFuncParams) { return OpPslld_Sse_Internal<true>(LogicPassParams); }
-FORCE_INLINE LogicFlow OpPsllq_Sse_Group(LogicFuncParams) { return OpPsllq_Sse_Internal<true>(LogicPassParams); }
-FORCE_INLINE LogicFlow OpPsraw_Sse_Group(LogicFuncParams) { return OpPsraw_Sse_Internal<true>(LogicPassParams); }
-FORCE_INLINE LogicFlow OpPsrad_Sse_Group(LogicFuncParams) { return OpPsrad_Sse_Internal<true>(LogicPassParams); }
-FORCE_INLINE LogicFlow OpPsrlw_Sse_Group(LogicFuncParams) { return OpPsrlw_Sse_Internal<true>(LogicPassParams); }
-FORCE_INLINE LogicFlow OpPsrld_Sse_Group(LogicFuncParams) { return OpPsrld_Sse_Internal<true>(LogicPassParams); }
-FORCE_INLINE LogicFlow OpPsrlq_Sse_Group(LogicFuncParams) { return OpPsrlq_Sse_Internal<true>(LogicPassParams); }
+#define FIBERCPU_BIND_OPS_SSE_INT_IMPL_0
+#include "instruction_kernel_bindings.inc"
+#undef FIBERCPU_BIND_OPS_SSE_INT_IMPL_0
 
 FORCE_INLINE LogicFlow OpPslldq_Sse(LogicFuncParams) {
     // 0F 73 /7: PSLLDQ xmm, imm8

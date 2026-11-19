@@ -9,7 +9,7 @@ namespace Podish.PerfTools;
 internal static partial class Program
 {
     private static readonly string[] InstructionCatalogInputs =
-    ["instruction_spec.h", "instruction_families.h", "instruction_variants.inc", "instruction_fallbacks.inc", "instruction_variants.cpp", "instruction_variants.h", "specialization.h"];
+    ["instruction_spec.h", "instruction_kernel_spec.h", "instruction_catalog.json", "instruction_variants.cpp", "instruction_variants.h", "specialization.h"];
 
     internal static string InstructionCatalogSourceHash()
     {

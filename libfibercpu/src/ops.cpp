@@ -1,5 +1,7 @@
 #include "ops.h"
 #include <algorithm>
+#include <atomic>
+#include <shared_mutex>
 #include "dispatch.h"
 #include "instruction_variants.h"
 
@@ -143,6 +145,7 @@ static FORCE_INLINE ATTR_PRESERVE_NONE int64_t ChainToKnownBlock(EmuState* RESTR
     BasicBlock* next_block = state->last_block;
     instr_limit -= next_block->inst_count();
     DecodedOp* next_head = next_block->FirstOp();
+    CountLLVMBlockEntry(state, next_block, next_block->chain.llvm_hot_count);
 #if defined(FIBERCPU_ENABLE_BLOCK_PROFILE) || defined(FIBERCPU_ENABLE_HANDLER_PROFILE)
     next_block->exec_count++;
 #endif
@@ -213,16 +216,8 @@ template <int I, bool UseBranch>
 ATTR_PRESERVE_NONE int64_t OpExitBlock(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
                                        mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
                                        uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
-    FIBERCPU_PIN_ASSUME;
-    RecordBlockHandlersUntil(state, op);
-    if constexpr (UseBranch) {
-        if (branch == std::numeric_limits<uint32_t>::max()) __builtin_unreachable();
-        ATTR_MUSTTAIL return ResolveBranchTargetInline<ExtKind::Link>(state, op, instr_limit, utlb_tags, utlb_addend,
-                                                                      branch, flags_cache FIBERCPU_PIN_RELOAD);
-    } else {
-        ATTR_MUSTTAIL return ResolveBranchTargetInline<ExtKind::Link>(state, op, instr_limit, utlb_tags, utlb_addend,
-                                                                      op->next_eip, flags_cache FIBERCPU_PIN_RELOAD);
-    }
+    ATTR_MUSTTAIL return OpExitBlockImpl<UseBranch>(state, op, instr_limit, utlb_tags, utlb_addend, branch,
+                                                    flags_cache FIBERCPU_PIN_RELOAD);
 }
 
 // Instantiate variants to reduce BTB pressure
@@ -245,6 +240,7 @@ HandlerFunc g_Handlers[1024] = {nullptr};
 
 // Static initialization of dispatch table
 static void BuildSpecializationIndex();
+static std::atomic<bool> g_SpecializationReady{false};
 
 struct HandlerInit {
     HandlerInit() {
@@ -255,6 +251,7 @@ struct HandlerInit {
 
         RegisterInstructionVariants();
         BuildSpecializationIndex();
+        g_SpecializationReady.store(true, std::memory_order_release);
     }
 };
 
@@ -301,15 +298,17 @@ static bool MatchesCompiled(const CompiledSpecialization& entry, const DecodedOp
 static std::vector<CompiledSpecialization> g_CompiledSpecializations[1024];
 using SpecializationBuckets = std::array<std::vector<const CompiledSpecialization*>, 514>;
 static std::unique_ptr<SpecializationBuckets> g_SpecializationIndex[1024];
+struct RuntimeSpecializations {
+    std::vector<SpecializedEntry> entries;
+    std::vector<CompiledSpecialization> compiled;
+    SpecializationBuckets buckets;
+};
+static std::array<std::unique_ptr<RuntimeSpecializations>, 1024> g_RuntimeSpecializations;
+static std::shared_mutex g_RuntimeSpecializationMutex;
+static std::atomic<bool> g_HasRuntimeSpecializations{false};
 static HandlerInit _init;
 
-void RegisterSpecializedHandler(uint16_t opcode, SpecCriteria criteria, HandlerFunc handler, int priority) {
-    if (opcode >= 1024) return;
-    auto& list = g_OpSpecializations[opcode];
-    list.push_back({opcode, criteria, handler, priority});
-
-    // Sort by specificity (Descending Score)
-    // Most specific first
+static void SortSpecializations(std::vector<SpecializedEntry>& list) {
     std::sort(list.begin(), list.end(), [](const SpecializedEntry& a, const SpecializedEntry& b) {
         int a_score = a.criteria.GetScore();
         int b_score = b.criteria.GetScore();
@@ -336,6 +335,36 @@ static void IndexSpecialization(const SpecCriteria& c, const CompiledSpecializat
     }
 }
 
+static void CompileSpecializationList(const std::vector<SpecializedEntry>& entries,
+                                      std::vector<CompiledSpecialization>& compiled, SpecializationBuckets& buckets) {
+    compiled.reserve(entries.size());
+    for (const auto& entry : entries) {
+        CompiledSpecialization item{};
+        if (!CompileSpecialization(entry.criteria, entry.handler, item)) continue;
+        compiled.push_back(item);
+        IndexSpecialization(entry.criteria, &compiled.back(), buckets);
+    }
+}
+
+void RegisterSpecializedHandler(uint16_t opcode, SpecCriteria criteria, HandlerFunc handler, int priority) {
+    if (opcode >= 1024 || !handler) return;
+    if (!g_SpecializationReady.load(std::memory_order_acquire)) {
+        auto& list = g_OpSpecializations[opcode];
+        list.push_back({opcode, criteria, handler, priority});
+        SortSpecializations(list);
+        return;
+    }
+    std::unique_lock lock(g_RuntimeSpecializationMutex);
+    auto& current = g_RuntimeSpecializations[opcode];
+    auto updated = std::make_unique<RuntimeSpecializations>();
+    updated->entries = current ? current->entries : g_OpSpecializations[opcode];
+    updated->entries.push_back({opcode, criteria, handler, priority});
+    SortSpecializations(updated->entries);
+    CompileSpecializationList(updated->entries, updated->compiled, updated->buckets);
+    current = std::move(updated);
+    g_HasRuntimeSpecializations.store(true, std::memory_order_release);
+}
+
 // Registration is complete before this is called. Buckets retain the exact
 // sorted order, including ties; remaining prefix and memory constraints are
 // checked after lookup. The extra ModRM value represents an absent ModRM.
@@ -345,28 +374,30 @@ static void BuildSpecializationIndex() {
         if (list.empty()) continue;
         auto buckets = std::make_unique<SpecializationBuckets>();
         auto& compiled = g_CompiledSpecializations[opcode];
-        compiled.reserve(list.size());
-        for (const auto& entry : list) {
-            const auto& c = entry.criteria;
-            CompiledSpecialization item{};
-            if (!CompileSpecialization(c, entry.handler, item)) continue;
-            compiled.push_back(item);
-            const auto* optimized = &compiled.back();
-            IndexSpecialization(c, optimized, *buckets);
-        }
+        CompileSpecializationList(list, compiled, *buckets);
         g_SpecializationIndex[opcode] = std::move(buckets);
     }
 }
 
-HandlerFunc FindSpecializedHandler(uint16_t handler_index, DecodedOp* op) {
-    if (handler_index >= 1024 || !g_SpecializationIndex[handler_index]) return nullptr;
+static HandlerFunc LookupSpecialization(const SpecializationBuckets& buckets, const DecodedOp* op) {
     const unsigned encoded = op->meta.flags.has_modrm ? unsigned(op->modrm) + 1 : 0;
-    const auto& bucket = (*g_SpecializationIndex[handler_index])[encoded * 2 + op->meta.flags.no_flags];
+    const auto& bucket = buckets[encoded * 2 + op->meta.flags.no_flags];
     for (const auto* entry : bucket) {
         if (!MatchesCompiled(*entry, op)) continue;
         return entry->handler;
     }
     return nullptr;
+}
+
+HandlerFunc FindSpecializedHandler(uint16_t handler_index, DecodedOp* op) {
+    if (handler_index >= 1024) return nullptr;
+    if (g_HasRuntimeSpecializations.load(std::memory_order_acquire)) {
+        std::shared_lock lock(g_RuntimeSpecializationMutex);
+        if (const auto& index = g_RuntimeSpecializations[handler_index])
+            return LookupSpecialization(index->buckets, op);
+    }
+    const auto& index = g_SpecializationIndex[handler_index];
+    return index ? LookupSpecialization(*index, op) : nullptr;
 }
 
 #ifdef FIBERCPU_VALIDATE_SPECIALIZATION_INDEX

@@ -258,14 +258,4 @@ constexpr SpecCriteria Criteria(Spec s) {
     return c;
 }
 
-// Existing inline logic bodies remain behind this adapter during migration.
-// A catalog declaration binds each (Family, Spec) to exactly one legacy entry.
-template <class Family, Spec S>
-struct LegacyBinding;
-template <class Family, Spec S>
-struct Variant : LegacyBinding<Family, S> {
-    static_assert(Valid<Family>(S), "Invalid instruction specialization");
-    static constexpr auto criteria = Criteria<Family>(S);
-};
-
 }  // namespace fiberish::spec

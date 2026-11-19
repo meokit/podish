@@ -26,10 +26,10 @@ struct DeclaredInstructionVariant {
 };
 
 template <class Family, spec::Spec S>
-consteval DeclaredInstructionVariant DeclareVariant() {
-    using V = spec::Variant<Family, S>;
-    return {Family::opcode, V::criteria, DispatchWrapper<V::logic>, V::name, V::family_name, V::parent,
-            V::bake,        V::rank};
+consteval DeclaredInstructionVariant DeclareVariant(HandlerFunc handler, const char* name, const char* family,
+                                                    const char* parent, bool bake, int rank) {
+    static_assert(spec::Valid<Family>(S), "Invalid catalog specialization");
+    return {Family::opcode, spec::Criteria<Family>(S), handler, name, family, parent, bake, rank};
 }
 
 }  // namespace fiberish

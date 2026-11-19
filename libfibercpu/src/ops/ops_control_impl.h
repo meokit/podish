@@ -34,13 +34,13 @@ FORCE_INLINE LogicFlow OpJcc_Rel_Internal(LogicFuncParams) {
 }
 
 // CMOV Implementation
-template <uint8_t Cond, Specialized S = Specialized::None>
+template <uint8_t Cond, RmOperandSpec S = RmOperandSpec::Dynamic>
 FORCE_INLINE LogicFlow OpCmov_Internal(LogicFuncParams) {
     // 0F 4x: CMOVcc r16, r/m16 OR CMOVcc r32, r/m32
     // A memory source is fetched unconditionally, even when the condition is
     // false. Keep the register-only specialization free of memory machinery.
 
-    if constexpr (S != Specialized::ModReg) {
+    if constexpr (S != RmOperandSpec::ModReg) {
         const uint8_t reg = (op->modrm >> 3) & 7;
         if (op->prefixes.flags.opsize) {
             auto value = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
@@ -58,7 +58,7 @@ FORCE_INLINE LogicFlow OpCmov_Internal(LogicFuncParams) {
     if (CheckConditionFixed<Cond>(flags_cache)) {
         uint8_t reg = (op->modrm >> 3) & 7;
 
-        if constexpr (S == Specialized::ModReg) {
+        if constexpr (S == RmOperandSpec::ModReg) {
             // Fast path: Register operand
             uint8_t rm = op->modrm & 7;
             if (op->prefixes.flags.opsize) {
@@ -112,8 +112,9 @@ inline void RaiseInterrupt(EmuState* state, GprCache& gpr, uint8_t vector, Decod
 
 namespace op {
 
-FORCE_INLINE LogicFlow OpJmp_Rel8(LogicFuncParams) { return OpJmp_Rel_Internal<true>(LogicPassParams); }
-FORCE_INLINE LogicFlow OpJmp_Rel32(LogicFuncParams) { return OpJmp_Rel_Internal<false>(LogicPassParams); }
+#define FIBERCPU_BIND_OPS_CONTROL_IMPL_0
+#include "instruction_kernel_bindings.inc"
+#undef FIBERCPU_BIND_OPS_CONTROL_IMPL_0
 
 FORCE_INLINE LogicFlow OpJecxz(LogicFuncParams) {
     // E3: JECXZ/JCXZ rel8
@@ -158,36 +159,15 @@ FORCE_INLINE LogicFlow OpLoop_Internal(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpLoopne(LogicFuncParams) { return OpLoop_Internal<true, false>(LogicPassParams); }
-FORCE_INLINE LogicFlow OpLoope(LogicFuncParams) { return OpLoop_Internal<true, true>(LogicPassParams); }
-FORCE_INLINE LogicFlow OpLoop(LogicFuncParams) { return OpLoop_Internal<false, false>(LogicPassParams); }
+#define FIBERCPU_BIND_OPS_CONTROL_IMPL_1
+#include "instruction_kernel_bindings.inc"
+#undef FIBERCPU_BIND_OPS_CONTROL_IMPL_1
 
 // Named wrappers for Jcc specializations
-#define JCC_WRAPPERS(cond, name)                                   \
-    FORCE_INLINE LogicFlow OpJcc_##name##_Rel8(LogicFuncParams) {  \
-        return OpJcc_Rel_Internal<cond, true>(LogicPassParams);    \
-    }                                                              \
-    FORCE_INLINE LogicFlow OpJcc_##name##_Rel32(LogicFuncParams) { \
-        return OpJcc_Rel_Internal<cond, false>(LogicPassParams);   \
-    }
 
-JCC_WRAPPERS(0, O)
-JCC_WRAPPERS(1, NO)
-JCC_WRAPPERS(2, B)
-JCC_WRAPPERS(3, AE)
-JCC_WRAPPERS(4, E)
-JCC_WRAPPERS(5, NE)
-JCC_WRAPPERS(6, BE)
-JCC_WRAPPERS(7, A)
-JCC_WRAPPERS(8, S)
-JCC_WRAPPERS(9, NS)
-JCC_WRAPPERS(10, P)
-JCC_WRAPPERS(11, NP)
-JCC_WRAPPERS(12, L)
-JCC_WRAPPERS(13, GE)
-JCC_WRAPPERS(14, LE)
-JCC_WRAPPERS(15, G)
-#undef JCC_WRAPPERS
+#define FIBERCPU_BIND_OPS_CONTROL_IMPL_MACRO_0
+#include "instruction_kernel_bindings.inc"
+#undef FIBERCPU_BIND_OPS_CONTROL_IMPL_MACRO_0
 
 FORCE_INLINE LogicFlow OpCall_Rel(LogicFuncParams) {
     // E8: CALL rel16/32
@@ -235,10 +215,10 @@ FORCE_INLINE LogicFlow OpRet_Imm16(LogicFuncParams) {
     return LogicFlow::ExitToBranch;
 }
 
-template <Specialized SizeSpec>
+template <OpsizeSpec SizeSpec>
 FORCE_INLINE LogicFlow OpPushf_Internal(LogicFuncParams) {
     CommitFlagsCache(state, flags_cache);
-    if constexpr (SizeSpec == Specialized::Opsize16) {
+    if (OperandIs16<SizeSpec>(op)) {
         if (!Push<uint16_t, true>(state, gpr, (uint16_t)GetArchitecturalEflags(state), utlb, op))
             return LogicFlow::RestartMemoryOp;
     } else {
@@ -248,9 +228,9 @@ FORCE_INLINE LogicFlow OpPushf_Internal(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-template <Specialized SizeSpec>
+template <OpsizeSpec SizeSpec>
 FORCE_INLINE LogicFlow OpPopf_Internal(LogicFuncParams) {
-    if constexpr (SizeSpec == Specialized::Opsize16) {
+    if (OperandIs16<SizeSpec>(op)) {
         auto val_res = Pop<uint16_t, true>(state, gpr, utlb, op);
         if (!val_res) return LogicFlow::RestartMemoryOp;
         uint16_t val = *val_res;
@@ -276,10 +256,9 @@ FORCE_INLINE LogicFlow OpPopf_Internal(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpPushf16(LogicFuncParams) { return OpPushf_Internal<Specialized::Opsize16>(LogicPassParams); }
-FORCE_INLINE LogicFlow OpPushf32(LogicFuncParams) { return OpPushf_Internal<Specialized::Opsize32>(LogicPassParams); }
-FORCE_INLINE LogicFlow OpPopf16(LogicFuncParams) { return OpPopf_Internal<Specialized::Opsize16>(LogicPassParams); }
-FORCE_INLINE LogicFlow OpPopf32(LogicFuncParams) { return OpPopf_Internal<Specialized::Opsize32>(LogicPassParams); }
+#define FIBERCPU_BIND_OPS_CONTROL_IMPL_2
+#include "instruction_kernel_bindings.inc"
+#undef FIBERCPU_BIND_OPS_CONTROL_IMPL_2
 
 FORCE_INLINE LogicFlow OpPushf(LogicFuncParams) {
     return op->prefixes.flags.opsize ? OpPushf16(LogicPassParams) : OpPushf32(LogicPassParams);
@@ -666,31 +645,10 @@ FORCE_INLINE LogicFlow OpInto(LogicFuncParams) {
 }
 
 // Named wrappers for Cmov specializations
-#define CMOV_WRAPPERS(cond, name)                                           \
-    FORCE_INLINE LogicFlow OpCmov_##name(LogicFuncParams) {                 \
-        return OpCmov_Internal<cond, Specialized::None>(LogicPassParams);   \
-    }                                                                       \
-    FORCE_INLINE LogicFlow OpCmov_##name##_ModReg(LogicFuncParams) {        \
-        return OpCmov_Internal<cond, Specialized::ModReg>(LogicPassParams); \
-    }
 
-CMOV_WRAPPERS(0, O)
-CMOV_WRAPPERS(1, NO)
-CMOV_WRAPPERS(2, B)
-CMOV_WRAPPERS(3, AE)
-CMOV_WRAPPERS(4, E)
-CMOV_WRAPPERS(5, NE)
-CMOV_WRAPPERS(6, BE)
-CMOV_WRAPPERS(7, A)
-CMOV_WRAPPERS(8, S)
-CMOV_WRAPPERS(9, NS)
-CMOV_WRAPPERS(10, P)
-CMOV_WRAPPERS(11, NP)
-CMOV_WRAPPERS(12, L)
-CMOV_WRAPPERS(13, GE)
-CMOV_WRAPPERS(14, LE)
-CMOV_WRAPPERS(15, G)
-#undef CMOV_WRAPPERS
+#define FIBERCPU_BIND_OPS_CONTROL_IMPL_MACRO_1
+#include "instruction_kernel_bindings.inc"
+#undef FIBERCPU_BIND_OPS_CONTROL_IMPL_MACRO_1
 
 FORCE_INLINE LogicFlow OpBound(LogicFuncParams) {
     // 62: BOUND r16/32, m16&16 / m32&32

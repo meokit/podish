@@ -179,9 +179,9 @@ FORCE_INLINE LogicFlow OpCvtScalarToInt32(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpCvt_2C(LogicFuncParams) { return OpCvtScalarToInt32<true>(LogicPassParams); }
-
-FORCE_INLINE LogicFlow OpCvt_2D(LogicFuncParams) { return OpCvtScalarToInt32<false>(LogicPassParams); }
+#define FIBERCPU_BIND_OPS_SSE_CVT_IMPL_0
+#include "instruction_kernel_bindings.inc"
+#undef FIBERCPU_BIND_OPS_SSE_CVT_IMPL_0
 
 FORCE_INLINE LogicFlow OpCvt_5A(LogicFuncParams) {
     // 0F 5A: CVTPS2PD / CVTPD2PS (66) / CVTSD2SS (F2) / CVTSS2SD (F3)

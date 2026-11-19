@@ -15,27 +15,6 @@
 #include "ops/ops_sse_int_impl.h"
 #include "ops/ops_sse_mov_impl.h"
 
-namespace fiberish::spec {
-#define DECLARE_LEGACY_VARIANT(Name, Family, S, Parent, Bake, Rank)                        \
-    template <>                                                                            \
-    struct LegacyBinding<family::Family, S> {                                              \
-        static_assert(Valid<family::Family>(S), "Invalid catalog specialization: " #Name); \
-        static constexpr LogicFunc logic = op::Name;                                       \
-        static constexpr const char* name = "op::" #Name;                                  \
-        static constexpr const char* family_name = #Family;                                \
-        static constexpr const char* parent = "op::" #Parent;                              \
-        static constexpr bool bake = Bake;                                                 \
-        static constexpr int rank = Rank;                                                  \
-    };
-#define INSTRUCTION_VARIANT(Name, Family, S, Rank) DECLARE_LEGACY_VARIANT(Name, Family, S, Name, false, Rank)
-#define INSTRUCTION_FUSION_VARIANT(Name, Family, S, Parent, Rank) \
-    DECLARE_LEGACY_VARIANT(Name, Family, S, Parent, true, Rank)
-#include "instruction_variants.inc"
-#undef INSTRUCTION_FUSION_VARIANT
-#undef INSTRUCTION_VARIANT
-#undef DECLARE_LEGACY_VARIANT
-}  // namespace fiberish::spec
-
 namespace fiberish {
 namespace {
 std::vector<X86_InstructionVariant>& MutableCatalog() {
@@ -109,19 +88,7 @@ void RegisterInstructionVariants() {
         HandlerFunc handler;
         const char* logic;
     };
-    static constexpr Fallback fallbacks[] = {
-#define INSTRUCTION_FALLBACK(Opcode, Name) {Opcode, DispatchWrapper<op::Name>, "op::" #Name},
-#include "instruction_fallbacks.inc"
-#undef INSTRUCTION_FALLBACK
-    };
-    using namespace spec;
-    static constexpr DeclaredInstructionVariant variants[] = {
-#define INSTRUCTION_VARIANT(Name, Family, S, Rank) DeclareVariant<family::Family, S>(),
-#define INSTRUCTION_FUSION_VARIANT(Name, Family, S, Parent, Rank) INSTRUCTION_VARIANT(Name, Family, S, Rank)
-#include "instruction_variants.inc"
-#undef INSTRUCTION_FUSION_VARIANT
-#undef INSTRUCTION_VARIANT
-    };
+#include "instruction_catalog.inc"
     for (const auto& f : fallbacks) RegisterInstructionFallback(f.opcode, f.handler, f.logic);
     for (const auto& v : variants)
         RegisterInstructionVariant(v.opcode, v.criteria, v.handler, v.logic, v.family, v.parent, v.bake, v.rank);

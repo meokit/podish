@@ -18,6 +18,9 @@
         <OperandBudget Condition="'$(OperandBudget)' == ''">AUTO</OperandBudget>
         <PinSpecialization Condition="'$(PinSpecialization)' == ''">AUTO</PinSpecialization>
         <OperandPlanFile Condition="'$(OperandPlanFile)' == ''"></OperandPlanFile>
+        <StaticInstructionSpecialization Condition="'$(StaticInstructionSpecialization)' == ''">ON</StaticInstructionSpecialization>
+        <DynamicInstructionSpecialization Condition="'$(DynamicInstructionSpecialization)' == ''">ON</DynamicInstructionSpecialization>
+        <LlvmBlockJit Condition="'$(LlvmBlockJit)' == ''">OFF</LlvmBlockJit>
         <GprPin Condition="'$(GprPin)' == ''">AUTO</GprPin>
         <GprPinRegisters Condition="'$(GprPinRegisters)' == ''">EAX,ESP</GprPinRegisters>
         <GprWriteBack Condition="'$(GprWriteBack)' == ''">ON</GprWriteBack>
@@ -46,12 +49,17 @@
         <NativeBuildInput Include="$(LibFibercpuSourceDir)/CMakeLists.txt" />
         <NativeBuildInput Include="$(MSBuildProjectFullPath)" />
         <NativeBuildInput Include="$(MSBuildThisFileDirectory)../scripts/gen_operand_specializations.py" />
+        <NativeBuildInput Include="$(MSBuildThisFileDirectory)../scripts/gen_instruction_catalog.py" />
+        <NativeBuildInput Include="$(MSBuildThisFileDirectory)../scripts/embed_llvm_bitcode.py" />
         <NativeBuildInput Include="$(MSBuildThisFileDirectory)../scripts/operand_specialization_data.py" />
+        <NativeBuildInput Include="$(MSBuildThisFileDirectory)../scripts/gen_dynamic_operand_specializations.py" Condition="'$(DynamicOperandPlanFile)' != ''" />
+        <NativeBuildInput Include="$(MSBuildThisFileDirectory)../scripts/operand_stencil_arm64.py" Condition="'$(DynamicOperandPlanFile)' != ''" />
         <NativeBuildInput Include="$(MSBuildThisFileDirectory)../benchmark/optimization/manifests/*" />
         <NativeBuildInput Include="$(SuperOpcodeGenerationDir)/native-options.txt" />
         <NativeBuildInput Include="$(LibFibercpuSourceDir)/src/**/*" />
         <NativeBuildInput Include="$(LibFibercpuSourceDir)/3rdparty/**/*" />
         <NativeBuildInput Include="$(OperandPlanFile)" Condition="'$(OperandPlanFile)' != ''" />
+        <NativeBuildInput Include="$(DynamicOperandPlanFile)" Condition="'$(DynamicOperandPlanFile)' != ''" />
         <NativeBuildInput Include="$(SuperOpcodeSource)" Condition="'$(SuperOpcodeSource)' != ''" />
     </ItemGroup>
 
@@ -79,7 +87,7 @@
             Condition="'$(DesignTimeBuild)' != 'true' And '$(FiberishSkipNativeBuild)' != 'true'">
         <MakeDir Directories="$(SuperOpcodeGenerationDir)" />
         <WriteLinesToFile File="$(SuperOpcodeGenerationDir)/native-options.txt"
-            Lines="fusion=$(FusionStrategy);operand=$(OperandSpecialization);budget=$(OperandBudget);scope=$(OperandScope);pin=$(GprPin);pins=$(GprPinRegisters);writeback=$(GprWriteBack);coverage=$(PinSpecialization);plan=$(OperandPlanFile);super=$(EnableSuperOpcodes);source=$(SuperOpcodeSource);handler=$(EnableHandlerProfile);block=$(EnableBlockProfile);sequence=$(EnableSequenceProfile)"
+            Lines="fusion=$(FusionStrategy);operand=$(OperandSpecialization);budget=$(OperandBudget);scope=$(OperandScope);pin=$(GprPin);pins=$(GprPinRegisters);writeback=$(GprWriteBack);coverage=$(PinSpecialization);plan=$(OperandPlanFile);static=$(StaticInstructionSpecialization);dynamic=$(DynamicInstructionSpecialization);dynamic_plan=$(DynamicOperandPlanFile);llvm=$(LlvmBlockJit);llvm_dir=$(LlvmConfigDir);native_clang=$(NativeClangDir);super=$(EnableSuperOpcodes);source=$(SuperOpcodeSource);handler=$(EnableHandlerProfile);block=$(EnableBlockProfile);sequence=$(EnableSequenceProfile)"
             Overwrite="true" WriteOnlyWhenDifferent="true" />
     </Target>
 
@@ -98,7 +106,8 @@
             <CMakeArgs Condition="'$(BuildFibercpuStatic)' != 'true'">-DFIBERCPU_BUILD_STATIC=OFF</CMakeArgs>
             <CMakeArgs Condition="'$(IsBrowserWasm)' == 'true'">$(CMakeArgs) -DCMAKE_BUILD_TYPE=Release</CMakeArgs>
             <CMakeArgs Condition="'$(IsBrowserWasm)' != 'true' And $([MSBuild]::IsOsPlatform('Windows')) != 'true'">$(CMakeArgs) -DCMAKE_BUILD_TYPE=Release</CMakeArgs>
-            <CMakeArgs Condition="$([MSBuild]::IsOsPlatform('OSX')) And '$(IsBrowserWasm)' != 'true'">$(CMakeArgs) -DCMAKE_C_COMPILER=/usr/bin/cc -DCMAKE_CXX_COMPILER=/usr/bin/c++</CMakeArgs>
+            <CMakeArgs Condition="$([MSBuild]::IsOsPlatform('OSX')) And '$(IsBrowserWasm)' != 'true' And '$(NativeClangDir)' == ''">$(CMakeArgs) -DCMAKE_C_COMPILER=/usr/bin/cc -DCMAKE_CXX_COMPILER=/usr/bin/c++</CMakeArgs>
+            <CMakeArgs Condition="$([MSBuild]::IsOsPlatform('OSX')) And '$(NativeClangDir)' != ''">$(CMakeArgs) -DCMAKE_C_COMPILER=&quot;$(NativeClangDir)/clang&quot; -DCMAKE_CXX_COMPILER=&quot;$(NativeClangDir)/clang++&quot;</CMakeArgs>
             <CMakeArgs Condition="$([MSBuild]::IsOsPlatform('Linux')) And '$(IsBrowserWasm)' != 'true'">$(CMakeArgs) -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_CXX_FLAGS=-stdlib=libc++ -DCMAKE_SHARED_LINKER_FLAGS=-stdlib=libc++</CMakeArgs>
             
             <!-- CMake 4.1 on Windows does not yet expose a Visual Studio 2026 generator, so use Ninja Multi-Config
@@ -119,6 +128,9 @@
             <CMakeArgs>$(CMakeArgs) -DFIBERCPU_ENABLE_SEQUENCE_PROFILE=$(CMakeSequenceProfile)</CMakeArgs>
             <CMakeArgs>$(CMakeArgs) -DFIBERCPU_FUSION_STRATEGY=$(FusionStrategy) -DFIBERCPU_OPERAND_SPECIALIZATION=$(OperandSpecialization) -DFIBERCPU_OPERAND_BUDGET=$(OperandBudget) -DFIBERCPU_OPERAND_SCOPE=$(OperandScope) -DFIBERCPU_GPR_PIN=$(GprPin) -DFIBERCPU_GPR_PIN_REGISTERS=&quot;$(GprPinRegisters)&quot; -DFIBERCPU_GPR_WRITE_BACK=$(GprWriteBack) -DFIBERCPU_PIN_SPECIALIZATION=$(PinSpecialization) -DFIBERCPU_OPERAND_PLAN_FILE=&quot;$(OperandPlanFile)&quot;</CMakeArgs>
             <CMakeArgs>$(CMakeArgs) -DFIBERCPU_GENERATED_SUPEROPCODES_FILE=&quot;$(SuperOpcodeSource)&quot;</CMakeArgs>
+            <CMakeArgs>$(CMakeArgs) -DFIBERCPU_DYNAMIC_OPERAND_PLAN_FILE=&quot;$(DynamicOperandPlanFile)&quot;</CMakeArgs>
+            <CMakeArgs>$(CMakeArgs) -DFIBERCPU_STATIC_SPECIALIZATION=$(StaticInstructionSpecialization) -DFIBERCPU_ENABLE_DYNAMIC_SPECIALIZATION=$(DynamicInstructionSpecialization) -DFIBERCPU_ENABLE_LLVM_JIT=$(LlvmBlockJit)</CMakeArgs>
+            <CMakeArgs Condition="'$(LlvmConfigDir)' != ''">$(CMakeArgs) -DLLVM_DIR=&quot;$(LlvmConfigDir)&quot;</CMakeArgs>
             <CMakeGeneratorArgs Condition="'$(IsBrowserWasm)' == 'true'">-G Ninja</CMakeGeneratorArgs>
             <CMakeArgs Condition="'$(IsBrowserWasm)' == 'true'">$(CMakeArgs) -DCMAKE_TOOLCHAIN_FILE=&quot;$(EmscriptenToolchainFile)&quot; -DCMAKE_CROSSCOMPILING_EMULATOR=&quot;$(BrowserWasmNodeExecutable)&quot;</CMakeArgs>
         </PropertyGroup>

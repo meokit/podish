@@ -15,22 +15,21 @@ namespace fiberish {
 // Specializations for OpCmp_EvGv (39: CMP r/m16/32, r16/32)
 // ============================================================================
 
-template <Specialized S = Specialized::None>
+template <typename T, AddrModeSpec Form>
+FORCE_INLINE MemResult<T> ReadCompareRm(EmuState* state, GprCache& gpr, DecodedOp* op, mem::MicroTLB* utlb) {
+    if constexpr (Form == AddrModeSpec::ModReg) return static_cast<T>(gpr.GetReg(state, op->modrm & 7));
+    return ReadModRM<T, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
+}
+
+template <OpsizeSpec Size = OpsizeSpec::Dynamic, AddrModeSpec Form = AddrModeSpec::Dynamic>
 FORCE_INLINE LogicFlow OpCmp_EvGv_Internal(LogicFuncParams) {
     // 39: CMP r/m16/32, r16/32
-    bool opsize;
-    if constexpr (S == Specialized::Opsize16) {
-        opsize = true;
-    } else if constexpr (S == Specialized::Opsize32 || S == Specialized::ModReg) {
-        opsize = false;
-    } else {
-        opsize = op->prefixes.flags.opsize;
-    }
+    const bool opsize = OperandIs16<Size>(op);
 
     uint8_t reg = (op->modrm >> 3) & 7;
     if (opsize) {
         uint16_t dest;
-        if constexpr (S == Specialized::ModReg) {
+        if constexpr (Form == AddrModeSpec::ModReg) {
             dest = (uint16_t)gpr.GetReg(state, op->modrm & 7);
         } else {
             auto dest_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
@@ -41,7 +40,7 @@ FORCE_INLINE LogicFlow OpCmp_EvGv_Internal(LogicFuncParams) {
         AluCmp<uint16_t>(state, flags_cache, dest, src);
     } else {
         uint32_t dest;
-        if constexpr (S == Specialized::ModReg) {
+        if constexpr (Form == AddrModeSpec::ModReg) {
             dest = gpr.GetReg(state, op->modrm & 7);
         } else {
             auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
@@ -58,28 +57,21 @@ FORCE_INLINE LogicFlow OpCmp_EvGv_Internal(LogicFuncParams) {
 // Specializations for OpCmp_GvEv (3B: CMP r16/32, r/m16/32)
 // ============================================================================
 
-template <Specialized S = Specialized::None>
+template <OpsizeSpec Size = OpsizeSpec::Dynamic, AddrModeSpec Form = AddrModeSpec::Dynamic>
 FORCE_INLINE LogicFlow OpCmp_GvEv_Internal(LogicFuncParams) {
     // 3B: CMP r16/32, r/m16/32
-    bool opsize;
-    if constexpr (S == Specialized::Opsize16) {
-        opsize = true;
-    } else if constexpr (S == Specialized::Opsize32) {
-        opsize = false;
-    } else {
-        opsize = op->prefixes.flags.opsize;
-    }
+    const bool opsize = OperandIs16<Size>(op);
 
     uint8_t reg = (op->modrm >> 3) & 7;
     if (opsize) {
         uint16_t dest = (uint16_t)gpr.GetReg(state, reg);
-        auto src_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
+        auto src_res = ReadCompareRm<uint16_t, Form>(state, gpr, op, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         uint16_t src = *src_res;
         AluCmp<uint16_t>(state, flags_cache, dest, src);
     } else {
         uint32_t dest = gpr.GetReg(state, reg);
-        auto src_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
+        auto src_res = ReadCompareRm<uint32_t, Form>(state, gpr, op, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         uint32_t src = *src_res;
         AluCmp<uint32_t>(state, flags_cache, dest, src);
@@ -91,22 +83,15 @@ FORCE_INLINE LogicFlow OpCmp_GvEv_Internal(LogicFuncParams) {
 // Specializations for OpTest_EvGv (85: TEST r/m16/32, r16/32)
 // ============================================================================
 
-template <Specialized S = Specialized::None>
+template <OpsizeSpec Size = OpsizeSpec::Dynamic, AddrModeSpec Form = AddrModeSpec::Dynamic>
 FORCE_INLINE LogicFlow OpTest_EvGv_Internal(LogicFuncParams) {
     // 85: TEST r/m16/32, r16/32
-    bool opsize;
-    if constexpr (S == Specialized::Opsize16) {
-        opsize = true;
-    } else if constexpr (S == Specialized::Opsize32 || S == Specialized::ModReg) {
-        opsize = false;
-    } else {
-        opsize = op->prefixes.flags.opsize;
-    }
+    const bool opsize = OperandIs16<Size>(op);
 
     uint8_t reg = (op->modrm >> 3) & 7;
     if (opsize) {
         uint16_t dest;
-        if constexpr (S == Specialized::ModReg) {
+        if constexpr (Form == AddrModeSpec::ModReg) {
             dest = (uint16_t)gpr.GetReg(state, op->modrm & 7);
         } else {
             auto dest_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
@@ -117,7 +102,7 @@ FORCE_INLINE LogicFlow OpTest_EvGv_Internal(LogicFuncParams) {
         AluAnd<uint16_t>(state, flags_cache, dest, src);
     } else {
         uint32_t dest;
-        if constexpr (S == Specialized::ModReg) {
+        if constexpr (Form == AddrModeSpec::ModReg) {
             dest = gpr.GetReg(state, op->modrm & 7);
         } else {
             auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
@@ -134,7 +119,7 @@ FORCE_INLINE LogicFlow OpTest_EvGv_Internal(LogicFuncParams) {
 // Specializations for OpCmpxchg (0F B0/B1: CMPXCHG r/m, r)
 // ============================================================================
 
-template <bool IsByte, Specialized S = Specialized::None>
+template <bool IsByte, OpsizeSpec Size = OpsizeSpec::Dynamic>
 FORCE_INLINE LogicFlow OpCmpxchg_Internal(LogicFuncParams) {
     // 0F B0: CMPXCHG r/m8, r8
     // 0F B1: CMPXCHG r/m, r
@@ -155,14 +140,7 @@ FORCE_INLINE LogicFlow OpCmpxchg_Internal(LogicFuncParams) {
             gpr.SetReg(state, EAX, (gpr.GetReg(state, EAX) & 0xFFFFFF00) | dest);
         }
     } else {
-        bool opsize;
-        if constexpr (S == Specialized::Opsize16) {
-            opsize = true;
-        } else if constexpr (S == Specialized::Opsize32) {
-            opsize = false;
-        } else {
-            opsize = op->prefixes.flags.opsize;
-        }
+        const bool opsize = OperandIs16<Size>(op);
 
         if (opsize) {
             auto dest_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
@@ -219,65 +197,9 @@ FORCE_INLINE LogicFlow OpTest_EvGv_32_ModReg_SameReg_Internal(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpCmp_EvGv_32_ModReg(LogicFuncParams) {
-    return OpCmp_EvGv_Internal<Specialized::ModReg>(LogicPassParams);
-}
-
-FORCE_INLINE LogicFlow OpCmp_EvGv_32_ModReg_Eax(LogicFuncParams) {
-    return OpCmp_EvGv_32_ModReg_SameReg_Internal<EAX>(LogicPassParams);
-}
-FORCE_INLINE LogicFlow OpCmp_EvGv_32_ModReg_Ecx(LogicFuncParams) {
-    return OpCmp_EvGv_32_ModReg_SameReg_Internal<ECX>(LogicPassParams);
-}
-FORCE_INLINE LogicFlow OpCmp_EvGv_32_ModReg_Edx(LogicFuncParams) {
-    return OpCmp_EvGv_32_ModReg_SameReg_Internal<EDX>(LogicPassParams);
-}
-
-FORCE_INLINE LogicFlow OpTest_EvGv_32_ModReg(LogicFuncParams) {
-    return OpTest_EvGv_Internal<Specialized::ModReg>(LogicPassParams);
-}
-FORCE_INLINE LogicFlow OpTest_EvGv_32_ModReg_Eax(LogicFuncParams) {
-    return OpTest_EvGv_32_ModReg_SameReg_Internal<EAX>(LogicPassParams);
-}
-FORCE_INLINE LogicFlow OpTest_EvGv_32_ModReg_Ecx(LogicFuncParams) {
-    return OpTest_EvGv_32_ModReg_SameReg_Internal<ECX>(LogicPassParams);
-}
-FORCE_INLINE LogicFlow OpTest_EvGv_32_ModReg_Edx(LogicFuncParams) {
-    return OpTest_EvGv_32_ModReg_SameReg_Internal<EDX>(LogicPassParams);
-}
-
-FORCE_INLINE LogicFlow OpCmp_EvGv_16(LogicFuncParams) {
-    return OpCmp_EvGv_Internal<Specialized::Opsize16>(LogicPassParams);
-}
-FORCE_INLINE LogicFlow OpCmp_EvGv_32(LogicFuncParams) {
-    return OpCmp_EvGv_Internal<Specialized::Opsize32>(LogicPassParams);
-}
-FORCE_INLINE LogicFlow OpCmp_EvGv(LogicFuncParams) { return OpCmp_EvGv_Internal<Specialized::None>(LogicPassParams); }
-
-FORCE_INLINE LogicFlow OpCmp_GvEv_16(LogicFuncParams) {
-    return OpCmp_GvEv_Internal<Specialized::Opsize16>(LogicPassParams);
-}
-FORCE_INLINE LogicFlow OpCmp_GvEv_32(LogicFuncParams) {
-    return OpCmp_GvEv_Internal<Specialized::Opsize32>(LogicPassParams);
-}
-FORCE_INLINE LogicFlow OpCmp_GvEv(LogicFuncParams) { return OpCmp_GvEv_Internal<Specialized::None>(LogicPassParams); }
-
-FORCE_INLINE LogicFlow OpTest_EvGv_16(LogicFuncParams) {
-    return OpTest_EvGv_Internal<Specialized::Opsize16>(LogicPassParams);
-}
-FORCE_INLINE LogicFlow OpTest_EvGv_32(LogicFuncParams) {
-    return OpTest_EvGv_Internal<Specialized::Opsize32>(LogicPassParams);
-}
-FORCE_INLINE LogicFlow OpTest_EvGv(LogicFuncParams) { return OpTest_EvGv_Internal<Specialized::None>(LogicPassParams); }
-
-FORCE_INLINE LogicFlow OpCmpxchg_EvGv_16(LogicFuncParams) {
-    return OpCmpxchg_Internal<false, Specialized::Opsize16>(LogicPassParams);
-}
-FORCE_INLINE LogicFlow OpCmpxchg_EvGv_32(LogicFuncParams) {
-    return OpCmpxchg_Internal<false, Specialized::Opsize32>(LogicPassParams);
-}
-FORCE_INLINE LogicFlow OpCmpxchg_EvGv(LogicFuncParams) { return OpCmpxchg_Internal<false>(LogicPassParams); }
-FORCE_INLINE LogicFlow OpCmpxchg_Byte(LogicFuncParams) { return OpCmpxchg_Internal<true>(LogicPassParams); }
+#define FIBERCPU_BIND_OPS_COMPARE_IMPL_0
+#include "instruction_kernel_bindings.inc"
+#undef FIBERCPU_BIND_OPS_COMPARE_IMPL_0
 
 // ============================================================================
 // Non-size-specific functions (unchanged)
@@ -303,22 +225,9 @@ FORCE_INLINE LogicFlow OpCmp_GbEb(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpSetcc_0(LogicFuncParams) { return OpSetcc_Internal<0>(LogicPassParams); }
-FORCE_INLINE LogicFlow OpSetcc_1(LogicFuncParams) { return OpSetcc_Internal<1>(LogicPassParams); }
-FORCE_INLINE LogicFlow OpSetcc_2(LogicFuncParams) { return OpSetcc_Internal<2>(LogicPassParams); }
-FORCE_INLINE LogicFlow OpSetcc_3(LogicFuncParams) { return OpSetcc_Internal<3>(LogicPassParams); }
-FORCE_INLINE LogicFlow OpSetcc_4(LogicFuncParams) { return OpSetcc_Internal<4>(LogicPassParams); }
-FORCE_INLINE LogicFlow OpSetcc_5(LogicFuncParams) { return OpSetcc_Internal<5>(LogicPassParams); }
-FORCE_INLINE LogicFlow OpSetcc_6(LogicFuncParams) { return OpSetcc_Internal<6>(LogicPassParams); }
-FORCE_INLINE LogicFlow OpSetcc_7(LogicFuncParams) { return OpSetcc_Internal<7>(LogicPassParams); }
-FORCE_INLINE LogicFlow OpSetcc_8(LogicFuncParams) { return OpSetcc_Internal<8>(LogicPassParams); }
-FORCE_INLINE LogicFlow OpSetcc_9(LogicFuncParams) { return OpSetcc_Internal<9>(LogicPassParams); }
-FORCE_INLINE LogicFlow OpSetcc_10(LogicFuncParams) { return OpSetcc_Internal<10>(LogicPassParams); }
-FORCE_INLINE LogicFlow OpSetcc_11(LogicFuncParams) { return OpSetcc_Internal<11>(LogicPassParams); }
-FORCE_INLINE LogicFlow OpSetcc_12(LogicFuncParams) { return OpSetcc_Internal<12>(LogicPassParams); }
-FORCE_INLINE LogicFlow OpSetcc_13(LogicFuncParams) { return OpSetcc_Internal<13>(LogicPassParams); }
-FORCE_INLINE LogicFlow OpSetcc_14(LogicFuncParams) { return OpSetcc_Internal<14>(LogicPassParams); }
-FORCE_INLINE LogicFlow OpSetcc_15(LogicFuncParams) { return OpSetcc_Internal<15>(LogicPassParams); }
+#define FIBERCPU_BIND_OPS_COMPARE_IMPL_1
+#include "instruction_kernel_bindings.inc"
+#undef FIBERCPU_BIND_OPS_COMPARE_IMPL_1
 
 }  // namespace op
 

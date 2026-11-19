@@ -2,52 +2,10 @@
 
 #include <cstdint>
 #include "decoder.h"
+#include "instruction_kernel_spec.h"
 
 namespace fiberish {
 
-// Specialization Types
-// This enum is used as a template parameter for instruction handlers.
-enum class Specialized : uint8_t {
-    None = 0,
-
-    // Naming convention: Source_Dest_Type
-    // e.g. Imm_RegEax
-
-    // General
-    // Registers (ModRM.Reg field)
-    RegEax = 100,
-    Reg0 = 100,
-    RegEcx = 101,
-    Reg1 = 101,
-    RegEdx = 102,
-    Reg2 = 102,
-    RegEbx = 103,
-    Reg3 = 103,
-    RegEsp = 104,
-    Reg4 = 104,
-    RegEbp = 105,
-    Reg5 = 105,
-    RegEsi = 106,
-    Reg6 = 106,
-    RegEdi = 107,
-    Reg7 = 107,
-
-    // Addressing Modes
-    ModReg,     // Mod=3 (Register)
-    MemDisp0,   // [reg]
-    MemDisp8,   // [reg + disp8]
-    MemDisp32,  // [reg + disp32]
-
-    // Operands
-    Imm8,
-    Imm32,
-
-    // Operand Size
-    Opsize16,
-    Opsize32,
-};
-
-// Criteria for specialization matching
 struct SpecCriteria {
     // ModRM Constraints
     // Set mask to 0 to ignore
@@ -167,7 +125,8 @@ struct SpecializedEntry {
     int priority = 0;
 };
 
-// Registration is only supported during HandlerInit, before the index is built.
+// Runtime registrations update future decodes. The caller retains ownership of
+// handler code for as long as decoded blocks can reference it.
 void RegisterSpecializedHandler(uint16_t opcode, SpecCriteria criteria, HandlerFunc handler, int priority);
 
 // Lookup

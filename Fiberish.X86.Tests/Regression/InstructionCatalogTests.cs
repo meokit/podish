@@ -22,14 +22,17 @@ public sealed unsafe class InstructionCatalogTests
         Assert.Equal(411, entries.Count(x => x.is_fallback != 0));
         Assert.Equal(509, entries.Count(x => x.is_fallback == 0));
         Assert.Equal(entries.Length, entries.Select(x => x.variant_key).Distinct().Count());
+        var staticSpecialization = !X86Native.GetOptimizationConfig().Contains("static=OFF;");
         foreach (var v in entries)
         {
             Assert.Equal(1u, v.schema_version);
             Assert.InRange(v.opcode, 0u, 1023u);
             Assert.StartsWith("op::Op", v.LogicName);
             Assert.NotEmpty(v.FamilyName);
-            Assert.NotEqual(IntPtr.Zero, v.handler);
-            Assert.True(X86Native.GetHandlerId(v.handler) >= 0);
+            if (staticSpecialization || v.is_fallback != 0)
+                Assert.NotEqual(IntPtr.Zero, v.handler);
+            if (v.handler != IntPtr.Zero)
+                Assert.True(X86Native.GetHandlerId(v.handler) >= 0);
         }
         Assert.Equal(0, X86Native.GetInstructionVariant(-1, out _));
         Assert.Equal(0, X86Native.GetInstructionVariant(entries.Length, out _));

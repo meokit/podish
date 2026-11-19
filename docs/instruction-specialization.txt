@@ -1,49 +1,30 @@
 Instruction specialization declarations
 ======================================
 
-The declaration interface is shared across scalar ALU/group operations, moves,
-comparisons, shifts/rotations, stack/control operations and SIMD prefix variants.
-Execution logic stays in ops/*_impl.h; existing inline kernels are private
-compatibility implementations behind LegacyBinding. Handler symbols and the
-preserve_none/musttail calling convention are retained.
-
-Files
------
-instruction_families.h: encoding traits (handler index, operand roles, group
-extension and width rule). Handler indices include the decoder's four split
-32-bit MOV forms, not just hardware opcode bytes.
-instruction_spec.h: structural C++23 Spec values and checked lowering into
-SpecCriteria. All values are compile-time facts; there is no runtime policy
-object or register-cache selection branch in an execution handler.
-instruction_variants.inc: the selected variants, each declared once.
-instruction_fallbacks.inc: decoder fallback entries.
-instruction_variants.cpp: compatibility bindings, static descriptor tables,
-unified registration and immutable tool metadata.
+instruction_catalog.json is the source for decoder fallbacks, specialization
+selectors, named kernel bindings and selection of operations for the LLVM
+prototype. CMake runs scripts/gen_instruction_catalog.py to generate the
+encoding traits, native registration table and named wrappers. Execution
+kernels live in ops/*_impl.h.
 
 Declaring a variant
 -------------------
-For example:
+Each variants row has a logic name, an encoding family, a spec object and a
+priority. For example:
 
-  INSTRUCTION_VARIANT(OpGroup1_EvIb_Add_32_NoFlags_Eax,
-      Group1_EvIb_Add,
-      Spec{}.width(Width::W32).regForm().dst(Gpr::Eax).flags(Flags::Dead),
-      2)
+  {"logic": "OpGroup1_EvIb_Add_32_NoFlags_Eax", "family": "Group1_EvIb_Add",
+   "spec": {"width": ["W32"], "regForm": [], "dst": ["Eax"], "flags": ["Dead"]},
+   "priority": 2}
 
-The family supplies handler index 0x83, extension /0, r/m destination and the
-scalar width rule. The Spec supplies only the facts specialized by this entry.
-DeclareVariant<Family, Spec>() derives the matcher and wrapper pointer through
-the compatibility binding. The last number is the explicit legacy precedence
-among equal-specificity rules; lower numbers win. Scores still determine
-specificity. Strict Live/Dead and memory-only predicates outrank their wildcard
-forms. All migrated entries have strict liveness, so their relative scores and
-selection order are preserved. Overlapping new rules
-must give a deliberate precedence, rather than rely on std::sort's tie ordering.
+The family supplies the handler index, opcode extension and operand roles.
+The generator lowers the spec object to a structural C++ Spec value.
+DeclareVariant checks the spec and derives the decoder criteria. The bucket
+sort uses descending specificity followed by ascending priority. The optional
+fusion_parent field permits a bounded expansion of an existing fusion.
 
-INSTRUCTION_FUSION_VARIANT has one additional parent-logic argument. It declares
-an approved, bounded exact-fusion expansion. Normal variants are not silently
-multiplied into all fusion sequences. Both forms share the same Spec and
-registration machinery. Selected bodies continue to execute their specialized
-logic; fusion does not normalize them back to generic implementations.
+A binding row supplies the name of the logic entry, its kernel and template
+arguments. Every bound logic entry has its own name and remains callable from
+generated fusion code.
 
 Typed facts
 -----------
@@ -66,12 +47,36 @@ Typed facts
 - Inconsistent or unsupported facts fail compile-time validation. The existing
   selected set remains unchanged except for removing 32 identical MOV entries.
 
-The legacy internal templates still have their existing parameter layouts;
-new declaration code uses Spec. Moving a kernel to a common operand accessor
-can be done behind LegacyBinding without changing registration or tooling.
-The EAX/ESP tail-register prototype is archived separately and is not enabled
-by this interface refactor. Register residency belongs in a backend policy,
-separate from guest operand identity.
+The kernel-side types in instruction_kernel_spec.h include OpsizeSpec,
+AddrModeSpec, FlagsSpec, RmOperandSpec and GroupOpSpec. Their Dynamic cases
+use decoded inputs or preserve the generic flags behavior. The common
+OperandSpec policies provide Dynamic, Exact, Profile, Register and Encoded
+dispatch paths. OperandSpec::Profile can fix the decoded fields and immediate
+for a kernel independent of its internal template parameters.
+
+RegisterSpecializedHandler can publish a rule after initialization. A runtime
+rule affects future decodes, and the caller owns the lifetime of its code.
+The catalog exposes build-time metadata independently of runtime registration.
+
+LLVM block JIT
+--------------
+FIBERCPU_ENABLE_LLVM_JIT enables the ORC block compiler on macOS arm64.
+Set FIBERCPU_LLVM_JIT=1 for exact operands or =generic for generic LLVM kernels.
+The default runtime mode is off.
+
+FIBERCPU_LLVM_JIT_HOT_THRESHOLD sets the block entry count before compiling the
+published block, including entries reached by threaded links. The default is
+64. Promotion re-decodes the published slots with architectural fallback
+handlers and uses their operands to specialize LLVM bitcode. The compiled
+prefix retains those generic scalar handlers for memory replay.
+The remaining slots keep their native lowering. If the prefix reaches the
+sentinel, the compiler inlines the normal OpExitBlock semantics.
+
+FIBERCPU_LLVM_JIT_CODE_BUDGET defaults to 16777216 bytes per MMU code cache.
+The budget charges each owned ORC allocation once by its mapped segment size.
+Invalidated blocks keep their machine code available for reuse. Budget
+pressure requests a hard reset when the MMU is quiescent. The native stats
+field llvm_code_cache_bytes reports the currently charged bytes.
 
 Tool metadata and fusion snapshot
 ---------------------------------
@@ -80,7 +85,8 @@ handler pointers together with names, families, normalized constraints, prioriti
 fusion parents and stable variant keys. The key includes opcode, logic reference
 and normalized constraints; addresses and registration order are not identities.
 The C ABI and managed bindings expose schema_version=1. Function pointers are
-only meaningful in the process/library that returned them.
+only meaningful in the process/library that returned them. Disabled native
+variants keep their metadata and report a null handler.
 
 PerfTools reads generated/instruction_fusion_families.json for cross-platform
 baking. This small checked-in snapshot is exported from the native declarations;

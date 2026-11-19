@@ -497,9 +497,9 @@ FORCE_INLINE LogicFlow OpCmp_Sse(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpMin_Sse(LogicFuncParams) { return OpMaxMin_Sse_Impl<true>(LogicPassParams); }
-
-FORCE_INLINE LogicFlow OpMax_Sse(LogicFuncParams) { return OpMaxMin_Sse_Impl<false>(LogicPassParams); }
+#define FIBERCPU_BIND_OPS_SSE_FP_IMPL_0
+#include "instruction_kernel_bindings.inc"
+#undef FIBERCPU_BIND_OPS_SSE_FP_IMPL_0
 
 FORCE_INLINE LogicFlow OpMovAp_Load(LogicFuncParams) {
     // 0F 28: MOVAPS xmm1, xmm2/m128 (Load/Move)

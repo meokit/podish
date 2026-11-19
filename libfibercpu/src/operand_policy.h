@@ -2,7 +2,8 @@
 #include "decoder.h"
 
 namespace fiberish {
-struct DynamicOperandPolicy {
+namespace OperandSpec {
+struct Dynamic {
     static constexpr unsigned keep_mask = 0;
     static FORCE_INLINE void Assume(const DecodedOp*) {}
     static FORCE_INLINE uint32_t Immediate(const DecodedOp* op) { return GetImm(op); }
@@ -17,10 +18,12 @@ FORCE_INLINE void AssumeOperandShape(const DecodedOp* op) {
     }
 }
 template <uint64_t Shape, unsigned Keep = 0>
-struct ExactOperandPolicy : DynamicOperandPolicy {
+struct Exact : Dynamic {
     static constexpr unsigned keep_mask = Keep;
     static FORCE_INLINE void Assume(const DecodedOp* op) { AssumeOperandShape<Shape>(op); }
 };
+
+}  // namespace OperandSpec
 
 // Fields that survive decoding and describe the instruction independently of
 // its address. The matching code reads the same fields before selecting a clone.
@@ -46,8 +49,9 @@ struct DecodedOperandShape {
     }
 };
 
+namespace OperandSpec {
 template <DecodedOperandShape Shape, unsigned Keep = 0>
-struct ProfileOperandPolicy {
+struct Profile {
     static constexpr unsigned keep_mask = Keep;
     static FORCE_INLINE void Assume(const DecodedOp* op) {
         constexpr uint8_t metadata = uint8_t(Shape.encoding >> 16);
@@ -65,6 +69,8 @@ struct ProfileOperandPolicy {
     }
     static constexpr uint32_t Immediate(const DecodedOp*) { return Shape.immediate; }
 };
+}  // namespace OperandSpec
+
 // Other is a decoded operand class, not a per-GetReg cache-selection branch.
 enum class PinWriteRole : uint8_t { None, Rm, Reg };
 enum class PinWriteClass : int8_t { Other = -1 };
@@ -88,8 +94,9 @@ FORCE_INLINE void AssumePinClass(unsigned parent) {
         __builtin_assume(parent == unsigned(Class));
     }
 }
+namespace OperandSpec {
 template <PinWriteRole Role, PinWriteClass Class, bool Byte>
-struct RegisterOperandPolicy : DynamicOperandPolicy {
+struct Register : Dynamic {
     static constexpr unsigned keep_mask = FIBERCPU_PIN_KEEP_MASK & ~PinArgumentBit(Class);
     static FORCE_INLINE void Assume(const DecodedOp* op) {
         __builtin_assume((op->modrm & 0xC0) == 0xC0);
@@ -103,7 +110,7 @@ struct RegisterOperandPolicy : DynamicOperandPolicy {
 // Pure scalar encodings: opcode-register forms and LEA never call an observer.
 // They need destination classification without claiming a ModRM register form.
 template <PinWriteRole Role, PinWriteClass Class, bool Byte, bool OpcodeRegister>
-struct EncodedOperandPolicy : DynamicOperandPolicy {
+struct Encoded : Dynamic {
     static constexpr unsigned keep_mask = FIBERCPU_PIN_KEEP_MASK & ~PinArgumentBit(Class);
     static FORCE_INLINE void Assume(const DecodedOp* op) {
         if constexpr (OpcodeRegister)
@@ -117,4 +124,5 @@ struct EncodedOperandPolicy : DynamicOperandPolicy {
         }
     }
 };
+}  // namespace OperandSpec
 }  // namespace fiberish

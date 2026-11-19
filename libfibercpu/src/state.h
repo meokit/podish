@@ -34,8 +34,7 @@ struct HandlerNGramKey {
 struct HandlerNGramHash {
     uint64_t operator()(const HandlerNGramKey& key) const {
         uint64_t hash = 0;
-        for (auto handler : key.handlers)
-            hash = (hash << 7) ^ ankerl::unordered_dense::hash<uint64_t>{}(handler);
+        for (auto handler : key.handlers) hash = (hash << 7) ^ ankerl::unordered_dense::hash<uint64_t>{}(handler);
         return hash;
     }
 };
@@ -176,6 +175,7 @@ struct EmuState {
 
     PendingMemOp mem_op_type = PendingMemOp::None;
     MemOpUnion mem_op;
+    BasicBlock* llvm_hot_block = nullptr;
 
     FORCE_INLINE void clear_pending_mem_op() { mem_op_type = PendingMemOp::None; }
 

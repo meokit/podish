@@ -1,6 +1,9 @@
 Bounded fusion / operand lowering / EAX-ESP pin
 
 Build switches (CMake cache; independent at compile time)
+  FIBERCPU_STATIC_SPECIALIZATION=ON/OFF
+  FIBERCPU_ENABLE_DYNAMIC_SPECIALIZATION=ON/OFF
+  FIBERCPU_ENABLE_LLVM_JIT=ON/OFF
   FIBERCPU_ENABLE_SUPEROPCODES=ON/OFF
   FIBERCPU_FUSION_STRATEGY=AUTO/BASE/EXTENDED/SHAPED
   FIBERCPU_OPERAND_SPECIALIZATION=AUTO/OFF/PROFILE/REGISTER/HYBRID
@@ -93,6 +96,77 @@ base/index/scale/segment, displacement and immediate. It guards every constituen
 of a generated fusion. Addresses after relocation, resolved branch targets and
 guest memory values are runtime inputs. The existing version 1 shape lists
 remain supported by FIBERCPU_OPERAND_PLAN_FILE.
+
+Dynamic operand templates
+
+Capture BLK2 v2 profiles from several workloads using the same instruction
+and fusion catalog. The collector's default exports every recognized shape:
+
+  python3 scripts/collect_operand_specializations.py /tmp/coremark-stats \
+    /tmp/gzip-stats /tmp/sha256-stats --output /tmp/dynamic-operands.json
+  cmake -S libfibercpu -B build/dynamic-operands -DCMAKE_BUILD_TYPE=Release \
+    -DFIBERCPU_DYNAMIC_OPERAND_PLAN_FILE=/tmp/dynamic-operands.json
+  cmake --build build/dynamic-operands --parallel
+
+For the managed CLI build, pass -p:DynamicOperandPlanFile=/tmp/dynamic-operands.json.
+The backend targets native macOS arm64 with Clang and uses the build's handler
+ABI, including the configured register pins. The dynamic plan is independent
+of the static operand budget. FIBERCPU_STATIC_SPECIALIZATION=OFF disables
+native operand clones, ISA optimizations and precompiled fusion. The generic
+decoder still distinguishes ISA meanings selected by mandatory prefixes and
+handles both stack widths. Use this option with the dynamic plan to generate
+instruction specializations at runtime. Set FIBERCPU_DYNAMIC_SPECIALIZATION=0
+in the host process environment to turn off materialization for that run. Build-time probes cover scalar handlers and
+fused handlers present in the selected generated fusion source.
+
+The generator groups machine code by handler identity and fixed instruction
+bits. A template holds one compiler body and the positions and masks of any
+varying immediate fields. Every recipe must reconstruct the compiler's handler
+bytes before the build packages it. Supported slow-path calls are rebound via
+local veneers, including scalar MMU and floating-point helpers. Mach-O
+PAGE21/PAGEOFF12 relocations can target an aligned read-only pool packed with
+the template. Unsupported relocations and position-dependent code fall back
+to the ordinary lowering path. The build writes coverage, exclusion reasons and
+code sizes to generated/dynamic_operands/report.json.
+
+At block decode, a full operand-key match materializes a recipe on first use
+in an executable arena and reuses the resulting handler on subsequent decodes.
+An unseen key or an unavailable arena uses the existing handlers. Training
+counts are block-based estimates. Materialized handlers have individual reflection names and IDs. Their names
+retain the original logic identity for the profile collector.
+
+Experimental LLVM block JIT
+
+Configure with FIBERCPU_ENABLE_LLVM_JIT=ON and LLVM_DIR pointing to LLVM's
+CMake package. Use a native macOS arm64 build with matching upstream Clang
+and LLVM major versions, at least LLVM 21. Select a deployment target
+supported by the installed LLVM library. The build packages Clang bitcode
+for the generic logic and parameterized templates selected in the catalog.
+
+Launch with FIBERCPU_LLVM_JIT=1 to bind decoded operands in the IR, or
+FIBERCPU_LLVM_JIT=generic to exercise the generic IR. Set it to 0 or omit it
+to use ordinary block entry points. The runtime switches are read from the
+host environment on first use. They are independent of the build switches.
+
+The compiler patches the decoded operand fields and immediate on each call
+site in the block template, then explicitly inlines the opcode IR before
+running the block optimization pipeline. It covers up to 64 decoded slots,
+including selected scalar memory operations and direct branches. The compiled
+entry tail-dispatches at the first unsupported slot or the block sentinel.
+LLVM ORC compiles and relocates the resulting handler.
+
+The decoded slots retain their scalar handler pointers. A memory restart
+re-enters the original slot through the existing slow path. A completed
+write resumes at the following slot. The block's entry alone points to JIT
+code.
+
+The MMU code cache owns the ORC resource leases. An invalidated block keeps
+its lease while the decoded storage remains reachable or can be revalidated.
+A quiescent cache reset releases the leases together with the decoded storage.
+Identical sequences can share a lease across caches while blocks still refer
+to it. The process allows up to 128 live sequences. X86_GetLLVMJitBlockCount
+reports cumulative materializations and X86_GetLLVMJitLiveBlockCount reports
+the currently owned executable sequences.
 
 Pin appends one uint32 argument per selected GPR to the preserve_none handler
 signature. CMake generates the register IDs, parameter order, lookup conditions

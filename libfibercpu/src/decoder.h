@@ -310,11 +310,12 @@ struct BasicBlockChainPrefix {
     uint64_t start_eip : 32;
     uint64_t inst_count : 8;
     uint64_t valid : 1;
-    uint64_t reserved : 23;
+    uint64_t reserved : 7;
+    uint64_t llvm_hot_count : 16;
 };
 
 struct alignas(16) BasicBlock {
-    BasicBlockChainPrefix chain;
+    BasicBlockChainPrefix chain{};
     HandlerFunc entry = nullptr;
     uint32_t end_eip;
     uint32_t slot_count;           // Total decoded ops including sentinel
@@ -322,16 +323,17 @@ struct alignas(16) BasicBlock {
     uint32_t branch_target_eip = 0;
     uint32_t fallthrough_eip = 0;
     uint8_t terminal_kind_raw = 0;
-    uint8_t block_padding0 = 0;
+    bool has_unfused_handlers = false;
     uint16_t block_padding1 = 0;
     uint64_t exec_count = 0;  // Number of times block was executed
 
     // Flexible Array Member - fixed-size decoded op stream.
     alignas(16) std::byte slots[sizeof(DecodedOp)];
 
-    static size_t CalculateSize(size_t slot_count) {
+    static size_t CalculateSize(size_t slot_count, bool retain_scalar_handlers = false) {
         if (slot_count == 0) return sizeof(BasicBlock);
-        return offsetof(BasicBlock, slots) + sizeof(DecodedOp) * slot_count;
+        return offsetof(BasicBlock, slots) + sizeof(DecodedOp) * slot_count +
+               (retain_scalar_handlers ? sizeof(HandlerFunc) * (slot_count - 1) : 0);
     }
 
     DecodedOp* FirstOp() { return reinterpret_cast<DecodedOp*>(slots); }
@@ -341,6 +343,10 @@ struct alignas(16) BasicBlock {
     const DecodedOp* Sentinel() const {
         return reinterpret_cast<const DecodedOp*>(slots + sentinel_slot_index * sizeof(DecodedOp));
     }
+
+    // The unfused native handlers allow concat and cache revalidation to reconstruct the original slots.
+    HandlerFunc* UnfusedHandlers() { return reinterpret_cast<HandlerFunc*>(FirstOp() + slot_count); }
+    const HandlerFunc* UnfusedHandlers() const { return reinterpret_cast<const HandlerFunc*>(FirstOp() + slot_count); }
 
     BlockTerminalKind terminal_kind() const { return static_cast<BlockTerminalKind>(terminal_kind_raw); }
     void set_terminal_kind(BlockTerminalKind kind) { terminal_kind_raw = static_cast<uint8_t>(kind); }
@@ -373,18 +379,23 @@ static_assert(offsetof(BasicBlock, slots) == 48, "BasicBlock: slots must start a
 
 // Decoder Logic
 enum class InstructionDecodeResult : uint8_t { Success, NeedMoreBytes, Invalid, FetchFault };
+enum class DecodeHandlerMode : uint8_t { Native, Generic };
 // Never reads beyond available bytes or the architectural 15-byte limit.
 InstructionDecodeResult DecodeInstructionBounded(const uint8_t* code, size_t available, DecodedInstTmp* inst,
-                                                 uint16_t* handler_index, uint16_t* raw_opcode = nullptr);
+                                                 uint16_t* handler_index, uint16_t* raw_opcode = nullptr,
+                                                 DecodeHandlerMode mode = DecodeHandlerMode::Native);
 bool DecodeInstruction(const uint8_t* code, DecodedInstTmp* inst, uint16_t* handler_index);
 // buffer must have room for 15 bytes; its contents are scratch except on invalid
 // decoding, where they hold the fetched bytes for diagnostics. Fetches another
 // page only when decoding requires it. raw_opcode, when requested, is the
 // architectural opcode before any handler-specific remapping.
 InstructionDecodeResult FetchAndDecodeInstruction(EmuState* state, uint32_t eip, uint8_t* buffer, DecodedInstTmp* inst,
-                                                  uint16_t* handler_index, uint16_t* raw_opcode = nullptr);
+                                                  uint16_t* handler_index, uint16_t* raw_opcode = nullptr,
+                                                  DecodeHandlerMode mode = DecodeHandlerMode::Native);
 // Shared Step/block preparation, without dead-flags analysis.
-void FinalizeDecodedInstruction(EmuState* state, uint32_t eip, uint16_t handler_index, DecodedOp* op);
+void FinalizeDecodedInstruction(EmuState* state, uint32_t eip, uint16_t handler_index, DecodedOp* op,
+                                DecodeHandlerMode mode = DecodeHandlerMode::Native);
+bool RedecodeGenericInstruction(EmuState* state, const DecodedOp& published, DecodedOp& generic);
 
 // Start EIP, Limit EIP, Max Instructions -> Returns Pointer to allocated block or nullptr
 BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64_t max_insts,

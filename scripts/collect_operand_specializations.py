@@ -9,6 +9,7 @@ from dataclasses import asdict
 import json
 from pathlib import Path
 
+from gen_instruction_catalog import read_catalog
 from operand_specialization_data import (
     FUSION_CALL, HAS_IMMEDIATE, HAS_MEMORY, METADATA_MASK, Operand, generated_fusions, instruction_targets,
 )
@@ -81,17 +82,13 @@ def blocks(path):
 
 
 def collect(profiles, fusion_source, limit):
-    targets = instruction_targets(SRC / "instruction_families.h", SRC / "instruction_variants.inc",
-                                  SRC / "instruction_fallbacks.inc")
+    catalog = read_catalog()
+    targets = instruction_targets(catalog)
     fusions = {
         name: tuple(call[1] for call in FUSION_CALL.finditer(body))
         for name, body in generated_fusions(fusion_source.read_text()).items()
     }
-    handwritten = {
-        match[2]: tuple(re.findall(r'op::(\w+)', match[3]))
-        for match in re.finditer(r'^DEFINE_HANDWRITTEN_SUPEROPCODE_([234])\((\w+),([^)]*)\)',
-                                 (SRC / "superopcodes.cpp").read_text(), re.M)
-    }
+    handwritten = {row["name"]: tuple(row["operations"]) for row in catalog["handwritten_fusions"]}
     sources = fusions | handwritten
     observed, dispatches, skipped = Counter(), Counter(), Counter()
     for path in profiles:

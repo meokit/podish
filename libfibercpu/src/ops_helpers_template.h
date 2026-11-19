@@ -11,15 +11,11 @@
 namespace fiberish {
 
 // Template Helper for Group 1 (ALU operations with immediate)
-template <typename T, bool UpdateFlags = true, uint8_t FixedSubOp = 0xFF, Specialized S = Specialized::None>
+template <typename T, bool UpdateFlags = true, GroupOpSpec FixedSubOp = GroupOpSpec::Dynamic,
+          RmOperandSpec S = RmOperandSpec::Dynamic>
 FORCE_INLINE LogicFlow Helper_Group1(EmuState* state, GprCache& gpr, DecodedOp* op, uint64_t& flags_cache, T dest,
                                      T src, mem::MicroTLB* utlb) {
-    uint8_t subop;
-    if constexpr (FixedSubOp != 0xFF) {
-        subop = FixedSubOp;
-    } else {
-        subop = (op->modrm >> 3) & 7;
-    }
+    const uint8_t subop = GroupOperation<FixedSubOp>(op);
 
     T res = 0;
 
@@ -31,11 +27,11 @@ FORCE_INLINE LogicFlow Helper_Group1(EmuState* state, GprCache& gpr, DecodedOp* 
             res = AluOr<T, UpdateFlags>(state, flags_cache, dest, src);
             break;
         case 2:
-            return ExecuteCarryRmw<CarryRmwKind::Adc, T, UpdateFlags, S == Specialized::ModReg>(state, gpr, op, dest,
-                                                                                                src, utlb, flags_cache);
+            return ExecuteCarryRmw<CarryRmwKind::Adc, T, UpdateFlags, S == RmOperandSpec::ModReg>(
+                state, gpr, op, dest, src, utlb, flags_cache);
         case 3:
-            return ExecuteCarryRmw<CarryRmwKind::Sbb, T, UpdateFlags, S == Specialized::ModReg>(state, gpr, op, dest,
-                                                                                                src, utlb, flags_cache);
+            return ExecuteCarryRmw<CarryRmwKind::Sbb, T, UpdateFlags, S == RmOperandSpec::ModReg>(
+                state, gpr, op, dest, src, utlb, flags_cache);
         case 4:
             res = AluAnd<T, UpdateFlags>(state, flags_cache, dest, src);
             break;
@@ -56,7 +52,7 @@ FORCE_INLINE LogicFlow Helper_Group1(EmuState* state, GprCache& gpr, DecodedOp* 
             return LogicFlow::ExitOnCurrentEIP;
     }
 
-    if constexpr (S == Specialized::ModReg) {
+    if constexpr (S == RmOperandSpec::ModReg) {
         uint8_t rm = op->modrm & 7;
         if constexpr (sizeof(T) == 1) {
             uint32_t curr = gpr.GetReg(state, rm & 3);
@@ -84,15 +80,10 @@ FORCE_INLINE LogicFlow Helper_Group1(EmuState* state, GprCache& gpr, DecodedOp* 
 }
 
 // Template Helper for Group 3 (MUL, DIV, TEST, NOT, NEG)
-template <typename T, bool UpdateFlags = true, uint8_t FixedSubOp = 0xFF>
+template <typename T, bool UpdateFlags = true, GroupOpSpec FixedSubOp = GroupOpSpec::Dynamic>
 FORCE_INLINE LogicFlow Helper_Group3(EmuState* state, GprCache& gpr, DecodedOp* op, uint64_t& flags_cache, T val,
                                      mem::MicroTLB* utlb, uint32_t imm) {
-    uint8_t subop;
-    if constexpr (FixedSubOp != 0xFF) {
-        subop = FixedSubOp;
-    } else {
-        subop = (op->modrm >> 3) & 7;
-    }
+    const uint8_t subop = GroupOperation<FixedSubOp>(op);
 
     switch (subop) {
         case 0:  // TEST imm
@@ -385,15 +376,10 @@ FORCE_INLINE LogicFlow Helper_Group3(EmuState* state, GprCache& gpr, DecodedOp* 
 }
 
 // Template Helper for Group 4 (INC, DEC)
-template <typename T, bool UpdateFlags = true, uint8_t FixedSubOp = 0xFF>
+template <typename T, bool UpdateFlags = true, GroupOpSpec FixedSubOp = GroupOpSpec::Dynamic>
 FORCE_INLINE LogicFlow Helper_Group4(EmuState* state, GprCache& gpr, DecodedOp* op, uint64_t& flags_cache, T val,
                                      mem::MicroTLB* utlb) {
-    uint8_t subop;
-    if constexpr (FixedSubOp != 0xFF) {
-        subop = FixedSubOp;
-    } else {
-        subop = (op->modrm >> 3) & 7;
-    }
+    const uint8_t subop = GroupOperation<FixedSubOp>(op);
 
     uint32_t old_cf = GetFlags32(flags_cache) & CF_MASK;
 
@@ -443,15 +429,10 @@ FORCE_INLINE LogicFlow Helper_Group4(EmuState* state, GprCache& gpr, DecodedOp* 
 }
 
 // Template Helper for Group 5 (INC, DEC, CALL, JMP, PUSH)
-template <typename T, bool UpdateFlags = true, uint8_t FixedSubOp = 0xFF>
+template <typename T, bool UpdateFlags = true, GroupOpSpec FixedSubOp = GroupOpSpec::Dynamic>
 FORCE_INLINE LogicFlow Helper_Group5(EmuState* state, GprCache& gpr, DecodedOp* op, uint64_t& flags_cache, T val,
                                      mem::MicroTLB* utlb, uint32_t* branch) {
-    uint8_t subop;
-    if constexpr (FixedSubOp != 0xFF) {
-        subop = FixedSubOp;
-    } else {
-        subop = (op->modrm >> 3) & 7;
-    }
+    const uint8_t subop = GroupOperation<FixedSubOp>(op);
 
     switch (subop) {
         case 0:  // INC Ev

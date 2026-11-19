@@ -105,6 +105,8 @@ int X86_EngineAttachMmuForExec(EmuState* state, X86_MmuHandle* mmu);
 // Execution
 // Returns zero if a host callback attempts to re-enter native execution.
 int X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts);
+uint64_t X86_GetLLVMJitBlockCount();
+uint64_t X86_GetLLVMJitLiveBlockCount();
 void X86_EmuStop(EmuState* state);
 void X86_EmuFault(EmuState* state);
 void X86_EmuYield(EmuState* state);

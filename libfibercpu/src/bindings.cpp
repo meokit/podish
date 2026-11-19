@@ -13,8 +13,15 @@
 #include <cstring>
 #include <limits>
 #include <mutex>
+#include <utility>
 #include "decoder.h"
 #include "dispatch.h"
+#if FIBERCPU_LLVM_JIT
+#include "jit/llvm_block_jit.h"
+#endif
+#if FIBERCPU_DYNAMIC_OPERANDS
+#include "dynamic_operand_specialization.h"
+#endif
 #include "hooks.h"
 #include "logger.h"
 #include "mem/mmu.h"
@@ -254,6 +261,29 @@ static bool CanBlockConcatWithSuccessor(const BasicBlock* a, const BasicBlock* b
     return true;
 }
 
+static void LowerConcatenatedBlock(BasicBlock* concat, const BasicBlock* a, const BasicBlock* b,
+                                   uint32_t a_instructions) {
+    auto* ops = concat->FirstOp();
+#if FIBERCPU_LLVM_JIT
+    if (concat->has_unfused_handlers) {
+        auto* handlers = concat->UnfusedHandlers();
+        std::copy_n(a->UnfusedHandlers(), a_instructions, handlers);
+        std::copy_n(b->UnfusedHandlers(), b->inst_count(), handlers + a_instructions);
+        for (uint32_t i = 0; i < concat->inst_count(); ++i) {
+            ops[i].handler = handlers[i];
+            ops[i].meta.flags.operand_lowered = 0;
+        }
+        concat->chain.llvm_hot_count = a->chain.llvm_hot_count;
+    }
+#else
+    (void)a;
+    (void)b;
+    (void)a_instructions;
+#endif
+    ApplySuperOpcodesToBlockOps(ops, concat->inst_count(), !concat->has_unfused_handlers);
+    concat->entry = ops->handler;
+}
+
 static BasicBlock* BuildDirectJmpBlockConcat(EmuState* state, const BasicBlock* a, const BasicBlock* b) {
     constexpr uint32_t kMaxConcatSlotCount = 65;
     const uint32_t concat_inst_count = a->inst_count() - 1 + b->inst_count();
@@ -276,7 +306,9 @@ static BasicBlock* BuildDirectJmpBlockConcat(EmuState* state, const BasicBlock* 
     }
     staged_ops[out] = *b->Sentinel();
 
-    void* mem = state->mmu.try_allocate_block_bytes(BasicBlock::CalculateSize(concat_slot_count), start_eip);
+    const bool retain_scalar_handlers = a->has_unfused_handlers && b->has_unfused_handlers;
+    void* mem = state->mmu.try_allocate_block_bytes(
+        BasicBlock::CalculateSize(concat_slot_count, retain_scalar_handlers), start_eip);
     if (!mem) return nullptr;
     BasicBlock* concat = new (mem) BasicBlock;
     state->mmu.remember_allocated_block(concat);
@@ -291,12 +323,12 @@ static BasicBlock* BuildDirectJmpBlockConcat(EmuState* state, const BasicBlock* 
     concat->fallthrough_eip = fallthrough_eip;
     concat->set_terminal_kind(terminal_kind);
     concat->exec_count = 0;
+    concat->has_unfused_handlers = retain_scalar_handlers;
 
     DecodedOp* dst = concat->FirstOp();
     std::copy_n(staged_ops.data(), concat_slot_count, dst);
 
-    ApplySuperOpcodesToBlockOps(dst, concat_inst_count, true);
-    concat->entry = concat->FirstOp()->handler;
+    LowerConcatenatedBlock(concat, a, b, a->inst_count() - 1);
     return concat;
 }
 
@@ -322,7 +354,9 @@ static BasicBlock* BuildJccFallthroughBlockConcat(EmuState* state, const BasicBl
     }
     staged_ops[out] = *b->Sentinel();
 
-    void* mem = state->mmu.try_allocate_block_bytes(BasicBlock::CalculateSize(concat_slot_count), start_eip);
+    const bool retain_scalar_handlers = a->has_unfused_handlers && b->has_unfused_handlers;
+    void* mem = state->mmu.try_allocate_block_bytes(
+        BasicBlock::CalculateSize(concat_slot_count, retain_scalar_handlers), start_eip);
     if (!mem) return nullptr;
     BasicBlock* concat = new (mem) BasicBlock;
     state->mmu.remember_allocated_block(concat);
@@ -337,12 +371,12 @@ static BasicBlock* BuildJccFallthroughBlockConcat(EmuState* state, const BasicBl
     concat->fallthrough_eip = fallthrough_eip;
     concat->set_terminal_kind(terminal_kind);
     concat->exec_count = 0;
+    concat->has_unfused_handlers = retain_scalar_handlers;
 
     DecodedOp* dst = concat->FirstOp();
     std::copy_n(staged_ops.data(), concat_slot_count, dst);
 
-    ApplySuperOpcodesToBlockOps(dst, concat_inst_count, true);
-    concat->entry = concat->FirstOp()->handler;
+    LowerConcatenatedBlock(concat, a, b, a->inst_count());
     return concat;
 }
 
@@ -364,6 +398,9 @@ static __attribute__((noinline, cold)) BasicBlock* ResolveBlockForRunSlow(EmuSta
         return nullptr;
     }
 
+    if (new_block->entry != new_block->FirstOp()->handler) {
+        return CacheDecodedBlock(state, eip, new_block);
+    }
     if (!BlockIsConcatCandidateTerminal(new_block)) {
         state->block_stats.block_concat_reject_not_concat_terminal++;
         return CacheDecodedBlock(state, eip, new_block);
@@ -882,6 +919,12 @@ int X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
 
     // Reset chaining state for this run
     state->last_block = state->mmu.invalid_code_block();
+#if FIBERCPU_LLVM_JIT
+    state->llvm_hot_block = nullptr;
+    const auto compile_hot_block = [&] {
+        if (auto* block = std::exchange(state->llvm_hot_block, nullptr)) CompileHotLLVMBlock(state, block);
+    };
+#endif
     state->smc_write_to_exec = false;
     state->allow_write_exec_page = false;
     state->intercept_exec_write_for_smc = false;
@@ -920,6 +963,10 @@ int X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
             state->last_block = block_ptr;
             if (block_ptr->inst_count() == 0) return;
 
+#if FIBERCPU_LLVM_JIT
+            CountLLVMBlockEntry(state, block_ptr, block_ptr->chain.llvm_hot_count);
+            compile_hot_block();
+#endif
             DecodedOp* head = block_ptr->FirstOp();
 #ifdef FIBERCPU_ENABLE_HANDLER_PROFILE
             state->current_block_head = head;
@@ -1005,6 +1052,9 @@ int X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
         }
 
         execute_block(block_ptr);
+#if FIBERCPU_LLVM_JIT
+        compile_hot_block();
+#endif
         if (state->status != EmuStatus::Running) break;
         if (state->mmu.code_cache_flush_pending() && (end_eip == 0 || state->ctx.eip != end_eip) &&
             (max_insts == 0 || total_run_insts < max_insts)) {
@@ -1127,6 +1177,15 @@ uint32_t X86_GetBuildFeatures(void) {
         (FIBERCPU_OPERAND_MODE << 4) | ((FIBERCPU_GPR_PIN_MODE & 3) << 8) | ((FIBERCPU_GPR_PIN_MODE >> 2) << 11);
 #if FIBERCPU_OPERAND_FUSIONS_ONLY
     features |= 1u << 10;
+#endif
+#if FIBERCPU_STATIC_SPECIALIZATION
+    features |= 1u << 12;
+#endif
+#if FIBERCPU_DYNAMIC_OPERANDS
+    features |= 1u << 13;
+#endif
+#if FIBERCPU_LLVM_JIT
+    features |= 1u << 14;
 #endif
     return features;
 }
@@ -1364,31 +1423,32 @@ int X86_DumpStats(EmuState* state, char* buffer, size_t buffer_size) {
     const auto& code_cache = state->mmu.code_cache();
 #ifdef ENABLE_TLB_STATS
     auto& s = state->mmu.stats;
-    int n = snprintf(
-        buffer, buffer_size,
-        "{\"l1_read_hits\":%llu,\"l1_write_hits\":%llu,"
-        "\"l2_read_hits\":%llu,\"l2_write_hits\":%llu,"
-        "\"read_misses\":%llu,\"write_misses\":%llu,"
-        "\"total_reads\":%llu,\"total_writes\":%llu,"
-        "\"all_blocks_count\":%zu,\"block_cache_size\":%zu,\"page_to_blocks_size\":%zu,"
-        "\"code_cache_bytes_requested\":%llu,\"code_cache_limit_bytes\":%llu,"
-        "\"code_cache_flush_count\":%llu,\"code_cache_generation\":%llu}",
-        (unsigned long long)s.l1_read_hits, (unsigned long long)s.l1_write_hits, (unsigned long long)s.l2_read_hits,
-        (unsigned long long)s.l2_write_hits, (unsigned long long)s.read_misses, (unsigned long long)s.write_misses,
-        (unsigned long long)s.total_reads, (unsigned long long)s.total_writes, code_cache.all_blocks.size(),
-        code_cache.CountValidBlocks(), code_cache.page_to_blocks.size(),
-        (unsigned long long)code_cache.requested_block_bytes, (unsigned long long)code_cache.block_budget_bytes,
-        (unsigned long long)code_cache.flush_count, (unsigned long long)code_cache.generation);
+    int n = snprintf(buffer, buffer_size,
+                     "{\"l1_read_hits\":%llu,\"l1_write_hits\":%llu,"
+                     "\"l2_read_hits\":%llu,\"l2_write_hits\":%llu,"
+                     "\"read_misses\":%llu,\"write_misses\":%llu,"
+                     "\"total_reads\":%llu,\"total_writes\":%llu,"
+                     "\"all_blocks_count\":%zu,\"block_cache_size\":%zu,\"page_to_blocks_size\":%zu,"
+                     "\"code_cache_bytes_requested\":%llu,\"code_cache_limit_bytes\":%llu,"
+                     "\"code_cache_flush_count\":%llu,\"code_cache_generation\":%llu,\"llvm_code_cache_bytes\":%zu}",
+                     (unsigned long long)s.l1_read_hits, (unsigned long long)s.l1_write_hits,
+                     (unsigned long long)s.l2_read_hits, (unsigned long long)s.l2_write_hits,
+                     (unsigned long long)s.read_misses, (unsigned long long)s.write_misses,
+                     (unsigned long long)s.total_reads, (unsigned long long)s.total_writes,
+                     code_cache.all_blocks.size(), code_cache.CountValidBlocks(), code_cache.page_to_blocks.size(),
+                     (unsigned long long)code_cache.requested_block_bytes,
+                     (unsigned long long)code_cache.block_budget_bytes, (unsigned long long)code_cache.flush_count,
+                     (unsigned long long)code_cache.generation, code_cache.llvm_block_bytes);
     return n;
 #else
     return snprintf(buffer, buffer_size,
                     "{\"all_blocks_count\":%zu,\"block_cache_size\":%zu,\"page_to_blocks_size\":%zu,"
                     "\"code_cache_bytes_requested\":%llu,\"code_cache_limit_bytes\":%llu,"
-                    "\"code_cache_flush_count\":%llu,\"code_cache_generation\":%llu}",
+                    "\"code_cache_flush_count\":%llu,\"code_cache_generation\":%llu,\"llvm_code_cache_bytes\":%zu}",
                     code_cache.all_blocks.size(), code_cache.CountValidBlocks(), code_cache.page_to_blocks.size(),
                     (unsigned long long)code_cache.requested_block_bytes,
                     (unsigned long long)code_cache.block_budget_bytes, (unsigned long long)code_cache.flush_count,
-                    (unsigned long long)code_cache.generation);
+                    (unsigned long long)code_cache.generation, code_cache.llvm_block_bytes);
 #endif
 }
 
@@ -1410,7 +1470,27 @@ size_t X86_GetBlockList(EmuState* state, BasicBlock** buffer, size_t max_count) 
 }
 
 int32_t X86_GetOpIdForHandler(void* handler) {
-    return static_cast<int32_t>(FindOpcodeIndexForHandler(reinterpret_cast<HandlerFunc>(handler)));
+    auto fn = reinterpret_cast<HandlerFunc>(handler);
+#if FIBERCPU_DYNAMIC_OPERANDS
+    fn = CanonicalDynamicOperandHandler(fn);
+#endif
+    return static_cast<int32_t>(FindOpcodeIndexForHandler(fn));
+}
+
+uint64_t X86_GetLLVMJitBlockCount() {
+#if FIBERCPU_LLVM_JIT
+    return LLVMJitBlockCount();
+#else
+    return 0;
+#endif
+}
+
+uint64_t X86_GetLLVMJitLiveBlockCount() {
+#if FIBERCPU_LLVM_JIT
+    return LLVMJitLiveBlockCount();
+#else
+    return 0;
+#endif
 }
 
 void* X86_GetLibAddress() {

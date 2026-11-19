@@ -3,6 +3,7 @@
 #include <type_traits>
 #include "common.h"
 #include "decoder.h"
+#include "instruction_kernel_spec.h"
 #include "state.h"
 
 namespace fiberish {
@@ -432,12 +433,11 @@ enum class OpOnTLBMiss {
  * Reads a value from a Register or Memory based on the ModRM byte.
  * Supports uint8_t, uint16_t, uint32_t, and simde__m128.
  */
-template <typename T, OpOnTLBMiss Strategy, uint32_t Alignment = 1>
+template <typename T, OpOnTLBMiss Strategy, uint32_t Alignment = 1, AddrModeSpec Form = AddrModeSpec::Dynamic>
 FORCE_INLINE MemResult<T> ReadModRM(EmuState* state, GprCache& gpr, DecodedOp* op, mem::MicroTLB* utlb) {
-    uint8_t mod = (op->modrm >> 6) & 3;
     uint8_t rm = op->modrm & 7;
 
-    if (mod == 3) [[likely]] {
+    if (OperandIsReg<Form>(op)) [[likely]] {
         // Register Operand
         return ReadRegGeneric<T>(state, gpr, rm);
     } else {
@@ -473,12 +473,11 @@ FORCE_INLINE MemResult<T> ReadModRM(EmuState* state, GprCache& gpr, DecodedOp* o
  * Writes a value to a Register or Memory based on the ModRM byte.
  * Supports uint8_t, uint16_t, uint32_t, and simde__m128.
  */
-template <typename T, OpOnTLBMiss Strategy, uint32_t Alignment = 1>
+template <typename T, OpOnTLBMiss Strategy, uint32_t Alignment = 1, AddrModeSpec Form = AddrModeSpec::Dynamic>
 FORCE_INLINE MemResult<void> WriteModRM(EmuState* state, GprCache& gpr, DecodedOp* op, T val, mem::MicroTLB* utlb) {
-    uint8_t mod = (op->modrm >> 6) & 3;
     uint8_t rm = op->modrm & 7;
 
-    if (mod == 3) [[likely]] {
+    if (OperandIsReg<Form>(op)) [[likely]] {
         // Register Operand
         WriteRegGeneric<T>(state, gpr, rm, val);
         return {};

@@ -15,6 +15,10 @@
 #include "tlb.h"
 #include "types.h"
 
+namespace fiberish {
+struct LLVMBlockCode;
+}
+
 namespace fiberish::mem {
 
 // L2 Chunk: Covers 4MB (1024 * 4KB)
@@ -291,6 +295,10 @@ struct CodeCacheState {
     ankerl::unordered_dense::map<BlockCacheKey, uint32_t, BlockCacheKeyHash> block_cache;
     std::vector<BlockCacheEntry> block_entries;
     std::vector<BasicBlock*> all_blocks;
+    // Blocks can remain reachable through threaded links after invalidation.
+    // Release their executable entries with the pool, at a quiescent reset.
+    ankerl::unordered_dense::set<std::shared_ptr<const LLVMBlockCode>> llvm_blocks;
+    size_t llvm_block_bytes = 0;
     BasicBlock dummy_invalid_block;
     ankerl::unordered_dense::map<uintptr_t, std::vector<PageBlockRef>> page_to_blocks;
     size_t requested_block_bytes = 0;
@@ -1123,7 +1131,7 @@ public:
     }
 
     // Safe resolution without faulting
-    [[nodiscard]] HostAddr resolve_safe_for_read(GuestAddr addr) {
+    [[nodiscard]] HostAddr resolve_safe_for_read(GuestAddr addr, Property access = Property::Read) {
         auto* dir = current_page_directory();
         if (!dir) return nullptr;
 
@@ -1137,7 +1145,7 @@ public:
 
         // 2. Check Permissions
         Property current_perm = chunk->permissions[l2_idx];
-        if (!has_property(current_perm, Property::Read)) return nullptr;
+        if (!has_property(current_perm, access)) return nullptr;
 
         // 3. Return existing page only (no lazy allocation for safe resolution)
         if (!chunk->pages[l2_idx]) {

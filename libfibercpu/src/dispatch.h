@@ -54,6 +54,21 @@ extern ATTR_PRESERVE_NONE int64_t ResolveBranchTarget(EmuState* RESTRICT state, 
                                                       mem::MicroTlbAbiWord utlb_addend, uint32_t branch,
                                                       uint64_t flags_cache FIBERCPU_PIN_PARAMS);
 
+FORCE_INLINE void CountLLVMBlockEntry(EmuState* state, BasicBlock* block, uint16_t count) {
+#if FIBERCPU_LLVM_JIT
+    if (count > 1) {
+        block->chain.llvm_hot_count = count - 1;
+    } else if (count == 1 && !state->llvm_hot_block) {
+        block->chain.llvm_hot_count = 0;
+        state->llvm_hot_block = block;
+    }
+#else
+    (void)state;
+    (void)block;
+    (void)count;
+#endif
+}
+
 template <ExtKind Kind>
 FORCE_INLINE ATTR_PRESERVE_NONE int64_t ResolveBranchTargetInline(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
                                                                   int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags,
@@ -86,6 +101,7 @@ FORCE_INLINE ATTR_PRESERVE_NONE int64_t ResolveBranchTargetInline(EmuState* REST
         state->last_block = next_block;
         instr_limit -= header_ptr->inst_count();
         DecodedOp* next_head = next_block->FirstOp();
+        CountLLVMBlockEntry(state, next_block, header_ptr->chain.llvm_hot_count);
 #if defined(FIBERCPU_ENABLE_BLOCK_PROFILE) || defined(FIBERCPU_ENABLE_HANDLER_PROFILE)
         next_block->exec_count++;
 #endif
@@ -106,7 +122,22 @@ FORCE_INLINE ATTR_PRESERVE_NONE int64_t ResolveBranchTargetInline(EmuState* REST
     }
 }
 
-template <LogicFunc Target, class OperandPolicy = DynamicOperandPolicy>
+template <bool UseBranch>
+FORCE_INLINE ATTR_PRESERVE_NONE int64_t OpExitBlockImpl(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
+                                                        int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags,
+                                                        mem::MicroTlbAbiWord utlb_addend, uint32_t branch,
+                                                        uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
+    RecordBlockHandlersUntil(state, op);
+    if constexpr (UseBranch) {
+        if (branch == std::numeric_limits<uint32_t>::max()) __builtin_unreachable();
+    }
+    const uint32_t target_eip = UseBranch ? branch : op->next_eip;
+    ATTR_MUSTTAIL return ResolveBranchTargetInline<ExtKind::Link>(state, op, instr_limit, utlb_tags, utlb_addend,
+                                                                  target_eip, flags_cache FIBERCPU_PIN_RELOAD);
+}
+
+template <LogicFunc Target, class OperandPolicy = OperandSpec::Dynamic>
 ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
                                            mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
                                            uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {

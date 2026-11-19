@@ -15,38 +15,8 @@ namespace fiberish {
 // Basic MOV / XCHG
 // ------------------------------------------------------------------------------------------------
 
-enum class AddrNoIndexSpec : uint8_t {
-    Dynamic = 0,
-    NoIndex,
-};
-
-enum class AddrBaseRegSpec : int8_t {
-    Dynamic = -1,
-    None = -2,
-    Eax = EAX,
-    Ecx = ECX,
-    Edx = EDX,
-    Ebx = EBX,
-    Esp = ESP,
-    Ebp = EBP,
-    Esi = ESI,
-    Edi = EDI,
-};
-
-enum class AddrSegmentSpec : int8_t {
-    General = -1,
-    None = 0,
-    Es = 1,
-    Cs = 2,
-    Ss = 3,
-    Ds = 4,
-    Fs = 5,
-    Gs = 6,
-};
-
-template <AddrNoIndexSpec NoIndexSpec = AddrNoIndexSpec::Dynamic,
-          AddrBaseRegSpec BaseRegSpec = AddrBaseRegSpec::Dynamic,
-          AddrSegmentSpec SegmentSpec = AddrSegmentSpec::General>
+template <AddrIndexSpec IndexSpec = AddrIndexSpec::Dynamic, AddrBaseRegSpec BaseRegSpec = AddrBaseRegSpec::Dynamic,
+          AddrSegmentSpec SegmentSpec = AddrSegmentSpec::Dynamic, AddrsizeSpec AddressSize = AddrsizeSpec::Dynamic>
 FORCE_INLINE uint32_t ComputeLinearAddressSpecialized(EmuState* state, GprCache& gpr, const DecodedOp* op) {
     const auto* ext = GetExt(op);
     const uint32_t ea_desc = ext->data.ea_desc;
@@ -54,20 +24,22 @@ FORCE_INLINE uint32_t ComputeLinearAddressSpecialized(EmuState* state, GprCache&
 
     if constexpr (BaseRegSpec == AddrBaseRegSpec::Dynamic) {
         addr += gpr.GetRegFromOffset(state, memdesc::BaseOffset(ea_desc));
-    } else if constexpr (BaseRegSpec != AddrBaseRegSpec::None) {
+    } else if constexpr (BaseRegSpec != AddrBaseRegSpec::Absent) {
         addr += gpr.GetReg(state, static_cast<int>(BaseRegSpec));
     }
 
-    if constexpr (NoIndexSpec == AddrNoIndexSpec::Dynamic) {
+    if constexpr (IndexSpec == AddrIndexSpec::Dynamic) {
         const uint32_t index = gpr.GetRegFromOffset(state, memdesc::IndexOffset(ea_desc));
         addr += index << memdesc::Scale(ea_desc);
+    } else if constexpr (IndexSpec != AddrIndexSpec::Absent) {
+        addr += gpr.GetReg(state, static_cast<int>(IndexSpec)) << memdesc::Scale(ea_desc);
     }
 
-    if (op->prefixes.flags.addrsize) addr &= 0xFFFFu;
+    if (AddressIs16<AddressSize>(op)) addr &= 0xFFFFu;
 
-    if constexpr (SegmentSpec == AddrSegmentSpec::General) {
+    if constexpr (SegmentSpec == AddrSegmentSpec::Dynamic) {
         addr += GetMemSegmentBase(state, op);
-    } else if constexpr (SegmentSpec == AddrSegmentSpec::None) {
+    } else if constexpr (SegmentSpec == AddrSegmentSpec::Default) {
         // "NoSegment" means no override, not an architectural zero base.
         // Keep specialized handlers correct if a caller supplies non-flat DS/SS.
         if constexpr (BaseRegSpec == AddrBaseRegSpec::Dynamic) {
@@ -77,22 +49,22 @@ FORCE_INLINE uint32_t ComputeLinearAddressSpecialized(EmuState* state, GprCache&
                 (BaseRegSpec == AddrBaseRegSpec::Esp || BaseRegSpec == AddrBaseRegSpec::Ebp) ? 3 : 4;
             addr += state->ctx.seg_base[segment];
         }
-    } else if constexpr (SegmentSpec != AddrSegmentSpec::None) {
+    } else if constexpr (SegmentSpec != AddrSegmentSpec::Default) {
         addr += state->ctx.seg_base[static_cast<int>(SegmentSpec)];
     }
 
     return addr;
 }
 
-template <Specialized SrcSpec = Specialized::None, Specialized DstSpec = Specialized::None>
+template <RmOperandSpec SrcSpec = RmOperandSpec::Dynamic, RmOperandSpec DstSpec = RmOperandSpec::Dynamic>
 FORCE_INLINE LogicFlow OpMov_EvGv_Reg_Internal(LogicFuncParams) {
-    // Specialized: MOV r32, r32
+    // RmOperandSpec: MOV r32, r32
     // Dst = Src
     uint32_t val;
 
     // Read Source (ModRM.Reg)
-    if constexpr (SrcSpec >= Specialized::Reg0 && SrcSpec <= Specialized::Reg7) {
-        constexpr uint8_t FixedSrc = (uint8_t)SrcSpec - (uint8_t)Specialized::Reg0;
+    if constexpr (SrcSpec >= RmOperandSpec::Reg0 && SrcSpec <= RmOperandSpec::Reg7) {
+        constexpr uint8_t FixedSrc = (uint8_t)SrcSpec - (uint8_t)RmOperandSpec::Reg0;
         if constexpr (FixedSrc == 0)
             val = gpr.GetReg(state, 0);
         else if constexpr (FixedSrc == 1)
@@ -115,8 +87,8 @@ FORCE_INLINE LogicFlow OpMov_EvGv_Reg_Internal(LogicFuncParams) {
     }
 
     // Write Destination (ModRM.RM)
-    if constexpr (DstSpec >= Specialized::Reg0 && DstSpec <= Specialized::Reg7) {
-        constexpr uint8_t FixedDst = (uint8_t)DstSpec - (uint8_t)Specialized::Reg0;
+    if constexpr (DstSpec >= RmOperandSpec::Reg0 && DstSpec <= RmOperandSpec::Reg7) {
+        constexpr uint8_t FixedDst = (uint8_t)DstSpec - (uint8_t)RmOperandSpec::Reg0;
         if constexpr (FixedDst == 0)
             gpr.SetReg(state, 0, val);
         else if constexpr (FixedDst == 1)
@@ -140,15 +112,15 @@ FORCE_INLINE LogicFlow OpMov_EvGv_Reg_Internal(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-template <Specialized S = Specialized::None, AddrNoIndexSpec NoIndexSpec = AddrNoIndexSpec::Dynamic,
+template <RmOperandSpec S = RmOperandSpec::Dynamic, AddrIndexSpec IndexSpec = AddrIndexSpec::Dynamic,
           AddrBaseRegSpec BaseRegSpec = AddrBaseRegSpec::Dynamic,
-          AddrSegmentSpec SegmentSpec = AddrSegmentSpec::General>
+          AddrSegmentSpec SegmentSpec = AddrSegmentSpec::Dynamic>
 FORCE_INLINE LogicFlow OpMov_EvGv_Mem_Internal(LogicFuncParams) {
-    // Specialized: MOV [mem], r32
+    // RmOperandSpec: MOV [mem], r32
     // ModRM.Reg is the Source Register
     uint32_t val;
-    if constexpr (S >= Specialized::Reg0 && S <= Specialized::Reg7) {
-        constexpr uint8_t FixedReg = (uint8_t)S - (uint8_t)Specialized::Reg0;
+    if constexpr (S >= RmOperandSpec::Reg0 && S <= RmOperandSpec::Reg7) {
+        constexpr uint8_t FixedReg = (uint8_t)S - (uint8_t)RmOperandSpec::Reg0;
         if constexpr (FixedReg == 0)
             val = gpr.GetReg(state, 0);
         else if constexpr (FixedReg == 1)
@@ -170,21 +142,21 @@ FORCE_INLINE LogicFlow OpMov_EvGv_Mem_Internal(LogicFuncParams) {
         val = gpr.GetReg(state, reg);
     }
 
-    uint32_t addr = ComputeLinearAddressSpecialized<NoIndexSpec, BaseRegSpec, SegmentSpec>(state, gpr, op);
+    uint32_t addr = ComputeLinearAddressSpecialized<IndexSpec, BaseRegSpec, SegmentSpec>(state, gpr, op);
     // Restart on TLB Miss
     if (!WriteMem<uint32_t, OpOnTLBMiss::Retry>(state, gpr, addr, val, utlb, op)) return LogicFlow::RetryMemoryOp;
     return LogicFlow::Continue;
 }
 
-template <Specialized DstSpec = Specialized::None, Specialized SrcSpec = Specialized::None>
+template <RmOperandSpec DstSpec = RmOperandSpec::Dynamic, RmOperandSpec SrcSpec = RmOperandSpec::Dynamic>
 FORCE_INLINE LogicFlow OpMov_GvEv_Reg_Internal(LogicFuncParams) {
-    // Specialized: MOV r32, r32
+    // RmOperandSpec: MOV r32, r32
     // Dst = Src
     uint32_t val;
 
     // Read Source
-    if constexpr (SrcSpec >= Specialized::Reg0 && SrcSpec <= Specialized::Reg7) {
-        constexpr uint8_t FixedSrc = (uint8_t)SrcSpec - (uint8_t)Specialized::Reg0;
+    if constexpr (SrcSpec >= RmOperandSpec::Reg0 && SrcSpec <= RmOperandSpec::Reg7) {
+        constexpr uint8_t FixedSrc = (uint8_t)SrcSpec - (uint8_t)RmOperandSpec::Reg0;
         if constexpr (FixedSrc == 0)
             val = gpr.GetReg(state, 0);
         else if constexpr (FixedSrc == 1)
@@ -207,8 +179,8 @@ FORCE_INLINE LogicFlow OpMov_GvEv_Reg_Internal(LogicFuncParams) {
     }
 
     // Write Destination
-    if constexpr (DstSpec >= Specialized::Reg0 && DstSpec <= Specialized::Reg7) {
-        constexpr uint8_t FixedDst = (uint8_t)DstSpec - (uint8_t)Specialized::Reg0;
+    if constexpr (DstSpec >= RmOperandSpec::Reg0 && DstSpec <= RmOperandSpec::Reg7) {
+        constexpr uint8_t FixedDst = (uint8_t)DstSpec - (uint8_t)RmOperandSpec::Reg0;
         if constexpr (FixedDst == 0)
             gpr.SetReg(state, 0, val);
         else if constexpr (FixedDst == 1)
@@ -232,7 +204,7 @@ FORCE_INLINE LogicFlow OpMov_GvEv_Reg_Internal(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-template <Specialized S = Specialized::None>
+template <RmOperandSpec S = RmOperandSpec::Dynamic>
 FORCE_INLINE LogicFlow OpMov_OaMa_Internal(LogicFuncParams) {
     // A3: MOV m32, EAX
     uint32_t addr = ComputeLinearAddress(state, gpr, op);
@@ -242,19 +214,19 @@ FORCE_INLINE LogicFlow OpMov_OaMa_Internal(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-template <Specialized S = Specialized::None, AddrNoIndexSpec NoIndexSpec = AddrNoIndexSpec::Dynamic,
+template <RmOperandSpec S = RmOperandSpec::Dynamic, AddrIndexSpec IndexSpec = AddrIndexSpec::Dynamic,
           AddrBaseRegSpec BaseRegSpec = AddrBaseRegSpec::Dynamic,
-          AddrSegmentSpec SegmentSpec = AddrSegmentSpec::General>
+          AddrSegmentSpec SegmentSpec = AddrSegmentSpec::Dynamic>
 FORCE_INLINE LogicFlow OpMov_GvEv_Mem_Internal(LogicFuncParams) {
-    // Specialized: MOV r32, [mem]
-    uint32_t addr = ComputeLinearAddressSpecialized<NoIndexSpec, BaseRegSpec, SegmentSpec>(state, gpr, op);
+    // RmOperandSpec: MOV r32, [mem]
+    uint32_t addr = ComputeLinearAddressSpecialized<IndexSpec, BaseRegSpec, SegmentSpec>(state, gpr, op);
     // Restart on TLB Miss
     auto val_res = ReadMem<uint32_t, OpOnTLBMiss::Restart>(state, gpr, addr, utlb, op);
     if (!val_res) return LogicFlow::RestartMemoryOp;
     uint32_t val = *val_res;
 
-    if constexpr (S >= Specialized::Reg0 && S <= Specialized::Reg7) {
-        constexpr uint8_t FixedReg = (uint8_t)S - (uint8_t)Specialized::Reg0;
+    if constexpr (S >= RmOperandSpec::Reg0 && S <= RmOperandSpec::Reg7) {
+        constexpr uint8_t FixedReg = (uint8_t)S - (uint8_t)RmOperandSpec::Reg0;
         if constexpr (FixedReg == 0)
             gpr.SetReg(state, 0, val);
         else if constexpr (FixedReg == 1)
@@ -294,90 +266,22 @@ FORCE_INLINE LogicFlow OpMov_EvGv(LogicFuncParams) {
 }
 
 // Named wrappers for OpMov_EvGv_Reg (0x89 Mod=3) - Specializing Source
-#define MOV_EVGV_REG_WRAPPER(RegName, Spec)                        \
-    FORCE_INLINE LogicFlow OpMov_EvGv_##RegName(LogicFuncParams) { \
-        return OpMov_EvGv_Reg_Internal<Spec>(LogicPassParams);     \
-    }
 
-MOV_EVGV_REG_WRAPPER(Eax, Specialized::RegEax)
-MOV_EVGV_REG_WRAPPER(Ecx, Specialized::RegEcx)
-MOV_EVGV_REG_WRAPPER(Edx, Specialized::RegEdx)
-MOV_EVGV_REG_WRAPPER(Ebx, Specialized::RegEbx)
-MOV_EVGV_REG_WRAPPER(Esp, Specialized::RegEsp)
-MOV_EVGV_REG_WRAPPER(Ebp, Specialized::RegEbp)
-MOV_EVGV_REG_WRAPPER(Esi, Specialized::RegEsi)
-MOV_EVGV_REG_WRAPPER(Edi, Specialized::RegEdi)
+#define FIBERCPU_BIND_OPS_DATA_MOV_IMPL_MACRO_0
+#include "instruction_kernel_bindings.inc"
+#undef FIBERCPU_BIND_OPS_DATA_MOV_IMPL_MACRO_0
 
 FORCE_INLINE LogicFlow OpMov_EvGv_Reg(LogicFuncParams) { return OpMov_EvGv_Reg_Internal<>(LogicPassParams); }
 
 // Named wrappers for OpMov_EvGv_Mem (Store) - Specializing Source
-#define MOV_STORE_WRAPPER(RegName, Spec)                            \
-    FORCE_INLINE LogicFlow OpMov_Store_##RegName(LogicFuncParams) { \
-        return OpMov_EvGv_Mem_Internal<Spec>(LogicPassParams);      \
-    }
 
-#define MOV_STORE_ADDRSPEC_WRAPPER(RegName, Spec, Suffix, NoIndexValue, BaseRegValue, SegmentValue)      \
-    FORCE_INLINE LogicFlow OpMov_Store_##RegName##_##Suffix(LogicFuncParams) {                           \
-        return OpMov_EvGv_Mem_Internal<Spec, NoIndexValue, BaseRegValue, SegmentValue>(LogicPassParams); \
-    }
+#define FIBERCPU_BIND_OPS_DATA_MOV_IMPL_MACRO_1
+#include "instruction_kernel_bindings.inc"
+#undef FIBERCPU_BIND_OPS_DATA_MOV_IMPL_MACRO_1
 
-MOV_STORE_WRAPPER(Eax, Specialized::RegEax)
-MOV_STORE_WRAPPER(Ecx, Specialized::RegEcx)
-MOV_STORE_WRAPPER(Edx, Specialized::RegEdx)
-MOV_STORE_WRAPPER(Ebx, Specialized::RegEbx)
-MOV_STORE_WRAPPER(Esp, Specialized::RegEsp)
-MOV_STORE_WRAPPER(Ebp, Specialized::RegEbp)
-MOV_STORE_WRAPPER(Esi, Specialized::RegEsi)
-MOV_STORE_WRAPPER(Edi, Specialized::RegEdi)
-
-MOV_STORE_ADDRSPEC_WRAPPER(Eax, Specialized::RegEax, EspBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
-                           AddrBaseRegSpec::Esp, AddrSegmentSpec::None)
-MOV_STORE_ADDRSPEC_WRAPPER(Ecx, Specialized::RegEcx, EspBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
-                           AddrBaseRegSpec::Esp, AddrSegmentSpec::None)
-MOV_STORE_ADDRSPEC_WRAPPER(Edx, Specialized::RegEdx, EspBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
-                           AddrBaseRegSpec::Esp, AddrSegmentSpec::None)
-MOV_STORE_ADDRSPEC_WRAPPER(Ebx, Specialized::RegEbx, EspBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
-                           AddrBaseRegSpec::Esp, AddrSegmentSpec::None)
-MOV_STORE_ADDRSPEC_WRAPPER(Esp, Specialized::RegEsp, EspBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
-                           AddrBaseRegSpec::Esp, AddrSegmentSpec::None)
-MOV_STORE_ADDRSPEC_WRAPPER(Ebp, Specialized::RegEbp, EspBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
-                           AddrBaseRegSpec::Esp, AddrSegmentSpec::None)
-MOV_STORE_ADDRSPEC_WRAPPER(Esi, Specialized::RegEsi, EspBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
-                           AddrBaseRegSpec::Esp, AddrSegmentSpec::None)
-MOV_STORE_ADDRSPEC_WRAPPER(Edi, Specialized::RegEdi, EspBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
-                           AddrBaseRegSpec::Esp, AddrSegmentSpec::None)
-MOV_STORE_ADDRSPEC_WRAPPER(Eax, Specialized::RegEax, EaxBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
-                           AddrBaseRegSpec::Eax, AddrSegmentSpec::None)
-MOV_STORE_ADDRSPEC_WRAPPER(Ecx, Specialized::RegEcx, EaxBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
-                           AddrBaseRegSpec::Eax, AddrSegmentSpec::None)
-MOV_STORE_ADDRSPEC_WRAPPER(Edx, Specialized::RegEdx, EaxBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
-                           AddrBaseRegSpec::Eax, AddrSegmentSpec::None)
-MOV_STORE_ADDRSPEC_WRAPPER(Ebx, Specialized::RegEbx, EaxBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
-                           AddrBaseRegSpec::Eax, AddrSegmentSpec::None)
-MOV_STORE_ADDRSPEC_WRAPPER(Esp, Specialized::RegEsp, EaxBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
-                           AddrBaseRegSpec::Eax, AddrSegmentSpec::None)
-MOV_STORE_ADDRSPEC_WRAPPER(Ebp, Specialized::RegEbp, EaxBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
-                           AddrBaseRegSpec::Eax, AddrSegmentSpec::None)
-MOV_STORE_ADDRSPEC_WRAPPER(Esi, Specialized::RegEsi, EaxBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
-                           AddrBaseRegSpec::Eax, AddrSegmentSpec::None)
-MOV_STORE_ADDRSPEC_WRAPPER(Edi, Specialized::RegEdi, EaxBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
-                           AddrBaseRegSpec::Eax, AddrSegmentSpec::None)
-MOV_STORE_ADDRSPEC_WRAPPER(Eax, Specialized::RegEax, EsiBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
-                           AddrBaseRegSpec::Esi, AddrSegmentSpec::None)
-MOV_STORE_ADDRSPEC_WRAPPER(Ecx, Specialized::RegEcx, EsiBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
-                           AddrBaseRegSpec::Esi, AddrSegmentSpec::None)
-MOV_STORE_ADDRSPEC_WRAPPER(Edx, Specialized::RegEdx, EsiBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
-                           AddrBaseRegSpec::Esi, AddrSegmentSpec::None)
-MOV_STORE_ADDRSPEC_WRAPPER(Ebx, Specialized::RegEbx, EsiBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
-                           AddrBaseRegSpec::Esi, AddrSegmentSpec::None)
-MOV_STORE_ADDRSPEC_WRAPPER(Esp, Specialized::RegEsp, EsiBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
-                           AddrBaseRegSpec::Esi, AddrSegmentSpec::None)
-MOV_STORE_ADDRSPEC_WRAPPER(Ebp, Specialized::RegEbp, EsiBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
-                           AddrBaseRegSpec::Esi, AddrSegmentSpec::None)
-MOV_STORE_ADDRSPEC_WRAPPER(Esi, Specialized::RegEsi, EsiBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
-                           AddrBaseRegSpec::Esi, AddrSegmentSpec::None)
-MOV_STORE_ADDRSPEC_WRAPPER(Edi, Specialized::RegEdi, EsiBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
-                           AddrBaseRegSpec::Esi, AddrSegmentSpec::None)
+#define FIBERCPU_BIND_OPS_DATA_MOV_IMPL_MACRO_2
+#include "instruction_kernel_bindings.inc"
+#undef FIBERCPU_BIND_OPS_DATA_MOV_IMPL_MACRO_2
 
 FORCE_INLINE LogicFlow OpMov_EvGv_Mem(LogicFuncParams) { return OpMov_EvGv_Mem_Internal<>(LogicPassParams); }
 
@@ -399,96 +303,22 @@ FORCE_INLINE LogicFlow OpMov_GvEv(LogicFuncParams) {
 }
 
 // Named wrappers for profiling visibility
-FORCE_INLINE LogicFlow OpMov_Ebp_Esp(LogicFuncParams) {
-    return OpMov_GvEv_Reg_Internal<Specialized::RegEbp, Specialized::RegEsp>(LogicPassParams);
-}
-FORCE_INLINE LogicFlow OpMov_Eax_Eax(LogicFuncParams) {
-    return OpMov_GvEv_Reg_Internal<Specialized::RegEax, Specialized::RegEax>(LogicPassParams);
-}
-FORCE_INLINE LogicFlow OpMov_Ecx_Eax(LogicFuncParams) {
-    return OpMov_GvEv_Reg_Internal<Specialized::RegEcx, Specialized::RegEax>(LogicPassParams);
-}
-FORCE_INLINE LogicFlow OpMov_Edx_Eax(LogicFuncParams) {
-    return OpMov_GvEv_Reg_Internal<Specialized::RegEdx, Specialized::RegEax>(LogicPassParams);
-}
-FORCE_INLINE LogicFlow OpMov_Esi_Eax(LogicFuncParams) {
-    return OpMov_GvEv_Reg_Internal<Specialized::RegEsi, Specialized::RegEax>(LogicPassParams);
-}
-FORCE_INLINE LogicFlow OpMov_Edi_Eax(LogicFuncParams) {
-    return OpMov_GvEv_Reg_Internal<Specialized::RegEdi, Specialized::RegEax>(LogicPassParams);
-}
+#define FIBERCPU_BIND_OPS_DATA_MOV_IMPL_0
+#include "instruction_kernel_bindings.inc"
+#undef FIBERCPU_BIND_OPS_DATA_MOV_IMPL_0
 
 // Generic fallback
 FORCE_INLINE LogicFlow OpMov_GvEv_Reg(LogicFuncParams) { return OpMov_GvEv_Reg_Internal<>(LogicPassParams); }
 
 // Named wrappers for OpMov_GvEv_Mem (Load) - Specializing Destination
-#define MOV_LOAD_WRAPPER(RegName, Spec)                            \
-    FORCE_INLINE LogicFlow OpMov_Load_##RegName(LogicFuncParams) { \
-        return OpMov_GvEv_Mem_Internal<Spec>(LogicPassParams);     \
-    }
 
-#define MOV_LOAD_ADDRSPEC_WRAPPER(RegName, Spec, Suffix, NoIndexValue, BaseRegValue, SegmentValue)       \
-    FORCE_INLINE LogicFlow OpMov_Load_##RegName##_##Suffix(LogicFuncParams) {                            \
-        return OpMov_GvEv_Mem_Internal<Spec, NoIndexValue, BaseRegValue, SegmentValue>(LogicPassParams); \
-    }
+#define FIBERCPU_BIND_OPS_DATA_MOV_IMPL_MACRO_3
+#include "instruction_kernel_bindings.inc"
+#undef FIBERCPU_BIND_OPS_DATA_MOV_IMPL_MACRO_3
 
-MOV_LOAD_WRAPPER(Eax, Specialized::RegEax)
-MOV_LOAD_WRAPPER(Ecx, Specialized::RegEcx)
-MOV_LOAD_WRAPPER(Edx, Specialized::RegEdx)
-MOV_LOAD_WRAPPER(Ebx, Specialized::RegEbx)
-MOV_LOAD_WRAPPER(Esp, Specialized::RegEsp)
-MOV_LOAD_WRAPPER(Ebp, Specialized::RegEbp)
-MOV_LOAD_WRAPPER(Esi, Specialized::RegEsi)
-MOV_LOAD_WRAPPER(Edi, Specialized::RegEdi)
-
-MOV_LOAD_ADDRSPEC_WRAPPER(Eax, Specialized::RegEax, EspBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
-                          AddrBaseRegSpec::Esp, AddrSegmentSpec::None)
-MOV_LOAD_ADDRSPEC_WRAPPER(Ecx, Specialized::RegEcx, EspBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
-                          AddrBaseRegSpec::Esp, AddrSegmentSpec::None)
-MOV_LOAD_ADDRSPEC_WRAPPER(Edx, Specialized::RegEdx, EspBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
-                          AddrBaseRegSpec::Esp, AddrSegmentSpec::None)
-MOV_LOAD_ADDRSPEC_WRAPPER(Ebx, Specialized::RegEbx, EspBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
-                          AddrBaseRegSpec::Esp, AddrSegmentSpec::None)
-MOV_LOAD_ADDRSPEC_WRAPPER(Esp, Specialized::RegEsp, EspBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
-                          AddrBaseRegSpec::Esp, AddrSegmentSpec::None)
-MOV_LOAD_ADDRSPEC_WRAPPER(Ebp, Specialized::RegEbp, EspBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
-                          AddrBaseRegSpec::Esp, AddrSegmentSpec::None)
-MOV_LOAD_ADDRSPEC_WRAPPER(Esi, Specialized::RegEsi, EspBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
-                          AddrBaseRegSpec::Esp, AddrSegmentSpec::None)
-MOV_LOAD_ADDRSPEC_WRAPPER(Edi, Specialized::RegEdi, EspBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
-                          AddrBaseRegSpec::Esp, AddrSegmentSpec::None)
-MOV_LOAD_ADDRSPEC_WRAPPER(Eax, Specialized::RegEax, EaxBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
-                          AddrBaseRegSpec::Eax, AddrSegmentSpec::None)
-MOV_LOAD_ADDRSPEC_WRAPPER(Ecx, Specialized::RegEcx, EaxBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
-                          AddrBaseRegSpec::Eax, AddrSegmentSpec::None)
-MOV_LOAD_ADDRSPEC_WRAPPER(Edx, Specialized::RegEdx, EaxBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
-                          AddrBaseRegSpec::Eax, AddrSegmentSpec::None)
-MOV_LOAD_ADDRSPEC_WRAPPER(Ebx, Specialized::RegEbx, EaxBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
-                          AddrBaseRegSpec::Eax, AddrSegmentSpec::None)
-MOV_LOAD_ADDRSPEC_WRAPPER(Esp, Specialized::RegEsp, EaxBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
-                          AddrBaseRegSpec::Eax, AddrSegmentSpec::None)
-MOV_LOAD_ADDRSPEC_WRAPPER(Ebp, Specialized::RegEbp, EaxBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
-                          AddrBaseRegSpec::Eax, AddrSegmentSpec::None)
-MOV_LOAD_ADDRSPEC_WRAPPER(Esi, Specialized::RegEsi, EaxBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
-                          AddrBaseRegSpec::Eax, AddrSegmentSpec::None)
-MOV_LOAD_ADDRSPEC_WRAPPER(Edi, Specialized::RegEdi, EaxBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
-                          AddrBaseRegSpec::Eax, AddrSegmentSpec::None)
-MOV_LOAD_ADDRSPEC_WRAPPER(Eax, Specialized::RegEax, EsiBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
-                          AddrBaseRegSpec::Esi, AddrSegmentSpec::None)
-MOV_LOAD_ADDRSPEC_WRAPPER(Ecx, Specialized::RegEcx, EsiBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
-                          AddrBaseRegSpec::Esi, AddrSegmentSpec::None)
-MOV_LOAD_ADDRSPEC_WRAPPER(Edx, Specialized::RegEdx, EsiBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
-                          AddrBaseRegSpec::Esi, AddrSegmentSpec::None)
-MOV_LOAD_ADDRSPEC_WRAPPER(Ebx, Specialized::RegEbx, EsiBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
-                          AddrBaseRegSpec::Esi, AddrSegmentSpec::None)
-MOV_LOAD_ADDRSPEC_WRAPPER(Esp, Specialized::RegEsp, EsiBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
-                          AddrBaseRegSpec::Esi, AddrSegmentSpec::None)
-MOV_LOAD_ADDRSPEC_WRAPPER(Ebp, Specialized::RegEbp, EsiBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
-                          AddrBaseRegSpec::Esi, AddrSegmentSpec::None)
-MOV_LOAD_ADDRSPEC_WRAPPER(Esi, Specialized::RegEsi, EsiBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
-                          AddrBaseRegSpec::Esi, AddrSegmentSpec::None)
-MOV_LOAD_ADDRSPEC_WRAPPER(Edi, Specialized::RegEdi, EsiBaseNoIndexNoSegment, AddrNoIndexSpec::NoIndex,
-                          AddrBaseRegSpec::Esi, AddrSegmentSpec::None)
+#define FIBERCPU_BIND_OPS_DATA_MOV_IMPL_MACRO_4
+#include "instruction_kernel_bindings.inc"
+#undef FIBERCPU_BIND_OPS_DATA_MOV_IMPL_MACRO_4
 
 FORCE_INLINE LogicFlow OpMov_GvEv_Mem(LogicFuncParams) { return OpMov_GvEv_Mem_Internal<>(LogicPassParams); }
 
@@ -545,11 +375,10 @@ FORCE_INLINE LogicFlow OpMov_EbIb(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-template <AddrNoIndexSpec NoIndexSpec = AddrNoIndexSpec::Dynamic,
-          AddrBaseRegSpec BaseRegSpec = AddrBaseRegSpec::Dynamic,
-          AddrSegmentSpec SegmentSpec = AddrSegmentSpec::General>
+template <AddrIndexSpec IndexSpec = AddrIndexSpec::Dynamic, AddrBaseRegSpec BaseRegSpec = AddrBaseRegSpec::Dynamic,
+          AddrSegmentSpec SegmentSpec = AddrSegmentSpec::Dynamic>
 FORCE_INLINE LogicFlow OpMov_EvIz_Mem_Internal(LogicFuncParams) {
-    const uint32_t addr = ComputeLinearAddressSpecialized<NoIndexSpec, BaseRegSpec, SegmentSpec>(state, gpr, op);
+    const uint32_t addr = ComputeLinearAddressSpecialized<IndexSpec, BaseRegSpec, SegmentSpec>(state, gpr, op);
     if (op->prefixes.flags.opsize) {
         if (!WriteMem<uint16_t, OpOnTLBMiss::Retry>(state, gpr, addr, (uint16_t)imm, utlb, op))
             return LogicFlow::RetryMemoryOp;
@@ -572,20 +401,9 @@ FORCE_INLINE LogicFlow OpMov_EvIz(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpMov_EvIz_EspBaseNoIndexNoSegment(LogicFuncParams) {
-    return OpMov_EvIz_Mem_Internal<AddrNoIndexSpec::NoIndex, AddrBaseRegSpec::Esp, AddrSegmentSpec::None>(
-        LogicPassParams);
-}
-
-FORCE_INLINE LogicFlow OpMov_EvIz_EaxBaseNoIndexNoSegment(LogicFuncParams) {
-    return OpMov_EvIz_Mem_Internal<AddrNoIndexSpec::NoIndex, AddrBaseRegSpec::Eax, AddrSegmentSpec::None>(
-        LogicPassParams);
-}
-
-FORCE_INLINE LogicFlow OpMov_EvIz_EsiBaseNoIndexNoSegment(LogicFuncParams) {
-    return OpMov_EvIz_Mem_Internal<AddrNoIndexSpec::NoIndex, AddrBaseRegSpec::Esi, AddrSegmentSpec::None>(
-        LogicPassParams);
-}
+#define FIBERCPU_BIND_OPS_DATA_MOV_IMMEDIATE_ADDRESS
+#include "instruction_kernel_bindings.inc"
+#undef FIBERCPU_BIND_OPS_DATA_MOV_IMMEDIATE_ADDRESS
 
 FORCE_INLINE LogicFlow OpMov_RegImm(LogicFuncParams) {
     // B8+reg: MOV r16/32, imm16/32
@@ -686,25 +504,25 @@ FORCE_INLINE LogicFlow OpMov_Sreg_Rm(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-template <Specialized RegSpec = Specialized::None, Specialized SizeSpec = Specialized::None>
+template <RmOperandSpec RegSpec = RmOperandSpec::Dynamic, OpsizeSpec SizeSpec = OpsizeSpec::Dynamic>
 FORCE_INLINE LogicFlow OpMovzx_Byte_Impl(LogicFuncParams) {
     // 0F B6: MOVZX r16/32, r/m8
     auto val_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!val_res) return LogicFlow::RestartMemoryOp;
     uint8_t val = *val_res;
 
-    if constexpr (SizeSpec == Specialized::Opsize16) {
-        if constexpr (RegSpec >= Specialized::Reg0 && RegSpec <= Specialized::Reg7) {
-            constexpr uint8_t FixedReg = (uint8_t)RegSpec - (uint8_t)Specialized::Reg0;
+    if (OperandIs16<SizeSpec>(op)) {
+        if constexpr (RegSpec >= RmOperandSpec::Reg0 && RegSpec <= RmOperandSpec::Reg7) {
+            constexpr uint8_t FixedReg = (uint8_t)RegSpec - (uint8_t)RmOperandSpec::Reg0;
             uint32_t current = gpr.GetReg(state, FixedReg);
             gpr.SetReg(state, FixedReg, (current & 0xFFFF0000) | (uint16_t)val);
         } else {
             uint8_t reg = (op->modrm >> 3) & 7;
             gpr.SetReg(state, reg, (gpr.GetReg(state, reg) & 0xFFFF0000) | (uint16_t)val);
         }
-    } else if constexpr (SizeSpec == Specialized::Opsize32) {
-        if constexpr (RegSpec >= Specialized::Reg0 && RegSpec <= Specialized::Reg7) {
-            constexpr uint8_t FixedReg = (uint8_t)RegSpec - (uint8_t)Specialized::Reg0;
+    } else if constexpr (SizeSpec == OpsizeSpec::Opsize32) {
+        if constexpr (RegSpec >= RmOperandSpec::Reg0 && RegSpec <= RmOperandSpec::Reg7) {
+            constexpr uint8_t FixedReg = (uint8_t)RegSpec - (uint8_t)RmOperandSpec::Reg0;
             gpr.SetReg(state, FixedReg, (uint32_t)val);
         } else {
             uint8_t reg = (op->modrm >> 3) & 7;
@@ -721,15 +539,9 @@ FORCE_INLINE LogicFlow OpMovzx_Byte_Impl(LogicFuncParams) {
 }
 
 FORCE_INLINE LogicFlow OpMovzx_Byte(LogicFuncParams) { return OpMovzx_Byte_Impl<>(LogicPassParams); }
-FORCE_INLINE LogicFlow OpMovzx_Byte_32_Eax(LogicFuncParams) {
-    return OpMovzx_Byte_Impl<Specialized::RegEax, Specialized::Opsize32>(LogicPassParams);
-}
-FORCE_INLINE LogicFlow OpMovzx_Byte_32_Ecx(LogicFuncParams) {
-    return OpMovzx_Byte_Impl<Specialized::RegEcx, Specialized::Opsize32>(LogicPassParams);
-}
-FORCE_INLINE LogicFlow OpMovzx_Byte_32_Edx(LogicFuncParams) {
-    return OpMovzx_Byte_Impl<Specialized::RegEdx, Specialized::Opsize32>(LogicPassParams);
-}
+#define FIBERCPU_BIND_OPS_DATA_MOV_IMPL_1
+#include "instruction_kernel_bindings.inc"
+#undef FIBERCPU_BIND_OPS_DATA_MOV_IMPL_1
 
 FORCE_INLINE LogicFlow OpMovzx_Word(LogicFuncParams) {
     // 0F B7: MOVZX r32, r/m16
@@ -745,25 +557,25 @@ FORCE_INLINE LogicFlow OpMovzx_Word(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-template <Specialized RegSpec = Specialized::None, Specialized SizeSpec = Specialized::None>
+template <RmOperandSpec RegSpec = RmOperandSpec::Dynamic, OpsizeSpec SizeSpec = OpsizeSpec::Dynamic>
 FORCE_INLINE LogicFlow OpMovsx_Byte_Impl(LogicFuncParams) {
     // 0F BE: MOVSX r16/32, r/m8
     auto val_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!val_res) return LogicFlow::RestartMemoryOp;
     int8_t val = (int8_t)*val_res;
 
-    if constexpr (SizeSpec == Specialized::Opsize16) {
-        if constexpr (RegSpec >= Specialized::Reg0 && RegSpec <= Specialized::Reg7) {
-            constexpr uint8_t FixedReg = (uint8_t)RegSpec - (uint8_t)Specialized::Reg0;
+    if (OperandIs16<SizeSpec>(op)) {
+        if constexpr (RegSpec >= RmOperandSpec::Reg0 && RegSpec <= RmOperandSpec::Reg7) {
+            constexpr uint8_t FixedReg = (uint8_t)RegSpec - (uint8_t)RmOperandSpec::Reg0;
             uint32_t current = gpr.GetReg(state, FixedReg);
             gpr.SetReg(state, FixedReg, (current & 0xFFFF0000) | (uint16_t)(int16_t)val);
         } else {
             uint8_t reg = (op->modrm >> 3) & 7;
             gpr.SetReg(state, reg, (gpr.GetReg(state, reg) & 0xFFFF0000) | (uint16_t)(int16_t)val);
         }
-    } else if constexpr (SizeSpec == Specialized::Opsize32) {
-        if constexpr (RegSpec >= Specialized::Reg0 && RegSpec <= Specialized::Reg7) {
-            constexpr uint8_t FixedReg = (uint8_t)RegSpec - (uint8_t)Specialized::Reg0;
+    } else if constexpr (SizeSpec == OpsizeSpec::Opsize32) {
+        if constexpr (RegSpec >= RmOperandSpec::Reg0 && RegSpec <= RmOperandSpec::Reg7) {
+            constexpr uint8_t FixedReg = (uint8_t)RegSpec - (uint8_t)RmOperandSpec::Reg0;
             gpr.SetReg(state, FixedReg, (uint32_t)(int32_t)val);
         } else {
             uint8_t reg = (op->modrm >> 3) & 7;
@@ -780,34 +592,28 @@ FORCE_INLINE LogicFlow OpMovsx_Byte_Impl(LogicFuncParams) {
 }
 
 FORCE_INLINE LogicFlow OpMovsx_Byte(LogicFuncParams) { return OpMovsx_Byte_Impl<>(LogicPassParams); }
-FORCE_INLINE LogicFlow OpMovsx_Byte_32_Eax(LogicFuncParams) {
-    return OpMovsx_Byte_Impl<Specialized::RegEax, Specialized::Opsize32>(LogicPassParams);
-}
-FORCE_INLINE LogicFlow OpMovsx_Byte_32_Ecx(LogicFuncParams) {
-    return OpMovsx_Byte_Impl<Specialized::RegEcx, Specialized::Opsize32>(LogicPassParams);
-}
-FORCE_INLINE LogicFlow OpMovsx_Byte_32_Edx(LogicFuncParams) {
-    return OpMovsx_Byte_Impl<Specialized::RegEdx, Specialized::Opsize32>(LogicPassParams);
-}
+#define FIBERCPU_BIND_OPS_DATA_MOV_IMPL_2
+#include "instruction_kernel_bindings.inc"
+#undef FIBERCPU_BIND_OPS_DATA_MOV_IMPL_2
 
-template <Specialized RegSpec = Specialized::None, Specialized SizeSpec = Specialized::None>
+template <RmOperandSpec RegSpec = RmOperandSpec::Dynamic, OpsizeSpec SizeSpec = OpsizeSpec::Dynamic>
 FORCE_INLINE LogicFlow OpMovsx_Word_Impl(LogicFuncParams) {
     // 0F BF: MOVSX r32, r/m16
     auto val_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!val_res) return LogicFlow::RestartMemoryOp;
     int16_t val = (int16_t)*val_res;
 
-    if constexpr (SizeSpec == Specialized::Opsize32) {
-        if constexpr (RegSpec >= Specialized::Reg0 && RegSpec <= Specialized::Reg7) {
-            constexpr uint8_t FixedReg = (uint8_t)RegSpec - (uint8_t)Specialized::Reg0;
+    if constexpr (SizeSpec == OpsizeSpec::Opsize32) {
+        if constexpr (RegSpec >= RmOperandSpec::Reg0 && RegSpec <= RmOperandSpec::Reg7) {
+            constexpr uint8_t FixedReg = (uint8_t)RegSpec - (uint8_t)RmOperandSpec::Reg0;
             gpr.SetReg(state, FixedReg, (uint32_t)(int32_t)val);
         } else {
             uint8_t reg = (op->modrm >> 3) & 7;
             gpr.SetReg(state, reg, (uint32_t)(int32_t)val);
         }
-    } else if constexpr (SizeSpec == Specialized::Opsize16) {
-        if constexpr (RegSpec >= Specialized::Reg0 && RegSpec <= Specialized::Reg7) {
-            constexpr uint8_t FixedReg = (uint8_t)RegSpec - (uint8_t)Specialized::Reg0;
+    } else if (OperandIs16<SizeSpec>(op)) {
+        if constexpr (RegSpec >= RmOperandSpec::Reg0 && RegSpec <= RmOperandSpec::Reg7) {
+            constexpr uint8_t FixedReg = (uint8_t)RegSpec - (uint8_t)RmOperandSpec::Reg0;
             uint32_t current = gpr.GetReg(state, FixedReg);
             gpr.SetReg(state, FixedReg, (current & 0xFFFF0000) | (uint16_t)val);
         } else {
@@ -826,27 +632,17 @@ FORCE_INLINE LogicFlow OpMovsx_Word_Impl(LogicFuncParams) {
 
 FORCE_INLINE LogicFlow OpMovsx_Word(LogicFuncParams) { return OpMovsx_Word_Impl<>(LogicPassParams); }
 
-#define MOVSX_WORD_32_REG_WRAPPER(RegName, Spec)                                \
-    FORCE_INLINE LogicFlow OpMovsx_Word_32_##RegName(LogicFuncParams) {         \
-        return OpMovsx_Word_Impl<Spec, Specialized::Opsize32>(LogicPassParams); \
-    }
+#define FIBERCPU_BIND_OPS_DATA_MOV_IMPL_MACRO_5
+#include "instruction_kernel_bindings.inc"
+#undef FIBERCPU_BIND_OPS_DATA_MOV_IMPL_MACRO_5
 
-MOVSX_WORD_32_REG_WRAPPER(Eax, Specialized::RegEax)
-MOVSX_WORD_32_REG_WRAPPER(Ecx, Specialized::RegEcx)
-MOVSX_WORD_32_REG_WRAPPER(Edx, Specialized::RegEdx)
-MOVSX_WORD_32_REG_WRAPPER(Ebx, Specialized::RegEbx)
-MOVSX_WORD_32_REG_WRAPPER(Ebp, Specialized::RegEbp)
-MOVSX_WORD_32_REG_WRAPPER(Edi, Specialized::RegEdi)
-
-#undef MOVSX_WORD_32_REG_WRAPPER
-
-template <Specialized SizeSpec, Specialized RegSpec = Specialized::None>
+template <OpsizeSpec SizeSpec, RmOperandSpec RegSpec = RmOperandSpec::Dynamic>
 FORCE_INLINE LogicFlow OpLea_Impl(LogicFuncParams) {
     uint32_t offset = ComputeEA(state, gpr, op);
 
-    if constexpr (SizeSpec == Specialized::Opsize16) {
-        if constexpr (RegSpec >= Specialized::Reg0 && RegSpec <= Specialized::Reg7) {
-            constexpr uint8_t FixedReg = (uint8_t)RegSpec - (uint8_t)Specialized::Reg0;
+    if (OperandIs16<SizeSpec>(op)) {
+        if constexpr (RegSpec >= RmOperandSpec::Reg0 && RegSpec <= RmOperandSpec::Reg7) {
+            constexpr uint8_t FixedReg = (uint8_t)RegSpec - (uint8_t)RmOperandSpec::Reg0;
             uint32_t current = gpr.GetReg(state, FixedReg);
             gpr.SetReg(state, FixedReg, (current & 0xFFFF0000) | (offset & 0xFFFF));
         } else {
@@ -854,8 +650,8 @@ FORCE_INLINE LogicFlow OpLea_Impl(LogicFuncParams) {
             gpr.SetReg(state, reg, (gpr.GetReg(state, reg) & 0xFFFF0000) | (offset & 0xFFFF));
         }
     } else {
-        if constexpr (RegSpec >= Specialized::Reg0 && RegSpec <= Specialized::Reg7) {
-            constexpr uint8_t FixedReg = (uint8_t)RegSpec - (uint8_t)Specialized::Reg0;
+        if constexpr (RegSpec >= RmOperandSpec::Reg0 && RegSpec <= RmOperandSpec::Reg7) {
+            constexpr uint8_t FixedReg = (uint8_t)RegSpec - (uint8_t)RmOperandSpec::Reg0;
             gpr.SetReg(state, FixedReg, offset);
         } else {
             uint8_t reg = (op->modrm >> 3) & 7;
@@ -865,17 +661,9 @@ FORCE_INLINE LogicFlow OpLea_Impl(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpLea_16(LogicFuncParams) { return OpLea_Impl<Specialized::Opsize16>(LogicPassParams); }
-FORCE_INLINE LogicFlow OpLea_32(LogicFuncParams) { return OpLea_Impl<Specialized::Opsize32>(LogicPassParams); }
-FORCE_INLINE LogicFlow OpLea_32_Eax(LogicFuncParams) {
-    return OpLea_Impl<Specialized::Opsize32, Specialized::RegEax>(LogicPassParams);
-}
-FORCE_INLINE LogicFlow OpLea_32_Ecx(LogicFuncParams) {
-    return OpLea_Impl<Specialized::Opsize32, Specialized::RegEcx>(LogicPassParams);
-}
-FORCE_INLINE LogicFlow OpLea_32_Edx(LogicFuncParams) {
-    return OpLea_Impl<Specialized::Opsize32, Specialized::RegEdx>(LogicPassParams);
-}
+#define FIBERCPU_BIND_OPS_DATA_MOV_IMPL_3
+#include "instruction_kernel_bindings.inc"
+#undef FIBERCPU_BIND_OPS_DATA_MOV_IMPL_3
 
 FORCE_INLINE LogicFlow OpLea(LogicFuncParams) {
     // 8D: LEA r16/32, m
@@ -889,10 +677,10 @@ FORCE_INLINE LogicFlow OpLea(LogicFuncParams) {
 // Stack Operations (Simple)
 // ------------------------------------------------------------------------------------------------
 
-template <Specialized RegSpec, Specialized SizeSpec>
+template <RmOperandSpec RegSpec, OpsizeSpec SizeSpec>
 FORCE_INLINE LogicFlow OpPush_Reg_Internal(LogicFuncParams) {
-    constexpr uint8_t FixedReg = static_cast<uint8_t>(RegSpec) - static_cast<uint8_t>(Specialized::Reg0);
-    if constexpr (SizeSpec == Specialized::Opsize16) {
+    constexpr uint8_t FixedReg = static_cast<uint8_t>(RegSpec) - static_cast<uint8_t>(RmOperandSpec::Reg0);
+    if (OperandIs16<SizeSpec>(op)) {
         if (!Push<uint16_t, true>(state, gpr, static_cast<uint16_t>(gpr.GetReg(state, FixedReg)), utlb, op))
             return LogicFlow::RestartMemoryOp;
     } else {
@@ -901,10 +689,10 @@ FORCE_INLINE LogicFlow OpPush_Reg_Internal(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-template <Specialized RegSpec, Specialized SizeSpec>
+template <RmOperandSpec RegSpec, OpsizeSpec SizeSpec>
 FORCE_INLINE LogicFlow OpPop_Reg_Internal(LogicFuncParams) {
-    constexpr uint8_t FixedReg = static_cast<uint8_t>(RegSpec) - static_cast<uint8_t>(Specialized::Reg0);
-    if constexpr (SizeSpec == Specialized::Opsize16) {
+    constexpr uint8_t FixedReg = static_cast<uint8_t>(RegSpec) - static_cast<uint8_t>(RmOperandSpec::Reg0);
+    if (OperandIs16<SizeSpec>(op)) {
         auto val_res = Pop<uint16_t, true>(state, gpr, utlb, op);
         if (!val_res) return LogicFlow::RestartMemoryOp;
         gpr.SetReg(state, FixedReg, (gpr.GetReg(state, FixedReg) & 0xFFFF0000) | *val_res);
@@ -916,30 +704,9 @@ FORCE_INLINE LogicFlow OpPop_Reg_Internal(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-#define STACK_REG_WRAPPERS(RegName, Spec)                                         \
-    FORCE_INLINE LogicFlow OpPush_Reg32_##RegName(LogicFuncParams) {              \
-        return OpPush_Reg_Internal<Spec, Specialized::Opsize32>(LogicPassParams); \
-    }                                                                             \
-    FORCE_INLINE LogicFlow OpPush_Reg16_##RegName(LogicFuncParams) {              \
-        return OpPush_Reg_Internal<Spec, Specialized::Opsize16>(LogicPassParams); \
-    }                                                                             \
-    FORCE_INLINE LogicFlow OpPop_Reg32_##RegName(LogicFuncParams) {               \
-        return OpPop_Reg_Internal<Spec, Specialized::Opsize32>(LogicPassParams);  \
-    }                                                                             \
-    FORCE_INLINE LogicFlow OpPop_Reg16_##RegName(LogicFuncParams) {               \
-        return OpPop_Reg_Internal<Spec, Specialized::Opsize16>(LogicPassParams);  \
-    }
-
-STACK_REG_WRAPPERS(Eax, Specialized::RegEax)
-STACK_REG_WRAPPERS(Ecx, Specialized::RegEcx)
-STACK_REG_WRAPPERS(Edx, Specialized::RegEdx)
-STACK_REG_WRAPPERS(Ebx, Specialized::RegEbx)
-STACK_REG_WRAPPERS(Esp, Specialized::RegEsp)
-STACK_REG_WRAPPERS(Ebp, Specialized::RegEbp)
-STACK_REG_WRAPPERS(Esi, Specialized::RegEsi)
-STACK_REG_WRAPPERS(Edi, Specialized::RegEdi)
-
-#undef STACK_REG_WRAPPERS
+#define FIBERCPU_BIND_OPS_DATA_MOV_IMPL_MACRO_6
+#include "instruction_kernel_bindings.inc"
+#undef FIBERCPU_BIND_OPS_DATA_MOV_IMPL_MACRO_6
 
 FORCE_INLINE LogicFlow OpPush_Reg(LogicFuncParams) {
     // Generic fallback; opcode-specialized handlers should handle the hot path.

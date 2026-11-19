@@ -1,7 +1,8 @@
 cmake_minimum_required(VERSION 3.20)
 
+option(FIBERCPU_ENABLE_LLVM_JIT "Enable the experimental LLVM basic-block JIT" OFF)
 # Keep native objects aligned with the NativeAOT macOS deployment target.
-if(APPLE)
+if(APPLE AND NOT FIBERCPU_ENABLE_LLVM_JIT)
     set(CMAKE_OSX_DEPLOYMENT_TARGET "12.0" CACHE STRING "Minimum macOS deployment version" FORCE)
 endif()
 
@@ -38,8 +39,12 @@ option(FIBERCPU_BUILD_STATIC "Build fibercpu as a static library instead of shar
 option(FIBERCPU_ENABLE_LTO "Enable interprocedural optimization (LTO/IPO)" ON)
 option(FIBERCPU_ENABLE_BLOCK_PROFILE "Enable lightweight per-block execution counting" OFF)
 option(FIBERCPU_ENABLE_HANDLER_PROFILE "Enable approximate per-handler execution profiling" OFF)
+option(FIBERCPU_STATIC_SPECIALIZATION "Build native ISA and operand specializations" ON)
 option(FIBERCPU_ENABLE_SUPEROPCODES "Enable generated SuperOpcode matching and handlers" ON)
 option(FIBERCPU_ENABLE_SEQUENCE_PROFILE "Count actual unfused within-block Continue edges (training only)" OFF)
+if(NOT FIBERCPU_STATIC_SPECIALIZATION)
+    set(FIBERCPU_ENABLE_SUPEROPCODES OFF)
+endif()
 if(FIBERCPU_ENABLE_SEQUENCE_PROFILE AND FIBERCPU_ENABLE_SUPEROPCODES)
     message(FATAL_ERROR "Sequence training requires FIBERCPU_ENABLE_SUPEROPCODES=OFF")
 endif()
@@ -55,6 +60,8 @@ set(FIBERCPU_OPERAND_SPECIALIZATION "AUTO" CACHE STRING "Operand lowering (AUTO,
 set_property(CACHE FIBERCPU_OPERAND_SPECIALIZATION PROPERTY STRINGS AUTO OFF PROFILE REGISTER HYBRID)
 set(FIBERCPU_OPERAND_BUDGET "AUTO" CACHE STRING "Maximum frozen operand shapes (AUTO or 0..1024)")
 set(FIBERCPU_OPERAND_PLAN_FILE "" CACHE FILEPATH "Explicit frozen operand plan (empty uses the default plan)")
+set(FIBERCPU_DYNAMIC_OPERAND_PLAN_FILE "" CACHE FILEPATH "Decoded operand plan for runtime templates (macOS arm64)")
+option(FIBERCPU_ENABLE_DYNAMIC_SPECIALIZATION "Enable native runtime instruction specialization" ON)
 set(FIBERCPU_OPERAND_SCOPE "AUTO" CACHE STRING "Operand lowering scope (AUTO, ALL, ADDED_FUSIONS)")
 set_property(CACHE FIBERCPU_OPERAND_SCOPE PROPERTY STRINGS AUTO ALL ADDED_FUSIONS)
 set(FIBERCPU_GPR_PIN "AUTO" CACHE STRING "Guest GPR pin (AUTO: supported ARM64 only; ON, OFF, ABI_ONLY, CONSERVATIVE, EAX_ESP, WRITE_BACK)")
@@ -275,7 +282,7 @@ if(FIBERCPU_GPR_PIN_MODE GREATER 0 AND NOT _can_pin_gprs)
     message(FATAL_ERROR "GPR pin requires a Clang target that supports the preserve_none tail-call handler ABI")
 endif()
 set(FIBERCPU_LOWER_OPERANDS OFF)
-if(FIBERCPU_OPERAND_MODE GREATER 0 OR FIBERCPU_GPR_PIN_MODE GREATER_EQUAL 3)
+if(FIBERCPU_STATIC_SPECIALIZATION AND (FIBERCPU_OPERAND_MODE GREATER 0 OR FIBERCPU_GPR_PIN_MODE GREATER_EQUAL 3))
     set(FIBERCPU_LOWER_OPERANDS ON)
 endif()
 set(FIBERCPU_FUSION_SHAPES OFF)
@@ -338,6 +345,21 @@ if(FIBERCPU_HAVE_GENERATED_SUPEROPCODES)
     endif()
 endif()
 
+set(_instruction_catalog "${CMAKE_CURRENT_SOURCE_DIR}/src/instruction_catalog.json")
+set(_catalog_generator "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/gen_instruction_catalog.py")
+set(_catalog_products "${CMAKE_CURRENT_BINARY_DIR}/generated/instruction_families.h"
+                      "${CMAKE_CURRENT_BINARY_DIR}/generated/instruction_catalog.inc"
+                      "${CMAKE_CURRENT_BINARY_DIR}/generated/instruction_kernel_bindings.inc"
+                      "${CMAKE_CURRENT_BINARY_DIR}/generated/llvm_block_operations.inc"
+                      "${CMAKE_CURRENT_BINARY_DIR}/generated/llvm_block_entries.inc"
+                      "${CMAKE_CURRENT_BINARY_DIR}/generated/handwritten_fusions.inc")
+add_custom_command(OUTPUT ${_catalog_products}
+    COMMAND "${Python3_EXECUTABLE}" "${_catalog_generator}" --catalog "${_instruction_catalog}"
+        --output "${CMAKE_CURRENT_BINARY_DIR}/generated"
+    DEPENDS "${_catalog_generator}" "${_instruction_catalog}"
+    VERBATIM)
+add_custom_target(fibercpu_instruction_catalog DEPENDS ${_catalog_products})
+
 # Source files
 file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS "src/*.cpp" "src/*.c" "src/*.h")
 list(FILTER SOURCES EXCLUDE REGEX "main.cpp")
@@ -375,14 +397,12 @@ if(FIBERCPU_LOWER_OPERANDS)
     add_custom_command(OUTPUT "${_operand_output}"
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/gen_operand_specializations.py"
             --source "${_operand_source}" --plan "${_plan}"
-            --families "${CMAKE_CURRENT_SOURCE_DIR}/src/instruction_families.h"
-            --variants "${CMAKE_CURRENT_SOURCE_DIR}/src/instruction_variants.inc"
-            --fallbacks "${CMAKE_CURRENT_SOURCE_DIR}/src/instruction_fallbacks.inc"
+            --catalog "${_instruction_catalog}"
             --output "${_operand_output}" --mode "${FIBERCPU_OPERAND_MODE}"
             --pin-specialization "${FIBERCPU_PIN_SPECIALIZATION_MODE}" --budget "${FIBERCPU_OPERAND_BUDGET}" --fused-only "$<BOOL:${FIBERCPU_OPERAND_FUSIONS_ONLY}>" --pin-mode "${FIBERCPU_GPR_PIN_MODE}" --pin-mask "${_pin_mask}"
         DEPENDS "${_operand_source}" "${_plan}" "${_operand_options}" "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/gen_operand_specializations.py"
             "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/operand_specialization_data.py"
-            src/instruction_families.h src/instruction_variants.inc src/instruction_fallbacks.inc
+            "${_instruction_catalog}" "${_catalog_generator}"
         VERBATIM)
     set_source_files_properties("${_combined}" PROPERTIES OBJECT_DEPENDS "${_operand_output}")
     list(APPEND SOURCES "${_combined}" "${_operand_output}")
@@ -390,6 +410,7 @@ elseif(FIBERCPU_HAVE_GENERATED_SUPEROPCODES)
     list(APPEND SOURCES "${FIBERCPU_GENERATED_SUPEROPCODES_FILE}")
 endif()
 list(FILTER SOURCES EXCLUDE REGEX "handler_reflection_exports\\.cpp$")
+list(FILTER SOURCES EXCLUDE REGEX "dynamic_operand_specialization\\.cpp$")
 list(FILTER SOURCES EXCLUDE REGEX "jit/.*")
 
 if(NOT MSVC AND NOT EMSCRIPTEN)
@@ -406,8 +427,7 @@ endif()
 
 # Fingerprint the semantic catalog independently of host addresses/compiler ABI.
 set(INSTRUCTION_CATALOG_INPUTS
-    instruction_spec.h instruction_families.h instruction_variants.inc
-    instruction_fallbacks.inc instruction_variants.cpp instruction_variants.h specialization.h)
+    instruction_spec.h instruction_kernel_spec.h instruction_catalog.json instruction_variants.cpp instruction_variants.h specialization.h)
 set(INSTRUCTION_CATALOG_FINGERPRINT "")
 foreach(input IN LISTS INSTRUCTION_CATALOG_INPUTS)
     set(path "${CMAKE_CURRENT_SOURCE_DIR}/src/${input}")
@@ -431,12 +451,29 @@ if(FIBERCPU_LOWER_OPERANDS)
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_plan}")
     file(SHA256 "${_plan}" _operand_plan_hash)
 endif()
-set(FIBERCPU_OPTIMIZATION_CONFIG "fusion=${FIBERCPU_FUSION_STRATEGY};enabled=${FIBERCPU_ENABLE_SUPEROPCODES};operand=${FIBERCPU_OPERAND_SPECIALIZATION};budget=${FIBERCPU_OPERAND_BUDGET};scope=${FIBERCPU_OPERAND_SCOPE};pin=${FIBERCPU_GPR_PIN};pins=${_pin_registers};coverage=${FIBERCPU_PIN_SPECIALIZATION};plan_source=${_operand_plan_source};plan=${_operand_plan_hash}")
+set(FIBERCPU_OPTIMIZATION_CONFIG "static=${FIBERCPU_STATIC_SPECIALIZATION};fusion=${FIBERCPU_FUSION_STRATEGY};enabled=${FIBERCPU_ENABLE_SUPEROPCODES};operand=${FIBERCPU_OPERAND_SPECIALIZATION};budget=${FIBERCPU_OPERAND_BUDGET};scope=${FIBERCPU_OPERAND_SCOPE};pin=${FIBERCPU_GPR_PIN};pins=${_pin_registers};coverage=${FIBERCPU_PIN_SPECIALIZATION};plan_source=${_operand_plan_source};plan=${_operand_plan_hash}")
+set(FIBERCPU_DYNAMIC_OPERANDS OFF)
+if(FIBERCPU_ENABLE_DYNAMIC_SPECIALIZATION AND FIBERCPU_DYNAMIC_OPERAND_PLAN_FILE)
+    if(APPLE AND NOT CMAKE_CROSSCOMPILING AND CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL "arm64" AND
+       (NOT CMAKE_OSX_ARCHITECTURES OR CMAKE_OSX_ARCHITECTURES STREQUAL "arm64") AND
+       CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND PGO_MODE STREQUAL "OFF")
+        set(FIBERCPU_DYNAMIC_OPERANDS ON)
+    else()
+        message(STATUS "Dynamic instruction specialization unavailable for this toolchain")
+    endif()
+endif()
+if(FIBERCPU_DYNAMIC_OPERANDS)
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${FIBERCPU_DYNAMIC_OPERAND_PLAN_FILE}")
+    file(SHA256 "${FIBERCPU_DYNAMIC_OPERAND_PLAN_FILE}" _dynamic_plan_hash)
+    string(APPEND FIBERCPU_OPTIMIZATION_CONFIG ";dynamic_plan=${_dynamic_plan_hash}")
+endif()
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/generated/optimization_config.h"
     "#pragma once\n#define FIBERCPU_OPTIMIZATION_CONFIG \"${FIBERCPU_OPTIMIZATION_CONFIG}\"\n")
 
 # Object library for core parts (contains the opcodes to scan)
-add_library(fibercpu_core OBJECT ${SOURCES})
+add_library(fibercpu_core OBJECT ${SOURCES} ${_catalog_products})
+add_dependencies(fibercpu_core fibercpu_instruction_catalog)
+target_compile_definitions(fibercpu_core PRIVATE FIBERCPU_STATIC_SPECIALIZATION=$<BOOL:${FIBERCPU_STATIC_SPECIALIZATION}>)
 set_target_properties(fibercpu_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(fibercpu_core PRIVATE . "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_include_directories(fibercpu_core SYSTEM PRIVATE ${simde_SOURCE_DIR})
@@ -514,7 +551,7 @@ set(FIBERCPU_GENERATED_HANDLER_REFLECTION_CPP
 # Its llvm-nm may not understand the newer Apple Clang host LTO bitcode.
 # Select Xcode's matching symbol reader for host objects only.
 set(FIBERCPU_REFLECTION_TOOL_ARGS)
-if(APPLE AND NOT EMSCRIPTEN)
+if(APPLE AND CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang" AND NOT EMSCRIPTEN)
     execute_process(COMMAND xcrun --find nm
         OUTPUT_VARIABLE FIBERCPU_APPLE_NM
         OUTPUT_STRIP_TRAILING_WHITESPACE
@@ -566,6 +603,8 @@ endif()
 target_compile_definitions(fibercpu_core PRIVATE FIBERCPU_GPR_PIN_MODE=${FIBERCPU_GPR_PIN_MODE}
     FIBERCPU_OPERAND_FUSIONS_ONLY=$<BOOL:${FIBERCPU_OPERAND_FUSIONS_ONLY}> FIBERCPU_FUSION_SHAPES=$<BOOL:${FIBERCPU_FUSION_SHAPES}> FIBERCPU_OPERAND_MODE=${FIBERCPU_OPERAND_MODE} FIBERCPU_LOWER_OPERANDS=$<BOOL:${FIBERCPU_LOWER_OPERANDS}>)
 target_compile_definitions(fibercpu PUBLIC FIBERCPU_GPR_PIN_MODE=${FIBERCPU_GPR_PIN_MODE})
+target_compile_definitions(fibercpu PRIVATE FIBERCPU_STATIC_SPECIALIZATION=$<BOOL:${FIBERCPU_STATIC_SPECIALIZATION}>)
+target_compile_definitions(fibercpu PRIVATE FIBERCPU_LOWER_OPERANDS=$<BOOL:${FIBERCPU_LOWER_OPERANDS}>)
 target_compile_definitions(fibercpu PRIVATE FIBERCPU_OPERAND_MODE=${FIBERCPU_OPERAND_MODE})
 target_include_directories(fibercpu PRIVATE src PUBLIC "$<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/generated>")
 target_include_directories(fibercpu SYSTEM PRIVATE ${simde_SOURCE_DIR})
@@ -709,6 +748,110 @@ if(FIBERCPU_ENABLE_LTO)
     endif()
 endif()
 
+if(FIBERCPU_DYNAMIC_OPERANDS)
+    set(_dynamic_src "${CMAKE_CURRENT_SOURCE_DIR}/src")
+    set(_dynamic_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/dynamic_operands")
+    file(MAKE_DIRECTORY "${_dynamic_dir}")
+    set(_dynamic_script "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/gen_dynamic_operand_specializations.py")
+    set(_dynamic_data "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/operand_specialization_data.py")
+    set(_dynamic_arm64 "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/operand_stencil_arm64.py")
+    set(_probe_shards 16)
+    math(EXPR _last_probe "${_probe_shards} - 1")
+    set(_probe_sources "")
+    foreach(shard RANGE 0 ${_last_probe})
+        list(APPEND _probe_sources "${_dynamic_dir}/probe_${shard}.cpp")
+    endforeach()
+    file(GENERATE OUTPUT "${_dynamic_dir}/inputs.txt" CONTENT
+        "${FIBERCPU_DYNAMIC_OPERAND_PLAN_FILE};${FIBERCPU_HAVE_GENERATED_SUPEROPCODES};${FIBERCPU_GENERATED_SUPEROPCODES_FILE}\n")
+    set(_dynamic_fusions "")
+    if(FIBERCPU_HAVE_GENERATED_SUPEROPCODES)
+        set(_dynamic_fusions "${FIBERCPU_GENERATED_SUPEROPCODES_FILE}")
+        set(_dynamic_fusion_args --fusions "${_dynamic_fusions}")
+    endif()
+    set(_probe_manifest "${_dynamic_dir}/probes.json")
+    add_custom_command(OUTPUT ${_probe_sources} "${_probe_manifest}"
+        COMMAND "${Python3_EXECUTABLE}" "${_dynamic_script}" probes
+            --src "${_dynamic_src}" --plan "${FIBERCPU_DYNAMIC_OPERAND_PLAN_FILE}"
+            --shards "${_probe_shards}" --output "${_dynamic_dir}" ${_dynamic_fusion_args}
+        DEPENDS "${_dynamic_dir}/inputs.txt" "${FIBERCPU_DYNAMIC_OPERAND_PLAN_FILE}" "${_dynamic_script}"
+            "${_dynamic_data}" "${_dynamic_arm64}" ${_dynamic_fusions}
+            "${_instruction_catalog}" "${_catalog_generator}"
+        VERBATIM)
+    add_library(fibercpu_operand_probes OBJECT ${_probe_sources})
+    add_dependencies(fibercpu_operand_probes fibercpu_instruction_catalog)
+    set_target_properties(fibercpu_operand_probes PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF
+        POSITION_INDEPENDENT_CODE ON)
+    target_compile_definitions(fibercpu_operand_probes PRIVATE $<TARGET_PROPERTY:fibercpu_core,COMPILE_DEFINITIONS>)
+    target_compile_options(fibercpu_operand_probes PRIVATE $<TARGET_PROPERTY:fibercpu_core,COMPILE_OPTIONS>
+        -O3 -fno-lto -fno-stack-protector)
+    target_include_directories(fibercpu_operand_probes PRIVATE $<TARGET_PROPERTY:fibercpu_core,INCLUDE_DIRECTORIES>)
+    target_link_libraries(fibercpu_operand_probes PRIVATE unordered_dense::unordered_dense)
+
+    set(_bundle_dir "${_dynamic_dir}")
+    if(CMAKE_CONFIGURATION_TYPES)
+        string(APPEND _bundle_dir "/$<CONFIG>")
+    endif()
+    set(_bundle "${_bundle_dir}/dynamic_operand_bundle.inc")
+    set(_report "${_bundle_dir}/report.json")
+    add_custom_command(OUTPUT "${_bundle}" "${_report}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${_bundle_dir}"
+        COMMAND "${Python3_EXECUTABLE}" "${_dynamic_script}" bundle --src "${_dynamic_src}"
+            --manifest "${_probe_manifest}" --output "${_bundle}" --report "${_report}"
+            $<TARGET_OBJECTS:fibercpu_operand_probes>
+        DEPENDS fibercpu_operand_probes $<TARGET_OBJECTS:fibercpu_operand_probes> "${_probe_manifest}"
+            "${_dynamic_script}" "${_dynamic_data}" "${_dynamic_arm64}"
+        COMMAND_EXPAND_LISTS VERBATIM)
+    target_compile_definitions(fibercpu_core PRIVATE FIBERCPU_DYNAMIC_OPERANDS=1)
+    target_compile_definitions(fibercpu PRIVATE FIBERCPU_DYNAMIC_OPERANDS=1)
+    target_include_directories(fibercpu PRIVATE "${_bundle_dir}")
+    target_sources(fibercpu PRIVATE src/dynamic_operand_specialization.cpp "${_bundle}")
+endif()
+
+if(FIBERCPU_ENABLE_LLVM_JIT)
+    if(NOT APPLE OR CMAKE_CROSSCOMPILING OR NOT CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL "arm64" OR
+       (CMAKE_OSX_ARCHITECTURES AND NOT CMAKE_OSX_ARCHITECTURES STREQUAL "arm64") OR
+       NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang" OR NOT PGO_MODE STREQUAL "OFF" OR
+       FIBERCPU_ENABLE_HANDLER_PROFILE OR FIBERCPU_ENABLE_SEQUENCE_PROFILE)
+        message(FATAL_ERROR "LLVM block JIT requires native macOS arm64, upstream Clang, and no PGO or handler tracing")
+    endif()
+    find_package(LLVM REQUIRED CONFIG)
+    string(REGEX MATCH "^[0-9]+" _clang_major "${CMAKE_CXX_COMPILER_VERSION}")
+    if(LLVM_VERSION_MAJOR LESS 21 OR NOT _clang_major STREQUAL "${LLVM_VERSION_MAJOR}")
+        message(FATAL_ERROR "LLVM bitcode producer and ORC loader require matching major versions (LLVM 21 or newer)")
+    endif()
+
+    add_library(fibercpu_block_ir OBJECT src/jit/llvm_block_ir.cpp)
+    add_dependencies(fibercpu_block_ir fibercpu_instruction_catalog)
+    set_target_properties(fibercpu_block_ir PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF POSITION_INDEPENDENT_CODE ON)
+    target_compile_definitions(fibercpu_block_ir PRIVATE $<TARGET_PROPERTY:fibercpu_core,COMPILE_DEFINITIONS>)
+    target_compile_options(fibercpu_block_ir PRIVATE $<TARGET_PROPERTY:fibercpu_core,COMPILE_OPTIONS>
+        -O1 -fno-lto -fno-stack-protector -emit-llvm)
+    target_include_directories(fibercpu_block_ir PRIVATE $<TARGET_PROPERTY:fibercpu_core,INCLUDE_DIRECTORIES>)
+    target_link_libraries(fibercpu_block_ir PRIVATE unordered_dense::unordered_dense)
+    set(_llvm_dir "${CMAKE_CURRENT_BINARY_DIR}/generated")
+    if(CMAKE_CONFIGURATION_TYPES)
+        string(APPEND _llvm_dir "/$<CONFIG>")
+    endif()
+    set(_llvm_bitcode "${_llvm_dir}/llvm_block_bitcode.inc")
+    set(_embed_script "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/embed_llvm_bitcode.py")
+    add_custom_command(OUTPUT "${_llvm_bitcode}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${_llvm_dir}"
+        COMMAND "${Python3_EXECUTABLE}" "${_embed_script}" $<TARGET_OBJECTS:fibercpu_block_ir> "${_llvm_bitcode}"
+        DEPENDS fibercpu_block_ir $<TARGET_OBJECTS:fibercpu_block_ir> "${_embed_script}"
+        COMMAND_EXPAND_LISTS VERBATIM)
+    target_compile_definitions(fibercpu_core PRIVATE FIBERCPU_LLVM_JIT=1)
+    target_compile_definitions(fibercpu PRIVATE FIBERCPU_LLVM_JIT=1)
+    target_include_directories(fibercpu PRIVATE "${_llvm_dir}")
+    target_include_directories(fibercpu SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
+    target_sources(fibercpu PRIVATE src/jit/llvm_block_jit.cpp "${_llvm_bitcode}")
+    if(TARGET LLVM)
+        target_link_libraries(fibercpu PRIVATE LLVM)
+    else()
+        llvm_map_components_to_libnames(_llvm_components native orcjit passes)
+        target_link_libraries(fibercpu PRIVATE ${_llvm_components})
+    endif()
+endif()
+
 # macOS codesign support
 if(APPLE)
     option(CODESIGN_IDENTITY "Codesign identity to sign the built library. Use empty for ad-hoc, SKIP to disable" "")
@@ -744,6 +887,10 @@ if(FIBERCPU_TEST_SPECIALIZATION_INDEX)
     add_executable(specialization_index_test ../benchmark/decode/specialization_test.cpp)
     target_include_directories(specialization_index_test PRIVATE src ${simde_SOURCE_DIR})
     target_link_libraries(specialization_index_test PRIVATE fibercpu unordered_dense::unordered_dense)
+    if(FIBERCPU_DYNAMIC_OPERANDS)
+        target_compile_definitions(fibercpu PRIVATE FIBERCPU_VALIDATE_SPECIALIZATION_INDEX=1)
+        target_compile_definitions(specialization_index_test PRIVATE FIBERCPU_DYNAMIC_OPERANDS=1)
+    endif()
     if(FIBERCPU_HAVE_GENERATED_SUPEROPCODES AND
        FIBERCPU_GENERATED_WITH_HANDWRITTEN)
         target_compile_definitions(specialization_index_test PRIVATE FIBERCPU_TEST_GENERATED_SUPEROPCODES=1)
@@ -758,4 +905,27 @@ if(FIBERCPU_TEST_SPECIALIZATION_INDEX)
         endif()
     endforeach()
     add_test(NAME decode_storage COMMAND decode_storage_test)
+    if(FIBERCPU_ENABLE_LLVM_JIT)
+        add_executable(llvm_block_test ../benchmark/decode/llvm_block_test.cpp)
+        target_include_directories(llvm_block_test PRIVATE src)
+        target_include_directories(llvm_block_test SYSTEM PRIVATE ${simde_SOURCE_DIR})
+        target_link_libraries(llvm_block_test PRIVATE fibercpu)
+        add_test(NAME llvm_block_disabled COMMAND llvm_block_test)
+        set_tests_properties(llvm_block_disabled PROPERTIES ENVIRONMENT "FIBERCPU_LLVM_JIT=0")
+        add_test(NAME llvm_block_generic COMMAND llvm_block_test enabled)
+        set_tests_properties(llvm_block_generic PROPERTIES ENVIRONMENT
+            "FIBERCPU_LLVM_JIT=generic;FIBERCPU_LLVM_JIT_HOT_THRESHOLD=1")
+        add_test(NAME llvm_block_specialized COMMAND llvm_block_test enabled)
+        set_tests_properties(llvm_block_specialized PROPERTIES ENVIRONMENT
+            "FIBERCPU_LLVM_JIT=1;FIBERCPU_LLVM_JIT_HOT_THRESHOLD=1")
+        add_test(NAME llvm_block_hot COMMAND llvm_block_test hot)
+        set_tests_properties(llvm_block_hot PROPERTIES ENVIRONMENT
+            "FIBERCPU_LLVM_JIT=1;FIBERCPU_LLVM_JIT_HOT_THRESHOLD=4")
+        add_test(NAME llvm_block_reuse COMMAND llvm_block_test reuse)
+        set_tests_properties(llvm_block_reuse PROPERTIES ENVIRONMENT
+            "FIBERCPU_LLVM_JIT=1;FIBERCPU_LLVM_JIT_HOT_THRESHOLD=1")
+        add_test(NAME llvm_block_budget COMMAND llvm_block_test budget)
+        set_tests_properties(llvm_block_budget PROPERTIES ENVIRONMENT
+            "FIBERCPU_LLVM_JIT=1;FIBERCPU_LLVM_JIT_HOT_THRESHOLD=1;FIBERCPU_LLVM_JIT_CODE_BUDGET=16384")
+    endif()
 endif()
