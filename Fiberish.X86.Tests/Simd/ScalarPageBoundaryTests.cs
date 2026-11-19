@@ -58,6 +58,57 @@ public sealed class ScalarPageBoundaryTests
         Assert.Equal(SimdTestSupport.Lanes(32, 0x3F800000), cpu.ReadXmm(3));
     }
 
+    [Fact]
+    public unsafe void FusedScalarStores_FaultingStraddleDoesNotPartiallyWriteOrReplayFirstStore()
+    {
+        using var cpu = SimdTestSupport.Create();
+        const uint edge = CpuSandbox.DataAddress + CpuSandbox.PageSize;
+        const uint warmEip = CpuSandbox.CodeAddress + 0x100;
+        cpu.MapMemory(edge, CpuSandbox.PageSize);
+        cpu.WriteMemory(edge, [0xA1, 0xA2, 0xA3, 0xA4]);
+        cpu.ProtectMemory(edge, CpuSandbox.PageSize, 1);
+        cpu[Reg.EAX] = edge - 4;
+        cpu.WriteMemory(warmEip, [0xF3, 0x0F, 0x11, 0x00]); // MOVSS [eax], xmm0
+        byte[] code =
+        [
+            0xF3, 0x0F, 0x11, 0x00,      // MOVSS [eax], xmm0
+            0xF3, 0x0F, 0x11, 0x48, 0x02 // MOVSS [eax+2], xmm1
+        ];
+        cpu.WriteCode(code);
+        cpu.Eip = warmEip;
+        cpu.Run(warmEip + 4); // Prime the writable first page's software TLB entry.
+        Assert.Equal(EmuStatus.Stopped, cpu.Status);
+
+        cpu.Eip = CpuSandbox.CodeAddress;
+        cpu.WriteXmm(0, SimdTestSupport.Lanes(32, 0x44332211));
+        cpu.WriteXmm(1, SimdTestSupport.Lanes(32, 0x88776655));
+        uint end = CpuSandbox.CodeAddress + (uint)code.Length;
+        cpu.Run(end);
+        Assert.Equal(EmuStatus.Fault, cpu.Status);
+        Assert.Equal(14, cpu.FaultVector);
+        Assert.Equal(edge, cpu.FaultAddress);
+        Assert.Equal(CpuSandbox.CodeAddress + 4, cpu.Eip);
+        SimdTestSupport.Bytes([0x11, 0x22, 0x33, 0x44, 0xA1, 0xA2, 0xA3, 0xA4],
+            cpu.ReadMemory(edge - 4, 8), "only the first store committed");
+
+        if ((X86Native.GetBuildFeatures() & 1) != 0)
+        {
+            var count = X86Native.GetBlockCount(cpu.State);
+            var blocks = new IntPtr[count];
+            fixed (IntPtr* pointer = blocks) Assert.Equal(count, X86Native.GetBlockList(cpu.State, pointer, count));
+            var head = Assert.Single(blocks.Where(p => ((X86Native.BasicBlock*)p)->start_eip == CpuSandbox.CodeAddress));
+            Assert.Contains("HandWrittenSuperOpcode_StoreTwoMovss",
+                X86Native.GetHandlerSymbolById(X86Native.GetHandlerId(((X86Native.BasicBlock*)head)->entry)));
+        }
+
+        cpu.ProtectMemory(edge, CpuSandbox.PageSize, 3);
+        cpu.WriteMemory(edge - 4, [0xB1, 0xB2]); // Detect replay of the already-completed first store.
+        cpu.Run(end);
+        Assert.Equal(EmuStatus.Stopped, cpu.Status);
+        SimdTestSupport.Bytes([0xB1, 0xB2, 0x55, 0x66, 0x77, 0x88, 0xA3, 0xA4],
+            cpu.ReadMemory(edge - 4, 8), "resume committed only the second store");
+    }
+
     [Theory]
     [InlineData(4, false)]
     [InlineData(8, false)]

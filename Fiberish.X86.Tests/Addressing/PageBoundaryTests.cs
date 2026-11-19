@@ -157,6 +157,47 @@ public sealed class DataPageBoundaryTests
         }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void WarmLastPage_DwordAccessWrapsToGuestPageZero(bool store)
+    {
+        using var cpu = AddressingTestSupport.Create();
+        const uint lastByte = uint.MaxValue;
+        cpu.MapMemory(lastByte & ~(CpuSandbox.PageSize - 1), CpuSandbox.PageSize);
+        cpu.MapMemory(0, CpuSandbox.PageSize);
+        cpu.WriteMemory(lastByte - 1, [0xA1, 0x11]);
+        cpu.WriteMemory(0, [0x22, 0x33, 0x44, 0xA2]);
+        cpu[Reg.EBX] = lastByte;
+        cpu[Reg.EDX] = 0x89ABCDEF;
+
+        // Two MOV AL,[EBX] reads prime the software TLB and then the micro-TLB
+        // before the dword MOV uses the same address.
+        byte[] code = [0x8A, 0x03, 0x8A, 0x03, ..Move(4, store)];
+        cpu.WriteCode(code);
+        cpu.Run(CpuSandbox.CodeAddress + (uint)code.Length);
+
+        Assert.Equal(EmuStatus.Stopped, cpu.Status);
+        Assert.Equal(0x11u, cpu[Reg.EAX] & 0xFFu);
+        Assert.Equal(store ? 0x89ABCDEFu : 0x44332211u, cpu[Reg.EDX]);
+        AddressingTestSupport.Bytes(store ? [0xA1, 0xEF] : [0xA1, 0x11], cpu.ReadMemory(lastByte - 1, 2),
+            "last guest page");
+        AddressingTestSupport.Bytes(store ? [0xCD, 0xAB, 0x89, 0xA2] : [0x22, 0x33, 0x44, 0xA2], cpu.ReadMemory(0, 4),
+            "guest page zero");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void InvalidTlbTag_DoesNotMatchLastGuestByte(bool store)
+    {
+        using var cpu = AddressingTestSupport.Create();
+        cpu[Reg.EBX] = uint.MaxValue;
+        byte[] code = Move(1, store);
+        cpu.WriteCode(code);
+        AddressingTestSupport.Fault(cpu, code, 14, uint.MaxValue, "unmapped byte at the invalid tag sentinel");
+    }
+
     private static byte[] Move(int width, bool store) => width == 2
         ? new byte[] { 0x66, store ? (byte)0x89 : (byte)0x8B, 0x13 }
         : new byte[] { width == 1 ? (store ? (byte)0x88 : (byte)0x8A) : (store ? (byte)0x89 : (byte)0x8B), 0x13 };

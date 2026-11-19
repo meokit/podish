@@ -273,42 +273,69 @@ bool Mmu::try_cross_page_dword_tlb(GuestAddr addr, std::byte* value) {
 }
 
 template <typename T>
-MemResult<T> Mmu::read_tlb_only(GuestAddr addr, MicroTLB* utlb) {
-    const GuestAddr end_addr = addr + sizeof(T) - 1;
-    const uint32_t target_tag = addr & ~PAGE_MASK;
-    const uint32_t cross_page_mask = (addr ^ end_addr) & ~PAGE_MASK;
+struct MicroTlbAccessGuard {
+    static_assert(sizeof(T) <= PAGE_SIZE);
+    GuestAddr addr;
+    GuestAddr tag = addr & ~PAGE_MASK;
 
-    if (((utlb->tag_r ^ target_tag) | cross_page_mask) == 0) [[likely]] {
-#ifdef ENABLE_TLB_STATS
-        stats.l1_read_hits++;
-        stats.total_reads++;
+    FORCE_INLINE bool can_probe() const {
+#if defined(__x86_64__) || defined(_M_X64)
+        // Reject straddles (including guest address wrap) before either probe.
+        // This keeps the offset check independent of the tag compare on x64.
+        return (addr & PAGE_MASK) <= PAGE_SIZE - sizeof(T);
+#else
+        return true;
 #endif
-        T val;
-        std::memcpy(&val, (const void*)(utlb->addend + addr), sizeof(T));
-        return val;
     }
 
-    const size_t idx = (addr >> PAGE_SHIFT) & TLB_INDEX_MASK;
-    const auto entry = tlb.read_tlb[idx];
-
-    if (((entry.tag ^ target_tag) | cross_page_mask) == 0) [[likely]] {
-#ifdef ENABLE_TLB_STATS
-        stats.l2_read_hits++;
-        stats.total_reads++;
+    FORCE_INLINE bool matches(GuestAddr cached_tag) const {
+#if defined(__x86_64__) || defined(_M_X64)
+        // Compare the whole tag: the unaligned invalid sentinel cannot match.
+        return cached_tag == tag;
+#else
+        const GuestAddr end_addr = addr + sizeof(T) - 1;
+        const GuestAddr cross_page_mask = (addr ^ end_addr) & ~PAGE_MASK;
+        return ((cached_tag ^ tag) | cross_page_mask) == 0;
 #endif
-        T val;
-        std::memcpy(&val, (const void*)(entry.addend + addr), sizeof(T));
+    }
+};
 
-        utlb->tag_r = target_tag;
-        utlb->addend = entry.addend;
-        // Write fast-path eligibility must match TLB::fill: a clean (not Dirty)
-        // page must take the slow path so the write can mark it dirty, otherwise
-        // the store is invisible to file writeback/eviction.
-        utlb->tag_w = (has_property(entry.perm, Property::Write) && has_property(entry.perm, Property::Dirty) &&
-                       !has_property(entry.perm, Property::ForceWriteSlow))
-                          ? target_tag
-                          : std::numeric_limits<decltype(utlb->tag_w)>::max();
-        return val;
+template <typename T>
+MemResult<T> Mmu::read_tlb_only(GuestAddr addr, MicroTLB* utlb) {
+    const MicroTlbAccessGuard<T> guard{addr};
+    if (guard.can_probe()) [[likely]] {
+        if (guard.matches(utlb->tag_r)) [[likely]] {
+#ifdef ENABLE_TLB_STATS
+            stats.l1_read_hits++;
+            stats.total_reads++;
+#endif
+            T val;
+            std::memcpy(&val, (const void*)(utlb->addend + addr), sizeof(T));
+            return val;
+        }
+
+        const size_t idx = (addr >> PAGE_SHIFT) & TLB_INDEX_MASK;
+        const auto entry = tlb.read_tlb[idx];
+
+        if (guard.matches(entry.tag)) [[likely]] {
+#ifdef ENABLE_TLB_STATS
+            stats.l2_read_hits++;
+            stats.total_reads++;
+#endif
+            T val;
+            std::memcpy(&val, (const void*)(entry.addend + addr), sizeof(T));
+
+            utlb->tag_r = guard.tag;
+            utlb->addend = entry.addend;
+            // Write fast-path eligibility must match TLB::fill: a clean (not Dirty)
+            // page must take the slow path so the write can mark it dirty, otherwise
+            // the store is invisible to file writeback/eviction.
+            utlb->tag_w = (has_property(entry.perm, Property::Write) && has_property(entry.perm, Property::Dirty) &&
+                           !has_property(entry.perm, Property::ForceWriteSlow))
+                              ? guard.tag
+                              : std::numeric_limits<decltype(utlb->tag_w)>::max();
+            return val;
+        }
     }
 
     InvalidateMicroTLB(utlb);
@@ -323,43 +350,42 @@ MemResult<T> Mmu::read_tlb_only(GuestAddr addr, MicroTLB* utlb) {
 
 template <typename T, bool Store, bool FlushOnMiss>
 MemResult<std::conditional_t<Store, void, HostAddr>> Mmu::write_tlb_impl(GuestAddr addr, T val, MicroTLB* utlb) {
-    const GuestAddr end_addr = addr + sizeof(T) - 1;
-    const uint32_t target_tag = addr & ~PAGE_MASK;
-    const uint32_t cross_page_mask = (addr ^ end_addr) & ~PAGE_MASK;
-
-    if (((utlb->tag_w ^ target_tag) | cross_page_mask) == 0) [[likely]] {
+    const MicroTlbAccessGuard<T> guard{addr};
+    if (guard.can_probe()) [[likely]] {
+        if (guard.matches(utlb->tag_w)) [[likely]] {
 #ifdef ENABLE_TLB_STATS
-        stats.l1_write_hits++;
-        stats.total_writes++;
+            stats.l1_write_hits++;
+            stats.total_writes++;
 #endif
-        if constexpr (Store) {
-            std::memcpy((void*)(utlb->addend + addr), &val, sizeof(T));
-            return {};
-        } else {
-            return reinterpret_cast<HostAddr>(utlb->addend + addr);
+            if constexpr (Store) {
+                std::memcpy((void*)(utlb->addend + addr), &val, sizeof(T));
+                return {};
+            } else {
+                return reinterpret_cast<HostAddr>(utlb->addend + addr);
+            }
         }
-    }
 
-    const size_t idx = (addr >> PAGE_SHIFT) & TLB_INDEX_MASK;
-    const auto entry = tlb.write_tlb[idx];
+        const size_t idx = (addr >> PAGE_SHIFT) & TLB_INDEX_MASK;
+        const auto entry = tlb.write_tlb[idx];
 
-    if (((entry.tag ^ target_tag) | cross_page_mask) == 0) [[likely]] {
+        if (guard.matches(entry.tag)) [[likely]] {
 #ifdef ENABLE_TLB_STATS
-        stats.l2_write_hits++;
-        stats.total_writes++;
+            stats.l2_write_hits++;
+            stats.total_writes++;
 #endif
-        // Preserve the original ordinary-store ordering/code generation. The
-        // RMW specialization only obtains the target; Store is compile-time.
-        if constexpr (Store) std::memcpy((void*)(entry.addend + addr), &val, sizeof(T));
+            // Preserve ordinary-store ordering. The RMW specialization only
+            // obtains the target; Store is compile-time.
+            if constexpr (Store) std::memcpy((void*)(entry.addend + addr), &val, sizeof(T));
 
-        utlb->tag_w = target_tag;
-        utlb->addend = entry.addend;
-        utlb->tag_r =
-            has_property(entry.perm, Property::Read) ? target_tag : std::numeric_limits<decltype(utlb->tag_r)>::max();
-        if constexpr (Store)
-            return {};
-        else
-            return reinterpret_cast<HostAddr>(entry.addend + addr);
+            utlb->tag_w = guard.tag;
+            utlb->addend = entry.addend;
+            utlb->tag_r =
+                has_property(entry.perm, Property::Read) ? guard.tag : std::numeric_limits<decltype(utlb->tag_r)>::max();
+            if constexpr (Store)
+                return {};
+            else
+                return reinterpret_cast<HostAddr>(entry.addend + addr);
+        }
     }
 
     // A write miss can be followed by a slow-path COW remap on this page.
