@@ -361,11 +361,12 @@ add_custom_command(OUTPUT ${_catalog_products}
 add_custom_target(fibercpu_instruction_catalog DEPENDS ${_catalog_products})
 
 # Source files
-file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS "src/*.cpp" "src/*.c" "src/*.h")
+file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}" "src/*.cpp" "src/*.c" "src/*.h")
 list(FILTER SOURCES EXCLUDE REGEX "main.cpp")
 list(FILTER SOURCES EXCLUDE REGEX "build/.*")
 list(FILTER SOURCES EXCLUDE REGEX "3rdparty/softfloat/.*")
 list(FILTER SOURCES EXCLUDE REGEX "generated/superopcodes.*\\.cpp$")
+list(FILTER SOURCES EXCLUDE REGEX "^src/jit/")
 if(FIBERCPU_LOWER_OPERANDS)
     set(_operand_output "${CMAKE_CURRENT_BINARY_DIR}/generated/operand_specializations.inc")
     set(_operand_source "${FIBERCPU_GENERATED_SUPEROPCODES_FILE}")
@@ -411,7 +412,6 @@ elseif(FIBERCPU_HAVE_GENERATED_SUPEROPCODES)
 endif()
 list(FILTER SOURCES EXCLUDE REGEX "handler_reflection_exports\\.cpp$")
 list(FILTER SOURCES EXCLUDE REGEX "dynamic_operand_specialization\\.cpp$")
-list(FILTER SOURCES EXCLUDE REGEX "jit/.*")
 
 if(NOT MSVC AND NOT EMSCRIPTEN)
     add_compile_options(
