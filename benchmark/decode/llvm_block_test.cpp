@@ -447,18 +447,6 @@ bool VerifyReuseAndBudget(bool tight_budget) {
     return restored && restored->entry == original && X86_GetLLVMJitBlockCount() == 2;
 }
 
-bool VerifyPrecompiledCache(bool compile_on_miss) {
-    const auto loads = X86_GetLLVMJitCacheLoadCount();
-    if (loads == 0 || loads != X86_GetLLVMJitBlockCount())
-        return false;
-    constexpr uint8_t code[] = {0xb8, 0x4a, 0x17, 0, 0}; // MOV EAX, 0x174a, absent from the profile.
-    auto state = LoadCode(code, sizeof(code));
-    const auto end = code_address + sizeof(code);
-    return X86_Run(state.get(), end, 16) && X86_RegRead(state.get(), 0) == 0x174a &&
-           HasCompiledEntry(state.get()) == compile_on_miss && X86_GetLLVMJitCacheLoadCount() == loads &&
-           X86_GetLLVMJitBlockCount() == loads + unsigned(compile_on_miss);
-}
-
 bool VerifyAsyncCompilations() {
     // Both blocks share a recipe initially. Replace one before the VM polls
     // for the first recipe and hard-reset the other's decoded code cache.
@@ -502,7 +490,7 @@ bool VerifyAsyncCompilations() {
 
 bool VerifyLinkedCache(bool compile_on_miss) {
     const auto hits = X86_GetLinkedBlockHitCount();
-    if (hits == 0 || X86_GetLLVMJitCacheLoadCount() != 0 || X86_GetLLVMJitBlockCount() != 0)
+    if (hits == 0 || X86_GetLLVMJitBlockCount() != 0)
         return false;
     constexpr uint8_t code[] = {0xb8, 0x4a, 0x17, 0, 0}; // MOV EAX, 0x174a, absent from the profile.
     auto state = LoadCode(code, sizeof(code));
@@ -520,7 +508,7 @@ bool VerifyLinkedCache(bool compile_on_miss) {
         if (!run())
             return false;
         if (HasCompiledEntry(state.get()))
-            return X86_GetLLVMJitBlockCount() == 1 && X86_GetLLVMJitCacheLoadCount() == 0;
+            return X86_GetLLVMJitBlockCount() == 1;
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     } while (std::chrono::steady_clock::now() < deadline);
     return false;
@@ -588,13 +576,5 @@ int main(int argc, char** argv) {
     if (linked && !VerifyLinkedCache(linked_hybrid)) {
         std::fprintf(stderr, "Linked block install or native miss fallback mismatch\n");
         return 1;
-    }
-    if (argc == 2) {
-        const bool cache_only = std::strcmp(argv[1], "cache") == 0;
-        const bool cache_hybrid = std::strcmp(argv[1], "cache-hybrid") == 0;
-        if ((cache_only || cache_hybrid) && !VerifyPrecompiledCache(cache_hybrid)) {
-            std::fprintf(stderr, "LLVM precompiled cache load or miss fallback mismatch\n");
-            return 1;
-        }
     }
 }

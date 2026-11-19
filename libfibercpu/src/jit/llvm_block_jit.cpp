@@ -60,14 +60,13 @@ namespace {
 
 #include "llvm_block_bitcode.inc"
 
-enum class JitMode { Off, Generic, Exact, Profile, Cache };
+enum class JitMode { Off, Generic, Exact, Profile };
 using block_recipe::kMaxOps;
 using block_recipe::Step;
 constexpr size_t kDefaultJitCodeBudget = 16 * 1024 * 1024;
 constexpr uint16_t kDefaultHotThreshold = 64;
 std::atomic<uint64_t> live_blocks{0};
 std::atomic<uint64_t> materializations{0};
-std::atomic<uint64_t> cache_loads{0};
 
 }  // namespace
 
@@ -91,7 +90,7 @@ struct LLVMBlockCode {
 
 namespace {
 
-const auto& CacheFingerprint() {
+const auto& ProfileFingerprint() {
     static const auto digest = [] {
         llvm::SHA256 hash;
         hash.update(llvm::ArrayRef<uint8_t>(kBitcode, sizeof(kBitcode)));
@@ -111,73 +110,22 @@ const auto& CacheFingerprint() {
     return digest;
 }
 
-void WriteFileHeader(llvm::raw_ostream& out, std::string_view magic) {
+void WriteProfileHeader(llvm::raw_ostream& out) {
+    const auto magic = llvm_block_cache::profile_magic;
     out.write(magic.data(), magic.size());
-    const auto& fingerprint = CacheFingerprint();
+    const auto& fingerprint = ProfileFingerprint();
     out.write(reinterpret_cast<const char*>(fingerprint.data()), fingerprint.size());
 }
 
-bool ReadFileHeader(std::string_view& bytes, std::string_view magic) {
-    const auto& fingerprint = CacheFingerprint();
+bool ReadProfileHeader(std::string_view& bytes) {
+    const auto magic = llvm_block_cache::profile_magic;
     if (!bytes.starts_with(magic)) return false;
     bytes.remove_prefix(magic.size());
+    const auto& fingerprint = ProfileFingerprint();
     if (bytes.size() < fingerprint.size() || std::memcmp(bytes.data(), fingerprint.data(), fingerprint.size()) != 0)
         return false;
     bytes.remove_prefix(fingerprint.size());
     return true;
-}
-
-struct CachedObject {
-    std::string_view bytes;
-    uint64_t index;
-};
-
-class PrecompiledObjects {
-    std::unique_ptr<llvm::MemoryBuffer> file_;
-    ankerl::unordered_dense::map<std::string_view, CachedObject> entries_;
-
-public:
-    PrecompiledObjects() {
-        const auto* path = std::getenv("FIBERCPU_LLVM_JIT_CACHE");
-        if (!path || !*path) return;
-        auto input = llvm::MemoryBuffer::getFile(path);
-        if (!input) return;
-        std::string_view bytes = (*input)->getBuffer();
-        if (!ReadFileHeader(bytes, llvm_block_cache::cache_magic)) return;
-        uint64_t index = 0;
-        while (!bytes.empty()) {
-            std::string_view key, object;
-            if (!llvm_block_cache::ReadRecord(bytes, key) || !llvm_block_cache::ReadRecord(bytes, object) ||
-                !entries_.emplace(key, CachedObject{object, index++}).second) {
-                entries_.clear();
-                return;
-            }
-        }
-        file_ = std::move(*input);
-    }
-
-    bool Empty() const { return entries_.empty(); }
-
-    const CachedObject* Find(std::string_view key) const {
-        const auto entry = entries_.find(key);
-        return entry == entries_.end() ? nullptr : &entry->second;
-    }
-};
-
-struct NativeObjectStorage {
-    std::once_flag initialized;
-    std::unique_ptr<const PrecompiledObjects> cache;
-};
-
-NativeObjectStorage& NativeStorage() {
-    static NativeObjectStorage storage;
-    return storage;
-}
-
-const PrecompiledObjects& NativeObjects() {
-    auto& storage = NativeStorage();
-    std::call_once(storage.initialized, [&] { storage.cache = std::make_unique<const PrecompiledObjects>(); });
-    return *storage.cache;
 }
 
 void RecordBlock(const std::string& key) {
@@ -187,7 +135,7 @@ void RecordBlock(const std::string& key) {
         std::error_code error;
         auto file = std::make_unique<llvm::raw_fd_ostream>(path, error, llvm::sys::fs::OF_None);
         if (error) return {};
-        WriteFileHeader(*file, llvm_block_cache::profile_magic);
+        WriteProfileHeader(*file);
         return file;
     }();
     if (!output) return;
@@ -211,7 +159,6 @@ JitMode RuntimeMode() {
         if (std::strcmp(value, "1") == 0) return JitMode::Exact;
         if (std::strcmp(value, "generic") == 0) return JitMode::Generic;
         if (std::strcmp(value, "profile") == 0 && std::getenv("FIBERCPU_LLVM_JIT_PROFILE")) return JitMode::Profile;
-        if (std::strcmp(value, "cache") == 0 && !NativeObjects().Empty()) return JitMode::Cache;
         return JitMode::Off;
     }();
     return mode;
@@ -303,8 +250,12 @@ struct BlockIR {
     std::unique_ptr<llvm::Module> module = ReadBlockIR(context);
 };
 
+bool InitializeLLVMTarget() {
+    static const bool initialized = !llvm::InitializeNativeTarget() && !llvm::InitializeNativeTargetAsmPrinter();
+    return initialized;
+}
+
 class BlockCompiler {
-    BlockIR ir_;
     std::shared_ptr<llvm::orc::LLJIT> jit_;
     BlockMemoryManager* memory_ = nullptr;
     std::mutex mutex_;
@@ -408,8 +359,9 @@ class BlockCompiler {
 
 public:
     BlockCompiler() {
-        if (llvm::InitializeNativeTarget() || llvm::InitializeNativeTargetAsmPrinter()) return;
-        if (!ir_.module) return;
+        if (!InitializeLLVMTarget()) return;
+        BlockIR ir;
+        if (!ir.module) return;
         auto page_size = llvm::sys::Process::getPageSize();
         if (!page_size) {
             llvm::consumeError(page_size.takeError());
@@ -450,7 +402,7 @@ public:
             {"_ZN8fiberish27ResolveBranchTargetSlowLinkE", ResolveBranchTargetSlowLink},
             {"_ZN8fiberish34ResolveBranchTargetSlowControlFlowE", ResolveBranchTargetSlowControlFlow},
         };
-        for (const auto& function : *ir_.module) {
+        for (const auto& function : *ir.module) {
             if (!function.isDeclaration()) continue;
             for (const auto& [prefix, target] : helpers) {
                 if (!function.getName().starts_with(prefix)) continue;
@@ -514,47 +466,40 @@ public:
         memory_ = memory_ptr;
     }
 
-    BlockLookup Find(std::span<const Step> steps, std::string key, JitMode mode, LLVMBlockExit exit, size_t budget,
-                     const CachedObject* cached) {
+    BlockLookup FindOrCompile(std::span<const Step> steps, std::string key, bool exact, LLVMBlockExit exit,
+                              size_t budget) {
         if (!jit_) return {};
         std::unique_lock lock(mutex_);
         compilation_done_.wait(lock, [&] { return !compiling_.contains(key); });
         const auto found = compiled_.find(key);
         if (found != compiled_.end()) {
-            if (auto cached = found->second.lock()) return {std::move(cached)};
+            if (auto code = found->second.lock()) return {std::move(code)};
             compiled_.erase(found);
         }
         if (budget < memory_->PageSize()) return {nullptr, memory_->PageSize()};
         if (compiled_.size() > live_blocks.load(std::memory_order_relaxed) + 128)
             std::erase_if(compiled_, [](const auto& entry) { return entry.second.expired(); });
-        BlockLookup result;
-        if (cached) {
-            const auto name = ObjectEntryName(cached->index);
-            result = Materialize(name, budget, llvm::MemoryBuffer::getMemBufferCopy(cached->bytes, name));
-            if (result.code) cache_loads.fetch_add(1, std::memory_order_relaxed);
-        }
-        if (!result.code && !result.blocked_bytes && mode != JitMode::Cache) {
-            const auto name = "FiberJitBlock_" + std::to_string(next_symbol_++);
-            compiling_.insert(key);
-            lock.unlock();
-            // Each caller owns its IR and target machine while optimizing and
-            // emitting the object. Only ORC linking and budget tracking serialize.
-            thread_local BlockIR worker_ir;
-            std::unique_ptr<llvm::MemoryBuffer> object;
-            if (worker_ir.module) {
-                if (auto module = Prepare(*worker_ir.module, steps, mode == JitMode::Exact, exit, name)) {
-                    auto compiled = jit_->getIRCompileLayer().getCompiler()(*module);
-                    if (compiled)
-                        object = std::move(*compiled);
-                    else
-                        llvm::consumeError(compiled.takeError());
-                }
+        const auto name = "FiberJitBlock_" + std::to_string(next_symbol_++);
+        compiling_.insert(key);
+        lock.unlock();
+        // Each caller owns its IR and target machine while optimizing and
+        // emitting the object. Only ORC linking and budget tracking serialize.
+        thread_local BlockIR worker_ir;
+        std::unique_ptr<llvm::MemoryBuffer> object;
+        if (worker_ir.module) {
+            if (auto module = Prepare(*worker_ir.module, steps, exact, exit, name)) {
+                auto compiled = jit_->getIRCompileLayer().getCompiler()(*module);
+                if (compiled)
+                    object = std::move(*compiled);
+                else
+                    llvm::consumeError(compiled.takeError());
             }
-            lock.lock();
-            compiling_.erase(key);
-            compilation_done_.notify_all();
-            if (object) result = Materialize(name, budget, std::move(object));
         }
+        lock.lock();
+        compiling_.erase(key);
+        compilation_done_.notify_all();
+        if (!object) return {};
+        auto result = Materialize(name, budget, std::move(object));
         if (result.code) {
             compiled_.emplace(std::move(key), result.code);
             materializations.fetch_add(1, std::memory_order_relaxed);
@@ -562,33 +507,26 @@ public:
         return result;
     }
 
-    int BuildCache(std::string_view profile, llvm::raw_ostream& output, bool linked) {
-        if (!jit_) return -1;
-        std::lock_guard lock(mutex_);
-        auto* compiler = &jit_->getIRCompileLayer().getCompiler();
-        std::unique_ptr<llvm::orc::TMOwningSimpleCompiler> linked_compiler;
-        if (linked) {
-            // Linked objects need the deployment target of the interpreter,
-            // while ORC objects can use the macOS version of the running host.
-            auto target = llvm::orc::JITTargetMachineBuilder::detectHost();
-            if (!target) {
-                llvm::consumeError(target.takeError());
-                return -1;
-            }
-            target->getTargetTriple() = ir_.module->getTargetTriple();
-            target->setRelocationModel(llvm::Reloc::PIC_).setOptions(llvm::TargetOptions{});
-            auto machine = target->createTargetMachine();
-            if (!machine) {
-                llvm::consumeError(machine.takeError());
-                return -1;
-            }
-            linked_compiler = std::make_unique<llvm::orc::TMOwningSimpleCompiler>(std::move(*machine));
-            compiler = linked_compiler.get();
-            output << llvm_block_cache::linked_magic << FIBERCPU_LINKED_BLOCK_CACHE_ABI;
-            if (!llvm_block_cache::WriteRecord(output, LinkedBlockCacheHostCPU())) return -1;
-        } else {
-            WriteFileHeader(output, llvm_block_cache::cache_magic);
+    static int BuildLinkedCache(std::string_view profile, llvm::raw_ostream& output) {
+        if (!InitializeLLVMTarget()) return -1;
+        BlockIR ir;
+        if (!ir.module) return -1;
+        // Use the interpreter's deployment target for the linked objects.
+        auto target = llvm::orc::JITTargetMachineBuilder::detectHost();
+        if (!target) {
+            llvm::consumeError(target.takeError());
+            return -1;
         }
+        target->getTargetTriple() = ir.module->getTargetTriple();
+        target->setRelocationModel(llvm::Reloc::PIC_).setOptions(llvm::TargetOptions{});
+        auto machine = target->createTargetMachine();
+        if (!machine) {
+            llvm::consumeError(machine.takeError());
+            return -1;
+        }
+        llvm::orc::TMOwningSimpleCompiler compiler(std::move(*machine));
+        output << llvm_block_cache::linked_magic << FIBERCPU_LINKED_BLOCK_CACHE_ABI;
+        if (!llvm_block_cache::WriteRecord(output, LinkedBlockCacheHostCPU())) return -1;
         int compiled = 0;
         ankerl::unordered_dense::set<std::string_view> seen;
         std::vector<Step> steps;
@@ -598,9 +536,9 @@ public:
             steps.clear();
             if (!llvm_block_cache::ReadRecord(profile, key) || !DecodeRecipe(key, steps, exit)) return -1;
             if (!seen.insert(key).second) continue;
-            auto module = Prepare(*ir_.module, steps, true, exit, ObjectEntryName(compiled));
+            auto module = Prepare(*ir.module, steps, true, exit, ObjectEntryName(compiled));
             if (!module) continue;
-            auto object = (*compiler)(*module);
+            auto object = compiler(*module);
             if (!object) {
                 llvm::logAllUnhandledErrors(object.takeError(), llvm::errs(), "LLVM block cache: ");
                 continue;
@@ -706,7 +644,7 @@ struct CompilationJob {
     size_t sentinel;
     size_t budget;
     LLVMBlockExit exit;
-    JitMode mode;
+    bool exact;
 
     void Compile(AsyncSignals& control) {
         if (result.expired()) return;
@@ -718,12 +656,11 @@ struct CompilationJob {
             return RedecodeGenericInstruction(instruction, op, generic);
         };
         BlockLookup lookup;
-        const bool planned = block_recipe::PlanBlock(ops, sentinel, exit, mode != JitMode::Generic, redecode, plan);
+        const bool planned = block_recipe::PlanBlock(ops, sentinel, exit, exact, redecode, plan);
         if (result.expired()) return;
         if (planned) {
-            auto key = block_recipe::BlockKey(plan.Steps(), mode != JitMode::Generic, plan.exit);
-            const auto* cached = mode == JitMode::Generic ? nullptr : NativeObjects().Find(key);
-            lookup = Compiler().Find(plan.Steps(), std::move(key), mode, plan.exit, budget, cached);
+            auto key = block_recipe::BlockKey(plan.Steps(), exact, plan.exit);
+            lookup = Compiler().FindOrCompile(plan.Steps(), std::move(key), exact, plan.exit, budget);
         }
         if (auto output = result.lock()) {
             output->lookup = std::move(lookup);
@@ -806,11 +743,10 @@ unsigned WorkerCount() {
 
 CompilationPool& Workers() {
     static CompilationPool pool([] {
-        // All three statics must outlive the pool. Compiler construction
+        // These statics must outlive the pool. Compiler construction
         // itself stays lazy so the VM thread does not parse bitcode here.
         (void)Storage();
         block_recipe::InitializeOperationLookup();
-        (void)NativeStorage();
         return WorkerCount();
     }());
     return pool;
@@ -844,7 +780,7 @@ void InstallResult(EmuState* state, BasicBlock* block, const BlockLookup& lookup
     block_recipe::InstallBlockHandler(*block, replay, code->handler);
 }
 
-void QueueBlock(EmuState* state, BasicBlock* block, JitMode mode) {
+void QueueBlock(EmuState* state, BasicBlock* block, bool exact) {
     auto& async = state->mmu.core_handle()->llvm_async;
     if (!async) async = std::make_shared<LLVMAsyncState>();
     if (async->pending.size() == kMaxPendingPerCache) {
@@ -860,7 +796,7 @@ void QueueBlock(EmuState* state, BasicBlock* block, JitMode mode) {
         .sentinel = block->sentinel_slot_index,
         .budget = CodeBudget() - state->mmu.code_cache().llvm_block_bytes,
         .exit = block_recipe::FullBlockExit(*block),
-        .mode = mode,
+        .exact = exact,
     };
     const auto ops = std::span(block->FirstOp(), std::min(job.sentinel, kMaxOps));
     job.ops.reserve(ops.size());
@@ -889,14 +825,8 @@ void QueueBlock(EmuState* state, BasicBlock* block, JitMode mode) {
 
 uint16_t LLVMJitHotThreshold() {
     static const uint16_t threshold = []() -> uint16_t {
-        switch (RuntimeMode()) {
-            case JitMode::Off:
-                return 0;
-            case JitMode::Cache:
-                return 1;
-            default:
-                return ReadPositiveSetting("FIBERCPU_LLVM_JIT_HOT_THRESHOLD", kDefaultHotThreshold);
-        }
+        if (RuntimeMode() == JitMode::Off) return 0;
+        return ReadPositiveSetting("FIBERCPU_LLVM_JIT_HOT_THRESHOLD", kDefaultHotThreshold);
     }();
     return threshold;
 }
@@ -905,23 +835,20 @@ void CompileHotLLVMBlock(EmuState* state, BasicBlock* block) {
     if (!block_recipe::CanPromoteBlock(*state, *block)) return;
     const auto mode = RuntimeMode();
     if (mode == JitMode::Off) return;
-    if ((mode == JitMode::Exact || mode == JitMode::Generic) && WorkerCount()) {
-        QueueBlock(state, block, mode);
+    const bool exact = mode != JitMode::Generic;
+    if (mode != JitMode::Profile && WorkerCount()) {
+        QueueBlock(state, block, exact);
         return;
     }
     block_recipe::Plan plan;
-    const bool exact = mode != JitMode::Generic;
     if (!block_recipe::PlanBlock(*state, *block, exact, plan)) return;
     auto key = block_recipe::BlockKey(plan.Steps(), exact, plan.exit);
     if (mode == JitMode::Profile) {
         RecordBlock(key);
         return;
     }
-    const auto* cached = mode == JitMode::Generic ? nullptr : NativeObjects().Find(key);
-    if (mode == JitMode::Cache && !cached) return;
-
     const size_t remaining = CodeBudget() - state->mmu.code_cache().llvm_block_bytes;
-    auto result = Compiler().Find(plan.Steps(), std::move(key), mode, plan.exit, remaining, cached);
+    auto result = Compiler().FindOrCompile(plan.Steps(), std::move(key), exact, plan.exit, remaining);
     InstallResult(state, block, result, plan.ReplayHandlers());
 }
 
@@ -941,12 +868,12 @@ void PollLLVMBlockCompilations(EmuState* state) {
     });
 }
 
-int BuildLLVMJitCache(const char* profile_path, const char* cache_path, bool linked) {
+int BuildLinkedLLVMBlockCache(const char* profile_path, const char* cache_path) {
     if (!profile_path || !cache_path) return -1;
     auto input = llvm::MemoryBuffer::getFile(profile_path);
     if (!input) return -1;
     std::string_view profile = (*input)->getBuffer();
-    if (!ReadFileHeader(profile, llvm_block_cache::profile_magic) || profile.empty()) return -1;
+    if (!ReadProfileHeader(profile) || profile.empty()) return -1;
 
     auto temp = llvm::sys::fs::TempFile::create(llvm::Twine(cache_path) + ".%%%%%%");
     if (!temp) {
@@ -956,7 +883,7 @@ int BuildLLVMJitCache(const char* profile_path, const char* cache_path, bool lin
     int count;
     {
         llvm::raw_fd_ostream output(temp->FD, false);
-        count = Compiler().BuildCache(profile, output, linked);
+        count = BlockCompiler::BuildLinkedCache(profile, output);
         output.flush();
         if (output.has_error()) {
             output.clear_error();
@@ -978,7 +905,5 @@ int BuildLLVMJitCache(const char* profile_path, const char* cache_path, bool lin
 uint64_t LLVMJitBlockCount() { return materializations.load(std::memory_order_relaxed); }
 
 uint64_t LLVMJitLiveBlockCount() { return live_blocks.load(std::memory_order_relaxed); }
-
-uint64_t LLVMJitCacheLoadCount() { return cache_loads.load(std::memory_order_relaxed); }
 
 }  // namespace fiberish

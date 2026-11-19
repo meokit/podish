@@ -1506,14 +1506,6 @@ uint64_t X86_GetLLVMJitLiveBlockCount() {
 #endif
 }
 
-uint64_t X86_GetLLVMJitCacheLoadCount() {
-#if FIBERCPU_LLVM_JIT
-    return LLVMJitCacheLoadCount();
-#else
-    return 0;
-#endif
-}
-
 uint64_t X86_GetLinkedBlockHitCount() {
 #if FIBERCPU_LINKED_BLOCK_CACHE
     return LinkedBlockHitCount();
@@ -1524,17 +1516,7 @@ uint64_t X86_GetLinkedBlockHitCount() {
 
 int X86_BuildLinkedLLVMBlockCache(const char* profile_path, const char* cache_path) {
 #if FIBERCPU_LLVM_JIT
-    return BuildLLVMJitCache(profile_path, cache_path, true);
-#else
-    (void)profile_path;
-    (void)cache_path;
-    return -1;
-#endif
-}
-
-int X86_BuildLLVMJitCache(const char* profile_path, const char* cache_path) {
-#if FIBERCPU_LLVM_JIT
-    return BuildLLVMJitCache(profile_path, cache_path);
+    return BuildLinkedLLVMBlockCache(profile_path, cache_path);
 #else
     (void)profile_path;
     (void)cache_path;

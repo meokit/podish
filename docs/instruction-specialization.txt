@@ -78,50 +78,32 @@ The guest executes the native handlers until a completed block can be
 installed at a dispatch boundary. A cache reset cancels pending publication
 and a block invalidation rejects results for its previous revision.
 FIBERCPU_LLVM_JIT_WORKERS selects 0–8 workers. Set it to 0 for synchronous
-promotion. Profile collection and cache-only mode promote synchronously.
+promotion. Profile collection records block recipes synchronously.
 
 FIBERCPU_LLVM_JIT_CODE_BUDGET defaults to 16777216 bytes per MMU code cache.
 The budget charges each owned ORC allocation once by its mapped segment size.
 Invalidated blocks keep their machine code available for reuse. Budget
 pressure requests a hard reset when the MMU is quiescent. The native stats
 field llvm_code_cache_bytes reports the currently charged bytes.
-
-Precompiled LLVM block cache
-----------------------------
-Collect exact block recipes at the configured hot threshold and leave the
-workload on the native dispatch path during collection:
-
-  FIBERCPU_LLVM_JIT=profile FIBERCPU_LLVM_JIT_PROFILE=blocks.profile <command>
-
-Compile the collected recipes to relocatable objects with the same native build:
-
-  <build>/fibercpu_llvm_cache blocks.profile blocks.cache
-
-Load objects on demand without running the LLVM optimizer or code generator:
-
-  FIBERCPU_LLVM_JIT=cache FIBERCPU_LLVM_JIT_CACHE=blocks.cache <command>
-
-Cache-only mode checks a block on its first entry and keeps native dispatch on
-a miss. FIBERCPU_LLVM_JIT=1 with the same cache path uses the regular hot
-threshold and compiles online on a miss. ORC applies relocations on load. Cached
-code uses the same code budget, invalidation lifetime and scalar memory replay
-as online JIT code. X86_GetLLVMJitCacheLoadCount counts object materializations
-and X86_GetLLVMJitBlockCount counts online and cached materializations together.
-
-The cache key includes the exit, generic opcode sequence and exact decoded
-operand shapes. Profiles and caches are tied to the embedded bitcode, LLVM
-version and host CPU target. Use trusted cache files since they contain native
-code.
+X86_GetLLVMJitBlockCount counts online block materializations.
 
 Linked LLVM block cache
 -----------------------
-Use the profiling command above with an LLVM-enabled producer. Emit a bundle
-of relocatable host objects for the build-time linker:
+Use an LLVM-enabled producer to collect exact block recipes at the configured
+hot threshold. The workload uses native dispatch during collection.
+
+  FIBERCPU_LINKED_BLOCK_CACHE=0 FIBERCPU_LLVM_JIT=profile \
+    FIBERCPU_LLVM_JIT_PROFILE=blocks.profile <command>
+
+The recipe key includes the exit, generic opcode sequence and exact decoded
+operand shapes. Profiles are tied to the embedded bitcode, LLVM version and
+host CPU target. Use the same producer to emit relocatable host objects for the
+build-time linker.
 
   <producer>/fibercpu_llvm_cache --linked blocks.profile blocks.linked
 
 Configure the interpreter using the same sources, compiler, target and VM
-layout settings as the producer, with the linked bundle as a build input:
+layout settings as the producer, with the linked bundle as a build input.
 
   cmake -S libfibercpu -B <consumer> -DFIBERCPU_ENABLE_LLVM_JIT=OFF \
     -DFIBERCPU_LINKED_BLOCK_CACHE_FILE=/absolute/path/blocks.linked
@@ -132,18 +114,15 @@ and an upstream Clang toolchain on native macOS ARM64. An LLVM-disabled
 build runs without the LLVM libraries. The linked handlers use the library's
 normal executable pages and receive their relocations from the platform
 linker. Use trusted build-time bundles. CMake checks the ABI fingerprint,
-and a different host CPU falls back to native dispatch. The ORC cache
-format and the linked bundle are separate inputs.
+and a different host CPU falls back to native dispatch.
 
 The linked cache is enabled at runtime by default when built in.
 FIBERCPU_LINKED_BLOCK_CACHE=0 disables its use independently of
-FIBERCPU_LLVM_JIT. Disable the linked cache while collecting a fresh profile
-with a build that already includes linked objects. When used by itself, it
-tries each decoded block on its first entry. With ORC enabled at runtime,
-it uses the existing ORC mode's
-entry threshold and checks linked code first at promotion. Misses follow the
-usual path for that ORC mode. X86_GetLinkedBlockHitCount counts linked block
-entry installations. Linked handlers persist for the lifetime of the
+FIBERCPU_LLVM_JIT. The linked cache alone tries each decoded block on its first
+entry and falls back to native dispatch on a miss. When online JIT is also
+enabled, the online hot threshold controls promotion. The linked lookup runs
+first, and misses go to the online compiler. X86_GetLinkedBlockHitCount counts
+linked block entry installations. Linked handlers persist for the lifetime of the
 library and use no per-MMU JIT allocation budget.
 
 Tool metadata and fusion snapshot

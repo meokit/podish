@@ -1022,25 +1022,14 @@ if(FIBERCPU_TEST_SPECIALIZATION_INDEX)
         add_test(NAME llvm_block_async COMMAND llvm_block_test async)
         set_tests_properties(llvm_block_async PROPERTIES ENVIRONMENT
             "FIBERCPU_LLVM_JIT=1;FIBERCPU_LLVM_JIT_HOT_THRESHOLD=1;FIBERCPU_LLVM_JIT_WORKERS=2")
-        set(_cache_test_profile "${CMAKE_CURRENT_BINARY_DIR}/llvm-block-test.profile")
-        set(_cache_test_binary "${CMAKE_CURRENT_BINARY_DIR}/llvm-block-test.cache")
-        add_test(NAME llvm_block_cache_profile COMMAND llvm_block_test)
-        set_tests_properties(llvm_block_cache_profile PROPERTIES FIXTURES_SETUP llvm_block_profile
-            ENVIRONMENT "FIBERCPU_LLVM_JIT=profile;FIBERCPU_LLVM_JIT_PROFILE=${_cache_test_profile};FIBERCPU_LLVM_JIT_HOT_THRESHOLD=1")
-        add_test(NAME llvm_block_cache_build COMMAND fibercpu_llvm_cache "${_cache_test_profile}" "${_cache_test_binary}")
-        set_tests_properties(llvm_block_cache_build PROPERTIES FIXTURES_REQUIRED llvm_block_profile
-            FIXTURES_SETUP llvm_block_cache)
-        add_test(NAME llvm_block_cache_run COMMAND llvm_block_test cache)
-        set_tests_properties(llvm_block_cache_run PROPERTIES FIXTURES_REQUIRED llvm_block_cache
-            ENVIRONMENT "FIBERCPU_LLVM_JIT=cache;FIBERCPU_LLVM_JIT_CACHE=${_cache_test_binary}")
-        add_test(NAME llvm_block_cache_hybrid COMMAND llvm_block_test cache-hybrid)
-        set_tests_properties(llvm_block_cache_hybrid PROPERTIES FIXTURES_REQUIRED llvm_block_cache
-            ENVIRONMENT "FIBERCPU_LLVM_JIT=1;FIBERCPU_LLVM_JIT_CACHE=${_cache_test_binary};FIBERCPU_LLVM_JIT_HOT_THRESHOLD=1;FIBERCPU_LLVM_JIT_WORKERS=0")
-        add_test(NAME llvm_block_cache_invalid COMMAND llvm_block_test)
-        set_tests_properties(llvm_block_cache_invalid PROPERTIES FIXTURES_REQUIRED llvm_block_profile
-            ENVIRONMENT "FIBERCPU_LLVM_JIT=cache;FIBERCPU_LLVM_JIT_CACHE=${_cache_test_profile}")
+        set(_linked_test_profile "${CMAKE_CURRENT_BINARY_DIR}/llvm-block-test.profile")
+        set(_linked_test_bundle "${CMAKE_CURRENT_BINARY_DIR}/llvm-block-test.linked")
+        add_test(NAME llvm_block_profile COMMAND llvm_block_test)
+        set_tests_properties(llvm_block_profile PROPERTIES FIXTURES_SETUP llvm_block_profile
+            ENVIRONMENT "FIBERCPU_LLVM_JIT=profile;FIBERCPU_LLVM_JIT_PROFILE=${_linked_test_profile};FIBERCPU_LLVM_JIT_HOT_THRESHOLD=1")
+        add_test(NAME llvm_block_linked_bundle COMMAND fibercpu_llvm_cache --linked "${_linked_test_profile}" "${_linked_test_bundle}")
+        set_tests_properties(llvm_block_linked_bundle PROPERTIES FIXTURES_REQUIRED llvm_block_profile)
         set_property(TEST llvm_block_generic llvm_block_specialized llvm_block_hot llvm_block_reuse llvm_block_budget llvm_block_async
-            llvm_block_cache_profile llvm_block_cache_build llvm_block_cache_run llvm_block_cache_hybrid
-            llvm_block_cache_invalid APPEND PROPERTY ENVIRONMENT "FIBERCPU_LINKED_BLOCK_CACHE=0")
+            llvm_block_profile APPEND PROPERTY ENVIRONMENT "FIBERCPU_LINKED_BLOCK_CACHE=0")
     endif()
 endif()
