@@ -327,6 +327,10 @@ FORCE_INLINE LogicFlow OpCvt_E6(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
+#define FIBERCPU_BIND_VECTOR_SSE_CVT
+#include "instruction_kernel_bindings.inc"
+#undef FIBERCPU_BIND_VECTOR_SSE_CVT
+
 }  // namespace op
 
 }  // namespace fiberish

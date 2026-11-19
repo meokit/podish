@@ -1,5 +1,6 @@
 {
   "version": 1,
+  "specialization_sources": ["integer_specializations.json", "move_control_specializations.json", "vector_specializations.json"],
   "families": {
     "Add_EbGb": {"opcode": 0, "layout": "RmReg", "extension": -1, "width_rule": "Fixed8"},
     "Add_EvGv": {"opcode": 1, "layout": "RmReg", "extension": -1, "width_rule": "ScalarEv"},

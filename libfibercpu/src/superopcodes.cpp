@@ -1,10 +1,12 @@
 #include "superopcodes.h"
+#include "instruction_variants.h"
 #include "operand_specialization.h"
 #if FIBERCPU_DYNAMIC_OPERANDS
 #include "dynamic_operand_specialization.h"
 #endif
 
 #include <array>
+#include <vector>
 
 #include "ops/ops_control_impl.h"
 #include "ops/ops_data_mov_impl.h"
@@ -171,9 +173,24 @@ HandlerFunc FindSuperOpcode(const DecodedOp* ops) {
 #endif
 }
 
+#if FIBERCPU_ENABLE_SUPEROPCODES
+static std::vector<DecodedOp> BuildFusionLookupView(const DecodedOp* ops, uint32_t count) {
+    // Normalize the entire view so the matcher also sees overlapping base fusions.
+    // Keep real slots intact for execution and memory-op replay.
+    std::vector<DecodedOp> view;
+    for (uint32_t i = 0; i < count; ++i) {
+        const auto fallback = FindFusionFallbackHandler(ops[i].handler);
+        if (fallback == ops[i].handler) continue;
+        if (view.empty()) view.assign(ops, ops + count + 1);  // Include the block sentinel.
+        view[i].handler = fallback;
+    }
+    return view;
+}
+#endif
+
 void ApplySuperOpcodesToBlockOps(DecodedOp* ops, uint32_t op_count, bool previously_lowered) {
-#if (FIBERCPU_LOWER_OPERANDS && !FIBERCPU_OPERAND_FUSIONS_ONLY) || FIBERCPU_DYNAMIC_OPERANDS
     if (!ops) return;
+#if (FIBERCPU_LOWER_OPERANDS && !FIBERCPU_OPERAND_FUSIONS_ONLY) || FIBERCPU_DYNAMIC_OPERANDS
     if (previously_lowered) {
         for (uint32_t i = 0; i < op_count; ++i) {
             auto& op = ops[i];
@@ -188,12 +205,19 @@ void ApplySuperOpcodesToBlockOps(DecodedOp* ops, uint32_t op_count, bool previou
             }
         }
     }
+#endif
 
+#if FIBERCPU_ENABLE_SUPEROPCODES
+    const auto view = BuildFusionLookupView(ops, op_count);
+    const auto* fusion_ops = view.empty() ? ops : view.data();
+#endif
+
+#if (FIBERCPU_LOWER_OPERANDS && !FIBERCPU_OPERAND_FUSIONS_ONLY) || FIBERCPU_DYNAMIC_OPERANDS
     for (uint32_t i = 0; i < op_count; ++i) {
         auto& op = ops[i];
 #if FIBERCPU_ENABLE_SUPEROPCODES
         if (i + 1 < op_count) {
-            if (auto handler = FindSuperOpcode(&op)) op.handler = handler;
+            if (auto handler = FindSuperOpcode(&fusion_ops[i])) op.handler = handler;
         }
 #endif
         // Fusion matching only looks forward, so lowering this entry cannot
@@ -219,9 +243,8 @@ void ApplySuperOpcodesToBlockOps(DecodedOp* ops, uint32_t op_count, bool previou
         }
     }
 #elif FIBERCPU_ENABLE_SUPEROPCODES
-    if (!ops) return;
     for (uint32_t i = 0; i + 1 < op_count; ++i) {
-        if (auto handler = FindSuperOpcode(&ops[i])) ops[i].handler = handler;
+        if (auto handler = FindSuperOpcode(&fusion_ops[i])) ops[i].handler = handler;
     }
 #endif
 }

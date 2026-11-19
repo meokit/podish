@@ -775,6 +775,10 @@ FORCE_INLINE LogicFlow OpUnpckh_Unified(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
+#define FIBERCPU_BIND_VECTOR_SSE_FP
+#include "instruction_kernel_bindings.inc"
+#undef FIBERCPU_BIND_VECTOR_SSE_FP
+
 }  // namespace op
 
 }  // namespace fiberish

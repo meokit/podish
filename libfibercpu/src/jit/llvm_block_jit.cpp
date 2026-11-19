@@ -7,11 +7,13 @@
 #include <array>
 #include <atomic>
 #include <charconv>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <new>
 #include <span>
 #include <string>
 #include <utility>
@@ -34,15 +36,25 @@
 #include <llvm/Transforms/Utils/Local.h>
 
 #include <pthread.h>
+#include <strings.h>
 
+#include "float80.h"
 #include "operand_policy.h"
 #include "ops.h"
 #include "ops/ops_alu_impl.h"
 #include "ops/ops_compare_impl.h"
 #include "ops/ops_control_impl.h"
 #include "ops/ops_data_mov_impl.h"
+#include "ops/ops_double_shift_impl.h"
+#include "ops/ops_fpu_impl.h"
 #include "ops/ops_groups_impl.h"
+#include "ops/ops_mmx_impl.h"
+#include "ops/ops_muldiv_impl.h"
 #include "ops/ops_shift_bit_impl.h"
+#include "ops/ops_sse_cvt_impl.h"
+#include "ops/ops_sse_fp_impl.h"
+#include "ops/ops_sse_int_impl.h"
+#include "ops/ops_sse_mov_impl.h"
 
 namespace fiberish {
 namespace {
@@ -98,14 +110,35 @@ T ReadPositiveSetting(const char* name, T fallback) {
     return parsed.ec == std::errc{} && parsed.ptr == end && result != 0 ? result : fallback;
 }
 
-const char* LogicName(HandlerFunc handler) {
-    static const ankerl::unordered_dense::map<HandlerFunc, const char*> names = {
-#define FIBERCPU_LLVM_OP(Name, Exact) {DispatchWrapper<op::Name>, #Name},
+enum LLVMRequirement : uint8_t {
+    kRegisterOperand = 1,
+    kMemoryOperand = 2,
+    kExactOnly = 4,
+};
+
+struct LLVMOperation {
+    const char* name;
+    uint8_t requirements;
+    uint8_t extensions;
+
+    bool Matches(const DecodedOp& op, JitMode mode) const {
+        if ((requirements & kRegisterOperand) && (!op.meta.flags.has_modrm || (op.modrm >> 6) != 3))
+            return false;
+        if ((requirements & kMemoryOperand) && !HasMem(&op)) return false;
+        if ((requirements & kExactOnly) && mode != JitMode::Exact) return false;
+        return extensions == 0xff || (op.meta.flags.has_modrm && (extensions & (1u << ((op.modrm >> 3) & 7))));
+    }
+};
+
+const char* LogicName(const DecodedOp& op, JitMode mode) {
+    static const ankerl::unordered_dense::map<HandlerFunc, LLVMOperation> operations = {
+#define FIBERCPU_LLVM_OP(Name, Exact, Requirements, Extensions) \
+    {DispatchWrapper<op::Name>, {#Name, Requirements, Extensions}},
 #include "llvm_block_operations.inc"
 #undef FIBERCPU_LLVM_OP
     };
-    const auto match = names.find(handler);
-    return match == names.end() ? nullptr : match->second;
+    const auto match = operations.find(op.handler);
+    return match != operations.end() && match->second.Matches(op, mode) ? match->second.name : nullptr;
 }
 
 struct Step {
@@ -315,6 +348,11 @@ public:
         });
         llvm::orc::MangleAndInterner mangle((*engine)->getExecutionSession(), (*engine)->getDataLayout());
         llvm::orc::SymbolMap slow_paths;
+        const auto bind = [&](llvm::StringRef name, auto* target) {
+            slow_paths[mangle(name)] = {
+                llvm::orc::ExecutorAddr::fromPtr(target),
+                llvm::JITSymbolFlags::Exported | llvm::JITSymbolFlags::Callable};
+        };
         const std::pair<llvm::StringRef, HandlerFunc> helpers[] = {
             {"_ZN8fiberish15MemoryOpRestartE", MemoryOpRestart},
             {"_ZN8fiberish13MemoryOpRetryE", MemoryOpRetry},
@@ -325,11 +363,58 @@ public:
             if (!function.isDeclaration()) continue;
             for (const auto& [prefix, target] : helpers) {
                 if (!function.getName().starts_with(prefix)) continue;
-                slow_paths[mangle(function.getName())] = {
-                    llvm::orc::ExecutorAddr::fromPtr(target),
-                    llvm::JITSymbolFlags::Exported | llvm::JITSymbolFlags::Callable};
+                bind(function.getName(), target);
             }
         }
+        // x87 uses the same host floating-point ABI and thread-local library state as native dispatch.
+#define FIBERCPU_BIND_JIT_HELPER(Name) bind(#Name, &Name)
+        FIBERCPU_BIND_JIT_HELPER(f80_abs);
+        FIBERCPU_BIND_JIT_HELPER(f80_add);
+        FIBERCPU_BIND_JIT_HELPER(f80_atan2);
+        FIBERCPU_BIND_JIT_HELPER(f80_cos);
+        FIBERCPU_BIND_JIT_HELPER(f80_div);
+        FIBERCPU_BIND_JIT_HELPER(f80_eq);
+        FIBERCPU_BIND_JIT_HELPER(f80_from_double);
+        FIBERCPU_BIND_JIT_HELPER(f80_from_int);
+        FIBERCPU_BIND_JIT_HELPER(f80_is_signaling_nan);
+        FIBERCPU_BIND_JIT_HELPER(f80_is_supported);
+        FIBERCPU_BIND_JIT_HELPER(f80_isdenormal);
+        FIBERCPU_BIND_JIT_HELPER(f80_isinf);
+        FIBERCPU_BIND_JIT_HELPER(f80_isnan);
+        FIBERCPU_BIND_JIT_HELPER(f80_iszero);
+        FIBERCPU_BIND_JIT_HELPER(f80_log2);
+        FIBERCPU_BIND_JIT_HELPER(f80_lt);
+        FIBERCPU_BIND_JIT_HELPER(f80_mod);
+        FIBERCPU_BIND_JIT_HELPER(f80_mul);
+        FIBERCPU_BIND_JIT_HELPER(f80_neg);
+        FIBERCPU_BIND_JIT_HELPER(f80_rem);
+        FIBERCPU_BIND_JIT_HELPER(f80_round);
+        FIBERCPU_BIND_JIT_HELPER(f80_scale);
+        FIBERCPU_BIND_JIT_HELPER(f80_sin);
+        FIBERCPU_BIND_JIT_HELPER(f80_sqrt);
+        FIBERCPU_BIND_JIT_HELPER(f80_sub);
+        FIBERCPU_BIND_JIT_HELPER(f80_sync_from_soft);
+        FIBERCPU_BIND_JIT_HELPER(f80_sync_to_soft);
+        FIBERCPU_BIND_JIT_HELPER(f80_tan);
+        FIBERCPU_BIND_JIT_HELPER(f80_to_double);
+        FIBERCPU_BIND_JIT_HELPER(f80_to_int16_checked);
+        FIBERCPU_BIND_JIT_HELPER(f80_to_int32_checked);
+        FIBERCPU_BIND_JIT_HELPER(f80_to_int64_checked);
+        FIBERCPU_BIND_JIT_HELPER(f80_trunc_to_int);
+        FIBERCPU_BIND_JIT_HELPER(f80_uncomparable);
+        FIBERCPU_BIND_JIT_HELPER(f80_xtract);
+#undef FIBERCPU_BIND_JIT_HELPER
+        bind("frexp", static_cast<double (*)(double, int*)>(std::frexp));
+        bind("exp2", static_cast<double (*)(double)>(std::exp2));
+        bind("log2", static_cast<double (*)(double)>(std::log2));
+        bind("pow", static_cast<double (*)(double, double)>(std::pow));
+        bind("memcmp", &std::memcmp);
+        bind("memcpy", &std::memcpy);
+        bind("memmove", &std::memmove);
+        bind("memset", &std::memset);
+        bind("bzero", &::bzero);
+        bind("_Znam", static_cast<void* (*)(size_t)>(::operator new[]));
+        bind("FiberReadRealtimeTsc", &FiberReadRealtimeTsc);
         if (auto error = (*engine)->getMainJITDylib().define(llvm::orc::absoluteSymbols(std::move(slow_paths)))) {
             llvm::consumeError(std::move(error));
             return;
@@ -403,7 +488,7 @@ void CompileHotLLVMBlock(EmuState* state, BasicBlock* block) {
         if (!op->len || op->prefixes.flags.lock || (HasMem(op) && GetExtKind(op) != ExtKind::Data)) break;
         DecodedOp generic;
         if (!RedecodeGenericInstruction(state, *op, generic)) return;
-        const auto* name = LogicName(generic.handler);
+        const auto* name = LogicName(generic, mode);
         if (!name) break;
         steps[covered] = {name, DecodedOperandShape::Read(&generic)};
         replay_handlers[covered] = generic.handler;

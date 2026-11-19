@@ -972,6 +972,10 @@ FORCE_INLINE LogicFlow OpGroup_Sse_Shift_Imm_Q(LogicFuncParams) {
     }
 }
 
+#define FIBERCPU_BIND_VECTOR_SSE_INT
+#include "instruction_kernel_bindings.inc"
+#undef FIBERCPU_BIND_VECTOR_SSE_INT
+
 }  // namespace op
 
 }  // namespace fiberish

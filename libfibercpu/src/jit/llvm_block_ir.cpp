@@ -3,8 +3,16 @@
 #include "ops/ops_compare_impl.h"
 #include "ops/ops_control_impl.h"
 #include "ops/ops_data_mov_impl.h"
+#include "ops/ops_double_shift_impl.h"
+#include "ops/ops_fpu_impl.h"
 #include "ops/ops_groups_impl.h"
+#include "ops/ops_mmx_impl.h"
+#include "ops/ops_muldiv_impl.h"
 #include "ops/ops_shift_bit_impl.h"
+#include "ops/ops_sse_cvt_impl.h"
+#include "ops/ops_sse_fp_impl.h"
+#include "ops/ops_sse_int_impl.h"
+#include "ops/ops_sse_mov_impl.h"
 #include "superopcodes.h"
 
 namespace fiberish {
@@ -20,7 +28,7 @@ FORCE_INLINE LogicFlow RunLLVMFlagPolicy(uint8_t metadata, LogicFuncParams) {
     return Live(LogicPassParams);
 }
 
-#define FIBERCPU_LLVM_OP(Name, Exact)                                                                       \
+#define FIBERCPU_LLVM_OP(Name, Exact, Requirements, Extensions)                                             \
     extern "C" LogicFlow FiberLLVMGeneric_##Name(unsigned, uint32_t, uint32_t, uint32_t, LogicFuncParams) { \
         return op::Name(LogicPassParams);                                                                   \
     }                                                                                                       \

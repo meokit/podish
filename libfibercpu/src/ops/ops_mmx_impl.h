@@ -1295,6 +1295,10 @@ FORCE_INLINE LogicFlow OpPunpckldq_Mmx(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
+#define FIBERCPU_BIND_VECTOR_MMX
+#include "instruction_kernel_bindings.inc"
+#undef FIBERCPU_BIND_VECTOR_MMX
+
 }  // namespace op
 
 }  // namespace fiberish

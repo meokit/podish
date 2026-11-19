@@ -244,6 +244,114 @@ bool VerifyShiftBitMemory(bool enabled) {
     return word == 0x80000007 && previous == 0x80 && HasCompiledEntry(state.get()) == enabled;
 }
 
+bool VerifyExtendedInteger(bool enabled) {
+    constexpr uint8_t code[] = {
+        0x69, 0xc0, 0xfe, 0xff, 0xff, 0xff,  // IMUL EAX, EAX, -2
+        0x0f, 0xa4, 0xc8, 4,               // SHLD EAX, ECX, 4
+        0x0f, 0x9c, 0xc2,                  // SETL DL
+    };
+    auto state = LoadCode(code, sizeof(code));
+    X86_RegWrite(state.get(), 0, 3);
+    X86_RegWrite(state.get(), 1, 0xf0000000);
+    const auto end = code_address + sizeof(code);
+    return X86_Run(state.get(), end, 16) && X86_GetEIP(state.get()) == end &&
+           X86_RegRead(state.get(), 0) == 0xffffffaf && X86_RegRead(state.get(), 2) == 1 &&
+           HasCompiledEntry(state.get()) == enabled;
+}
+
+bool VerifyVectorPrefixRouting(bool enabled) {
+    constexpr uint8_t code[] = {
+        0x66, 0x0f, 0xef, 0xc0,  // PXOR XMM0, XMM0
+        0x66, 0x0f, 0x6e, 0xc8,  // MOVD XMM1, EAX
+        0x66, 0x0f, 0xfe, 0xc1,  // PADDD XMM0, XMM1
+        0x0f, 0xef, 0xc0,        // PXOR MM0, MM0 (must leave XMM0 alone)
+        0x66, 0x0f, 0x7e, 0xc2,  // MOVD EDX, XMM0
+    };
+    auto state = LoadCode(code, sizeof(code));
+    X86_RegWrite(state.get(), 0, 0x12345678);
+    const auto end = code_address + sizeof(code);
+    return X86_Run(state.get(), end, 16) && X86_GetEIP(state.get()) == end &&
+           X86_RegRead(state.get(), 2) == 0x12345678 && HasCompiledEntry(state.get()) == enabled;
+}
+
+bool VerifyX87Helpers(bool enabled) {
+    constexpr uint8_t code[] = {
+        0xd9, 0xe8,  // FLD1
+        0xd9, 0xe8,  // FLD1
+        0xde, 0xc1,  // FADDP ST(1), ST(0)
+        0xd9, 0x19,  // FSTP dword [ECX]
+    };
+    auto state = LoadCode(code, sizeof(code));
+    FaultData fault{true};
+    X86_SetFaultCallback(state.get(), MapOnFault, &fault);
+    X86_RegWrite(state.get(), 1, data_address);
+    const auto end = code_address + sizeof(code);
+    if (!X86_Run(state.get(), end, 16) || X86_GetEIP(state.get()) != end || fault.count != 1)
+        return false;
+    uint32_t value = 0;
+    X86_MemRead(state.get(), data_address, reinterpret_cast<uint8_t*>(&value), sizeof(value));
+    return value == 0x40000000 && HasCompiledEntry(state.get()) == enabled;
+}
+
+bool VerifyStackWidths(bool enabled) {
+    constexpr uint8_t code[] = {0x66, 0x50, 0x66, 0x5a};  // PUSH AX; POP DX
+    auto state = LoadCode(code, sizeof(code));
+    X86_MemMap(state.get(), data_address, 4096, 3);
+    X86_RegWrite(state.get(), 0, 0x89abcdef);
+    X86_RegWrite(state.get(), 2, 0x12340000);
+    X86_RegWrite(state.get(), 4, data_address + 32);
+    const auto end = code_address + sizeof(code);
+    return X86_Run(state.get(), end, 16) && X86_GetEIP(state.get()) == end &&
+           X86_RegRead(state.get(), 2) == 0x1234cdef && X86_RegRead(state.get(), 4) == data_address + 32 &&
+           HasCompiledEntry(state.get()) == enabled;
+}
+
+bool VerifyStackReplay(bool enabled) {
+    constexpr uint8_t code[] = {0x66, 0x9c, 0x66, 0x58};  // PUSHF word; POP AX
+    auto state = LoadCode(code, sizeof(code));
+    X86_RegWrite(state.get(), 0, 0x12340000);
+    X86_RegWrite(state.get(), 4, data_address + 2);
+    X86_SetEFLAGS(state.get(), 0x203);
+    FaultData fault{true};
+    X86_SetFaultCallback(state.get(), MapOnFault, &fault);
+    const auto end = code_address + sizeof(code);
+    return X86_Run(state.get(), end, 16) && X86_GetEIP(state.get()) == end && fault.count == 1 &&
+           X86_RegRead(state.get(), 0) == 0x12340203 && X86_RegRead(state.get(), 4) == data_address + 2 &&
+           HasCompiledEntry(state.get()) == enabled;
+}
+
+bool VerifyCallReturn(bool enabled) {
+    constexpr uint8_t code[] = {
+        0xe8, 2, 0, 0, 0,   // CALL callee
+        0xeb, 6,            // JMP end
+        0xb8, 42, 0, 0, 0,  // MOV EAX, 42
+        0xc3,               // RET
+    };
+    auto state = LoadCode(code, sizeof(code));
+    X86_MemMap(state.get(), data_address, 4096, 3);
+    X86_RegWrite(state.get(), 4, data_address + 32);
+    const auto end = code_address + sizeof(code);
+    return X86_Run(state.get(), end, 16) && X86_GetEIP(state.get()) == end &&
+           X86_RegRead(state.get(), 0) == 42 && X86_RegRead(state.get(), 4) == data_address + 32 &&
+           HasCompiledEntry(state.get()) == enabled;
+}
+
+bool VerifyTsc(bool enabled) {
+    constexpr uint8_t code[] = {0x0f, 0x31, 0x89, 0xc3, 0x0f, 0x31};  // RDTSC; MOV EBX, EAX; RDTSC
+    for (int mode = 0; mode < 2; ++mode) {
+        auto state = LoadCode(code, sizeof(code));
+        X86_SetTscMode(state.get(), mode);
+        X86_SetTscOffset(state.get(), 0x200000010ull);
+        X86_SetTscFrequency(state.get(), 0);  // Real-time mode yields the offset regardless of elapsed time.
+        const auto end = code_address + sizeof(code);
+        if (!X86_Run(state.get(), end, 16) || X86_RegRead(state.get(), 3) != 16 ||
+            X86_RegRead(state.get(), 0) != uint32_t(mode ? 16 : 1016) || X86_RegRead(state.get(), 2) != 2 ||
+            HasCompiledEntry(state.get()) != enabled)
+            return false;
+    }
+    return true;
+}
+
 bool VerifyHotLoop() {
     // SUB EAX, 1; JNE to SUB. With threshold four, the second run
     // becomes hot on a threaded backedge.
@@ -260,9 +368,9 @@ bool VerifyHotLoop() {
 }
 
 bool VerifyUncompiledSuffix() {
-    // MOV ESI, [ESP+0x14]; MOV [ESI], EDX; POP EBX/ESI/EDI/EBP; RET.
-    // The POP sequence has a static fusion when native specialization is on.
-    constexpr uint8_t code[] = {0x8b, 0x74, 0x24, 0x14, 0x89, 0x16, 0x5b, 0x5e, 0x5f, 0x5d, 0xc3};
+    // MOV ESI, [ESP+0x14]; MOV [ESI], EDX; LOCK OR dword [ESI], 0; POP EBX/ESI/EDI/EBP; RET.
+    constexpr uint8_t code[] = {0x8b, 0x74, 0x24, 0x14, 0x89, 0x16, 0xf0, 0x83,
+                                0x0e, 0,    0x5b, 0x5e, 0x5f, 0x5d, 0xc3};
     auto state = LoadCode(code, sizeof(code));
     const auto end = code_address + sizeof(code);
     constexpr uint32_t destination = data_address + 0x100;
@@ -377,6 +485,16 @@ int main(int argc, char** argv) {
     if (!VerifyShiftBitRegisters(enabled) || !VerifyTzcntPrefix(enabled) || !VerifyShiftBitMemory(enabled) ||
         X86_GetLLVMJitLiveBlockCount() != 0) {
         std::fprintf(stderr, "Shift/bit flags, operands or memory restart mismatch\n");
+        return 1;
+    }
+    if (!VerifyExtendedInteger(enabled) || !VerifyVectorPrefixRouting(enabled) || !VerifyX87Helpers(enabled) ||
+        X86_GetLLVMJitLiveBlockCount() != 0) {
+        std::fprintf(stderr, "Generated integer, vector prefix or x87 template mismatch\n");
+        return 1;
+    }
+    if (!VerifyStackWidths(enabled) || !VerifyStackReplay(enabled) || !VerifyCallReturn(enabled) || !VerifyTsc(enabled) ||
+        X86_GetLLVMJitLiveBlockCount() != 0) {
+        std::fprintf(stderr, "LLVM generic stack width, call or return mismatch\n");
         return 1;
     }
 }

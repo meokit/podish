@@ -8,6 +8,8 @@ def instruction_targets(catalog):
     targets = {}
     for opcode, name in catalog["fallbacks"].items():
         targets.setdefault(name, set()).add(int(opcode))
+    for opcode, name in catalog.get("generic_fallbacks", {}).items():
+        targets.setdefault(name, set()).add(int(opcode))
     for row in catalog["variants"]:
         targets.setdefault(row["logic"], set()).add(catalog["families"][row["family"]]["opcode"])
     return targets

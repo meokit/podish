@@ -321,14 +321,25 @@ inline mem::MemResult<float80> ReadF64(EmuState* state, GprCache& gpr, DecodedOp
 
 namespace op {
 
-FORCE_INLINE LogicFlow OpFpu_D8(LogicFuncParams) {
+// Keep the decoded r/m index dynamic: it selects ST(i) relative to the current TOP.
+template <GroupOpSpec Extension, AddrModeSpec Form>
+FORCE_INLINE uint8_t FpuModRM(const DecodedOp* op) {
+    uint8_t modrm = op->modrm;
+    if constexpr (Form == AddrModeSpec::ModReg) modrm |= 0xc0;
+    if constexpr (Extension != GroupOpSpec::Dynamic) {
+        modrm = static_cast<uint8_t>((modrm & 0xc7) | (static_cast<uint8_t>(Extension) << 3));
+    }
+    return modrm;
+}
+
+template <GroupOpSpec Extension, AddrModeSpec Form>
+FORCE_INLINE LogicFlow Fpu_D8_Impl(LogicFuncParams) {
     // D8: FPU arithmetic
-    uint8_t subop = (op->modrm >> 3) & 7;
-    uint8_t mod = op->modrm >> 6;
+    uint8_t subop = GroupOperation<Extension>(op);
     float80& st0 = FpuTop(state, 0);
 
     // Register form: D8 C0-FF (operate with ST(i))
-    if (mod == 3) {
+    if (OperandIsReg<Form>(op)) {
         uint8_t sti_idx = op->modrm & 7;
         float80& sti = FpuTop(state, sti_idx);
 
@@ -415,13 +426,14 @@ FORCE_INLINE LogicFlow OpFpu_D8(LogicFuncParams) {
     return ContinueWithSyncedFpuStatus(state);
 }
 
-FORCE_INLINE LogicFlow OpFpu_D9(LogicFuncParams) {
-    uint8_t subop = (op->modrm >> 3) & 7;
+template <GroupOpSpec Extension, AddrModeSpec Form>
+FORCE_INLINE LogicFlow Fpu_D9_Impl(LogicFuncParams) {
+    uint8_t subop = GroupOperation<Extension>(op);
 
-    if ((op->modrm >> 6) == 3) {
+    if (OperandIsReg<Form>(op)) {
         // D9 C0-FF: FPU Instructions with Regs
         // Map 0xD9C0 -> index
-        uint8_t op_byte = op->modrm;
+        uint8_t op_byte = FpuModRM<Extension, Form>(op);
 
         if ((op_byte & 0xF8) == 0xC0) {  // FLD ST(i) (DUP) -> D9 C0
             float80 t = FpuTop(state, op_byte & 7);
@@ -619,14 +631,15 @@ FORCE_INLINE LogicFlow OpFpu_D9(LogicFuncParams) {
                 return LogicFlow::ExitOnCurrentEIP;
         }
     }
-    if ((op->modrm >> 6) == 3 || subop < 4) RecordFpuInstruction(state, gpr, op, 0xD9);
+    if (OperandIsReg<Form>(op) || subop < 4) RecordFpuInstruction(state, gpr, op, 0xD9);
     return ContinueWithSyncedFpuStatus(state);
 }
 
-FORCE_INLINE LogicFlow OpFpu_DA(LogicFuncParams) {
+template <GroupOpSpec Extension, AddrModeSpec Form>
+FORCE_INLINE LogicFlow Fpu_DA_Impl(LogicFuncParams) {
     // DA: Int Arith m32
-    if ((op->modrm >> 6) == 3) {
-        if (op->modrm == 0xE9) {  // FUCOMPP
+    if (OperandIsReg<Form>(op)) {
+        if (FpuModRM<Extension, Form>(op) == 0xE9) {  // FUCOMPP
             float80 st0 = FpuTop(state, 0);
             float80 st1 = FpuTop(state, 1);
             if (f80_uncomparable(st0, st1)) {
@@ -647,7 +660,7 @@ FORCE_INLINE LogicFlow OpFpu_DA(LogicFuncParams) {
             // DA D8-DF: FCMOVU
             int idx = op->modrm & 7;
             bool pass = false;
-            switch ((op->modrm >> 3) & 7) {
+            switch (GroupOperation<Extension>(op)) {
                 case 0:
                     pass = ReadCF(flags_cache);
                     break;  // FCMOVB
@@ -664,7 +677,7 @@ FORCE_INLINE LogicFlow OpFpu_DA(LogicFuncParams) {
             if (pass) FpuTop(state, 0) = FpuTop(state, idx);
         }
     } else {
-        uint8_t subop = (op->modrm >> 3) & 7;
+        uint8_t subop = GroupOperation<Extension>(op);
         uint32_t addr = ComputeLinearAddress(state, gpr, op);
         auto val_res = ReadMem<uint32_t, OpOnTLBMiss::Blocking>(state, gpr, addr, utlb, op);
         if (!val_res) return LogicFlow::ExitOnCurrentEIP;
@@ -710,20 +723,22 @@ FORCE_INLINE LogicFlow OpFpu_DA(LogicFuncParams) {
     return ContinueWithSyncedFpuStatus(state);
 }
 
-FORCE_INLINE LogicFlow OpFpu_DB(LogicFuncParams) {
+template <GroupOpSpec Extension, AddrModeSpec Form>
+FORCE_INLINE LogicFlow Fpu_DB_Impl(LogicFuncParams) {
     // DB: FILD/FIST
-    uint8_t subop = (op->modrm >> 3) & 7;
+    const auto subop = GroupOperation<Extension>(op);
+    const auto modrm = FpuModRM<Extension, Form>(op);
+    const bool reg_form = OperandIsReg<Form>(op);
 
-    if ((op->modrm >> 6) == 3) {
+    if (reg_form) {
         // DB C0-C7: FCMOVNB
         // DB C8-CF: FCMOVNE
         // DB D0-D7: FCMOVNBE
         // DB D8-DF: FCMOVNU
-        uint8_t mode = (op->modrm >> 3) & 7;
-        if (mode < 4) {
+        if (subop < 4) {
             int idx = op->modrm & 7;
             bool pass = false;
-            switch (mode) {
+            switch (subop) {
                 case 0:
                     pass = !ReadCF(flags_cache);
                     break;  // FCMOVNB
@@ -738,18 +753,18 @@ FORCE_INLINE LogicFlow OpFpu_DB(LogicFuncParams) {
                     break;  // FCMOVNU
             }
             if (pass) FpuTop(state, 0) = FpuTop(state, idx);
-        } else if (op->modrm == 0xE2) {               // FCLEX
+        } else if (modrm == 0xE2) {                 // FCLEX
             state->ctx.fpu_sw &= ~(0x00FF | 0x8000);  // Clear exception flags and busy flag
             UpdateFpuRoundingMode(state);
-        } else if (op->modrm == 0xE3) {  // FINIT
+        } else if (modrm == 0xE3) {             // FINIT
             ResetFpuEnvironment(state);
-        } else if ((op->modrm & 0xF8) == 0xE8) {  // FUCOMI
+        } else if ((modrm & 0xF8) == 0xE8) {  // FUCOMI
             int idx = op->modrm & 7;
             float80 st0 = FpuTop(state, 0);
             float80 sti = FpuTop(state, idx);
             SetFcomiFlags(flags_cache, st0, sti);
             MergeFcomiInvalidStatus(state, st0, sti, true);
-        } else if ((op->modrm & 0xF8) == 0xF0) {  // FCOMI
+        } else if ((modrm & 0xF8) == 0xF0) {  // FCOMI
             int idx = op->modrm & 7;
             float80 st0 = FpuTop(state, 0);
             float80 sti = FpuTop(state, idx);
@@ -834,15 +849,16 @@ FORCE_INLINE LogicFlow OpFpu_DB(LogicFuncParams) {
                 return LogicFlow::ExitOnCurrentEIP;
         }
     }
-    if ((op->modrm >> 6) != 3 || (op->modrm != 0xE2 && op->modrm != 0xE3)) RecordFpuInstruction(state, gpr, op, 0xDB);
+    if (!reg_form || (modrm != 0xE2 && modrm != 0xE3)) RecordFpuInstruction(state, gpr, op, 0xDB);
     return ContinueWithSyncedFpuStatus(state);
 }
 
-FORCE_INLINE LogicFlow OpFpu_DC(LogicFuncParams) {
+template <GroupOpSpec Extension, AddrModeSpec Form>
+FORCE_INLINE LogicFlow Fpu_DC_Impl(LogicFuncParams) {
     // DC: FPU Arith m64 (double)
-    uint8_t subop = (op->modrm >> 3) & 7;
+    uint8_t subop = GroupOperation<Extension>(op);
 
-    if ((op->modrm >> 6) == 3) {
+    if (OperandIsReg<Form>(op)) {
         // FADD ST(i), ST0 etc.
         // DC C0+i: FADD ST(i), ST0
         int idx = op->modrm & 7;
@@ -920,11 +936,12 @@ FORCE_INLINE LogicFlow OpFpu_DC(LogicFuncParams) {
     return ContinueWithSyncedFpuStatus(state);
 }
 
-FORCE_INLINE LogicFlow OpFpu_DD(LogicFuncParams) {
+template <GroupOpSpec Extension, AddrModeSpec Form>
+FORCE_INLINE LogicFlow Fpu_DD_Impl(LogicFuncParams) {
     // DD: Load/Store m64
-    uint8_t subop = (op->modrm >> 3) & 7;
+    uint8_t subop = GroupOperation<Extension>(op);
 
-    if ((op->modrm >> 6) == 3) {
+    if (OperandIsReg<Form>(op)) {
         // DD C0+i: FFREE ST(i)
         // DD D0+i: FST ST(i) (Store ST0 to STi)
         // DD D8+i: FSTP ST(i)
@@ -1056,16 +1073,17 @@ FORCE_INLINE LogicFlow OpFpu_DD(LogicFuncParams) {
                 return LogicFlow::ExitOnCurrentEIP;
         }
     }
-    if ((op->modrm >> 6) == 3 || subop < 4) RecordFpuInstruction(state, gpr, op, 0xDD);
+    if (OperandIsReg<Form>(op) || subop < 4) RecordFpuInstruction(state, gpr, op, 0xDD);
     return ContinueWithSyncedFpuStatus(state);
 }
 
-FORCE_INLINE LogicFlow OpFpu_DE(LogicFuncParams) {
+template <GroupOpSpec Extension, AddrModeSpec Form>
+FORCE_INLINE LogicFlow Fpu_DE_Impl(LogicFuncParams) {
     // DE: Arith (Pop)
-    uint8_t subop = (op->modrm >> 3) & 7;
+    uint8_t subop = GroupOperation<Extension>(op);
 
-    if ((op->modrm >> 6) == 3) {
-        if (op->modrm == 0xD9) {  // FCOMPP
+    if (OperandIsReg<Form>(op)) {
+        if (FpuModRM<Extension, Form>(op) == 0xD9) {  // FCOMPP
             float80 st0 = FpuTop(state, 0);
             float80 st1 = FpuTop(state, 1);
             SetFpuCompareFlags(state, st0, st1);
@@ -1189,27 +1207,30 @@ FORCE_INLINE LogicFlow OpFpu_DE(LogicFuncParams) {
     return ContinueWithSyncedFpuStatus(state);
 }
 
-FORCE_INLINE LogicFlow OpFpu_DF(LogicFuncParams) {
+template <GroupOpSpec Extension, AddrModeSpec Form>
+FORCE_INLINE LogicFlow Fpu_DF_Impl(LogicFuncParams) {
     // DF: m16 Int / Misc
-    uint8_t subop = (op->modrm >> 3) & 7;
+    const auto subop = GroupOperation<Extension>(op);
+    const auto modrm = FpuModRM<Extension, Form>(op);
+    const bool reg_form = OperandIsReg<Form>(op);
 
-    if ((op->modrm >> 6) == 3) {
-        if ((op->modrm & 0xF8) == 0xC0) {  // FFREEP ST(i)
+    if (reg_form) {
+        if ((modrm & 0xF8) == 0xC0) {  // FFREEP ST(i)
             int idx = op->modrm & 7;
             int phys = (state->ctx.fpu_top + idx) & 7;
             state->ctx.fpu_tw |= (3 << (phys * 2));  // mark ST(i) empty
             FpuPop(state);                           // pop ST(0)
-        } else if (op->modrm == 0xE0) {              // FNSTSW AX
+        } else if (modrm == 0xE0) {              // FNSTSW AX
             SyncFpuStatusFromSoft(state);
             gpr.SetReg(state, EAX, (gpr.GetReg(state, EAX) & 0xFFFF0000) | state->ctx.fpu_sw);
-        } else if ((op->modrm & 0xF8) == 0xE8) {  // FUCOMIP
+        } else if ((modrm & 0xF8) == 0xE8) {  // FUCOMIP
             int idx = op->modrm & 7;
             float80 st0 = FpuTop(state, 0);
             float80 sti = FpuTop(state, idx);
             SetFcomiFlags(flags_cache, st0, sti);
             MergeFcomiInvalidStatus(state, st0, sti, true);
             FpuPop(state);
-        } else if ((op->modrm & 0xF8) == 0xF0) {  // FCOMIP
+        } else if ((modrm & 0xF8) == 0xF0) {  // FCOMIP
             int idx = op->modrm & 7;
             float80 st0 = FpuTop(state, 0);
             float80 sti = FpuTop(state, idx);
@@ -1304,9 +1325,13 @@ FORCE_INLINE LogicFlow OpFpu_DF(LogicFuncParams) {
                 return LogicFlow::ExitOnCurrentEIP;
         }
     }
-    if ((op->modrm >> 6) != 3 || op->modrm != 0xE0) RecordFpuInstruction(state, gpr, op, 0xDF);
+    if (!reg_form || modrm != 0xE0) RecordFpuInstruction(state, gpr, op, 0xDF);
     return ContinueWithSyncedFpuStatus(state);
 }
+
+#define FIBERCPU_BIND_VECTOR_FPU
+#include "instruction_kernel_bindings.inc"
+#undef FIBERCPU_BIND_VECTOR_FPU
 
 }  // namespace op
 

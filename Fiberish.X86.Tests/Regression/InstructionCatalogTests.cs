@@ -20,7 +20,7 @@ public sealed unsafe class InstructionCatalogTests
     {
         var entries = Catalog();
         Assert.Equal(411, entries.Count(x => x.is_fallback != 0));
-        Assert.Equal(755, entries.Count(x => x.is_fallback == 0));
+        Assert.Equal(1862, entries.Count(x => x.is_fallback == 0));
         Assert.Equal(entries.Length, entries.Select(x => x.variant_key).Distinct().Count());
         var staticSpecialization = !X86Native.GetOptimizationConfig().Contains("static=OFF;");
         foreach (var v in entries)

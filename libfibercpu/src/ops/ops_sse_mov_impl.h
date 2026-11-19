@@ -520,6 +520,10 @@ FORCE_INLINE LogicFlow OpGroup_Mov17(LogicFuncParams) {
     }
 }
 
+#define FIBERCPU_BIND_VECTOR_SSE_MOV
+#include "instruction_kernel_bindings.inc"
+#undef FIBERCPU_BIND_VECTOR_SSE_MOV
+
 }  // namespace op
 
 }  // namespace fiberish

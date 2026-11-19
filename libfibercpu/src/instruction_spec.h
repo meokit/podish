@@ -6,7 +6,7 @@ namespace fiberish::spec {
 
 enum class Width : uint8_t { Dynamic, W8, W16, W32 };
 enum class AddressWidth : uint8_t { Dynamic, A16, A32 };
-enum class WidthRule : uint8_t { Fixed8, Fixed32, ScalarEv, MandatoryPrefix };
+enum class WidthRule : uint8_t { Fixed8, Fixed32, ScalarEv, MandatoryPrefix, Fixed16, Unspecified };
 enum class ByteLane : uint8_t { Low, High };
 enum class Flags : uint8_t { Live, Dead, Any };
 enum class Repeat : uint8_t { Dynamic, Absent, Present };
@@ -16,7 +16,7 @@ enum class Base : int8_t { Dynamic = -2, Absent = -1, Eax, Ecx, Edx, Ebx, Esp, E
 enum class Index : int8_t { Dynamic = -2, Absent = -1, Eax, Ecx, Edx, Ebx, Esp, Ebp, Esi, Edi };
 // Default means no override, not a zero architectural segment base.
 enum class Segment : int8_t { Dynamic = -1, Default, Es, Cs, Ss, Ds, Fs, Gs };
-enum class MandatoryPrefix : uint8_t { Dynamic, P66, F2, F3, F3Only };
+enum class MandatoryPrefix : uint8_t { Dynamic, P66, F2, F3, F3Only, P66Only, F2Only, None };
 enum class Layout : uint8_t { None, RmReg, RegRm, RmOnly, OpcodeReg, Accumulator };
 
 // A structural C++23 value: all variant facts can be used as template arguments.
@@ -139,11 +139,13 @@ constexpr bool Valid(Spec s) {
         static_cast<int>(s.repeat_prefix) > static_cast<int>(Repeat::Present) ||
         static_cast<int>(s.rm_form) > static_cast<int>(Form::Memory) || static_cast<int>(s.address_segment) < -1 ||
         static_cast<int>(s.address_segment) > 6 ||
-        static_cast<int>(s.mandatory_prefix) > static_cast<int>(MandatoryPrefix::F3Only))
+        static_cast<int>(s.mandatory_prefix) > static_cast<int>(MandatoryPrefix::None))
         return false;
     if (s.operand_width != Width::Dynamic) {
-        if (Family::width_rule == WidthRule::MandatoryPrefix) return false;
+        if (Family::width_rule == WidthRule::MandatoryPrefix || Family::width_rule == WidthRule::Unspecified)
+            return false;
         if (Family::width_rule == WidthRule::Fixed8 && s.operand_width != Width::W8) return false;
+        if (Family::width_rule == WidthRule::Fixed16 && s.operand_width != Width::W16) return false;
         if (Family::width_rule == WidthRule::Fixed32 && s.operand_width != Width::W32) return false;
         if (Family::width_rule == WidthRule::ScalarEv && s.operand_width == Width::W8) return false;
     }
@@ -172,8 +174,9 @@ constexpr bool Valid(Spec s) {
                     s.address_segment != Segment::Dynamic || s.address_scale != -1;
     if ((Family::layout == Layout::None || Family::layout == Layout::OpcodeReg ||
          Family::layout == Layout::Accumulator) &&
-        (ea || s.address_width != AddressWidth::Dynamic || s.rm_form != Form::Dynamic))
+        (ea || s.rm_form != Form::Dynamic))
         return false;
+    if (Family::layout == Layout::OpcodeReg && s.address_width != AddressWidth::Dynamic) return false;
     if (s.address_width != AddressWidth::Dynamic && (rm_fixed || s.rm_form == Form::Register)) return false;
     if (s.address_width == AddressWidth::A16 &&
         (s.address_base == Base::Eax || s.address_base == Base::Ecx || s.address_base == Base::Edx ||
@@ -233,11 +236,18 @@ constexpr SpecCriteria Criteria(Spec s) {
         c.prefix_val = s.operand_width == Width::W16 ? prefix::OPSIZE : 0;
     }
     if (s.mandatory_prefix != MandatoryPrefix::Dynamic) {
-        c.prefix_mask = s.mandatory_prefix == MandatoryPrefix::P66  ? prefix::OPSIZE
-                        : s.mandatory_prefix == MandatoryPrefix::F2 ? prefix::REPNE
-                                                                    : prefix::REP;
-        c.prefix_val = c.prefix_mask;
-        if (s.mandatory_prefix == MandatoryPrefix::F3Only) c.prefix_mask |= prefix::OPSIZE | prefix::REPNE;
+        switch (s.mandatory_prefix) {
+            case MandatoryPrefix::P66:
+            case MandatoryPrefix::P66Only: c.prefix_val = prefix::OPSIZE; break;
+            case MandatoryPrefix::F2:
+            case MandatoryPrefix::F2Only: c.prefix_val = prefix::REPNE; break;
+            case MandatoryPrefix::F3:
+            case MandatoryPrefix::F3Only: c.prefix_val = prefix::REP; break;
+            default: break;
+        }
+        c.prefix_mask = s.mandatory_prefix >= MandatoryPrefix::F3Only
+                            ? prefix::OPSIZE | prefix::REPNE | prefix::REP
+                            : c.prefix_val;
     }
     if (s.repeat_prefix != Repeat::Dynamic) {
         c.prefix_mask |= prefix::REP;
@@ -269,6 +279,31 @@ constexpr SpecCriteria Criteria(Spec s) {
         c.segment_val = static_cast<uint8_t>(s.address_segment);
     }
     return c;
+}
+
+template <class Family, Spec Shape>
+FORCE_INLINE void AssumeInstructionShape(const DecodedOp* op) {
+    // Block liveness is resolved after initial native handler selection.
+    constexpr auto c = Criteria<Family>(Shape);
+    if constexpr (c.mod_mask) __builtin_assume(((op->modrm >> 6) & c.mod_mask) == c.mod_val);
+    if constexpr (c.reg_mask) __builtin_assume(((op->modrm >> 3) & c.reg_mask) == c.reg_val);
+    if constexpr (c.rm_mask) __builtin_assume((op->modrm & c.rm_mask) == c.rm_val);
+    if constexpr (c.prefix_mask) __builtin_assume((op->prefixes.all & c.prefix_mask) == c.prefix_val);
+    if constexpr (c.memory_only) {
+        __builtin_assume(op->meta.flags.has_mem);
+        __builtin_assume((op->modrm >> 6) != 3);
+    }
+    if constexpr (c.base_offset_mask || c.index_offset_mask || c.scale_mask || c.segment_mask) {
+        const auto ea = GetExt(op)->data.ea_desc;
+        const auto base = memdesc::BaseOffset(ea);
+        const auto index = memdesc::IndexOffset(ea);
+        const auto scale = memdesc::Scale(ea);
+        const auto segment = memdesc::Segment(ea);
+        if constexpr (c.base_offset_mask) __builtin_assume((base & c.base_offset_mask) == c.base_offset_val);
+        if constexpr (c.index_offset_mask) __builtin_assume((index & c.index_offset_mask) == c.index_offset_val);
+        if constexpr (c.scale_mask) __builtin_assume((scale & c.scale_mask) == c.scale_val);
+        if constexpr (c.segment_mask) __builtin_assume((segment & c.segment_mask) == c.segment_val);
+    }
 }
 
 }  // namespace fiberish::spec

@@ -8,6 +8,9 @@
 namespace fiberish {
 
 void RegisterInstructionVariants();
+HandlerFunc FindGenericInstructionHandler(uint16_t opcode, const DecodedOp* op);
+int FindGenericOpcodeIndex(HandlerFunc handler);
+HandlerFunc FindFusionFallbackHandler(HandlerFunc handler);
 const char* InstructionCatalogHash();
 const std::vector<X86_InstructionVariant>& InstructionVariantCatalog();
 void RegisterInstructionVariant(uint16_t opcode, SpecCriteria criteria, HandlerFunc handler, const char* logic,

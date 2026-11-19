@@ -1,4 +1,6 @@
 #include "instruction_variants.h"
+#include <ankerl/unordered_dense.h>
+#include <algorithm>
 #include "instruction_catalog_hash.h"
 #include "ops/ops_alu_impl.h"
 #include "ops/ops_compare_impl.h"
@@ -17,6 +19,14 @@
 
 namespace fiberish {
 namespace {
+struct Fallback {
+    uint16_t opcode;
+    HandlerFunc handler;
+    const char* logic;
+};
+using FusionAlias = std::pair<HandlerFunc, HandlerFunc>;
+#include "instruction_catalog.inc"
+
 std::vector<X86_InstructionVariant>& MutableCatalog() {
     // Also safe during dispatch table initialization across translation units.
     static std::vector<X86_InstructionVariant> entries;
@@ -83,14 +93,42 @@ void RegisterInstructionFallback(uint16_t opcode, HandlerFunc handler, const cha
 }
 
 void RegisterInstructionVariants() {
-    struct Fallback {
-        uint16_t opcode;
-        HandlerFunc handler;
-        const char* logic;
-    };
-#include "instruction_catalog.inc"
     for (const auto& f : fallbacks) RegisterInstructionFallback(f.opcode, f.handler, f.logic);
     for (const auto& v : variants)
         RegisterInstructionVariant(v.opcode, v.criteria, v.handler, v.logic, v.family, v.parent, v.bake, v.rank);
+}
+
+HandlerFunc FindGenericInstructionHandler(uint16_t opcode, const DecodedOp* op) {
+    const auto first = std::ranges::lower_bound(semantic_variant_indices, opcode, {}, [](uint16_t index) {
+        return variants[index].opcode;
+    });
+    const DeclaredInstructionVariant* best = nullptr;
+    for (auto it = first; it != std::end(semantic_variant_indices); ++it) {
+        const auto& candidate = variants[*it];
+        if (candidate.opcode != opcode) break;
+        if (!candidate.criteria.Matches(op)) continue;
+        const auto score = candidate.criteria.GetScore();
+        if (!best || score > best->criteria.GetScore() ||
+            (score == best->criteria.GetScore() && candidate.rank < best->rank))
+            best = &candidate;
+    }
+    if (best) return best->handler;
+    const auto fallback = std::ranges::lower_bound(generic_fallbacks, opcode, {}, &Fallback::opcode);
+    return fallback->opcode == opcode ? fallback->handler : nullptr;
+}
+
+int FindGenericOpcodeIndex(HandlerFunc handler) {
+    for (const auto& fallback : generic_fallbacks) {
+        if (fallback.handler == handler) return fallback.opcode;
+    }
+    return -1;
+}
+
+HandlerFunc FindFusionFallbackHandler(HandlerFunc handler) {
+    if constexpr (std::size(fusion_aliases) == 1) return handler;
+    static const ankerl::unordered_dense::map<HandlerFunc, HandlerFunc> aliases(
+        std::begin(fusion_aliases), std::end(fusion_aliases) - 1);
+    if (const auto it = aliases.find(handler); it != aliases.end()) return it->second;
+    return handler;
 }
 }  // namespace fiberish

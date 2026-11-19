@@ -3,6 +3,7 @@
 #include "common.h"
 #include "decoder.h"
 #include "dispatch.h"
+#include "instruction_families.h"
 #include "specialization.h"
 #include "state.h"
 

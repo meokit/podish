@@ -1,187 +1,73 @@
 #pragma once
-// Double-Shift Instructions (SHLD/SHRD)
-// Implements 0F A4/A5/AC/AD opcodes
 
 #include "../dispatch.h"
 #include "../exec_utils.h"
 #include "../ops.h"
-#include "../state.h"
 
 namespace fiberish {
-namespace op {
 
-// SHLD: Double Precision Shift Left
-// dest = (dest << count) | (src >> (32 - count))
-FORCE_INLINE LogicFlow OpShld_EvGvIb(LogicFuncParams) {
-    // 0F A4: SHLD r/m16/32, r16/32, imm8
-    uint8_t count = imm & 0x1F;
+enum class DoubleShiftDirection { Left, Right };
+enum class DoubleShiftCount { Immediate, Cl };
+
+template <typename T, DoubleShiftDirection Direction, AddrModeSpec Form, FlagsSpec Flags>
+FORCE_INLINE LogicFlow OpDoubleShiftValue(LogicFuncParams, uint8_t count) {
+    const auto destination = ReadModRM<T, OpOnTLBMiss::Restart, 1, Form>(state, gpr, op, utlb);
+    if (!destination) return LogicFlow::RestartMemoryOp;
+
+    constexpr unsigned width = sizeof(T) * 8;
+    // For a word count of 16, the existing handler reads r/m before returning.
+    count &= width - 1;
     if (count == 0) return LogicFlow::Continue;
 
-    if (op->prefixes.flags.opsize) {
-        auto dest_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
-        if (!dest_res) return LogicFlow::RestartMemoryOp;
-        uint16_t dest = *dest_res;
-        uint16_t src = (uint16_t)gpr.GetReg(state, (op->modrm >> 3) & 7);
-        count &= 0x0F;
-        if (count == 0) return LogicFlow::Continue;
-
-        uint16_t res = (dest << count) | (src >> (16 - count));
+    constexpr bool left = Direction == DoubleShiftDirection::Left;
+    constexpr T sign_bit = T{1} << (width - 1);
+    const T dst = *destination;
+    const T src = ReadRegGeneric<T>(state, gpr, (op->modrm >> 3) & 7);
+    const T result = left ? (dst << count) | (src >> (width - count)) : (dst >> count) | (src << (width - count));
+    if constexpr (Flags != FlagsSpec::Dead) {
         uint32_t flags = GetFlags32(flags_cache) & ~(CF_MASK | PF_MASK | ZF_MASK | SF_MASK | OF_MASK);
-        if ((dest >> (16 - count)) & 1) flags |= CF_MASK;
-        if (res == 0) flags |= ZF_MASK;
-        if (res & 0x8000) flags |= SF_MASK;
-        if (Parity(res & 0xFF)) flags |= PF_MASK;
-        if (count == 1 && ((dest ^ res) & 0x8000)) flags |= OF_MASK;
+        if ((dst >> (left ? width - count : count - 1)) & 1) flags |= CF_MASK;
+        if (result == 0) flags |= ZF_MASK;
+        if (result & sign_bit) flags |= SF_MASK;
+        if (Parity(result & 0xff)) flags |= PF_MASK;
+        if (count == 1 && ((dst ^ result) & sign_bit)) flags |= OF_MASK;
         SetFlags32AndSyncParityState(flags_cache, flags);
-
-        if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, gpr, op, res, utlb)) return LogicFlow::RetryMemoryOp;
-    } else {
-        auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
-        if (!dest_res) return LogicFlow::RestartMemoryOp;
-        uint32_t dest = *dest_res;
-        uint32_t src = gpr.GetReg(state, (op->modrm >> 3) & 7);
-        uint32_t res = (dest << count) | (src >> (32 - count));
-        uint32_t flags = GetFlags32(flags_cache) & ~(CF_MASK | PF_MASK | ZF_MASK | SF_MASK | OF_MASK);
-        if ((dest >> (32 - count)) & 1) flags |= CF_MASK;
-        if (res == 0) flags |= ZF_MASK;
-        if (res & 0x80000000) flags |= SF_MASK;
-        if (Parity(res & 0xFF)) flags |= PF_MASK;
-        if (count == 1 && ((dest ^ res) & 0x80000000)) flags |= OF_MASK;
-        SetFlags32AndSyncParityState(flags_cache, flags);
-
-        if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, gpr, op, res, utlb)) return LogicFlow::RetryMemoryOp;
     }
+
+    if (!WriteModRM<T, OpOnTLBMiss::Retry, 1, Form>(state, gpr, op, result, utlb)) return LogicFlow::RetryMemoryOp;
     return LogicFlow::Continue;
+}
+
+template <DoubleShiftDirection Direction, DoubleShiftCount CountSource, OpsizeSpec Size = OpsizeSpec::Dynamic,
+          AddrModeSpec Form = AddrModeSpec::Dynamic, FlagsSpec Flags = FlagsSpec::Dynamic>
+FORCE_INLINE LogicFlow OpDoubleShift_Internal(LogicFuncParams) {
+    const uint8_t count = (CountSource == DoubleShiftCount::Immediate ? imm : gpr.GetReg(state, ECX)) & 31;
+    if (count == 0) return LogicFlow::Continue;
+    if (OperandIs16<Size>(op)) return OpDoubleShiftValue<uint16_t, Direction, Form, Flags>(LogicPassParams, count);
+    return OpDoubleShiftValue<uint32_t, Direction, Form, Flags>(LogicPassParams, count);
+}
+
+namespace op {
+
+FORCE_INLINE LogicFlow OpShld_EvGvIb(LogicFuncParams) {
+    return OpDoubleShift_Internal<DoubleShiftDirection::Left, DoubleShiftCount::Immediate>(LogicPassParams);
 }
 
 FORCE_INLINE LogicFlow OpShld_EvGvCl(LogicFuncParams) {
-    // 0F A5: SHLD r/m16/32, r16/32, CL
-    uint8_t count = gpr.GetReg(state, ECX) & 0x1F;
-    if (count == 0) return LogicFlow::Continue;
-
-    if (op->prefixes.flags.opsize) {
-        auto dest_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
-        if (!dest_res) return LogicFlow::RestartMemoryOp;
-        uint16_t dest = *dest_res;
-        uint16_t src = (uint16_t)gpr.GetReg(state, (op->modrm >> 3) & 7);
-        count &= 0x0F;
-        if (count == 0) return LogicFlow::Continue;
-
-        uint16_t res = (dest << count) | (src >> (16 - count));
-        uint32_t flags = GetFlags32(flags_cache) & ~(CF_MASK | PF_MASK | ZF_MASK | SF_MASK | OF_MASK);
-        if ((dest >> (16 - count)) & 1) flags |= CF_MASK;
-        if (res == 0) flags |= ZF_MASK;
-        if (res & 0x8000) flags |= SF_MASK;
-        if (Parity(res & 0xFF)) flags |= PF_MASK;
-        if (count == 1 && ((dest ^ res) & 0x8000)) flags |= OF_MASK;
-        SetFlags32AndSyncParityState(flags_cache, flags);
-
-        if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, gpr, op, res, utlb)) return LogicFlow::RetryMemoryOp;
-    } else {
-        auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
-        if (!dest_res) return LogicFlow::RestartMemoryOp;
-        uint32_t dest = *dest_res;
-        uint32_t src = gpr.GetReg(state, (op->modrm >> 3) & 7);
-        uint32_t res = (dest << count) | (src >> (32 - count));
-        uint32_t flags = GetFlags32(flags_cache) & ~(CF_MASK | PF_MASK | ZF_MASK | SF_MASK | OF_MASK);
-        if ((dest >> (32 - count)) & 1) flags |= CF_MASK;
-        if (res == 0) flags |= ZF_MASK;
-        if (res & 0x80000000) flags |= SF_MASK;
-        if (Parity(res & 0xFF)) flags |= PF_MASK;
-        if (count == 1 && ((dest ^ res) & 0x80000000)) flags |= OF_MASK;
-        SetFlags32AndSyncParityState(flags_cache, flags);
-
-        if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, gpr, op, res, utlb)) return LogicFlow::RetryMemoryOp;
-    }
-    return LogicFlow::Continue;
+    return OpDoubleShift_Internal<DoubleShiftDirection::Left, DoubleShiftCount::Cl>(LogicPassParams);
 }
 
-// SHRD: Double Precision Shift Right
-// dest = (dest >> count) | (src << (32 - count))
 FORCE_INLINE LogicFlow OpShrd_EvGvIb(LogicFuncParams) {
-    // 0F AC: SHRD r/m16/32, r16/32, imm8
-    uint8_t count = imm & 0x1F;
-    if (count == 0) return LogicFlow::Continue;
-
-    if (op->prefixes.flags.opsize) {
-        auto dest_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
-        if (!dest_res) return LogicFlow::RestartMemoryOp;
-        uint16_t dest = *dest_res;
-        uint16_t src = (uint16_t)gpr.GetReg(state, (op->modrm >> 3) & 7);
-        count &= 0x0F;
-        if (count == 0) return LogicFlow::Continue;
-
-        uint16_t res = (dest >> count) | (src << (16 - count));
-        uint32_t flags = GetFlags32(flags_cache) & ~(CF_MASK | PF_MASK | ZF_MASK | SF_MASK | OF_MASK);
-        if ((dest >> (count - 1)) & 1) flags |= CF_MASK;
-        if (res == 0) flags |= ZF_MASK;
-        if (res & 0x8000) flags |= SF_MASK;
-        if (Parity(res & 0xFF)) flags |= PF_MASK;
-        if (count == 1 && ((dest ^ res) & 0x8000)) flags |= OF_MASK;
-        SetFlags32AndSyncParityState(flags_cache, flags);
-
-        if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, gpr, op, res, utlb)) return LogicFlow::RetryMemoryOp;
-    } else {
-        auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
-        if (!dest_res) return LogicFlow::RestartMemoryOp;
-        uint32_t dest = *dest_res;
-        uint32_t src = gpr.GetReg(state, (op->modrm >> 3) & 7);
-        uint32_t res = (dest >> count) | (src << (32 - count));
-        uint32_t flags = GetFlags32(flags_cache) & ~(CF_MASK | PF_MASK | ZF_MASK | SF_MASK | OF_MASK);
-        if ((dest >> (count - 1)) & 1) flags |= CF_MASK;
-        if (res == 0) flags |= ZF_MASK;
-        if (res & 0x80000000) flags |= SF_MASK;
-        if (Parity(res & 0xFF)) flags |= PF_MASK;
-        if (count == 1 && ((dest ^ res) & 0x80000000)) flags |= OF_MASK;
-        SetFlags32AndSyncParityState(flags_cache, flags);
-
-        if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, gpr, op, res, utlb)) return LogicFlow::RetryMemoryOp;
-    }
-    return LogicFlow::Continue;
+    return OpDoubleShift_Internal<DoubleShiftDirection::Right, DoubleShiftCount::Immediate>(LogicPassParams);
 }
 
 FORCE_INLINE LogicFlow OpShrd_EvGvCl(LogicFuncParams) {
-    // 0F AD: SHRD r/m16/32, r16/32, CL
-    uint8_t count = gpr.GetReg(state, ECX) & 0x1F;
-    if (count == 0) return LogicFlow::Continue;
-
-    if (op->prefixes.flags.opsize) {
-        auto dest_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
-        if (!dest_res) return LogicFlow::RestartMemoryOp;
-        uint16_t dest = *dest_res;
-        uint16_t src = (uint16_t)gpr.GetReg(state, (op->modrm >> 3) & 7);
-        count &= 0x0F;
-        if (count == 0) return LogicFlow::Continue;
-
-        uint16_t res = (dest >> count) | (src << (16 - count));
-        uint32_t flags = GetFlags32(flags_cache) & ~(CF_MASK | PF_MASK | ZF_MASK | SF_MASK | OF_MASK);
-        if ((dest >> (count - 1)) & 1) flags |= CF_MASK;
-        if (res == 0) flags |= ZF_MASK;
-        if (res & 0x8000) flags |= SF_MASK;
-        if (Parity(res & 0xFF)) flags |= PF_MASK;
-        if (count == 1 && ((dest ^ res) & 0x8000)) flags |= OF_MASK;
-        SetFlags32AndSyncParityState(flags_cache, flags);
-
-        if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, gpr, op, res, utlb)) return LogicFlow::RetryMemoryOp;
-    } else {
-        auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
-        if (!dest_res) return LogicFlow::RestartMemoryOp;
-        uint32_t dest = *dest_res;
-        uint32_t src = gpr.GetReg(state, (op->modrm >> 3) & 7);
-        uint32_t res = (dest >> count) | (src << (32 - count));
-        uint32_t flags = GetFlags32(flags_cache) & ~(CF_MASK | PF_MASK | ZF_MASK | SF_MASK | OF_MASK);
-        if ((dest >> (count - 1)) & 1) flags |= CF_MASK;
-        if (res == 0) flags |= ZF_MASK;
-        if (res & 0x80000000) flags |= SF_MASK;
-        if (Parity(res & 0xFF)) flags |= PF_MASK;
-        if (count == 1 && ((dest ^ res) & 0x80000000)) flags |= OF_MASK;
-        SetFlags32AndSyncParityState(flags_cache, flags);
-
-        if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, gpr, op, res, utlb)) return LogicFlow::RetryMemoryOp;
-    }
-    return LogicFlow::Continue;
+    return OpDoubleShift_Internal<DoubleShiftDirection::Right, DoubleShiftCount::Cl>(LogicPassParams);
 }
 
-}  // namespace op
+#define FIBERCPU_BIND_INTEGER_DOUBLE_SHIFT
+#include "instruction_kernel_bindings.inc"
+#undef FIBERCPU_BIND_INTEGER_DOUBLE_SHIFT
 
+}  // namespace op
 }  // namespace fiberish

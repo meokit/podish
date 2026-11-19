@@ -10,6 +10,7 @@
 #include "dfe_lut.h"
 #include "dispatch.h"
 #include "exec_utils.h"  // For Flag Masks
+#include "instruction_variants.h"
 #include "ops.h"         // For g_Handlers
 #include "specialization.h"
 #include "state.h"
@@ -517,7 +518,11 @@ static void ApplySpecializedHandler(uint16_t handler_index, DecodedOp& op) {
 void FinalizeDecodedInstruction(EmuState* state, uint32_t eip, uint16_t handler_index, DecodedOp* op,
                                 DecodeHandlerMode mode) {
     op->next_eip = eip + op->GetLength();
-    if (mode == DecodeHandlerMode::Native) ApplySpecializedHandler(handler_index, *op);
+    if (mode == DecodeHandlerMode::Native) {
+        ApplySpecializedHandler(handler_index, *op);
+    } else if (auto generic = FindGenericInstructionHandler(handler_index, op)) {
+        op->handler = generic;
+    }
     if (GetExtKind(op) == ExtKind::ControlFlow) {
         SetCachedTarget(op, state->mmu.invalid_code_block());
     }
@@ -834,13 +839,20 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
                 }
                 break;
             }
-            case DFE_TYPE_BIT_REGISTER:
+            case DFE_TYPE_REGISTER_FLAGS:
                 // Leave flags materialized at a possible memory fault.
                 if (HasMem(&op) || (flat_idx == 0x1ba && ((op.modrm >> 3) & 7) < 4)) {
                     reads = DFE_ALL_FLAGS;
                 } else {
                     writes = info.write_mask;
                     if (flat_idx == 0x1bc && op.prefixes.flags.rep) writes |= CF_MASK;
+                }
+                break;
+            case DFE_TYPE_DOUBLE_SHIFT_IMMEDIATE:
+                if (HasMem(&op)) {
+                    reads = DFE_ALL_FLAGS;
+                } else if (GetImm(&op) & (op.prefixes.flags.opsize ? 15 : 31)) {
+                    writes = info.write_mask;
                 }
                 break;
             default:

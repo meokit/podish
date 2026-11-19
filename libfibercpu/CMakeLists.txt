@@ -347,6 +347,25 @@ endif()
 
 set(_instruction_catalog "${CMAKE_CURRENT_SOURCE_DIR}/src/instruction_catalog.json")
 set(_catalog_generator "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/gen_instruction_catalog.py")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_instruction_catalog}")
+file(READ "${_instruction_catalog}" _catalog_schema)
+string(JSON _catalog_source_count ERROR_VARIABLE _catalog_source_error LENGTH "${_catalog_schema}" specialization_sources)
+set(_catalog_inputs "${_instruction_catalog}")
+set(_catalog_fragments "")
+if(NOT _catalog_source_error AND _catalog_source_count GREATER 0)
+    math(EXPR _catalog_source_last "${_catalog_source_count} - 1")
+    foreach(index RANGE "${_catalog_source_last}")
+        string(JSON source GET "${_catalog_schema}" specialization_sources "${index}")
+        list(APPEND _catalog_fragments "${source}")
+        list(APPEND _catalog_inputs "${CMAKE_CURRENT_SOURCE_DIR}/src/${source}")
+    endforeach()
+endif()
+set(_catalog_fusion_args "")
+set(_catalog_fusion_input "")
+if(FIBERCPU_HAVE_GENERATED_SUPEROPCODES)
+    set(_catalog_fusion_input "${FIBERCPU_GENERATED_SUPEROPCODES_FILE}")
+    set(_catalog_fusion_args --fusion-source "${_catalog_fusion_input}")
+endif()
 set(_catalog_products "${CMAKE_CURRENT_BINARY_DIR}/generated/instruction_families.h"
                       "${CMAKE_CURRENT_BINARY_DIR}/generated/instruction_catalog.inc"
                       "${CMAKE_CURRENT_BINARY_DIR}/generated/instruction_kernel_bindings.inc"
@@ -355,8 +374,8 @@ set(_catalog_products "${CMAKE_CURRENT_BINARY_DIR}/generated/instruction_familie
                       "${CMAKE_CURRENT_BINARY_DIR}/generated/handwritten_fusions.inc")
 add_custom_command(OUTPUT ${_catalog_products}
     COMMAND "${Python3_EXECUTABLE}" "${_catalog_generator}" --catalog "${_instruction_catalog}"
-        --output "${CMAKE_CURRENT_BINARY_DIR}/generated"
-    DEPENDS "${_catalog_generator}" "${_instruction_catalog}"
+        --output "${CMAKE_CURRENT_BINARY_DIR}/generated" ${_catalog_fusion_args}
+    DEPENDS "${_catalog_generator}" ${_catalog_inputs} ${_catalog_fusion_input}
     VERBATIM)
 add_custom_target(fibercpu_instruction_catalog DEPENDS ${_catalog_products})
 
@@ -403,7 +422,7 @@ if(FIBERCPU_LOWER_OPERANDS)
             --pin-specialization "${FIBERCPU_PIN_SPECIALIZATION_MODE}" --budget "${FIBERCPU_OPERAND_BUDGET}" --fused-only "$<BOOL:${FIBERCPU_OPERAND_FUSIONS_ONLY}>" --pin-mode "${FIBERCPU_GPR_PIN_MODE}" --pin-mask "${_pin_mask}"
         DEPENDS "${_operand_source}" "${_plan}" "${_operand_options}" "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/gen_operand_specializations.py"
             "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/operand_specialization_data.py"
-            "${_instruction_catalog}" "${_catalog_generator}"
+            ${_catalog_inputs} "${_catalog_generator}"
         VERBATIM)
     set_source_files_properties("${_combined}" PROPERTIES OBJECT_DEPENDS "${_operand_output}")
     list(APPEND SOURCES "${_combined}" "${_operand_output}")
@@ -427,7 +446,8 @@ endif()
 
 # Fingerprint the semantic catalog independently of host addresses/compiler ABI.
 set(INSTRUCTION_CATALOG_INPUTS
-    instruction_spec.h instruction_kernel_spec.h instruction_catalog.json instruction_variants.cpp instruction_variants.h specialization.h)
+    instruction_spec.h instruction_kernel_spec.h instruction_catalog.json instruction_variants.cpp instruction_variants.h
+    specialization.h ${_catalog_fragments})
 set(INSTRUCTION_CATALOG_FINGERPRINT "")
 foreach(input IN LISTS INSTRUCTION_CATALOG_INPUTS)
     set(path "${CMAKE_CURRENT_SOURCE_DIR}/src/${input}")
@@ -775,7 +795,7 @@ if(FIBERCPU_DYNAMIC_OPERANDS)
             --shards "${_probe_shards}" --output "${_dynamic_dir}" ${_dynamic_fusion_args}
         DEPENDS "${_dynamic_dir}/inputs.txt" "${FIBERCPU_DYNAMIC_OPERAND_PLAN_FILE}" "${_dynamic_script}"
             "${_dynamic_data}" "${_dynamic_arm64}" ${_dynamic_fusions}
-            "${_instruction_catalog}" "${_catalog_generator}"
+            ${_catalog_inputs} "${_catalog_generator}"
         VERBATIM)
     add_library(fibercpu_operand_probes OBJECT ${_probe_sources})
     add_dependencies(fibercpu_operand_probes fibercpu_instruction_catalog)

@@ -7,7 +7,7 @@ import re
 from collections import Counter, defaultdict
 from pathlib import Path
 
-from gen_instruction_catalog import is_semantic_variant, read_catalog, variant_criteria
+from gen_instruction_catalog import is_semantic_variant, read_catalog, variant_criteria, variant_dispatch_base
 from operand_specialization_data import Operand, generated_fusions, instruction_targets, specialize_profile_fusion
 from operand_stencil_arm64 import HELPERS, MachO, immediate_mask
 
@@ -250,10 +250,9 @@ def build_bundle(args):
         if name in base_handlers:
             dynamic_only.append(f"{{{original}, {first}, {count}, 1, {{.any_flags = true}}}}")
         for row in variants[name]:
-            opcode = catalog["families"][row["family"]]["opcode"]
             if is_semantic_variant(row):
                 dynamic_only.append(f"{{{original}, {first}, {count}, 1, {variant_criteria(row)}}}")
-            elif base := catalog["fallbacks"].get(str(opcode)):
+            elif base := variant_dispatch_base(catalog, row):
                 dynamic_only.append(f"{{DispatchWrapper<op::{base}>, {first}, {count}, 1, {variant_criteria(row)}}}")
     emit_array(code_header, "kFamilies", "OperandFamily", list(dict.fromkeys(dynamic_only)))
     code_header.append("constexpr size_t kFamilyCount = " + str(len(set(dynamic_only))) + ";")

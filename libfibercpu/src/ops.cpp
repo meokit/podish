@@ -1,11 +1,20 @@
 #include "ops.h"
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <shared_mutex>
 #include "dispatch.h"
 #include "instruction_variants.h"
+#include "ops/ops_control_impl.h"
 
 namespace fiberish {
+
+extern "C" uint64_t FiberReadRealtimeTsc(const EmuState* state) {
+    const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now() - state->tsc_start_time).count();
+    __extension__ unsigned __int128 ticks = static_cast<unsigned __int128>(elapsed) * state->tsc_frequency;
+    return state->tsc_offset + static_cast<uint64_t>(ticks / 1000000000ULL);
+}
 
 template <typename T>
 static inline bool ExecuteMemOp(EmuState* state, DecodedOp* op, mem::MicroTLB& utlb, uint32_t addr, T* value,
@@ -470,7 +479,7 @@ int FindOpcodeIndexForHandler(HandlerFunc handler) {
         }
     }
 
-    return -1;
+    return FindGenericOpcodeIndex(handler);
 }
 
 }  // namespace fiberish

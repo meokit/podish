@@ -1,53 +1,33 @@
 #pragma once
-// Multiplication & Division
-// Auto-generated from ops.cpp refactoring
 
-#include <simde/x86/sse.h>
+#include <type_traits>
 
 #include "../dispatch.h"
 #include "../exec_utils.h"
 #include "../ops.h"
-#include "../state.h"
 
 namespace fiberish {
 
-template <typename T>
-FORCE_INLINE LogicFlow OpImul_GvEv_T_Internal(LogicFuncParams) {
-    // 0F AF: IMUL r16/32, r/m16/32
-    // Dest: Register (Gv)
-    // Src:  r/m (Ev)
-    uint8_t reg = (op->modrm >> 3) & 7;
+enum class ImulSource { Register, OperandWidthImmediate, SignedByteImmediate };
 
-    T val1;
-    if constexpr (sizeof(T) == 2)
-        val1 = (T)gpr.GetReg(state, reg);
-    else
-        val1 = (T)gpr.GetReg(state, reg);
+template <typename T, ImulSource Source, AddrModeSpec Form, FlagsSpec Flags>
+FORCE_INLINE LogicFlow OpImul_T(LogicFuncParams) {
+    using Signed = std::make_signed_t<T>;
+    using Wide = std::conditional_t<sizeof(T) == 2, int32_t, int64_t>;
+    const uint8_t reg = (op->modrm >> 3) & 7;
+    const Signed lhs = [&]() -> Signed {
+        if constexpr (Source == ImulSource::Register) return static_cast<Signed>(gpr.GetReg(state, reg));
+        if constexpr (Source == ImulSource::SignedByteImmediate) return static_cast<int8_t>(imm);
+        return static_cast<Signed>(imm);
+    }();
+    const auto rhs = ReadModRM<T, OpOnTLBMiss::Restart, 1, Form>(state, gpr, op, utlb);
+    if (!rhs) return LogicFlow::RestartMemoryOp;
 
-    T val2;
-    if constexpr (sizeof(T) == 2) {
-        auto res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
-        if (!res) return LogicFlow::RestartMemoryOp;
-        val2 = *res;
-    } else {
-        auto res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
-        if (!res) return LogicFlow::RestartMemoryOp;
-        val2 = *res;
-    }
-
-    if constexpr (sizeof(T) == 2) {
-        int32_t res = (int32_t)(int16_t)val1 * (int32_t)(int16_t)val2;
-        gpr.SetReg(state, reg, (gpr.GetReg(state, reg) & 0xFFFF0000) | (uint16_t)res);
-
-        if (res != (int32_t)(int16_t)res)
-            SetFlagBits(flags_cache, OF_MASK | CF_MASK);
-        else
-            ClearFlagBits(flags_cache, OF_MASK | CF_MASK);
-    } else {
-        int64_t res = (int64_t)(int32_t)val1 * (int64_t)(int32_t)val2;
-        gpr.SetReg(state, reg, (uint32_t)res);
-
-        if (res != (int64_t)(int32_t)res)
+    const Wide product = static_cast<Wide>(lhs) * static_cast<Signed>(*rhs);
+    const T result = static_cast<T>(product);
+    WriteRegGeneric<T>(state, gpr, reg, result);
+    if constexpr (Flags != FlagsSpec::Dead) {
+        if (product != static_cast<Signed>(result))
             SetFlagBits(flags_cache, OF_MASK | CF_MASK);
         else
             ClearFlagBits(flags_cache, OF_MASK | CF_MASK);
@@ -55,77 +35,28 @@ FORCE_INLINE LogicFlow OpImul_GvEv_T_Internal(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-template <typename T, bool IsImm8>
-FORCE_INLINE LogicFlow OpImul_GvEvI_T_Internal(LogicFuncParams) {
-    // 69: IMUL r, r/m, imm16/32
-    // 6B: IMUL r, r/m, imm8
-    uint8_t reg = (op->modrm >> 3) & 7;
-
-    T val1;  // r/m value
-    if constexpr (sizeof(T) == 2) {
-        auto res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
-        if (!res) return LogicFlow::RestartMemoryOp;
-        val1 = *res;
-    } else {
-        auto res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
-        if (!res) return LogicFlow::RestartMemoryOp;
-        val1 = *res;
-    }
-
-    T val2;  // Immediate
-    if constexpr (IsImm8) {
-        val2 = (T)(int16_t)(int8_t)imm;  // Sign-extend imm8
-    } else {
-        val2 = (T)imm;
-    }
-
-    if constexpr (sizeof(T) == 2) {
-        int32_t res = (int32_t)(int16_t)val1 * (int32_t)(int16_t)val2;
-        gpr.SetReg(state, reg, (gpr.GetReg(state, reg) & 0xFFFF0000) | (uint16_t)res);
-
-        if (res != (int32_t)(int16_t)res)
-            SetFlagBits(flags_cache, OF_MASK | CF_MASK);
-        else
-            ClearFlagBits(flags_cache, OF_MASK | CF_MASK);
-    } else {
-        int64_t res = (int64_t)(int32_t)val1 * (int64_t)(int32_t)val2;
-        gpr.SetReg(state, reg, (uint32_t)res);
-
-        if (res != (int64_t)(int32_t)res)
-            SetFlagBits(flags_cache, OF_MASK | CF_MASK);
-        else
-            ClearFlagBits(flags_cache, OF_MASK | CF_MASK);
-    }
-    return LogicFlow::Continue;
+template <ImulSource Source, OpsizeSpec Size = OpsizeSpec::Dynamic, AddrModeSpec Form = AddrModeSpec::Dynamic,
+          FlagsSpec Flags = FlagsSpec::Dynamic>
+FORCE_INLINE LogicFlow OpImul_Internal(LogicFuncParams) {
+    if (OperandIs16<Size>(op)) return OpImul_T<uint16_t, Source, Form, Flags>(LogicPassParams);
+    return OpImul_T<uint32_t, Source, Form, Flags>(LogicPassParams);
 }
 
 namespace op {
 
-FORCE_INLINE LogicFlow OpImul_GvEv(LogicFuncParams) {
-    if (op->prefixes.flags.opsize)
-        return OpImul_GvEv_T_Internal<uint16_t>(LogicPassParams);
-    else
-        return OpImul_GvEv_T_Internal<uint32_t>(LogicPassParams);
-}
+FORCE_INLINE LogicFlow OpImul_GvEv(LogicFuncParams) { return OpImul_Internal<ImulSource::Register>(LogicPassParams); }
 
 FORCE_INLINE LogicFlow OpImul_GvEvIz(LogicFuncParams) {
-    if (op->prefixes.flags.opsize)
-        return OpImul_GvEvI_T_Internal<uint16_t, false>(LogicPassParams);
-    else
-        return OpImul_GvEvI_T_Internal<uint32_t, false>(LogicPassParams);
+    return OpImul_Internal<ImulSource::OperandWidthImmediate>(LogicPassParams);
 }
 
 FORCE_INLINE LogicFlow OpImul_GvEvIb(LogicFuncParams) {
-    if (op->prefixes.flags.opsize)
-        return OpImul_GvEvI_T_Internal<uint16_t, true>(LogicPassParams);
-    else
-        return OpImul_GvEvI_T_Internal<uint32_t, true>(LogicPassParams);
+    return OpImul_Internal<ImulSource::SignedByteImmediate>(LogicPassParams);
 }
 
+#define FIBERCPU_BIND_INTEGER_MULDIV
+#include "instruction_kernel_bindings.inc"
+#undef FIBERCPU_BIND_INTEGER_MULDIV
+
 }  // namespace op
-
-// =========================================================================================
-// Registration
-// =========================================================================================
-
 }  // namespace fiberish

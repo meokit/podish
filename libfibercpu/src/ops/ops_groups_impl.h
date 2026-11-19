@@ -54,31 +54,29 @@ FORCE_INLINE LogicFlow OpGroup1_Internal(LogicFuncParams) {
 // Group 3: 0xF6 (Eb), 0xF7 (Ev)
 // =========================================================================================
 
-template <bool UpdateFlags, GroupOpSpec FixedSubOp = GroupOpSpec::Dynamic>
-FORCE_INLINE LogicFlow OpGroup3_Eb_Internal(LogicFuncParams) {
-    // F6
-    auto val_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
-    if (!val_res) return LogicFlow::RestartMemoryOp;
-    uint8_t val = *val_res;
-
-    return Helper_Group3<uint8_t, UpdateFlags, FixedSubOp>(state, gpr, op, flags_cache, val, utlb, imm);
+template <typename T, bool UpdateFlags, GroupOpSpec SubOp = GroupOpSpec::Dynamic,
+          AddrModeSpec Form = AddrModeSpec::Dynamic>
+FORCE_INLINE LogicFlow OpGroup3_Ev_T_Internal(LogicFuncParams) {
+    const auto value = ReadModRM<T, OpOnTLBMiss::Restart, 1, Form>(state, gpr, op, utlb);
+    if (!value) return LogicFlow::RestartMemoryOp;
+    return Helper_Group3<T, UpdateFlags, SubOp>(state, gpr, op, flags_cache, *value, utlb, imm);
 }
 
-template <typename T, bool UpdateFlags, GroupOpSpec FixedSubOp = GroupOpSpec::Dynamic>
-FORCE_INLINE LogicFlow OpGroup3_Ev_T_Internal(LogicFuncParams) {
-    // F7
-    T val;
-    if constexpr (sizeof(T) == 2) {
-        auto res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
-        if (!res) return LogicFlow::RestartMemoryOp;
-        val = *res;
-    } else {
-        auto res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
-        if (!res) return LogicFlow::RestartMemoryOp;
-        val = *res;
-    }
+template <bool UpdateFlags, GroupOpSpec SubOp = GroupOpSpec::Dynamic>
+FORCE_INLINE LogicFlow OpGroup3_Eb_Internal(LogicFuncParams) {
+    return OpGroup3_Ev_T_Internal<uint8_t, UpdateFlags, SubOp>(LogicPassParams);
+}
 
-    return Helper_Group3<T, UpdateFlags, FixedSubOp>(state, gpr, op, flags_cache, val, utlb, imm);
+template <bool Byte, GroupOpSpec SubOp = GroupOpSpec::Dynamic, OpsizeSpec Size = OpsizeSpec::Dynamic,
+          AddrModeSpec Form = AddrModeSpec::Dynamic, FlagsSpec Flags = FlagsSpec::Dynamic>
+FORCE_INLINE LogicFlow OpGroup3_Internal(LogicFuncParams) {
+    constexpr bool update_flags = Flags != FlagsSpec::Dead;
+    if constexpr (Byte) {
+        return OpGroup3_Ev_T_Internal<uint8_t, update_flags, SubOp, Form>(LogicPassParams);
+    } else {
+        if (OperandIs16<Size>(op)) return OpGroup3_Ev_T_Internal<uint16_t, update_flags, SubOp, Form>(LogicPassParams);
+        return OpGroup3_Ev_T_Internal<uint32_t, update_flags, SubOp, Form>(LogicPassParams);
+    }
 }
 
 // =========================================================================================
@@ -171,75 +169,38 @@ FORCE_INLINE LogicFlow OpGroup5_Ev_Control_Internal(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-template <typename T>
+template <typename T, AddrModeSpec Form = AddrModeSpec::Dynamic, FlagsSpec Flags = FlagsSpec::Dynamic>
 FORCE_INLINE LogicFlow OpXadd_T_Internal(LogicFuncParams) {
-    // Restart on read fail
-    T dest_val = 0;
-    if constexpr (sizeof(T) == 1) {
-        auto res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
-        if (!res) return LogicFlow::RestartMemoryOp;
-        dest_val = *res;
-    } else if constexpr (sizeof(T) == 2) {
-        auto res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
-        if (!res) return LogicFlow::RestartMemoryOp;
-        dest_val = *res;
-    } else {
-        auto res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
-        if (!res) return LogicFlow::RestartMemoryOp;
-        dest_val = *res;
-    }
+    const auto destination = ReadModRM<T, OpOnTLBMiss::Restart, 1, Form>(state, gpr, op, utlb);
+    if (!destination) return LogicFlow::RestartMemoryOp;
 
-    uint8_t reg = (op->modrm >> 3) & 7;
-    T src_val = 0;
-    if constexpr (sizeof(T) == 1)
-        src_val = (T)gpr.GetReg8(state, reg);
-    else if constexpr (sizeof(T) == 2)
-        src_val = (T)gpr.GetReg(state, reg) & 0xFFFF;
-    else
-        src_val = (T)gpr.GetReg(state, reg);
-
-    // Keep the flag update local until the store is known to have completed: a
-    // faulting instruction must not commit partial architectural state.
-    uint64_t xadd_flags = flags_cache;
-    T res = AluAdd(state, xadd_flags, dest_val, src_val);
-
-    // Write the result BEFORE overwriting the source register. WriteModRM
-    // recomputes the effective address from the register file, and the source
-    // register can participate in that address (e.g. xadd [eax], eax).
-    if constexpr (sizeof(T) == 1) {
-        if (!WriteModRM<uint8_t, OpOnTLBMiss::Blocking>(state, gpr, op, res, utlb)) return LogicFlow::ExitOnCurrentEIP;
-    } else if constexpr (sizeof(T) == 2) {
-        if (!WriteModRM<uint16_t, OpOnTLBMiss::Blocking>(state, gpr, op, res, utlb)) return LogicFlow::ExitOnCurrentEIP;
-    } else {
-        if (!WriteModRM<uint32_t, OpOnTLBMiss::Blocking>(state, gpr, op, res, utlb)) return LogicFlow::ExitOnCurrentEIP;
-    }
-    flags_cache = xadd_flags;
-
-    // Swap: Original Dest -> Src Reg
-    if constexpr (sizeof(T) == 1) {
-        uint32_t curr = gpr.GetReg(state, reg & 3);
-        if (reg < 4)
-            curr = (curr & 0xFFFFFF00) | (dest_val & 0xFF);
-        else
-            curr = (curr & 0xFFFF00FF) | ((dest_val & 0xFF) << 8);
-        gpr.SetReg(state, reg & 3, curr);
-    } else if constexpr (sizeof(T) == 2) {
-        gpr.SetReg(state, reg, (gpr.GetReg(state, reg) & 0xFFFF0000) | (dest_val & 0xFFFF));
-    } else {
-        gpr.SetReg(state, reg, dest_val);
-    }
-
+    const uint8_t reg = (op->modrm >> 3) & 7;
+    const T source = ReadRegGeneric<T>(state, gpr, reg);
+    // Commit flags only after the write succeeds; the source can participate
+    // in the destination address and must not be modified before that write.
+    uint64_t updated_flags = flags_cache;
+    const T result = AluAdd<T, Flags != FlagsSpec::Dead>(state, updated_flags, *destination, source);
+    if (!WriteModRM<T, OpOnTLBMiss::Blocking, 1, Form>(state, gpr, op, result, utlb))
+        return LogicFlow::ExitOnCurrentEIP;
+    flags_cache = updated_flags;
+    WriteRegGeneric<T>(state, gpr, reg, *destination);
     return LogicFlow::Continue;
+}
+
+template <bool Byte, OpsizeSpec Size = OpsizeSpec::Dynamic, AddrModeSpec Form = AddrModeSpec::Dynamic,
+          FlagsSpec Flags = FlagsSpec::Dynamic>
+FORCE_INLINE LogicFlow OpXadd_Internal(LogicFuncParams) {
+    if constexpr (Byte) {
+        return OpXadd_T_Internal<uint8_t, Form, Flags>(LogicPassParams);
+    } else {
+        if (OperandIs16<Size>(op)) return OpXadd_T_Internal<uint16_t, Form, Flags>(LogicPassParams);
+        return OpXadd_T_Internal<uint32_t, Form, Flags>(LogicPassParams);
+    }
 }
 
 namespace op {
 
-FORCE_INLINE LogicFlow OpGroup3_Ev_Generic(LogicFuncParams) {
-    if (op->prefixes.flags.opsize)
-        return OpGroup3_Ev_T_Internal<uint16_t, true>(LogicPassParams);
-    else
-        return OpGroup3_Ev_T_Internal<uint32_t, true>(LogicPassParams);
-}
+FORCE_INLINE LogicFlow OpGroup3_Ev_Generic(LogicFuncParams) { return OpGroup3_Internal<false>(LogicPassParams); }
 
 FORCE_INLINE LogicFlow OpGroup5_Ev_Generic(LogicFuncParams) {
     if (op->prefixes.flags.opsize)
@@ -288,8 +249,9 @@ FORCE_INLINE LogicFlow OpCdq(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpCwde(LogicFuncParams) {
-    if (op->prefixes.flags.opsize) {
+template <OpsizeSpec Size = OpsizeSpec::Dynamic>
+FORCE_INLINE LogicFlow OpCwde_Internal(LogicFuncParams) {
+    if (OperandIs16<Size>(op)) {
         int8_t val = (int8_t)gpr.GetReg(state, EAX);
         uint32_t current = gpr.GetReg(state, EAX);
         uint32_t res = (current & 0xFFFF0000) | (uint16_t)(int16_t)val;
@@ -301,6 +263,8 @@ FORCE_INLINE LogicFlow OpCwde(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
+FORCE_INLINE LogicFlow OpCwde(LogicFuncParams) { return OpCwde_Internal<>(LogicPassParams); }
+
 FORCE_INLINE LogicFlow OpUd2_Groups(LogicFuncParams) {
     state->fault_vector = 6;
     if (!gpr.WithCanonical(state, [&] { return state->hooks.on_invalid_opcode(state); })) {
@@ -311,8 +275,9 @@ FORCE_INLINE LogicFlow OpUd2_Groups(LogicFuncParams) {
     return LogicFlow::ExitOnCurrentEIP;
 }
 
-FORCE_INLINE LogicFlow OpGroup9(LogicFuncParams) {
-    uint8_t sub = (op->modrm >> 3) & 7;
+template <GroupOpSpec SubOp = GroupOpSpec::Dynamic>
+FORCE_INLINE LogicFlow OpGroup9_Internal(LogicFuncParams) {
+    const uint8_t sub = GroupOperation<SubOp>(op);
     if (sub == 1) {  // CMPXCHG8B
         uint32_t addr = ComputeLinearAddress(state, gpr, op);
         auto mem_res = ReadMem<uint64_t, OpOnTLBMiss::Restart>(state, gpr, addr, utlb, op);
@@ -342,16 +307,17 @@ FORCE_INLINE LogicFlow OpGroup9(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
+FORCE_INLINE LogicFlow OpGroup9(LogicFuncParams) { return OpGroup9_Internal<>(LogicPassParams); }
+
 #define FIBERCPU_BIND_OPS_GROUPS_IMPL_2
 #include "instruction_kernel_bindings.inc"
 #undef FIBERCPU_BIND_OPS_GROUPS_IMPL_2
 
-FORCE_INLINE LogicFlow OpXadd_Word(LogicFuncParams) {
-    if (op->prefixes.flags.opsize)
-        return OpXadd_T_Internal<uint16_t>(LogicPassParams);
-    else
-        return OpXadd_T_Internal<uint32_t>(LogicPassParams);
-}
+FORCE_INLINE LogicFlow OpXadd_Word(LogicFuncParams) { return OpXadd_Internal<false>(LogicPassParams); }
+
+#define FIBERCPU_BIND_INTEGER_GROUPS
+#include "instruction_kernel_bindings.inc"
+#undef FIBERCPU_BIND_INTEGER_GROUPS
 
 }  // namespace op
 

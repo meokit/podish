@@ -15,7 +15,8 @@ DFE_TYPE_GROUP1 = 1  # 80-83 (ADD, OR, ADC, SBB, AND, SUB, XOR, CMP)
 DFE_TYPE_GROUP2 = 2  # C0/C1/D0-D3 (Shift/Rot) -> Writes All
 DFE_TYPE_GROUP3 = 3  # F6/F7 (TEST/NOT/NEG/MUL...)
 DFE_TYPE_GROUP4 = 4  # FE/FF (INC/DEC)
-DFE_TYPE_BIT_REGISTER = 5  # Bit operations with a register operand
+DFE_TYPE_REGISTER_FLAGS = 5  # Optimize flag liveness only for register operands
+DFE_TYPE_DOUBLE_SHIFT_IMMEDIATE = 6
 DFE_TYPE_UNKNOWN = 255
 
 class OpInfo:
@@ -87,6 +88,7 @@ set_range(0x80, 0x83, OpInfo(DFE_TYPE_GROUP1, 0, 0))
 # TEST (0x84, 0x85) - Write All, Read None? TEST is AND but discard result.
 set_op(0x84, OpInfo(DFE_TYPE_SIMPLE, 0, ALL_FLAGS))
 set_op(0x85, OpInfo(DFE_TYPE_SIMPLE, 0, ALL_FLAGS))
+set_range(0xA8, 0xA9, OpInfo(DFE_TYPE_SIMPLE, 0, ALL_FLAGS))
 
 # XCHG (0x86, 0x87) - No flags
 set_op(0x86, OpInfo(DFE_TYPE_SIMPLE, 0, 0))
@@ -132,13 +134,20 @@ set_range(256 + 0x90, 256 + 0x9F, OpInfo(DFE_TYPE_SIMPLE, ALL_FLAGS, 0))
 # CMOVcc (0x0F 40 - 0x0F 4F) - Reads flags
 set_range(256 + 0x40, 256 + 0x4F, OpInfo(DFE_TYPE_SIMPLE, ALL_FLAGS, 0))
 
-# IMUL (0x0F AF) - Write All
-set_op(256 + 0xAF, OpInfo(DFE_TYPE_SIMPLE, 0, ALL_FLAGS))
+# IMUL immediate / register forms update CF and OF.
+for opcode in (0x69, 0x6B, 0x1AF):
+    set_op(opcode, OpInfo(DFE_TYPE_REGISTER_FLAGS, 0, CF_MASK | OF_MASK))
+
+for opcode in (0x1A4, 0x1AC):
+    set_op(opcode, OpInfo(DFE_TYPE_DOUBLE_SHIFT_IMMEDIATE, 0, ALL_FLAGS & ~AF_MASK))
+
+for opcode in (0x1B0, 0x1B1, 0x1C0, 0x1C1):
+    set_op(opcode, OpInfo(DFE_TYPE_REGISTER_FLAGS, 0, ALL_FLAGS))
 
 # BT/BTS/BTR/BTC write CF. BSF/BSR write ZF; the decoder adds CF for F3 TZCNT.
 for opcode in (0xA3, 0xAB, 0xB3, 0xBA, 0xBB):
-    set_op(256 + opcode, OpInfo(DFE_TYPE_BIT_REGISTER, 0, CF_MASK))
-set_range(256 + 0xBC, 256 + 0xBD, OpInfo(DFE_TYPE_BIT_REGISTER, 0, ZF_MASK))
+    set_op(256 + opcode, OpInfo(DFE_TYPE_REGISTER_FLAGS, 0, CF_MASK))
+set_range(256 + 0xBC, 256 + 0xBD, OpInfo(DFE_TYPE_REGISTER_FLAGS, 0, ZF_MASK))
 set_range(256 + 0xC8, 256 + 0xCF, OpInfo(DFE_TYPE_SIMPLE, 0, 0))
 
 # Generate Header
@@ -155,7 +164,8 @@ with open(header_path, "w") as f:
     f.write(f"constexpr uint8_t DFE_TYPE_GROUP2 = {DFE_TYPE_GROUP2};\n")
     f.write(f"constexpr uint8_t DFE_TYPE_GROUP3 = {DFE_TYPE_GROUP3};\n")
     f.write(f"constexpr uint8_t DFE_TYPE_GROUP4 = {DFE_TYPE_GROUP4};\n")
-    f.write(f"constexpr uint8_t DFE_TYPE_BIT_REGISTER = {DFE_TYPE_BIT_REGISTER};\n")
+    f.write(f"constexpr uint8_t DFE_TYPE_REGISTER_FLAGS = {DFE_TYPE_REGISTER_FLAGS};\n")
+    f.write(f"constexpr uint8_t DFE_TYPE_DOUBLE_SHIFT_IMMEDIATE = {DFE_TYPE_DOUBLE_SHIFT_IMMEDIATE};\n")
     f.write(f"constexpr uint8_t DFE_TYPE_UNKNOWN = {DFE_TYPE_UNKNOWN};\n\n")
     
     f.write("// Flag Masks (for convenience)\n")
