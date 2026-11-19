@@ -72,6 +72,14 @@ prefix retains those generic scalar handlers for memory replay.
 The remaining slots keep their native lowering. If the prefix reaches the
 sentinel, the compiler inlines the normal OpExitBlock semantics.
 
+Online JIT snapshots the published instruction bytes on the VM thread.
+Two workers re-decode, optimize and emit objects concurrently by default.
+The guest executes the native handlers until a completed block can be
+installed at a dispatch boundary. A cache reset cancels pending publication
+and a block invalidation rejects results for its previous revision.
+FIBERCPU_LLVM_JIT_WORKERS selects 0–8 workers. Set it to 0 for synchronous
+promotion. Profile collection and cache-only mode promote synchronously.
+
 FIBERCPU_LLVM_JIT_CODE_BUDGET defaults to 16777216 bytes per MMU code cache.
 The budget charges each owned ORC allocation once by its mapped segment size.
 Invalidated blocks keep their machine code available for reuse. Budget

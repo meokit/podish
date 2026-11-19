@@ -11,7 +11,7 @@
 #include "dispatch.h"
 #include "exec_utils.h"  // For Flag Masks
 #include "instruction_variants.h"
-#include "ops.h"         // For g_Handlers
+#include "ops.h"  // For g_Handlers
 #include "specialization.h"
 #include "state.h"
 #include "superopcodes.h"
@@ -515,8 +515,8 @@ static void ApplySpecializedHandler(uint16_t handler_index, DecodedOp& op) {
     }
 }
 
-void FinalizeDecodedInstruction(EmuState* state, uint32_t eip, uint16_t handler_index, DecodedOp* op,
-                                DecodeHandlerMode mode) {
+static void FinalizeDecodedInstructionAt(uint32_t eip, uint16_t handler_index, DecodedOp* op, DecodeHandlerMode mode,
+                                         BasicBlock* invalid_target) {
     op->next_eip = eip + op->GetLength();
     if (mode == DecodeHandlerMode::Native) {
         ApplySpecializedHandler(handler_index, *op);
@@ -524,7 +524,7 @@ void FinalizeDecodedInstruction(EmuState* state, uint32_t eip, uint16_t handler_
         op->handler = generic;
     }
     if (GetExtKind(op) == ExtKind::ControlFlow) {
-        SetCachedTarget(op, state->mmu.invalid_code_block());
+        SetCachedTarget(op, invalid_target);
     }
     uint32_t target_eip;
     // Read the immediate before storing a target. These fields share storage
@@ -532,6 +532,11 @@ void FinalizeDecodedInstruction(EmuState* state, uint32_t eip, uint16_t handler_
     if (TryGetDirectRelativeTargetEip(handler_index, *op, &target_eip)) {
         SetControlTargetEip(op, target_eip);
     }
+}
+
+void FinalizeDecodedInstruction(EmuState* state, uint32_t eip, uint16_t handler_index, DecodedOp* op,
+                                DecodeHandlerMode mode) {
+    FinalizeDecodedInstructionAt(eip, handler_index, op, mode, state->mmu.invalid_code_block());
 }
 
 static bool DecodedOpSemanticallyEquals(const DecodedOp& decoded, const DecodedOp& cached) {
@@ -554,28 +559,42 @@ static bool DecodedOpSemanticallyEquals(const DecodedOp& decoded, const DecodedO
     return false;
 }
 
-bool RedecodeGenericInstruction(EmuState* state, const DecodedOp& published, DecodedOp& generic) {
+bool CopyDecodedInstructionBytes(EmuState* state, const DecodedOp& published, std::span<uint8_t> bytes) {
+    if (bytes.empty() || bytes.size() != published.len) return false;
+    uint32_t eip = published.next_eip - published.len;
+    while (!bytes.empty()) {
+        const auto* code = state->mmu.resolve_safe_for_read(eip, mem::Property::Exec);
+        if (!code) return false;
+        const size_t count = std::min<size_t>(bytes.size(), 0x1000u - (eip & 0xFFFu));
+        std::memcpy(bytes.data(), code, count);
+        bytes = bytes.subspan(count);
+        eip += static_cast<uint32_t>(count);
+    }
+    return true;
+}
+
+bool RedecodeGenericInstruction(std::span<const uint8_t> bytes, const DecodedOp& published, DecodedOp& generic) {
+    if (bytes.empty() || bytes.size() != published.len) return false;
     constexpr auto mode = DecodeHandlerMode::Generic;
     const uint32_t eip = published.next_eip - published.len;
-    uint8_t buffer[15];
     uint16_t opcode;
     DecodedInstTmp inst;
-    if (FetchAndDecodeInstruction(state, eip, buffer, &inst, &opcode, nullptr, mode) !=
-            InstructionDecodeResult::Success ||
-        inst.head.len > published.len)
+    if (DecodeInstructionBounded(bytes.data(), bytes.size(), &inst, &opcode, nullptr, mode) !=
+        InstructionDecodeResult::Success)
         return false;
-    FinalizeDecodedInstruction(state, eip, opcode, &inst.head, mode);
+    FinalizeDecodedInstructionAt(eip, opcode, &inst.head, mode, nullptr);
 
     // Use the final block's slot boundaries. In particular, DecodeBlock can
     // absorb one or more NOPs into an instruction's length.
-    for (unsigned length = inst.head.len; length < published.len;) {
+    bytes = bytes.subspan(inst.head.len);
+    while (!bytes.empty()) {
         DecodedInstTmp nop;
         if (IsControlFlow(inst) ||
-            FetchAndDecodeInstruction(state, eip + length, buffer, &nop, &opcode, nullptr, mode) !=
+            DecodeInstructionBounded(bytes.data(), bytes.size(), &nop, &opcode, nullptr, mode) !=
                 InstructionDecodeResult::Success ||
-            (opcode != 0x90 && opcode != 0x11f) || nop.head.len > published.len - length)
+            (opcode != 0x90 && opcode != 0x11f))
             return false;
-        length += nop.head.len;
+        bytes = bytes.subspan(nop.head.len);
     }
     generic = inst.head;
     generic.len = published.len;
@@ -585,6 +604,13 @@ bool RedecodeGenericInstruction(EmuState* state, const DecodedOp& published, Dec
     expected.handler = generic.handler;
     expected.meta.flags.operand_lowered = 0;
     return DecodedOpSemanticallyEquals(generic, expected);
+}
+
+bool RedecodeGenericInstruction(EmuState* state, const DecodedOp& published, DecodedOp& generic) {
+    uint8_t buffer[UINT8_MAX];
+    const auto bytes = std::span(buffer).first(published.len);
+    return CopyDecodedInstructionBytes(state, published, bytes) &&
+           RedecodeGenericInstruction(bytes, published, generic);
 }
 
 static bool BasicBlockMatchesDecodedCandidate(const BasicBlock* candidate, uint32_t start_eip, uint32_t end_eip,
@@ -987,6 +1013,7 @@ finalize:
 void BasicBlock::Invalidate() {
     if (!is_valid()) return;
     set_valid(false);
+    ++invalidation_revision;
     // No unlinking needed because chained exits validate the cached block header on dispatch.
 }
 

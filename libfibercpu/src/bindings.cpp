@@ -922,6 +922,7 @@ int X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
 #if FIBERCPU_LLVM_JIT
     state->llvm_hot_block = nullptr;
     const auto compile_hot_block = [&] {
+        PollLLVMBlockCompilations(state);
         if (auto* block = std::exchange(state->llvm_hot_block, nullptr)) CompileHotLLVMBlock(state, block);
     };
 #endif

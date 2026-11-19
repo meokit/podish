@@ -2,9 +2,11 @@
 #include "decoder.h"
 
 #include <array>
+#include <chrono>
 #include <cstdio>
 #include <cstring>
 #include <memory>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -246,9 +248,9 @@ bool VerifyShiftBitMemory(bool enabled) {
 
 bool VerifyExtendedInteger(bool enabled) {
     constexpr uint8_t code[] = {
-        0x69, 0xc0, 0xfe, 0xff, 0xff, 0xff,  // IMUL EAX, EAX, -2
-        0x0f, 0xa4, 0xc8, 4,               // SHLD EAX, ECX, 4
-        0x0f, 0x9c, 0xc2,                  // SETL DL
+        0x69, 0xc0, 0xfe, 0xff, 0xff, 0xff, // IMUL EAX, EAX, -2
+        0x0f, 0xa4, 0xc8, 4,                // SHLD EAX, ECX, 4
+        0x0f, 0x9c, 0xc2,                   // SETL DL
     };
     auto state = LoadCode(code, sizeof(code));
     X86_RegWrite(state.get(), 0, 3);
@@ -261,11 +263,11 @@ bool VerifyExtendedInteger(bool enabled) {
 
 bool VerifyVectorPrefixRouting(bool enabled) {
     constexpr uint8_t code[] = {
-        0x66, 0x0f, 0xef, 0xc0,  // PXOR XMM0, XMM0
-        0x66, 0x0f, 0x6e, 0xc8,  // MOVD XMM1, EAX
-        0x66, 0x0f, 0xfe, 0xc1,  // PADDD XMM0, XMM1
-        0x0f, 0xef, 0xc0,        // PXOR MM0, MM0 (must leave XMM0 alone)
-        0x66, 0x0f, 0x7e, 0xc2,  // MOVD EDX, XMM0
+        0x66, 0x0f, 0xef, 0xc0, // PXOR XMM0, XMM0
+        0x66, 0x0f, 0x6e, 0xc8, // MOVD XMM1, EAX
+        0x66, 0x0f, 0xfe, 0xc1, // PADDD XMM0, XMM1
+        0x0f, 0xef, 0xc0,       // PXOR MM0, MM0 (must leave XMM0 alone)
+        0x66, 0x0f, 0x7e, 0xc2, // MOVD EDX, XMM0
     };
     auto state = LoadCode(code, sizeof(code));
     X86_RegWrite(state.get(), 0, 0x12345678);
@@ -276,10 +278,10 @@ bool VerifyVectorPrefixRouting(bool enabled) {
 
 bool VerifyX87Helpers(bool enabled) {
     constexpr uint8_t code[] = {
-        0xd9, 0xe8,  // FLD1
-        0xd9, 0xe8,  // FLD1
-        0xde, 0xc1,  // FADDP ST(1), ST(0)
-        0xd9, 0x19,  // FSTP dword [ECX]
+        0xd9, 0xe8, // FLD1
+        0xd9, 0xe8, // FLD1
+        0xde, 0xc1, // FADDP ST(1), ST(0)
+        0xd9, 0x19, // FSTP dword [ECX]
     };
     auto state = LoadCode(code, sizeof(code));
     FaultData fault{true};
@@ -294,7 +296,7 @@ bool VerifyX87Helpers(bool enabled) {
 }
 
 bool VerifyStackWidths(bool enabled) {
-    constexpr uint8_t code[] = {0x66, 0x50, 0x66, 0x5a};  // PUSH AX; POP DX
+    constexpr uint8_t code[] = {0x66, 0x50, 0x66, 0x5a}; // PUSH AX; POP DX
     auto state = LoadCode(code, sizeof(code));
     X86_MemMap(state.get(), data_address, 4096, 3);
     X86_RegWrite(state.get(), 0, 0x89abcdef);
@@ -307,7 +309,7 @@ bool VerifyStackWidths(bool enabled) {
 }
 
 bool VerifyStackReplay(bool enabled) {
-    constexpr uint8_t code[] = {0x66, 0x9c, 0x66, 0x58};  // PUSHF word; POP AX
+    constexpr uint8_t code[] = {0x66, 0x9c, 0x66, 0x58}; // PUSHF word; POP AX
     auto state = LoadCode(code, sizeof(code));
     X86_RegWrite(state.get(), 0, 0x12340000);
     X86_RegWrite(state.get(), 4, data_address + 2);
@@ -322,27 +324,26 @@ bool VerifyStackReplay(bool enabled) {
 
 bool VerifyCallReturn(bool enabled) {
     constexpr uint8_t code[] = {
-        0xe8, 2, 0, 0, 0,   // CALL callee
-        0xeb, 6,            // JMP end
-        0xb8, 42, 0, 0, 0,  // MOV EAX, 42
-        0xc3,               // RET
+        0xe8, 2,  0, 0, 0, // CALL callee
+        0xeb, 6,           // JMP end
+        0xb8, 42, 0, 0, 0, // MOV EAX, 42
+        0xc3,              // RET
     };
     auto state = LoadCode(code, sizeof(code));
     X86_MemMap(state.get(), data_address, 4096, 3);
     X86_RegWrite(state.get(), 4, data_address + 32);
     const auto end = code_address + sizeof(code);
-    return X86_Run(state.get(), end, 16) && X86_GetEIP(state.get()) == end &&
-           X86_RegRead(state.get(), 0) == 42 && X86_RegRead(state.get(), 4) == data_address + 32 &&
-           HasCompiledEntry(state.get()) == enabled;
+    return X86_Run(state.get(), end, 16) && X86_GetEIP(state.get()) == end && X86_RegRead(state.get(), 0) == 42 &&
+           X86_RegRead(state.get(), 4) == data_address + 32 && HasCompiledEntry(state.get()) == enabled;
 }
 
 bool VerifyTsc(bool enabled) {
-    constexpr uint8_t code[] = {0x0f, 0x31, 0x89, 0xc3, 0x0f, 0x31};  // RDTSC; MOV EBX, EAX; RDTSC
+    constexpr uint8_t code[] = {0x0f, 0x31, 0x89, 0xc3, 0x0f, 0x31}; // RDTSC; MOV EBX, EAX; RDTSC
     for (int mode = 0; mode < 2; ++mode) {
         auto state = LoadCode(code, sizeof(code));
         X86_SetTscMode(state.get(), mode);
         X86_SetTscOffset(state.get(), 0x200000010ull);
-        X86_SetTscFrequency(state.get(), 0);  // Real-time mode yields the offset regardless of elapsed time.
+        X86_SetTscFrequency(state.get(), 0); // Real-time mode yields the offset regardless of elapsed time.
         const auto end = code_address + sizeof(code);
         if (!X86_Run(state.get(), end, 16) || X86_RegRead(state.get(), 3) != 16 ||
             X86_RegRead(state.get(), 0) != uint32_t(mode ? 16 : 1016) || X86_RegRead(state.get(), 2) != 2 ||
@@ -369,8 +370,7 @@ bool VerifyHotLoop() {
 
 bool VerifyUncompiledSuffix() {
     // MOV ESI, [ESP+0x14]; MOV [ESI], EDX; LOCK OR dword [ESI], 0; POP EBX/ESI/EDI/EBP; RET.
-    constexpr uint8_t code[] = {0x8b, 0x74, 0x24, 0x14, 0x89, 0x16, 0xf0, 0x83,
-                                0x0e, 0,    0x5b, 0x5e, 0x5f, 0x5d, 0xc3};
+    constexpr uint8_t code[] = {0x8b, 0x74, 0x24, 0x14, 0x89, 0x16, 0xf0, 0x83, 0x0e, 0, 0x5b, 0x5e, 0x5f, 0x5d, 0xc3};
     auto state = LoadCode(code, sizeof(code));
     const auto end = code_address + sizeof(code);
     constexpr uint32_t destination = data_address + 0x100;
@@ -448,8 +448,9 @@ bool VerifyReuseAndBudget(bool tight_budget) {
 
 bool VerifyPrecompiledCache(bool compile_on_miss) {
     const auto loads = X86_GetLLVMJitCacheLoadCount();
-    if (loads == 0 || loads != X86_GetLLVMJitBlockCount()) return false;
-    constexpr uint8_t code[] = {0xb8, 0x4a, 0x17, 0, 0};  // MOV EAX, 0x174a, absent from the profile.
+    if (loads == 0 || loads != X86_GetLLVMJitBlockCount())
+        return false;
+    constexpr uint8_t code[] = {0xb8, 0x4a, 0x17, 0, 0}; // MOV EAX, 0x174a, absent from the profile.
     auto state = LoadCode(code, sizeof(code));
     const auto end = code_address + sizeof(code);
     return X86_Run(state.get(), end, 16) && X86_RegRead(state.get(), 0) == 0x174a &&
@@ -457,9 +458,56 @@ bool VerifyPrecompiledCache(bool compile_on_miss) {
            X86_GetLLVMJitBlockCount() == loads + unsigned(compile_on_miss);
 }
 
+bool VerifyAsyncCompilations() {
+    // Both blocks share a recipe initially. Replace one before the VM polls
+    // for the first recipe and hard-reset the other's decoded code cache.
+    constexpr uint8_t code[] = {0xb8, 5, 0, 0, 0, 0x90, 0x05, 3, 0, 0, 0};
+    const auto end = code_address + sizeof(code);
+    auto changed = LoadCode(code, sizeof(code));
+    auto reset = LoadCode(code, sizeof(code));
+    auto run = [&](State& state, uint32_t expected) {
+        X86_SetEIP(state.get(), code_address);
+        return X86_Run(state.get(), end, 32) && X86_GetEIP(state.get()) == end &&
+               X86_RegRead(state.get(), 0) == expected;
+    };
+    if (!run(changed, 8) || !run(reset, 8))
+        return false;
+    constexpr uint8_t sub = 0x2d;
+    X86_MemWrite(changed.get(), code_address + 6, &sub, 1);
+    X86_ResetCodeCacheByRange(changed.get(), code_address, sizeof(code));
+    X86_ResetAllCodeCache(reset.get());
+    auto peer = LoadCode(code, sizeof(code));
+    {
+        auto destroyed = LoadCode(code, sizeof(code));
+        if (!run(destroyed, 8))
+            return false;
+    }
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    do {
+        if (!run(changed, 2) || !run(reset, 8) || !run(peer, 8))
+            return false;
+        const auto* sub_block = FindCompiledBlock(changed.get());
+        const auto* add_block = FindCompiledBlock(reset.get());
+        const auto* peer_block = FindCompiledBlock(peer.get());
+        if (sub_block && add_block && peer_block) {
+            return sub_block->entry != add_block->entry && add_block->entry == peer_block->entry &&
+                   X86_GetLLVMJitLiveBlockCount() == 2;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    } while (std::chrono::steady_clock::now() < deadline);
+    return false;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
+    if (argc == 2 && std::strcmp(argv[1], "async") == 0) {
+        if (VerifyAsyncCompilations())
+            return 0;
+        std::fprintf(stderr, "Async LLVM installation, invalidation or code reuse mismatch\n");
+        return 1;
+    }
     if (argc == 2 && std::strcmp(argv[1], "hot") == 0) {
         if (VerifyHotLoop() && VerifyUncompiledSuffix())
             return 0;
@@ -503,8 +551,8 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "Generated integer, vector prefix or x87 template mismatch\n");
         return 1;
     }
-    if (!VerifyStackWidths(enabled) || !VerifyStackReplay(enabled) || !VerifyCallReturn(enabled) || !VerifyTsc(enabled) ||
-        X86_GetLLVMJitLiveBlockCount() != 0) {
+    if (!VerifyStackWidths(enabled) || !VerifyStackReplay(enabled) || !VerifyCallReturn(enabled) ||
+        !VerifyTsc(enabled) || X86_GetLLVMJitLiveBlockCount() != 0) {
         std::fprintf(stderr, "LLVM generic stack width, call or return mismatch\n");
         return 1;
     }

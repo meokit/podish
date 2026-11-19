@@ -22,6 +22,7 @@ inline EmuState* Mmu::get_state() {
 inline bool Mmu::owning_engine_is_executing() { return get_state()->native_execution_active; }
 
 inline void Mmu::on_code_cache_hard_reset() {
+    core_->llvm_async.reset();
     clear_block_lookup_cache();
     seen_code_cache_generation_ = core_ ? core_->code_cache.generation : 0;
     if (auto* state = get_state()) {
@@ -379,8 +380,8 @@ MemResult<std::conditional_t<Store, void, HostAddr>> Mmu::write_tlb_impl(GuestAd
 
             utlb->tag_w = guard.tag;
             utlb->addend = entry.addend;
-            utlb->tag_r =
-                has_property(entry.perm, Property::Read) ? guard.tag : std::numeric_limits<decltype(utlb->tag_r)>::max();
+            utlb->tag_r = has_property(entry.perm, Property::Read) ? guard.tag
+                                                                   : std::numeric_limits<decltype(utlb->tag_r)>::max();
             if constexpr (Store)
                 return {};
             else

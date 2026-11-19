@@ -17,7 +17,8 @@
 
 namespace fiberish {
 struct LLVMBlockCode;
-}
+struct LLVMAsyncState;
+}  // namespace fiberish
 
 namespace fiberish::mem {
 
@@ -679,6 +680,7 @@ struct MmuCore {
     };
     ankerl::unordered_dense::map<uintptr_t, ExternalAliasState> external_aliases;
     RuntimeTlbShootdownRing runtime_tlb_shootdown_ring;
+    std::shared_ptr<LLVMAsyncState> llvm_async;
 };
 
 class Mmu {

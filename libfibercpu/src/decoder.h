@@ -2,6 +2,7 @@
 #include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 #include <type_traits>
 #include <vector>
 #include "common.h"
@@ -326,7 +327,7 @@ struct alignas(16) BasicBlock {
     uint32_t fallthrough_eip = 0;
     uint8_t terminal_kind_raw = 0;
     bool has_unfused_handlers = false;
-    uint16_t block_padding1 = 0;
+    uint16_t invalidation_revision = 0;
     uint64_t exec_count = 0;  // Number of times block was executed
 
     // Flexible Array Member - fixed-size decoded op stream.
@@ -398,6 +399,10 @@ InstructionDecodeResult FetchAndDecodeInstruction(EmuState* state, uint32_t eip,
 void FinalizeDecodedInstruction(EmuState* state, uint32_t eip, uint16_t handler_index, DecodedOp* op,
                                 DecodeHandlerMode mode = DecodeHandlerMode::Native);
 bool RedecodeGenericInstruction(EmuState* state, const DecodedOp& published, DecodedOp& generic);
+// Snapshot a published slot, including any absorbed NOPs, without invoking
+// guest callbacks. Generic re-decode of those bytes can then run on a worker.
+bool CopyDecodedInstructionBytes(EmuState* state, const DecodedOp& published, std::span<uint8_t> bytes);
+bool RedecodeGenericInstruction(std::span<const uint8_t> bytes, const DecodedOp& published, DecodedOp& generic);
 
 // Start EIP, Limit EIP, Max Instructions -> Returns Pointer to allocated block or nullptr
 BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64_t max_insts,
