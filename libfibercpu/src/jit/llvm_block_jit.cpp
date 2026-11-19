@@ -1,4 +1,6 @@
 #include "jit/llvm_block_jit.h"
+#include "jit/llvm_block_cache.h"
+#include "jit/llvm_operand_ir.h"
 
 #include <ankerl/unordered_dense.h>
 #include <llvm/ADT/SmallBitVector.h>
@@ -16,24 +18,29 @@
 #include <new>
 #include <span>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
 #include <llvm/Bitcode/BitcodeReader.h>
+#include <llvm/Config/llvm-config.h>
 #include <llvm/ExecutionEngine/JITLink/JITLinkMemoryManager.h>
+#include <llvm/ExecutionEngine/Orc/IRCompileLayer.h>
 #include <llvm/ExecutionEngine/Orc/LLJIT.h>
 #include <llvm/ExecutionEngine/Orc/SelfExecutorProcessControl.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/InstIterator.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/Verifier.h>
-#include <llvm/Passes/PassBuilder.h>
 #include <llvm/Support/Error.h>
+#include <llvm/Support/FileSystem.h>
 #include <llvm/Support/Process.h>
+#include <llvm/Support/SHA256.h>
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/Transforms/Utils/Cloning.h>
 #include <llvm/Transforms/Utils/Local.h>
+#include <llvm/TargetParser/Host.h>
 
 #include <pthread.h>
 #include <strings.h>
@@ -61,7 +68,7 @@ namespace {
 
 #include "llvm_block_bitcode.inc"
 
-enum class JitMode { Off, Generic, Exact };
+enum class JitMode { Off, Generic, Exact, Profile, Cache };
 constexpr size_t kMaxBlockOps = 64;
 constexpr size_t kDefaultJitCodeBudget = 16 * 1024 * 1024;
 constexpr uint16_t kDefaultHotThreshold = 64;
@@ -89,12 +96,116 @@ struct LLVMBlockCode {
 
 namespace {
 
+const auto& CacheFingerprint() {
+    static const auto digest = [] {
+        llvm::SHA256 hash;
+        hash.update(llvm::ArrayRef<uint8_t>(kBitcode, sizeof(kBitcode)));
+        hash.update(LLVM_VERSION_STRING);
+        hash.update(llvm::sys::getProcessTriple());
+        hash.update(llvm::sys::getHostCPUName());
+        const auto cpu_features = llvm::sys::getHostCPUFeatures();
+        std::vector<std::pair<llvm::StringRef, bool>> sorted;
+        for (const auto& feature : cpu_features) sorted.emplace_back(feature.getKey(), feature.getValue());
+        std::sort(sorted.begin(), sorted.end());
+        for (const auto& [feature, enabled] : sorted) {
+            hash.update(enabled ? "+" : "-");
+            hash.update(feature);
+        }
+        return hash.final();
+    }();
+    return digest;
+}
+
+void WriteFileHeader(llvm::raw_ostream& out, std::string_view magic) {
+    out.write(magic.data(), magic.size());
+    const auto& fingerprint = CacheFingerprint();
+    out.write(reinterpret_cast<const char*>(fingerprint.data()), fingerprint.size());
+}
+
+bool ReadFileHeader(std::string_view& bytes, std::string_view magic) {
+    const auto& fingerprint = CacheFingerprint();
+    if (!bytes.starts_with(magic)) return false;
+    bytes.remove_prefix(magic.size());
+    if (bytes.size() < fingerprint.size() || std::memcmp(bytes.data(), fingerprint.data(), fingerprint.size()) != 0)
+        return false;
+    bytes.remove_prefix(fingerprint.size());
+    return true;
+}
+
+struct CachedObject {
+    std::string_view bytes;
+    uint64_t index;
+};
+
+class PrecompiledObjects {
+    std::unique_ptr<llvm::MemoryBuffer> file_;
+    ankerl::unordered_dense::map<std::string_view, CachedObject> entries_;
+
+public:
+    PrecompiledObjects() {
+        const auto* path = std::getenv("FIBERCPU_LLVM_JIT_CACHE");
+        if (!path || !*path) return;
+        auto input = llvm::MemoryBuffer::getFile(path);
+        if (!input) return;
+        std::string_view bytes = (*input)->getBuffer();
+        if (!ReadFileHeader(bytes, llvm_block_cache::cache_magic)) return;
+        uint64_t index = 0;
+        while (!bytes.empty()) {
+            std::string_view key, object;
+            if (!llvm_block_cache::ReadRecord(bytes, key) || !llvm_block_cache::ReadRecord(bytes, object) ||
+                !entries_.emplace(key, CachedObject{object, index++}).second) {
+                entries_.clear();
+                return;
+            }
+        }
+        file_ = std::move(*input);
+    }
+
+    bool Empty() const { return entries_.empty(); }
+
+    const CachedObject* Find(std::string_view key) const {
+        const auto entry = entries_.find(key);
+        return entry == entries_.end() ? nullptr : &entry->second;
+    }
+};
+
+const PrecompiledObjects& NativeObjects() {
+    static const PrecompiledObjects cache;
+    return cache;
+}
+
+void RecordBlock(const std::string& key) {
+    static auto output = []() -> std::unique_ptr<llvm::raw_fd_ostream> {
+        const auto* path = std::getenv("FIBERCPU_LLVM_JIT_PROFILE");
+        if (!path || !*path) return {};
+        std::error_code error;
+        auto file = std::make_unique<llvm::raw_fd_ostream>(path, error, llvm::sys::fs::OF_None);
+        if (error) return {};
+        WriteFileHeader(*file, llvm_block_cache::profile_magic);
+        return file;
+    }();
+    if (!output) return;
+    static std::mutex mutex;
+    static ankerl::unordered_dense::set<std::string> seen;
+    std::lock_guard lock(mutex);
+    if (seen.insert(key).second) {
+        llvm_block_cache::WriteRecord(*output, key);
+        output->flush();
+        if (output->has_error()) {
+            llvm::errs() << "Failed writing LLVM block profile: " << output->error().message() << '\n';
+            output->clear_error();
+        }
+    }
+}
+
 JitMode RuntimeMode() {
     static const auto mode = [] {
         const char* value = std::getenv("FIBERCPU_LLVM_JIT");
         if (!value || !pthread_jit_write_protect_supported_np()) return JitMode::Off;
         if (std::strcmp(value, "1") == 0) return JitMode::Exact;
         if (std::strcmp(value, "generic") == 0) return JitMode::Generic;
+        if (std::strcmp(value, "profile") == 0 && std::getenv("FIBERCPU_LLVM_JIT_PROFILE")) return JitMode::Profile;
+        if (std::strcmp(value, "cache") == 0 && !NativeObjects().Empty()) return JitMode::Cache;
         return JitMode::Off;
     }();
     return mode;
@@ -125,7 +236,7 @@ struct LLVMOperation {
         if ((requirements & kRegisterOperand) && (!op.meta.flags.has_modrm || (op.modrm >> 6) != 3))
             return false;
         if ((requirements & kMemoryOperand) && !HasMem(&op)) return false;
-        if ((requirements & kExactOnly) && mode != JitMode::Exact) return false;
+        if ((requirements & kExactOnly) && mode == JitMode::Generic) return false;
         return extensions == 0xff || (op.meta.flags.has_modrm && (extensions & (1u << ((op.modrm >> 3) & 7))));
     }
 };
@@ -142,9 +253,44 @@ const char* LogicName(const DecodedOp& op, JitMode mode) {
 }
 
 struct Step {
-    const char* name;
+    std::string_view name;
     DecodedOperandShape shape;
 };
+
+std::string BlockKey(std::span<const Step> steps, bool exact, LLVMBlockExit exit) {
+    std::string key(1, static_cast<char>(exit));
+    for (const auto& step : steps) {
+        key += step.name;
+        key += '\0';
+        if (exact) {
+            llvm_block_cache::AppendU32(key, step.shape.encoding);
+            llvm_block_cache::AppendU32(key, step.shape.ea_desc);
+            llvm_block_cache::AppendU32(key, step.shape.displacement);
+            llvm_block_cache::AppendU32(key, step.shape.immediate);
+        }
+    }
+    return key;
+}
+
+bool DecodeRecipe(std::string_view key, std::vector<Step>& steps, LLVMBlockExit& exit) {
+    if (key.empty() || static_cast<uint8_t>(key.front()) > static_cast<uint8_t>(LLVMBlockExit::Branch)) return false;
+    exit = static_cast<LLVMBlockExit>(key.front());
+    key.remove_prefix(1);
+    while (!key.empty()) {
+        const auto end = key.find('\0');
+        if (end == 0 || end == std::string_view::npos || steps.size() == kMaxBlockOps) return false;
+        const auto name = key.substr(0, end);
+        key.remove_prefix(end + 1);
+        DecodedOperandShape shape;
+        if (!llvm_block_cache::ReadU32(key, shape.encoding) || !llvm_block_cache::ReadU32(key, shape.ea_desc) ||
+            !llvm_block_cache::ReadU32(key, shape.displacement) || !llvm_block_cache::ReadU32(key, shape.immediate))
+            return false;
+        steps.push_back({name, shape});
+    }
+    return !steps.empty();
+}
+
+std::string ObjectEntryName(uint64_t index) { return "FiberCachedBlock_" + std::to_string(index); }
 
 struct CodeBudgetExceeded : llvm::ErrorInfo<CodeBudgetExceeded> {
     static inline char ID = 0;
@@ -188,21 +334,6 @@ struct BlockLookup {
     size_t blocked_bytes = 0;
 };
 
-void Optimize(llvm::Module& module) {
-    llvm::LoopAnalysisManager loops;
-    llvm::FunctionAnalysisManager functions;
-    llvm::CGSCCAnalysisManager call_graph;
-    llvm::ModuleAnalysisManager modules;
-    llvm::PassBuilder passes;
-    passes.registerModuleAnalyses(modules);
-    passes.registerCGSCCAnalyses(call_graph);
-    passes.registerFunctionAnalyses(functions);
-    passes.registerLoopAnalyses(loops);
-    passes.crossRegisterProxies(loops, functions, call_graph, modules);
-    auto pipeline = passes.buildPerModuleDefaultPipeline(llvm::OptimizationLevel::O2);
-    pipeline.run(module, modules);
-}
-
 class BlockCompiler {
     llvm::orc::ThreadSafeContext context_{std::make_unique<llvm::LLVMContext>()};
     std::unique_ptr<llvm::Module> ir_;
@@ -212,12 +343,15 @@ class BlockCompiler {
     ankerl::unordered_dense::map<std::string, std::weak_ptr<const LLVMBlockCode>> compiled_;
     uint64_t next_symbol_ = 0;
     std::atomic<uint64_t> successes_{0};
+    std::atomic<uint64_t> cache_loads_{0};
 
-    BlockLookup Compile(std::span<const Step> steps, bool exact, LLVMBlockExit exit, size_t budget) {
+    std::unique_ptr<llvm::Module> Prepare(std::span<const Step> steps, bool exact, LLVMBlockExit exit,
+                                          llvm::StringRef entry_name) {
         const std::string prefix = exact ? "FiberLLVMTemplate_" : "FiberLLVMGeneric_";
+        const auto template_name = [&](const Step& step) { return prefix + std::string(step.name); };
         llvm::SmallPtrSet<const llvm::GlobalValue*, 32> kernels;
         for (const auto& step : steps) {
-            const auto* kernel = ir_->getFunction(prefix + step.name);
+            const auto* kernel = ir_->getFunction(template_name(step));
             if (!kernel) return {};
             kernels.insert(kernel);
         }
@@ -263,39 +397,32 @@ class BlockCompiler {
             if (!index || index->getZExtValue() >= steps.size() || slots.test(index->getZExtValue())) return {};
             slots.set(index->getZExtValue());
             const auto& step = steps[index->getZExtValue()];
-            auto* target = module->getFunction(prefix + step.name);
-            if (!target || target->isDeclaration() || target->getFunctionType() != call->getFunctionType()) return {};
-            call->setCalledFunction(target);
-            if (exact) {
-                // The template ABI is step index, decoded fields, then LogicFuncParams.
-                const auto bind = [&](unsigned arg, uint32_t value) {
-                    call->setArgOperand(arg, llvm::ConstantInt::get(call->getArgOperand(arg)->getType(), value));
-                };
-                bind(1, step.shape.encoding);
-                bind(2, step.shape.ea_desc);
-                bind(3, step.shape.displacement);
-                bind(7, step.shape.immediate);
-            }
-            llvm::InlineFunctionInfo info;
-            if (!llvm::InlineFunction(*call, info).isSuccess()) return {};
+            auto* target = module->getFunction(template_name(step));
+            if (!target || !InlineLLVMKernel(*call, *target, exact ? &step.shape : nullptr)) return {};
         }
 
-        const auto name = "FiberJitBlock_" + std::to_string(next_symbol_++);
-        entry->setName(name);
+        entry->setName(entry_name);
         for (auto& function : *module) {
             if (&function != entry && !function.isDeclaration())
                 function.setLinkage(llvm::GlobalValue::InternalLinkage);
         }
-        Optimize(*module);
+        OptimizeLLVMModule(*module);
         if (llvm::verifyModule(*module)) return {};
         for (auto& inst : llvm::instructions(*entry)) {
             const auto* call = llvm::dyn_cast<llvm::CallBase>(&inst);
             const auto* fn = call ? call->getCalledFunction() : nullptr;
             if (fn && fn->getName().starts_with("FiberLLVM")) return {};
         }
+        return module;
+    }
 
+    BlockLookup Materialize(llvm::StringRef name, size_t budget, std::unique_ptr<llvm::Module> module,
+                            const CachedObject* cached = nullptr) {
         auto tracker = jit_->getMainJITDylib().createResourceTracker();
-        if (auto error = jit_->addIRModule(tracker, {std::move(module), context_})) {
+        auto error = cached
+                         ? jit_->addObjectFile(tracker, llvm::MemoryBuffer::getMemBufferCopy(cached->bytes, name))
+                         : jit_->addIRModule(tracker, {std::move(module), context_});
+        if (error) {
             llvm::consumeError(std::move(error));
             llvm::consumeError(tracker->remove());
             return {};
@@ -424,19 +551,9 @@ public:
         ir_ = std::move(*parsed);
     }
 
-    BlockLookup Find(std::span<const Step> steps, bool exact, LLVMBlockExit exit, size_t budget) {
+    BlockLookup Find(std::span<const Step> steps, std::string key, JitMode mode, LLVMBlockExit exit, size_t budget,
+                     const CachedObject* cached) {
         if (!jit_) return {};
-        std::string key(1, static_cast<char>(exit));
-        for (const auto& step : steps) {
-            key += step.name;
-            key += '\0';
-            if (exact) {
-                key.append(reinterpret_cast<const char*>(&step.shape.encoding), sizeof(step.shape.encoding));
-                key.append(reinterpret_cast<const char*>(&step.shape.ea_desc), sizeof(step.shape.ea_desc));
-                key.append(reinterpret_cast<const char*>(&step.shape.displacement), sizeof(step.shape.displacement));
-                key.append(reinterpret_cast<const char*>(&step.shape.immediate), sizeof(step.shape.immediate));
-            }
-        }
         std::lock_guard lock(mutex_);
         const auto found = compiled_.find(key);
         if (found != compiled_.end()) {
@@ -446,7 +563,16 @@ public:
         if (budget < memory_->PageSize()) return {nullptr, memory_->PageSize()};
         if (compiled_.size() > live_blocks.load(std::memory_order_relaxed) + 128)
             std::erase_if(compiled_, [](const auto& entry) { return entry.second.expired(); });
-        auto result = Compile(steps, exact, exit, budget);
+        BlockLookup result;
+        if (cached) {
+            result = Materialize(ObjectEntryName(cached->index), budget, nullptr, cached);
+            if (result.code) cache_loads_.fetch_add(1, std::memory_order_relaxed);
+        }
+        if (!result.code && !result.blocked_bytes && mode != JitMode::Cache) {
+            const auto name = "FiberJitBlock_" + std::to_string(next_symbol_++);
+            if (auto module = Prepare(steps, mode == JitMode::Exact, exit, name))
+                result = Materialize(name, budget, std::move(module));
+        }
         if (result.code) {
             compiled_.emplace(std::move(key), result.code);
             successes_.fetch_add(1, std::memory_order_relaxed);
@@ -454,7 +580,36 @@ public:
         return result;
     }
 
+    int BuildCache(std::string_view profile, llvm::raw_ostream& output) {
+        if (!jit_) return -1;
+        std::lock_guard lock(mutex_);
+        WriteFileHeader(output, llvm_block_cache::cache_magic);
+        int compiled = 0;
+        ankerl::unordered_dense::set<std::string_view> seen;
+        std::vector<Step> steps;
+        while (!profile.empty()) {
+            std::string_view key;
+            LLVMBlockExit exit;
+            steps.clear();
+            if (!llvm_block_cache::ReadRecord(profile, key) || !DecodeRecipe(key, steps, exit)) return -1;
+            if (!seen.insert(key).second) continue;
+            auto module = Prepare(steps, true, exit, ObjectEntryName(compiled));
+            if (!module) continue;
+            auto object = jit_->getIRCompileLayer().getCompiler()(*module);
+            if (!object) {
+                llvm::logAllUnhandledErrors(object.takeError(), llvm::errs(), "LLVM block cache: ");
+                continue;
+            }
+            if (!llvm_block_cache::WriteRecord(output, key) ||
+                !llvm_block_cache::WriteRecord(output, (*object)->getBuffer()))
+                return -1;
+            ++compiled;
+        }
+        return compiled;
+    }
+
     uint64_t Count() const { return successes_.load(std::memory_order_relaxed); }
+    uint64_t CacheLoadCount() const { return cache_loads_.load(std::memory_order_relaxed); }
 };
 
 BlockCompiler& Compiler() {
@@ -465,9 +620,13 @@ BlockCompiler& Compiler() {
 }  // namespace
 
 uint16_t LLVMJitHotThreshold() {
-    static const uint16_t threshold =
-        RuntimeMode() == JitMode::Off ? 0
-                                      : ReadPositiveSetting("FIBERCPU_LLVM_JIT_HOT_THRESHOLD", kDefaultHotThreshold);
+    static const uint16_t threshold = []() -> uint16_t {
+        switch (RuntimeMode()) {
+            case JitMode::Off: return 0;
+            case JitMode::Cache: return 1;
+            default: return ReadPositiveSetting("FIBERCPU_LLVM_JIT_HOT_THRESHOLD", kDefaultHotThreshold);
+        }
+    }();
     return threshold;
 }
 
@@ -503,11 +662,19 @@ void CompileHotLLVMBlock(EmuState* state, BasicBlock* block) {
         }
     }
     if (covered == 0 || (covered == 1 && exit == LLVMBlockExit::Dispatch)) return;
+    const std::span<const Step> plan{steps.data(), covered};
+    auto key = BlockKey(plan, mode != JitMode::Generic, exit);
+    if (mode == JitMode::Profile) {
+        RecordBlock(key);
+        return;
+    }
+    const auto* cached = mode == JitMode::Generic ? nullptr : NativeObjects().Find(key);
+    if (mode == JitMode::Cache && !cached) return;
 
     auto& cache = mmu.code_cache();
     static const size_t budget = ReadPositiveSetting("FIBERCPU_LLVM_JIT_CODE_BUDGET", kDefaultJitCodeBudget);
     const size_t remaining = budget - cache.llvm_block_bytes;
-    auto [code, blocked_bytes] = Compiler().Find({steps.data(), covered}, mode == JitMode::Exact, exit, remaining);
+    auto [code, blocked_bytes] = Compiler().Find(plan, std::move(key), mode, exit, remaining, cached);
     const bool already_owned = code && cache.llvm_blocks.contains(code);
     const size_t bytes = code ? code->mapped_bytes : blocked_bytes;
     if (!already_owned && bytes > remaining) {
@@ -532,8 +699,50 @@ void CompileHotLLVMBlock(EmuState* state, BasicBlock* block) {
     block->entry = code->handler;
 }
 
-uint64_t LLVMJitBlockCount() { return RuntimeMode() == JitMode::Off ? 0 : Compiler().Count(); }
+int BuildLLVMJitCache(const char* profile_path, const char* cache_path) {
+    if (!profile_path || !cache_path) return -1;
+    auto input = llvm::MemoryBuffer::getFile(profile_path);
+    if (!input) return -1;
+    std::string_view profile = (*input)->getBuffer();
+    if (!ReadFileHeader(profile, llvm_block_cache::profile_magic) || profile.empty()) return -1;
+
+    auto temp = llvm::sys::fs::TempFile::create(llvm::Twine(cache_path) + ".%%%%%%");
+    if (!temp) {
+        llvm::consumeError(temp.takeError());
+        return -1;
+    }
+    int count;
+    {
+        llvm::raw_fd_ostream output(temp->FD, false);
+        count = Compiler().BuildCache(profile, output);
+        output.flush();
+        if (output.has_error()) {
+            output.clear_error();
+            count = -1;
+        }
+    }
+    if (count <= 0) {
+        llvm::consumeError(temp->discard());
+        return -1;
+    }
+    if (auto error = temp->keep(cache_path)) {
+        llvm::consumeError(std::move(error));
+        llvm::consumeError(temp->discard());
+        return -1;
+    }
+    return count;
+}
+
+uint64_t LLVMJitBlockCount() {
+    const auto mode = RuntimeMode();
+    return mode == JitMode::Off || mode == JitMode::Profile ? 0 : Compiler().Count();
+}
 
 uint64_t LLVMJitLiveBlockCount() { return live_blocks.load(std::memory_order_relaxed); }
+
+uint64_t LLVMJitCacheLoadCount() {
+    const auto mode = RuntimeMode();
+    return mode == JitMode::Cache || mode == JitMode::Exact ? Compiler().CacheLoadCount() : 0;
+}
 
 }  // namespace fiberish

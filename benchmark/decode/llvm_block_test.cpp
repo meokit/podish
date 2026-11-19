@@ -446,6 +446,17 @@ bool VerifyReuseAndBudget(bool tight_budget) {
     return restored && restored->entry == original && X86_GetLLVMJitBlockCount() == 2;
 }
 
+bool VerifyPrecompiledCache(bool compile_on_miss) {
+    const auto loads = X86_GetLLVMJitCacheLoadCount();
+    if (loads == 0 || loads != X86_GetLLVMJitBlockCount()) return false;
+    constexpr uint8_t code[] = {0xb8, 0x4a, 0x17, 0, 0};  // MOV EAX, 0x174a, absent from the profile.
+    auto state = LoadCode(code, sizeof(code));
+    const auto end = code_address + sizeof(code);
+    return X86_Run(state.get(), end, 16) && X86_RegRead(state.get(), 0) == 0x174a &&
+           HasCompiledEntry(state.get()) == compile_on_miss && X86_GetLLVMJitCacheLoadCount() == loads &&
+           X86_GetLLVMJitBlockCount() == loads + unsigned(compile_on_miss);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -496,5 +507,13 @@ int main(int argc, char** argv) {
         X86_GetLLVMJitLiveBlockCount() != 0) {
         std::fprintf(stderr, "LLVM generic stack width, call or return mismatch\n");
         return 1;
+    }
+    if (argc == 2) {
+        const bool cache_only = std::strcmp(argv[1], "cache") == 0;
+        const bool cache_hybrid = std::strcmp(argv[1], "cache-hybrid") == 0;
+        if ((cache_only || cache_hybrid) && !VerifyPrecompiledCache(cache_hybrid)) {
+            std::fprintf(stderr, "LLVM precompiled cache load or miss fallback mismatch\n");
+            return 1;
+        }
     }
 }

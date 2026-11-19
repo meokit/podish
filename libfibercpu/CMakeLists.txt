@@ -864,6 +864,9 @@ if(FIBERCPU_ENABLE_LLVM_JIT)
     target_include_directories(fibercpu PRIVATE "${_llvm_dir}")
     target_include_directories(fibercpu SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
     target_sources(fibercpu PRIVATE src/jit/llvm_block_jit.cpp "${_llvm_bitcode}")
+    add_executable(fibercpu_llvm_cache src/jit/llvm_cache_main.cpp)
+    target_include_directories(fibercpu_llvm_cache PRIVATE src)
+    target_link_libraries(fibercpu_llvm_cache PRIVATE fibercpu)
     if(TARGET LLVM)
         target_link_libraries(fibercpu PRIVATE LLVM)
     else()
@@ -947,5 +950,22 @@ if(FIBERCPU_TEST_SPECIALIZATION_INDEX)
         add_test(NAME llvm_block_budget COMMAND llvm_block_test budget)
         set_tests_properties(llvm_block_budget PROPERTIES ENVIRONMENT
             "FIBERCPU_LLVM_JIT=1;FIBERCPU_LLVM_JIT_HOT_THRESHOLD=1;FIBERCPU_LLVM_JIT_CODE_BUDGET=16384")
+        set(_cache_test_profile "${CMAKE_CURRENT_BINARY_DIR}/llvm-block-test.profile")
+        set(_cache_test_binary "${CMAKE_CURRENT_BINARY_DIR}/llvm-block-test.cache")
+        add_test(NAME llvm_block_cache_profile COMMAND llvm_block_test)
+        set_tests_properties(llvm_block_cache_profile PROPERTIES FIXTURES_SETUP llvm_block_profile
+            ENVIRONMENT "FIBERCPU_LLVM_JIT=profile;FIBERCPU_LLVM_JIT_PROFILE=${_cache_test_profile};FIBERCPU_LLVM_JIT_HOT_THRESHOLD=1")
+        add_test(NAME llvm_block_cache_build COMMAND fibercpu_llvm_cache "${_cache_test_profile}" "${_cache_test_binary}")
+        set_tests_properties(llvm_block_cache_build PROPERTIES FIXTURES_REQUIRED llvm_block_profile
+            FIXTURES_SETUP llvm_block_cache)
+        add_test(NAME llvm_block_cache_run COMMAND llvm_block_test cache)
+        set_tests_properties(llvm_block_cache_run PROPERTIES FIXTURES_REQUIRED llvm_block_cache
+            ENVIRONMENT "FIBERCPU_LLVM_JIT=cache;FIBERCPU_LLVM_JIT_CACHE=${_cache_test_binary}")
+        add_test(NAME llvm_block_cache_hybrid COMMAND llvm_block_test cache-hybrid)
+        set_tests_properties(llvm_block_cache_hybrid PROPERTIES FIXTURES_REQUIRED llvm_block_cache
+            ENVIRONMENT "FIBERCPU_LLVM_JIT=1;FIBERCPU_LLVM_JIT_CACHE=${_cache_test_binary};FIBERCPU_LLVM_JIT_HOT_THRESHOLD=1")
+        add_test(NAME llvm_block_cache_invalid COMMAND llvm_block_test)
+        set_tests_properties(llvm_block_cache_invalid PROPERTIES FIXTURES_REQUIRED llvm_block_profile
+            ENVIRONMENT "FIBERCPU_LLVM_JIT=cache;FIBERCPU_LLVM_JIT_CACHE=${_cache_test_profile}")
     endif()
 endif()

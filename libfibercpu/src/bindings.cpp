@@ -1493,6 +1493,24 @@ uint64_t X86_GetLLVMJitLiveBlockCount() {
 #endif
 }
 
+uint64_t X86_GetLLVMJitCacheLoadCount() {
+#if FIBERCPU_LLVM_JIT
+    return LLVMJitCacheLoadCount();
+#else
+    return 0;
+#endif
+}
+
+int X86_BuildLLVMJitCache(const char* profile_path, const char* cache_path) {
+#if FIBERCPU_LLVM_JIT
+    return BuildLLVMJitCache(profile_path, cache_path);
+#else
+    (void)profile_path;
+    (void)cache_path;
+    return -1;
+#endif
+}
+
 void* X86_GetLibAddress() {
 #if defined(__EMSCRIPTEN__)
     return nullptr;

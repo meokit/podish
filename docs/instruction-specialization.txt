@@ -78,6 +78,33 @@ Invalidated blocks keep their machine code available for reuse. Budget
 pressure requests a hard reset when the MMU is quiescent. The native stats
 field llvm_code_cache_bytes reports the currently charged bytes.
 
+Precompiled LLVM block cache
+----------------------------
+Collect exact block recipes at the configured hot threshold and leave the
+workload on the native dispatch path during collection:
+
+  FIBERCPU_LLVM_JIT=profile FIBERCPU_LLVM_JIT_PROFILE=blocks.profile <command>
+
+Compile the collected recipes to relocatable objects with the same native build:
+
+  <build>/fibercpu_llvm_cache blocks.profile blocks.cache
+
+Load objects on demand without running the LLVM optimizer or code generator:
+
+  FIBERCPU_LLVM_JIT=cache FIBERCPU_LLVM_JIT_CACHE=blocks.cache <command>
+
+Cache-only mode checks a block on its first entry and keeps native dispatch on
+a miss. FIBERCPU_LLVM_JIT=1 with the same cache path uses the regular hot
+threshold and compiles online on a miss. ORC applies relocations on load. Cached
+code uses the same code budget, invalidation lifetime and scalar memory replay
+as online JIT code. X86_GetLLVMJitCacheLoadCount counts object materializations
+and X86_GetLLVMJitBlockCount counts online and cached materializations together.
+
+The cache key includes the exit, generic opcode sequence and exact decoded
+operand shapes. Profiles and caches are tied to the embedded bitcode, LLVM
+version and host CPU target. Use trusted cache files since they contain native
+code.
+
 Tool metadata and fusion snapshot
 ---------------------------------
 X86_GetInstructionVariantCount/GetInstructionVariant expose immutable, build-local
