@@ -11,12 +11,14 @@ struct BasicBlock;
 typedef fiberish::EmuState EmuState;
 typedef fiberish::BasicBlock BasicBlock;
 struct X86_MmuHandle;
+struct X86_RunContext;
 #else
 #include <stddef.h>
 #include <stdint.h>
 typedef struct EmuState EmuState;
 typedef struct BasicBlock BasicBlock;
 typedef struct X86_MmuHandle X86_MmuHandle;
+typedef struct X86_RunContext X86_RunContext;
 #endif
 
 #ifdef __cplusplus
@@ -36,6 +38,13 @@ enum { X86_PAGE_FLAG_DIRTY = 1 << 0, X86_PAGE_FLAG_EXTERNAL = 1 << 1 };
 // Creation / Destruction
 enum { X86_CREATE_NO_FATAL_SIGNAL_HANDLERS = 1u };
 EmuState* X86_Create();
+// args is a batch of NUL-terminated UTF-8 Name=Value entries, including the
+// last terminator in size. On failure error receives a UTF-8 diagnostic.
+X86_RunContext* X86_CreateRun(const char* args, size_t size, char* error, size_t error_size);
+EmuState* X86_CreateForRun(const X86_RunContext* run);
+// Call after this run's CPUs have stopped. Returns 1 on success.
+int X86_FinishRun(const X86_RunContext* run, char* error, size_t error_size);
+void X86_DestroyRun(X86_RunContext* run);
 // Options affect this creation only; no environment variables are modified.
 EmuState* X86_CreateWithOptions(uint32_t options);
 // share_mem=1: Threads (CLONE_VM), share_mem=0: Fork (copy owned pages, preserve external mappings)
@@ -110,6 +119,8 @@ uint64_t X86_GetLLVMJitLiveBlockCount();
 uint64_t X86_GetLinkedBlockHitCount();
 // Returns the number of compiled entries, or -1 on failure.
 int X86_BuildLinkedLLVMBlockCache(const char* profile_path, const char* cache_path);
+int X86_BuildLinkedLLVMBlockCacheWithOptions(const char* profile_path, const char* cache_path, uint32_t limit,
+                                             const char* opt_level, const char* pass_pipeline);
 void X86_EmuStop(EmuState* state);
 void X86_EmuFault(EmuState* state);
 void X86_EmuYield(EmuState* state);

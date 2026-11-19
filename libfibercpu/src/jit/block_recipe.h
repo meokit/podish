@@ -74,7 +74,7 @@ struct Plan {
     std::span<const HandlerFunc> ReplayHandlers() const { return {replay_handlers.data(), covered}; }
 };
 
-uint16_t HotThreshold();
+uint16_t HotThreshold(const EmuState& state);
 void InitializeOperationLookup();
 OpId FindOperation(const DecodedOp& op, bool exact);
 bool CanPromoteBlock(EmuState& state, BasicBlock& block);

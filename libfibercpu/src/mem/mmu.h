@@ -17,6 +17,7 @@
 
 namespace fiberish {
 struct LLVMAsyncState;
+struct CpuRunOptions;
 #if FIBERCPU_LLVM_JIT
 void CancelPendingLLVMBlockCompilations(LLVMAsyncState& state);
 bool LLVMJitCacheFlushPending();
@@ -312,6 +313,7 @@ struct CodeCacheState {
     uint64_t llvm_cache_epoch = 0;
     bool pending_flush = false;
     bool pending_budget_flush = false;
+    std::shared_ptr<const CpuRunOptions> run_options;
 
     CodeCacheState() { InitializeInvalidBasicBlock(dummy_invalid_block); }
     void InvalidateAll() {
@@ -333,6 +335,7 @@ struct CodeCacheState {
         const uint64_t next_generation = generation + generation_increment;
         const uint64_t next_reset_request_epoch = reset_request_epoch;
         const uint64_t previous_llvm_epoch = llvm_cache_epoch;
+        auto preserved_run_options = run_options;
 
         this->~CodeCacheState();
         new (this) CodeCacheState();
@@ -341,6 +344,7 @@ struct CodeCacheState {
         generation = next_generation;
         reset_request_epoch = next_reset_request_epoch;
         llvm_cache_epoch = previous_llvm_epoch;
+        run_options = std::move(preserved_run_options);
     }
 
     void SetBlockBudgetBytes(size_t bytes) { block_budget_bytes = bytes == 0 ? kDefaultBlockBudgetBytes : bytes; }
@@ -984,6 +988,7 @@ private:
 #endif
         if (parent) {
             core->code_cache.block_budget_bytes = parent->code_cache.block_budget_bytes;
+            core->code_cache.run_options = parent->code_cache.run_options;
         }
         return core;
     }

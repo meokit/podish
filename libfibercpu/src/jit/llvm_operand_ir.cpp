@@ -12,6 +12,7 @@
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/Transforms/IPO/GlobalDCE.h>
+#include <llvm/Transforms/Scalar/SimplifyCFG.h>
 #include <llvm/Transforms/Utils/Cloning.h>
 #include <llvm/Transforms/Utils/Local.h>
 
@@ -36,7 +37,7 @@ bool InlineLLVMKernel(llvm::CallInst& call, llvm::Function& kernel, const Decode
     return llvm::InlineFunction(call, info).isSuccess();
 }
 
-void OptimizeLLVMModule(llvm::Module& module, bool prune_dead_globals) {
+bool OptimizeLLVMModule(llvm::Module& module, bool prune_dead_globals, llvm::StringRef custom_pipeline) {
     llvm::LoopAnalysisManager loops;
     llvm::FunctionAnalysisManager functions;
     llvm::CGSCCAnalysisManager call_graph;
@@ -51,11 +52,39 @@ void OptimizeLLVMModule(llvm::Module& module, bool prune_dead_globals) {
     // The copied kernels have already been inlined into the entry. Prune
     // unreachable definitions before spending optimization time on them.
     if (prune_dead_globals) pipeline.addPass(llvm::GlobalDCEPass());
-    pipeline.addPass(passes.buildPerModuleDefaultPipeline(llvm::OptimizationLevel::O2));
+    if (custom_pipeline.empty()) {
+        pipeline.addPass(passes.buildPerModuleDefaultPipeline(llvm::OptimizationLevel::O2));
+    } else {
+        // Resolve the constantized step and exit guards even for a minimal
+        // user pipeline. Unused template bodies must never reach codegen.
+        pipeline.addPass(llvm::createModuleToFunctionPassAdaptor(llvm::SimplifyCFGPass()));
+        if (auto error = passes.parsePassPipeline(pipeline, custom_pipeline)) {
+            llvm::logAllUnhandledErrors(std::move(error), llvm::errs(), "LLVM block pipeline: ");
+            return false;
+        }
+        pipeline.addPass(llvm::GlobalDCEPass());
+    }
     pipeline.run(module, modules);
+    return true;
 }
 
 }  // namespace
+
+llvm::Expected<std::string> ParseLLVMBlockPipeline(llvm::StringRef level, llvm::StringRef passes) {
+    if (!level.empty() && !passes.empty())
+        return llvm::createStringError("select an LLVM optimization level or a pass pipeline");
+    if (!passes.empty()) {
+        llvm::PassBuilder builder;
+        llvm::ModulePassManager pipeline;
+        if (auto error = builder.parsePassPipeline(pipeline, passes)) return std::move(error);
+        return passes.str();
+    }
+    level.consume_front("-");
+    if (level.empty() || level == "O2") return std::string{};
+    if (level != "O0" && level != "O1" && level != "O3" && level != "Os" && level != "Oz")
+        return llvm::createStringError("invalid LLVM optimization level: %s", level.str().c_str());
+    return "default<" + level.str() + ">";
+}
 
 bool InitializeLLVMTarget() {
     static const bool initialized = !llvm::InitializeNativeTarget() && !llvm::InitializeNativeTargetAsmPrinter();
@@ -102,7 +131,8 @@ bool LLVMOperandTemplates::IsTemplateGlobal(const llvm::GlobalValue* value) cons
 }
 
 std::unique_ptr<llvm::Module> PrepareLLVMBlock(const LLVMOperandTemplates& templates, block_recipe::BlockKeyView key,
-                                               llvm::StringRef entry_name, bool prune_dead_globals) {
+                                               llvm::StringRef entry_name, bool prune_dead_globals,
+                                               llvm::StringRef custom_pipeline) {
     if (!templates.IsValid()) return {};
     const bool exact = key.IsExact();
     llvm::SmallPtrSet<const llvm::GlobalValue*, 32> kernels;
@@ -161,8 +191,7 @@ std::unique_ptr<llvm::Module> PrepareLLVMBlock(const LLVMOperandTemplates& templ
     for (auto& function : *module) {
         if (&function != entry && !function.isDeclaration()) function.setLinkage(llvm::GlobalValue::InternalLinkage);
     }
-    OptimizeLLVMModule(*module, prune_dead_globals);
-    if (llvm::verifyModule(*module)) return {};
+    if (!OptimizeLLVMModule(*module, prune_dead_globals, custom_pipeline) || llvm::verifyModule(*module)) return {};
     for (auto& inst : llvm::instructions(*entry)) {
         const auto* call = llvm::dyn_cast<llvm::CallBase>(&inst);
         const auto* fn = call ? call->getCalledFunction() : nullptr;

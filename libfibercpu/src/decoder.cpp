@@ -962,7 +962,7 @@ finalize:
         invalidated_candidate->Revalidate();
         return invalidated_candidate;
     }
-    hot_count = decoded_inst_count ? block_recipe::HotThreshold() : 0;
+    hot_count = decoded_inst_count ? block_recipe::HotThreshold(*state) : 0;
     if (hot_count && candidate_has_jit) hot_count = 1;
     std::array<HandlerFunc, MAX_INSTS> scalar_handlers;
     if (hot_count) {

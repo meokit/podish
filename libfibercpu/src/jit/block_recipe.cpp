@@ -38,9 +38,11 @@ const auto& Operations() {
 
 }  // namespace
 
-uint16_t HotThreshold() {
+uint16_t HotThreshold(const EmuState& state) {
 #if FIBERCPU_LLVM_JIT
-    if (const auto online = LLVMJitHotThreshold()) return online;
+    if (const auto online = LLVMJitHotThreshold(state)) return online;
+#else
+    (void)state;
 #endif
 #if FIBERCPU_LINKED_BLOCK_CACHE
     return LinkedBlockCacheEnabled() ? 1 : 0;

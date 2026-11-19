@@ -55,6 +55,7 @@ public sealed class ContainerRunRequest
     public IReadOnlyList<PublishedPortSpec> PublishedPorts { get; init; } = Array.Empty<PublishedPortSpec>();
     public bool UseEngineInit { get; init; }
     public long? MemoryQuotaBytes { get; init; }
+    public string[] CpuOptions { get; init; } = [];
     public string? GuestStatsExportDir { get; init; }
     public bool EnablePulseServer { get; init; }
     public bool EnableWaylandServer { get; init; }
@@ -253,6 +254,14 @@ public sealed class ContainerRuntimeService
             if (request.MemoryQuotaBytes.HasValue)
                 memoryContext.MemoryQuotaBytes = request.MemoryQuotaBytes.Value;
 
+            try
+            {
+                memoryContext.ConfigureCpu(request.CpuOptions);
+            }
+            catch (ArgumentException ex)
+            {
+                throw new ContainerConfigurationException(ex.Message);
+            }
             runtime = KernelRuntime.BootstrapBare(request.Strace, ttyDiag, memoryContext);
             runtime.Syscalls.Framebuffer = request.Framebuffer;
             scheduler.Runtime = runtime;
@@ -564,6 +573,7 @@ public sealed class ContainerRuntimeService
                 "Scheduler run returned containerId={ContainerId} mainExited={MainExited}",
                 request.ContainerId, mainTask.Exited);
 
+            memoryContext.FinishCpuRun();
             TryExportGuestStats(runtime, request);
 
             if (!mainTask.Exited)

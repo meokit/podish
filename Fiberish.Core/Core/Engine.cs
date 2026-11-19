@@ -32,7 +32,7 @@ public class Engine : IDisposable
     {
         ArgumentNullException.ThrowIfNull(memoryContext);
         MemoryContext = memoryContext;
-        State = X86Native.Create();
+        State = memoryContext.CreateCpuState();
         if (State == IntPtr.Zero)
             throw new InvalidOperationException("Failed to create Fiberish state");
 

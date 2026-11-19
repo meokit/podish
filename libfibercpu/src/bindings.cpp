@@ -35,6 +35,7 @@
 #include "operand_specialization.h"
 #include "ops.h"
 #include "state.h"
+#include "runtime_options.h"
 #include "superopcodes.h"
 
 #if defined(__SSE__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 1)
@@ -488,6 +489,15 @@ static void RegisterFatalSignalHandler(int sig) {
 
 EmuState* X86_Create() { return X86_CreateWithOptions(0); }
 
+EmuState* X86_CreateForRun(const X86_RunContext* run) {
+    if (!run) return nullptr;
+    auto* state = X86_Create();
+    auto& cache = state->mmu.code_cache();
+    cache.SetBlockBudgetBytes(run->options->block_cache_bytes);
+    cache.run_options = run->options;
+    return state;
+}
+
 EmuState* X86_CreateWithOptions(uint32_t options) {
     if (!(options & X86_CREATE_NO_FATAL_SIGNAL_HANDLERS) && FatalSignalHandlerEnabled()) {
 #if !defined(__EMSCRIPTEN__) && !defined(_WIN32)
@@ -755,6 +765,9 @@ int X86_EngineAttachMmu(EmuState* state, X86_MmuHandle* mmu) {
 // old core is kept referenced until the current native run unwinds.
 int X86_EngineAttachMmuForExec(EmuState* state, X86_MmuHandle* mmu) {
     if (!state || !mmu || !mmu->core) return 0;
+    const auto* previous = state->mmu.core_handle();
+    // The current dispatch already holds the execution lock for this run.
+    if (previous && previous->code_cache.run_options != mmu->core->code_cache.run_options) return 0;
     return state->mmu.attach_core_for_exec(mmu->core, true) ? 1 : 0;
 }
 
@@ -907,7 +920,7 @@ static bool ExecuteSingleInstructionOnStack(EmuState* state) {
 int X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
     if (!state || g_native_execution_active || state->native_execution_active) return 0;
 #if FIBERCPU_LLVM_JIT
-    ScopedLLVMJitExecution jit_execution;
+    ScopedLLVMJitExecution jit_execution(*state);
 #endif
     state->mmu.flush_pending_code_cache_before_run();
     ScopedNativeExecution execution(state);
@@ -1278,7 +1291,7 @@ void X86_EmuYield(EmuState* state) {
 int X86_Step(EmuState* state) {
 #if FIBERCPU_LLVM_JIT
     if (!state || g_native_execution_active || state->native_execution_active) return -1;
-    ScopedLLVMJitExecution jit_execution;
+    ScopedLLVMJitExecution jit_execution(*state);
     state->mmu.flush_pending_code_cache_before_run();
 #endif
     ScopedNativeExecution execution(state);
@@ -1573,12 +1586,25 @@ uint64_t X86_GetLinkedBlockHitCount() {
 #endif
 }
 
+int X86_FinishRun(const X86_RunContext* run, char* error, size_t error_size) {
+    if (error && error_size) error[0] = '\0';
+    return run ? 1 : 0;
+}
+
 int X86_BuildLinkedLLVMBlockCache(const char* profile_path, const char* cache_path) {
+    return X86_BuildLinkedLLVMBlockCacheWithOptions(profile_path, cache_path, 0, nullptr, nullptr);
+}
+
+int X86_BuildLinkedLLVMBlockCacheWithOptions(const char* profile_path, const char* cache_path, uint32_t limit,
+                                             const char* opt_level, const char* pass_pipeline) {
 #if FIBERCPU_LLVM_JIT
-    return BuildLinkedLLVMBlockCache(profile_path, cache_path);
+    return BuildLinkedLLVMBlockCache(profile_path, cache_path, limit, opt_level, pass_pipeline);
 #else
     (void)profile_path;
     (void)cache_path;
+    (void)limit;
+    (void)opt_level;
+    (void)pass_pipeline;
     return -1;
 #endif
 }

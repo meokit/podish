@@ -1,5 +1,6 @@
 #include "jit/llvm_block_jit.h"
 #include "jit/block_recipe.h"
+#include "jit/executable_arena.h"
 #include "jit/linked_block_cache_host.h"
 #include "jit/llvm_block_cache.h"
 #include "jit/llvm_block_memory.h"
@@ -50,11 +51,11 @@
 #include "ops/ops_control_impl.h"
 
 namespace fiberish {
+
 namespace {
 
 #include "llvm_block_bitcode.inc"
 
-enum class JitMode { Off, Generic, Exact, Profile };
 using block_recipe::BlockKeyView;
 using block_recipe::kMaxOps;
 constexpr uint16_t kDefaultHotThreshold = 64;
@@ -64,6 +65,46 @@ std::atomic<uint64_t> cache_epoch{0};
 std::atomic<bool> flush_requested{false};
 std::atomic<size_t> mmu_count{0};
 std::shared_mutex execution_gate;
+
+unsigned DefaultWorkerCount() {
+    const auto* value = std::getenv("FIBERCPU_LLVM_JIT_WORKERS");
+    if (!value) return 2;
+    unsigned threads;
+    const auto* end = value + std::strlen(value);
+    const auto parsed = std::from_chars(value, end, threads);
+    return parsed.ec == std::errc{} && parsed.ptr == end ? std::min(threads, 8u) : 2u;
+}
+
+struct RuntimeOptions {
+    std::string pipeline;
+    unsigned workers = DefaultWorkerCount();
+};
+
+struct RuntimeConfiguration {
+    std::mutex mutex;
+    RuntimeOptions options;
+    bool frozen = false;
+};
+
+RuntimeConfiguration& Configuration() {
+    static RuntimeConfiguration config;
+    return config;
+}
+
+const RuntimeOptions& Options() {
+    static const auto options = [] {
+        auto& config = Configuration();
+        std::lock_guard lock(config.mutex);
+        config.frozen = true;
+        return config.options;
+    }();
+    return options;
+}
+
+const CpuRunOptions* RunOptions(const EmuState& state) {
+    const auto* core = state.mmu.core_handle();
+    return core ? core->code_cache.run_options.get() : nullptr;
+}
 
 bool AcceptsJobs(uint64_t epoch) {
     return !flush_requested.load(std::memory_order_acquire) &&
@@ -172,7 +213,8 @@ void RecordBlock(BlockKeyView key) {
     }
 }
 
-JitMode RuntimeMode() {
+JitMode RuntimeMode(const EmuState& state) {
+    if (const auto* options = RunOptions(state); options && options->jit_mode) return *options->jit_mode;
     static const auto mode = [] {
         const char* value = std::getenv("FIBERCPU_LLVM_JIT");
         if (!value || !pthread_jit_write_protect_supported_np()) return JitMode::Off;
@@ -382,7 +424,7 @@ public:
         // under the same lock that serializes the linker and arena reset.
         thread_local BlockIR worker_ir;
         std::unique_ptr<llvm::MemoryBuffer> object;
-        if (auto module = PrepareLLVMBlock(worker_ir.templates, key, name, /*prune_dead_globals=*/true)) {
+        if (auto module = PrepareLLVMBlock(worker_ir.templates, key, name, /*prune_dead_globals=*/true, Options().pipeline)) {
             auto result = jit_->getIRCompileLayer().getCompiler()(*module);
             if (result)
                 object = std::move(*result);
@@ -420,7 +462,8 @@ public:
         compilation_done_.notify_all();
     }
 
-    static int BuildLinkedCache(std::string_view profile, llvm::raw_ostream& output) {
+    static int BuildLinkedCache(std::string_view profile, llvm::raw_ostream& output,
+                                uint32_t limit, llvm::StringRef pipeline) {
         if (!InitializeLLVMTarget()) return -1;
         BlockIR ir;
         if (!ir.templates.IsValid()) return -1;
@@ -444,7 +487,8 @@ public:
             const auto key = plan.Key(exact);
             if (seen.contains(key)) continue;
             seen.emplace(key);
-            auto module = PrepareLLVMBlock(ir.templates, key, ObjectEntryName(compiled));
+            auto module = PrepareLLVMBlock(ir.templates, key, ObjectEntryName(compiled),
+                                           /*prune_dead_globals=*/false, pipeline);
             if (!module) continue;
             auto object = compiler(*module);
             if (!object) {
@@ -455,6 +499,7 @@ public:
                 !llvm_block_cache::WriteRecord(output, (*object)->getBuffer()))
                 return -1;
             ++compiled;
+            if (limit && static_cast<uint32_t>(compiled) == limit) break;
         }
         return compiled;
     }
@@ -633,17 +678,7 @@ public:
     }
 };
 
-unsigned WorkerCount() {
-    static const auto count = [] {
-        const auto* value = std::getenv("FIBERCPU_LLVM_JIT_WORKERS");
-        if (!value) return 2u;
-        unsigned threads;
-        const auto* end = value + std::strlen(value);
-        const auto parsed = std::from_chars(value, end, threads);
-        return parsed.ec == std::errc{} && parsed.ptr == end ? std::min(threads, 8u) : 2u;
-    }();
-    return count;
-}
+unsigned WorkerCount() { return Options().workers; }
 
 CompilationPool& Workers() {
     static CompilationPool pool([] {
@@ -705,8 +740,8 @@ void QueueBlock(EmuState* state, BasicBlock* block, bool exact) {
 
 }  // namespace
 
-ScopedLLVMJitExecution::ScopedLLVMJitExecution() {
-    const auto mode = RuntimeMode();
+ScopedLLVMJitExecution::ScopedLLVMJitExecution(const EmuState& state) {
+    const auto mode = RuntimeMode(state);
     if (mode != JitMode::Exact && mode != JitMode::Generic) return;
 
     for (;;) {
@@ -736,20 +771,58 @@ void LLVMJitMmuDestroyed() {
     FinishPendingFlush();
 }
 
-uint16_t LLVMJitHotThreshold() {
-    static const uint16_t threshold = []() -> uint16_t {
-        if (RuntimeMode() == JitMode::Off) return 0;
-        return ReadPositiveSetting("FIBERCPU_LLVM_JIT_HOT_THRESHOLD", kDefaultHotThreshold);
-    }();
+bool LLVMBlockJitSupported() { return pthread_jit_write_protect_supported_np(); }
+
+bool ConfigureLLVMBlockJit(const SharedJitOptions& settings, std::string& error) {
+    std::optional<std::string> pipeline;
+    if (settings.pipeline) {
+        llvm::StringRef input(settings.pipeline->data(), settings.pipeline->size());
+        llvm::StringRef level = input;
+        level.consume_front("-");
+        const bool is_level = level == "O0" || level == "O1" || level == "O2" ||
+                              level == "O3" || level == "Os" || level == "Oz";
+        auto parsed = is_level ? ParseLLVMBlockPipeline(level, "") : ParseLLVMBlockPipeline("", input);
+        if (!parsed) {
+            error = "LlvmPipeline: " + llvm::toString(parsed.takeError());
+            return false;
+        }
+        pipeline = std::move(*parsed);
+    }
+
+    auto& config = Configuration();
+    std::lock_guard lock(config.mutex);
+    if (config.frozen && settings.workers && *settings.workers != config.options.workers) {
+        error = "JitWorkers conflicts with the existing process-wide worker count";
+        return false;
+    }
+    if (config.frozen && pipeline && *pipeline != config.options.pipeline) {
+        error = "LlvmPipeline conflicts with the existing process-wide LLVM pipeline";
+        return false;
+    }
+    // This is the only fallible step after checking the shared configuration.
+    if (settings.arena_bytes && !ExecutableArena::Shared(settings.arena_bytes)) {
+        error = "JitArenaSize conflicts with the existing arena or could not be allocated";
+        return false;
+    }
+    if (settings.workers) config.options.workers = *settings.workers;
+    if (pipeline) config.options.pipeline = std::move(*pipeline);
+    config.frozen = true;
+    return true;
+}
+
+uint16_t LLVMJitHotThreshold(const EmuState& state) {
+    if (RuntimeMode(state) == JitMode::Off) return 0;
+    if (const auto* options = RunOptions(state); options && options->hot_threshold) return *options->hot_threshold;
+    static const auto threshold = ReadPositiveSetting("FIBERCPU_LLVM_JIT_HOT_THRESHOLD", kDefaultHotThreshold);
     return threshold;
 }
 
 void CompileHotLLVMBlock(EmuState* state, BasicBlock* block) {
     if (!block_recipe::CanPromoteBlock(*state, *block)) return;
-    const auto mode = RuntimeMode();
+    const auto mode = RuntimeMode(*state);
     if (mode == JitMode::Off) return;
     const bool exact = mode != JitMode::Generic;
-    if (mode != JitMode::Profile && WorkerCount()) {
+    if ((mode == JitMode::Exact || mode == JitMode::Generic) && WorkerCount()) {
         QueueBlock(state, block, exact);
         return;
     }
@@ -780,12 +853,18 @@ void PollLLVMBlockCompilations(EmuState* state) {
     });
 }
 
-int BuildLinkedLLVMBlockCache(const char* profile_path, const char* cache_path) {
+int BuildLinkedLLVMBlockCache(const char* profile_path, const char* cache_path, uint32_t limit,
+                              const char* opt_level, const char* pass_pipeline) {
     if (!profile_path || !cache_path) return -1;
     auto input = llvm::MemoryBuffer::getFile(profile_path);
     if (!input) return -1;
     std::string_view profile = (*input)->getBuffer();
     if (!ReadProfileHeader(profile) || profile.empty()) return -1;
+    auto pipeline = ParseLLVMBlockPipeline(opt_level ? opt_level : "", pass_pipeline ? pass_pipeline : "");
+    if (!pipeline) {
+        llvm::logAllUnhandledErrors(pipeline.takeError(), llvm::errs(), "LLVM block cache: ");
+        return -1;
+    }
 
     auto temp = llvm::sys::fs::TempFile::create(llvm::Twine(cache_path) + ".%%%%%%");
     if (!temp) {
@@ -795,7 +874,7 @@ int BuildLinkedLLVMBlockCache(const char* profile_path, const char* cache_path) 
     int count;
     {
         llvm::raw_fd_ostream output(temp->FD, false);
-        count = BlockCompiler::BuildLinkedCache(profile, output);
+        count = BlockCompiler::BuildLinkedCache(profile, output, limit, *pipeline);
         output.flush();
         if (output.has_error()) {
             output.clear_error();

@@ -18,6 +18,8 @@ namespace Podish.Cli;
 
 internal class Program
 {
+    private const string CpuOption = "--cpu-opt";
+
     private static ILogger Logger = null!;
     private static ILoggerFactory ProgramLoggerFactory = NullLoggerFactory.Instance;
 
@@ -102,6 +104,13 @@ internal class Program
         var memoryOption = new Option<string?>(
             new[] { "--memory", "-m" },
             "Set container memory limit (e.g. 64M, 1G; minimum 32M)");
+        var cpuOptions = new Option<string[]>(CpuOption,
+            "Pass Name=Value to libfibercpu. Repeat as needed, or use -XX:Name=Value.")
+        {
+            ArgumentHelpName = "Name=Value",
+            AllowMultipleArgumentsPerToken = false
+        };
+
         var envOption = new Option<string[]>(
             new[] { "--env", "-e" },
             "Set environment variables (e.g. -e KEY=VALUE)")
@@ -179,6 +188,7 @@ internal class Program
         runCommand.AddOption(rootfsOption);
         runCommand.AddOption(fsBackendOption);
         runCommand.AddOption(memoryOption);
+        runCommand.AddOption(cpuOptions);
         runCommand.AddOption(envOption);
         runCommand.AddOption(userOption);
         runCommand.AddOption(dnsOption);
@@ -454,6 +464,7 @@ internal class Program
                 FbdevWidth = fbdevSize.Width,
                 FbdevHeight = fbdevSize.Height,
                 MemoryQuotaBytes = memoryQuotaBytes,
+                CpuOptions = context.ParseResult.GetValueForOption(cpuOptions) ?? [],
                 LogDriver = containerLogDriver.ToCliValue(),
                 PublishedPorts = publishedPorts
             };
@@ -520,6 +531,7 @@ internal class Program
                 spec.PublishedPorts,
                 guestStatsExportDir,
                 spec.MemoryQuotaBytes,
+                spec.CpuOptions,
                 spec.PulseServer,
                 spec.WaylandServer,
                 new WaylandDesktopOptions(spec.WaylandDesktopWidth, spec.WaylandDesktopHeight),
@@ -557,6 +569,7 @@ internal class Program
         startCommand.AddArgument(startContainerArgument);
         startCommand.AddOption(startStraceOption);
         startCommand.AddOption(guestStatsExportDirOption);
+        startCommand.AddOption(cpuOptions);
         startCommand.AddArgument(startArgsArgument);
         startCommand.SetHandler(async context =>
         {
@@ -728,6 +741,7 @@ internal class Program
                 spec.PublishedPorts,
                 guestStatsExportDir,
                 spec.MemoryQuotaBytes,
+                [.. spec.CpuOptions, .. (context.ParseResult.GetValueForOption(cpuOptions) ?? [])],
                 spec.PulseServer,
                 spec.WaylandServer,
                 new WaylandDesktopOptions(spec.WaylandDesktopWidth, spec.WaylandDesktopHeight),
@@ -1284,7 +1298,7 @@ internal class Program
         rootCommand.AddCommand(logsCommand);
         rootCommand.AddCommand(eventsCommand);
 
-        var normalizedArgs = NormalizeRunArgsForPodman(args);
+        var normalizedArgs = NormalizeContainerArgsForPodman(args);
         return await rootCommand.InvokeAsync(normalizedArgs);
     }
 
@@ -1301,19 +1315,28 @@ internal class Program
         Logger = ProgramLoggerFactory.CreateLogger<Program>();
     }
 
-    private static string[] NormalizeRunArgsForPodman(string[] args)
+    private static string[] NormalizeContainerArgsForPodman(string[] args)
     {
-        if (args.Length == 0)
-            return args;
+        // Skip root options before locating the host subcommand. The guest
+        // argv may itself contain "run", "start", or JVM options.
+        var commandIndex = 0;
+        while (commandIndex < args.Length)
+        {
+            var token = args[commandIndex];
+            if (token is "-l" or "--log-level" or "--log-file")
+                commandIndex += 2;
+            else if (token.StartsWith("--log-level=", StringComparison.Ordinal) ||
+                     token.StartsWith("--log-file=", StringComparison.Ordinal))
+                commandIndex++;
+            else
+                break;
+        }
 
-        var runIdx = Array.FindIndex(args, a => string.Equals(a, "run", StringComparison.Ordinal));
-        if (runIdx < 0 || runIdx == args.Length - 1)
+        if (commandIndex >= args.Length || args[commandIndex] is not ("run" or "start"))
             return args;
-
-        // If user already provided `--`, keep raw tokens.
-        for (var i = runIdx + 1; i < args.Length; i++)
-            if (args[i] == "--")
-                return args;
+        var isStart = args[commandIndex] == "start";
+        var explicitSeparator = Array.IndexOf(args, "--", commandIndex + 1);
+        var normalized = args;
 
         var optionsWithValue = new HashSet<string>(StringComparer.Ordinal)
         {
@@ -1324,6 +1347,8 @@ internal class Program
             "--volume",
             "-m",
             "--memory",
+            "--fs-backend",
+            CpuOption,
             "-e",
             "--env",
             "-u",
@@ -1360,69 +1385,80 @@ internal class Program
         };
 
         var hasRootfs = false;
-        var firstPositional = -1;
-        for (var i = runIdx + 1; i < args.Length; i++)
+        var foundContainer = false;
+        for (var i = commandIndex + 1; i < args.Length; i++)
         {
             var token = args[i];
-            if (token.StartsWith("--rootfs=", StringComparison.Ordinal))
+            if (token == "--")
+                return normalized;
+
+            var equals = token.IndexOf('=');
+            var name = equals < 0 ? token : token[..equals];
+            if (token.StartsWith("-XX:", StringComparison.Ordinal))
             {
-                hasRootfs = true;
+                if (ReferenceEquals(normalized, args))
+                    normalized = (string[])args.Clone();
+                normalized[i] = CpuOption + "=" + token[4..];
                 continue;
             }
 
-            if (token.StartsWith("--memory=", StringComparison.Ordinal) ||
-                token.StartsWith("--log-level=", StringComparison.Ordinal) ||
-                token.StartsWith("--log-file=", StringComparison.Ordinal) ||
-                token.StartsWith("--volume=", StringComparison.Ordinal) ||
-                token.StartsWith("--env=", StringComparison.Ordinal) ||
-                token.StartsWith("--user=", StringComparison.Ordinal) ||
-                token.StartsWith("--dns=", StringComparison.Ordinal) ||
-                token.StartsWith("--log-driver=", StringComparison.Ordinal) ||
-                token.StartsWith("--name=", StringComparison.Ordinal) ||
-                token.StartsWith("--hostname=", StringComparison.Ordinal) ||
-                token.StartsWith("--network=", StringComparison.Ordinal) ||
-                token.StartsWith("--publish=", StringComparison.Ordinal) ||
-                token.StartsWith("--guest-stats-dir=", StringComparison.Ordinal) ||
-                token.StartsWith("--wayland-desktop-size=", StringComparison.Ordinal) ||
-                token.StartsWith("--kmsdrm=", StringComparison.Ordinal) ||
-                token.StartsWith("--gles=", StringComparison.Ordinal) ||
-                token.StartsWith("--fbdev=", StringComparison.Ordinal) ||
-                token.StartsWith("--fbdev-size=", StringComparison.Ordinal))
+            // Legacy CLI shorthands. New native options use the generic channel.
+            var legacyName = name switch
+            {
+                "--block-cache-size" => "BlockCacheSize",
+                "--jit-arena-size" => "JitArenaSize",
+                _ => null
+            };
+            if (legacyName is not null)
+            {
+                if (ReferenceEquals(normalized, args))
+                    normalized = (string[])args.Clone();
+                if (equals >= 0)
+                    normalized[i] = CpuOption + "=" + legacyName + token[equals..];
+                else
+                {
+                    normalized[i] = CpuOption;
+                    if (++i < args.Length)
+                        normalized[i] = legacyName + "=" + args[i];
+                }
+                continue;
+            }
+            if (optionsWithValue.Contains(name))
+            {
+                hasRootfs |= name == "--rootfs";
+                if (equals < 0)
+                    i++;
+                continue;
+            }
+
+            if (optionsNoValue.Contains(name) ||
+                (equals < 0 && token.Length > 2 && token[0] == '-' &&
+                 token[1..].All(ch => ch is 'i' or 't' or 's')))
                 continue;
 
             if (token.StartsWith("-", StringComparison.Ordinal))
+                return normalized;
+
+            if (isStart && !foundContainer)
             {
-                if (optionsNoValue.Contains(token))
-                    continue;
-
-                if (optionsWithValue.Contains(token))
-                {
-                    if (token == "--rootfs")
-                        hasRootfs = true;
-                    i++;
-                    continue;
-                }
-
-                // Unknown option before passthrough boundary: keep original to let parser report it.
-                return args;
+                foundContainer = true;
+                continue;
             }
 
-            firstPositional = i;
-            break;
+            var passThroughStart = isStart || hasRootfs ? i : i + 1;
+            // Honor a separator before the command or immediately after its
+            // name. A later separator is part of the guest arguments.
+            if (passThroughStart >= args.Length || explicitSeparator == passThroughStart ||
+                explicitSeparator == passThroughStart + 1)
+                return normalized;
+            var rewritten = new List<string>(args.Length + 1);
+            rewritten.AddRange(normalized.Take(passThroughStart));
+            rewritten.Add("--");
+            rewritten.AddRange(normalized.Skip(passThroughStart));
+            return rewritten.ToArray();
         }
 
-        if (firstPositional < 0)
-            return args;
-
-        var passThroughStart = hasRootfs ? firstPositional : firstPositional + 1;
-        if (passThroughStart >= args.Length)
-            return args;
-
-        var rewritten = new List<string>(args.Length + 1);
-        rewritten.AddRange(args.Take(passThroughStart));
-        rewritten.Add("--");
-        rewritten.AddRange(args.Skip(passThroughStart));
-        return rewritten.ToArray();
+        return normalized;
     }
 
     private static (string Repository, string Tag) SplitImageReference(string imageRef)
@@ -1616,7 +1652,7 @@ internal class Program
         string containerId, string? containerName, string hostname, NetworkMode networkMode, string image,
         string containerDir, ContainerLogDriver logDriver,
         ContainerEventStore eventStore, IReadOnlyList<PublishedPortSpec> publishedPorts, string? guestStatsExportDir,
-        long? memoryQuotaBytes, bool enablePulseServer, bool enableWaylandServer,
+        long? memoryQuotaBytes, string[] cpuOptions, bool enablePulseServer, bool enableWaylandServer,
         WaylandDesktopOptions waylandDesktopOptions, DisplaySize? fbdevSize, bool enableGles,
         bool enableKmsDrm)
     {
@@ -1680,6 +1716,7 @@ internal class Program
                 KmsWindow = kmsOutput?.KmsWindow,
                 ProcessController = processController,
                 MemoryQuotaBytes = memoryQuotaBytes,
+                CpuOptions = cpuOptions,
                 EnablePulseServer = enablePulseServer,
                 EnableWaylandServer = enableWaylandServer,
                 WaylandDesktopWidth = waylandDesktopOptions.Width,

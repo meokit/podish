@@ -219,6 +219,7 @@ public static class ContainerLaunchSpecResolver
             FbdevWidth = spec.FbdevWidth,
             FbdevHeight = spec.FbdevHeight,
             MemoryQuotaBytes = spec.MemoryQuotaBytes,
+            CpuOptions = spec.CpuOptions,
             LogDriver = spec.LogDriver,
             TerminalRows = spec.TerminalRows,
             TerminalCols = spec.TerminalCols,

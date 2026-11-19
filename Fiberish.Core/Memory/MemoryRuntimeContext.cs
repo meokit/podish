@@ -2,9 +2,11 @@ using System.Buffers.Binary;
 using System.Runtime.InteropServices;
 using System.Security.Cryptography;
 using System.Text;
+using Fiberish.Core;
 using Fiberish.Native;
 using Fiberish.Syscalls;
 using Fiberish.VFS;
+using Fiberish.X86.Native;
 
 namespace Fiberish.Memory;
 
@@ -13,6 +15,7 @@ public sealed class MemoryRuntimeContext : IDisposable
     private readonly Lock _shmGate = new();
     private long _aslrSequence;
     private bool _disposed;
+    private IntPtr _cpuRun;
     private long _nextSharedAnonymousBackingId;
     private SuperBlock? _shmSuperBlock;
     private ZeroInode? _zeroInode;
@@ -86,12 +89,48 @@ public sealed class MemoryRuntimeContext : IDisposable
         }
     }
 
+    /// <summary>Pass CPU options to native before creating any engines for this runtime.</summary>
+    public unsafe void ConfigureCpu(string[] options)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        if (options.Length == 0)
+            return;
+        if (_cpuRun != IntPtr.Zero)
+            throw new InvalidOperationException("The CPU run is already configured.");
+        if (Array.Exists(options, option => option is null || option.Contains('\0')))
+            throw new ArgumentException("CPU options cannot be null or contain NUL.");
+
+        var utf8 = Encoding.UTF8.GetBytes(string.Join('\0', options) + '\0');
+        var error = stackalloc byte[1024];
+        fixed (byte* args = utf8)
+            _cpuRun = X86Native.CreateRun(args, (nuint)utf8.Length, error, 1024);
+        if (_cpuRun == IntPtr.Zero)
+            throw new ArgumentException(Marshal.PtrToStringUTF8((IntPtr)error));
+    }
+
+    internal IntPtr CreateCpuState() =>
+        _cpuRun == IntPtr.Zero ? X86Native.Create() : X86Native.CreateForRun(_cpuRun);
+
+    public unsafe void FinishCpuRun()
+    {
+        if (_cpuRun == IntPtr.Zero)
+            return;
+        var error = stackalloc byte[1024];
+        if (X86Native.FinishRun(_cpuRun, error, 1024) == 0)
+            throw new IOException(Marshal.PtrToStringUTF8((IntPtr)error));
+    }
+
     public void Dispose()
     {
         if (_disposed)
             return;
 
         _disposed = true;
+        if (_cpuRun != IntPtr.Zero)
+        {
+            X86Native.DestroyRun(_cpuRun);
+            _cpuRun = IntPtr.Zero;
+        }
         lock (_shmGate)
         {
             _zeroInode?.Dispose();

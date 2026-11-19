@@ -91,9 +91,39 @@ and a block invalidation rejects results for its previous revision.
 FIBERCPU_LLVM_JIT_WORKERS selects 0–8 workers. Set it to 0 for synchronous
 promotion. Profile collection records block recipes synchronously.
 
-The decoded-block budget defaults to 64 MiB per MMU. The host-wide JIT
-arena defaults to 128 MiB. Native callers can set these limits on a
-fresh engine using X86_ConfigureCodeCache.
+Podish passes CPU options to libfibercpu
+----------------------------------------
+Use -XX:Name=Value or repeat --cpu-opt Name=Value before the guest command.
+
+  podish run -XX:JitMode=exact -XX:JitHotThreshold=128 -XX:JitWorkers=2 \
+    '-XX:LlvmPipeline=default<O1>' -XX:BlockCacheSize=512m \
+    -XX:JitArenaSize=128m IMAGE COMMAND
+
+Run saves these strings in the container spec. Start appends its options,
+and the last value for each name wins. Podish forwards the values as UTF-8.
+libfibercpu validates the full batch before applying it and reports errors
+for unknown names, invalid values or unavailable build features.
+
+BlockCacheSize defaults to 64 MiB per MMU and is inherited by forked MMUs.
+JitArenaSize defaults to 128 MiB per host process and is rounded up to a
+host page. Sizes accept bytes or binary suffixes such as k, m and g.
+--block-cache-size and --jit-arena-size are legacy CLI shorthands. A saved
+spec with both old JIT limits migrates to the smaller nonzero size.
+
+JitMode selects off, exact or generic for the run. JitHotThreshold
+sets its block admission count (1 through 65535). These options override
+the equivalent Host environment settings. JitWorkers accepts 0 through 8.
+LlvmPipeline accepts an LLVM IR optimization level (O0, O1, O2, O3, Os, Oz)
+or a textual pass pipeline. The default is O2 with dead template definitions
+removed early online. Worker count, pipeline and JIT arena capacity are
+shared by the host process. Once initialized, an explicit conflicting value
+fails. A run with no override uses the shared setting.
+
+Native hosts use X86_CreateRun to validate a batch of NUL-terminated UTF-8
+Name=Value entries and X86_CreateForRun to create its CPU states. The states
+and their cloned MMUs retain the options. Call X86_FinishRun after its CPUs
+stop, then X86_DestroyRun to release the configuration. Legacy native
+callers can still set cache budgets with X86_ConfigureCodeCache.
 
 The arena charges reserved executable slabs, the dynamic instruction
 specialization region and page-rounded resident LLVM data. LLVM packs
@@ -136,7 +166,11 @@ with the new producer. Profiles also validate the embedded bitcode, LLVM
 version and host CPU target. Use the same producer to emit relocatable host
 objects for the build-time linker.
 
-  <producer>/fibercpu_llvm_cache --linked blocks.profile blocks.linked
+  <producer>/fibercpu_llvm_cache --linked blocks.profile blocks.linked \
+    --top 512 --llvm-opt-level O2
+
+--top limits the number of emitted objects. --llvm-opt-level and
+--llvm-pass-pipeline are mutually exclusive.
 
 Configure the interpreter using the same sources, compiler, target and VM
 layout settings as the producer, with the linked bundle as a build input.

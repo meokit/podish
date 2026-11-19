@@ -8,6 +8,18 @@ public unsafe partial class X86Native
     [LibraryImport(LibName, EntryPoint = "X86_CreateWithOptions")]
     public static partial IntPtr CreateWithOptions(uint options);
 
+    [LibraryImport(LibName, EntryPoint = "X86_CreateRun")]
+    public static partial IntPtr CreateRun(byte* args, nuint size, byte* error, nuint errorSize);
+
+    [LibraryImport(LibName, EntryPoint = "X86_CreateForRun")]
+    public static partial IntPtr CreateForRun(IntPtr run);
+
+    [LibraryImport(LibName, EntryPoint = "X86_FinishRun")]
+    public static partial int FinishRun(IntPtr run, byte* error, nuint errorSize);
+
+    [LibraryImport(LibName, EntryPoint = "X86_DestroyRun")]
+    public static partial void DestroyRun(IntPtr run);
+
     [LibraryImport(LibName, EntryPoint = "X86_GetFCW")]
     public static partial ushort GetFCW(IntPtr state);
 

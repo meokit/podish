@@ -1,3 +1,6 @@
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using Fiberish.Core;
 using Fiberish.Core.Net;
 using Fiberish.Core.VFS.TTY;
 using Fiberish.Diagnostics;
@@ -43,6 +46,22 @@ public sealed class PodishRunSpec
     public int FbdevWidth { get; init; } = 640;
     public int FbdevHeight { get; init; } = 480;
     public long? MemoryQuotaBytes { get; init; }
+    private readonly string[] _cpuOptions = [];
+    private readonly string[] _legacyCpuOptions = [];
+    public string[] CpuOptions
+    {
+        get => _legacyCpuOptions.Length == 0 ? _cpuOptions : [.. _legacyCpuOptions, .. _cpuOptions];
+        init => _cpuOptions = value ?? [];
+    }
+
+    [JsonInclude]
+    [JsonPropertyName("CodeCache")]
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
+    internal JsonElement? LegacyCodeCache
+    {
+        get => null;
+        init => _legacyCpuOptions = PodishContainerMetadataStore.MigrateLegacyCodeCache(value);
+    }
     public string LogDriver { get; init; } = "json-file";
     public ushort? TerminalRows { get; init; }
     public ushort? TerminalCols { get; init; }
@@ -518,6 +537,7 @@ public sealed class PodishContext : IDisposable
             FbdevWidth = spec.FbdevWidth,
             FbdevHeight = spec.FbdevHeight,
             MemoryQuotaBytes = spec.MemoryQuotaBytes,
+            CpuOptions = spec.CpuOptions,
             LogDriver = spec.LogDriver,
             PublishedPorts = spec.PublishedPorts
         };
@@ -624,6 +644,7 @@ public sealed class PodishContext : IDisposable
             PublishedPorts = effectiveSpec.PublishedPorts,
             UseEngineInit = effectiveSpec.Init,
             MemoryQuotaBytes = effectiveSpec.MemoryQuotaBytes,
+            CpuOptions = effectiveSpec.CpuOptions,
             EnablePulseServer = effectiveSpec.PulseServer,
             EnableWaylandServer = effectiveSpec.WaylandServer,
             WaylandDesktopWidth = effectiveSpec.WaylandDesktopWidth,

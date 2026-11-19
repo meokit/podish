@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Globalization;
 
 namespace Podish.Core;
 
@@ -99,5 +100,31 @@ public static class PodishContainerMetadataStore
         var dir = Path.Combine(containersDir, containerId);
         if (Directory.Exists(dir))
             Directory.Delete(dir, true);
+    }
+
+    internal static string[] MigrateLegacyCodeCache(JsonElement? legacy)
+    {
+        if (legacy is not { ValueKind: JsonValueKind.Object } spec)
+            return [];
+
+        ulong block = 0, arena = 0, oldCodeCache = 0;
+        foreach (var property in spec.EnumerateObject())
+        {
+            if (property.Name.Equals("BlockCacheBytes", StringComparison.OrdinalIgnoreCase))
+                block = property.Value.GetUInt64();
+            else if (property.Name.Equals("JitArenaBytes", StringComparison.OrdinalIgnoreCase))
+                arena = property.Value.GetUInt64();
+            else if (property.Name.Equals("JitCodeCacheBytes", StringComparison.OrdinalIgnoreCase))
+                oldCodeCache = property.Value.GetUInt64();
+        }
+
+        if (oldCodeCache != 0)
+            arena = arena == 0 ? oldCodeCache : Math.Min(arena, oldCodeCache);
+        var options = new List<string>(2);
+        if (block != 0)
+            options.Add("BlockCacheSize=" + block.ToString(CultureInfo.InvariantCulture));
+        if (arena != 0)
+            options.Add("JitArenaSize=" + arena.ToString(CultureInfo.InvariantCulture));
+        return options.ToArray();
     }
 }

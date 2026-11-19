@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <string>
 
 #include <llvm/ADT/SmallPtrSet.h>
 #include <llvm/ADT/StringRef.h>
@@ -36,7 +37,10 @@ private:
     llvm::SmallPtrSet<const llvm::GlobalValue*, 32> kernels_;
 };
 
+llvm::Expected<std::string> ParseLLVMBlockPipeline(llvm::StringRef level, llvm::StringRef passes);
+
 std::unique_ptr<llvm::Module> PrepareLLVMBlock(const LLVMOperandTemplates& templates, block_recipe::BlockKeyView key,
-                                               llvm::StringRef entry_name, bool prune_dead_globals = false);
+                                               llvm::StringRef entry_name, bool prune_dead_globals = false,
+                                               llvm::StringRef custom_pipeline = {});
 
 }  // namespace fiberish

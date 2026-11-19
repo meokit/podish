@@ -10,7 +10,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <initializer_list>
 #include <limits>
+#include <string>
 #include <memory>
 #include <thread>
 #include <vector>
@@ -24,8 +26,8 @@ constexpr uint32_t data_address = 0x20000;
 constexpr int ss_segment = 2;
 using State = std::unique_ptr<EmuState, decltype(&X86_Destroy)>;
 
-State LoadCode(const uint8_t* code, unsigned size) {
-    State state{X86_CreateWithOptions(X86_CREATE_NO_FATAL_SIGNAL_HANDLERS), X86_Destroy};
+State LoadCode(const uint8_t* code, unsigned size, const X86_RunContext* run = nullptr) {
+    State state{run ? X86_CreateForRun(run) : X86_CreateWithOptions(X86_CREATE_NO_FATAL_SIGNAL_HANDLERS), X86_Destroy};
     X86_MemMap(state.get(), code_address, 4096, 7);
     X86_MemWrite(state.get(), code_address, code, size);
     X86_SetEIP(state.get(), code_address);
@@ -778,6 +780,38 @@ bool VerifyPackedBudget() {
     return std::strstr(stats, "\"code_cache_flush_count\":1") &&
            std::strstr(stats, arena_field.c_str());
 }
+
+bool VerifyCpuRunOptions() {
+    using Run = std::unique_ptr<X86_RunContext, decltype(&X86_DestroyRun)>;
+    char error[512];
+    const auto configure = [&](std::initializer_list<std::string> entries) {
+        std::string args;
+        for (const auto& entry : entries) {
+            args += entry;
+            args.push_back('\0');
+        }
+        return Run{X86_CreateRun(args.data(), args.size(), error, sizeof(error)), X86_DestroyRun};
+    };
+
+    if (configure({"JitWorkers=5", "LlvmPipeline=unknown-pass"}) || !std::strstr(error, "LlvmPipeline"))
+        return false;
+    const auto online = configure({"JitMode=exact", "JitHotThreshold=2", "LlvmPipeline=O1", "JitWorkers=0"});
+    if (!online || configure({"JitWorkers=2"}) || !std::strstr(error, "JitWorkers"))
+        return false;
+    uint8_t code[] = {0xb8, 1, 0, 0, 0, 0x05, 1, 0, 0, 0};
+    const auto run = [&](EmuState* state, unsigned count, unsigned eax) {
+        for (unsigned i = 0; i < count; ++i) {
+            X86_SetEIP(state, code_address);
+            if (!X86_Run(state, code_address + sizeof(code), 16) || X86_RegRead(state, 0) != eax) return false;
+        }
+        return true;
+    };
+    auto jit = LoadCode(code, sizeof(code), online.get());
+    if (!run(jit.get(), 1, 2) || HasCompiledEntry(jit.get()) || !run(jit.get(), 1, 2) || !HasCompiledEntry(jit.get()))
+        return false;
+
+    return true;
+}
 #endif
 
 bool VerifyAsyncCompilations() {
@@ -857,6 +891,12 @@ int main(int argc, char** argv) {
         return 1;
     }
 #if FIBERCPU_LLVM_JIT
+    if (argc == 2 && std::strcmp(argv[1], "options") == 0) {
+        if (VerifyCpuRunOptions())
+            return 0;
+        std::fprintf(stderr, "CPU run option configuration or admission threshold mismatch\n");
+        return 1;
+    }
     if (argc == 2 && std::strcmp(argv[1], "budget") == 0) {
         if (VerifyPackedBudget())
             return 0;
