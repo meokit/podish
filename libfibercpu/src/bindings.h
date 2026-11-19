@@ -270,6 +270,11 @@ const char* X86_GetHandlerSymbolById(int32_t handler_id);
 // Returns the base logical opcode id for a dispatch/specialized handler, or -1 if unknown.
 int32_t X86_GetOpIdForHandler(void* handler);
 
+// Build-generated training ID, or zero for non-catalog handlers.
+uint32_t X86_GetTrainingHandlerId(void* handler);
+uint32_t X86_GetTrainingOperationIdAt(uint32_t index);
+const char* X86_GetTrainingOperationName(uint32_t id);
+
 // Returns the base address of the fibercpu library (for symbol resolution)
 void* X86_GetLibAddress();
 

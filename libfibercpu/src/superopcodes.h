@@ -9,6 +9,7 @@ using RegisterHandwrittenCallback = void (*)(void*, HandlerFunc, HandlerFunc, Ha
                                              unsigned);
 void RegisterHandwrittenSuperOpcodes(void* context, RegisterHandwrittenCallback callback);
 HandlerFunc FindSuperOpcode(const DecodedOp* ops);
+uint32_t FindFusionTrainingId(HandlerFunc handler);
 #if FIBERCPU_HAVE_GENERATED_SUPEROPCODES
 HandlerFunc GeneratedFindSuperOpcode(const DecodedOp* ops);
 #endif

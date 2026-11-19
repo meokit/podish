@@ -11,18 +11,12 @@ from pathlib import Path
 from gen_instruction_catalog import (
     is_semantic_variant, llvm_operation_fingerprint, llvm_operation_names, read_catalog, variant_criteria,
 )
-from operand_specialization_data import FUSION_CALL, Operand, generated_fusions, instruction_targets
+from operand_specialization_data import (
+    FUSION_CALL, Operand, generated_fusions, instruction_targets, resolve_training_plan, training_plan_match,
+)
 from operand_stencil_arm64 import HELPERS, PAGE_RELOCATIONS, MachO, immediate_mask
 
 WRAPPER = re.compile(r"DispatchWrapper<op::(\w+)>")
-
-
-def read_plan(path):
-    plan = json.loads(path.read_text())
-    if (not isinstance(plan, dict) or type(plan.get("version")) is not int or plan["version"] != 2
-            or not isinstance(plan.get("entries"), list)):
-        raise ValueError("expected a version 2 decoded operand plan")
-    return plan["entries"]
 
 
 def shape_key(item):
@@ -77,7 +71,10 @@ def emit_plan(args):
     records, requests = [], [llvm_operation_fingerprint(op_names) + "\n"]
     missing, missing_weight = Counter(), Counter()
     seen = set()
-    plan = read_plan(args.plan)
+    source = json.loads(args.plan.read_text())
+    if training_plan_match(source) != "decoded":
+        raise ValueError("dynamic operand templates need a decoded version 3 operand plan")
+    plan = resolve_training_plan(source, catalog, fusions)
     for item in plan:
         original, shapes = shape_key(item)
         if type(item["dispatch_count"]) is not int or item["dispatch_count"] < 0:

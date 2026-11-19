@@ -643,7 +643,8 @@ internal static partial class Program
     private static void AnalyzeSampleCandidates(
         JsonElement blocksNode,
         Dictionary<string, SampleAnchorStats> anchors,
-        Dictionary<(string, string), SamplePairStats> pairs)
+        Dictionary<(string, string), SamplePairStats> pairs,
+        IReadOnlyDictionary<uint, string> operations)
     {
         foreach (var blockNode in blocksNode.EnumerateArray())
         {
@@ -658,10 +659,8 @@ internal static partial class Program
             var seq = new List<string?>();
             foreach (var opNode in opsNode.EnumerateArray())
             {
-                var raw = opNode.TryGetProperty("logic_func", out var lf) ? lf.GetString() : null;
-                var sym = opNode.TryGetProperty("symbol", out var symNode) ? symNode.GetString() : null;
-                var normalized = NormalizeCandidateName(raw ?? sym);
-                seq.Add(normalized);
+                var id = opNode.GetProperty("training_id").GetUInt32();
+                seq.Add(id != 0 && id >> 30 == 0 ? ResolveTrainingOperation(operations, id) : null);
             }
 
             for (var i = 0; i < seq.Count; i++)

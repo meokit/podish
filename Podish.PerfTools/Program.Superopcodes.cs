@@ -6,16 +6,37 @@ namespace Podish.PerfTools;
 
 internal static partial class Program
 {
+    private const int CandidateManifestVersion = 3;
+
+    private static Dictionary<uint, string> ReadTrainingOperations(JsonElement root) =>
+        root.TryGetProperty("operations", out var operations) && operations.ValueKind == JsonValueKind.Object
+            ? operations.Deserialize<Dictionary<uint, string>>()!
+            : throw new InvalidDataException("Expected a numeric training operation directory.");
+
+    private static Dictionary<uint, string> ReadCandidateOperations(JsonElement root)
+    {
+        if (!root.TryGetProperty("schemaVersion", out var version) || version.ValueKind != JsonValueKind.Number ||
+            !version.TryGetInt32(out var number) || number != CandidateManifestVersion)
+            throw new InvalidDataException("Expected a version 3 SuperOpcode candidate manifest.");
+        return ReadTrainingOperations(root);
+    }
+
+    private static string[] ReadCandidatePair(JsonElement pair, IReadOnlyDictionary<uint, string> operations) =>
+        pair.EnumerateArray().Select(element => element.ValueKind == JsonValueKind.Number && element.TryGetUInt32(out var id)
+            ? ResolveTrainingOperation(operations, id)
+            : throw new InvalidDataException("SuperOpcode candidates require numeric operation IDs.")).ToArray();
+
     internal static string GenerateSuperopcodes(string inputPath, int top, string workload = "", IReadOnlyList<string>? generationParams = null)
     {
         using var document = JsonDocument.Parse(File.ReadAllText(inputPath, Encoding.UTF8));
         var data = document.RootElement;
         if (top <= 0) throw new ArgumentOutOfRangeException(nameof(top));
+        var operations = ReadCandidateOperations(data);
         var extended = data.TryGetProperty("metadata", out var metadata) &&
                        metadata.TryGetProperty("extended_lookup", out var extendedNode) && extendedNode.GetBoolean();
         if (extended || data.TryGetProperty("candidates", out var sequenceCandidates) && sequenceCandidates.EnumerateArray()
                 .Any(candidate => candidate.TryGetProperty("pair", out var ops) && ops.GetArrayLength() > 2))
-            return GenerateSuperopcodeSequences(inputPath, data, top);
+            return GenerateSuperopcodeSequences(inputPath, data, operations, top);
         var candidates =
             new List<(string Op0, string Op1, long Wec, long Occ, string Relation, string Anchor, string Direction)>();
         generationParams ??= Array.Empty<string>();
@@ -28,15 +49,12 @@ internal static partial class Program
             {
                 var pair = candidate.TryGetProperty("pair", out var pairNode) &&
                            pairNode.ValueKind == JsonValueKind.Array
-                    ? pairNode.EnumerateArray().Select(e => e.GetString() ?? "").ToArray()
+                    ? ReadCandidatePair(pairNode, operations)
                     : Array.Empty<string>();
                 if (pair.Length != 2) throw new InvalidDataException("Superopcode candidates must have exactly two handlers");
 
-                var op0 = CanonicalLogicName(pair[0]);
-                var op1 = CanonicalLogicName(pair[1]);
-                if (!Regex.IsMatch(op0, @"^op::Op[A-Za-z0-9_]+$") || !Regex.IsMatch(op1, @"^op::Op[A-Za-z0-9_]+$"))
-                    throw new InvalidDataException("Invalid candidate handler name");
-
+                var op0 = pair[0];
+                var op1 = pair[1];
                 if (!seen.Add((op0, op1)))
                     continue;
 
@@ -245,17 +263,6 @@ internal static partial class Program
             JsonValueKind.Null => "",
             _ => value.GetRawText()
         };
-    }
-
-    private static string CanonicalLogicName(string name)
-    {
-        if (string.IsNullOrWhiteSpace(name))
-            return "";
-        if (name.StartsWith("op::Op", StringComparison.Ordinal))
-            return name;
-        if (name.StartsWith("Op", StringComparison.Ordinal))
-            return "op::" + name;
-        return "";
     }
 
     private static string SanitizeName(string name)

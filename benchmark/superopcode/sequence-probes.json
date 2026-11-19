@@ -1,15 +1,81 @@
 {
-  "schemaVersion": 1,
-  "metadata": { "extended_lookup": true, "purpose": "correctness probes, not a trained or recommended table" },
+  "schemaVersion": 3,
+  "operations": {
+    "135291065": "op::OpInc_Reg",
+    "177880110": "op::OpJcc_NE_Rel8",
+    "466880386": "op::OpInc_Reg_NF",
+    "843811492": "op::OpMov_Load_Ecx"
+  },
+  "metadata": {
+    "extended_lookup": true,
+    "purpose": "correctness probes, not a trained or recommended table"
+  },
   "candidates": [
-    { "pair": ["op::OpInc_Reg_NF", "op::OpInc_Reg_NF"] },
-    { "pair": ["op::OpInc_Reg_NF", "op::OpInc_Reg"] },
-    { "pair": ["op::OpInc_Reg_NF", "op::OpInc_Reg_NF", "op::OpInc_Reg"] },
-    { "pair": ["op::OpInc_Reg_NF", "op::OpInc_Reg_NF", "op::OpInc_Reg_NF", "op::OpInc_Reg"] },
-    { "pair": ["op::OpInc_Reg_NF", "op::OpMov_Load_Ecx", "op::OpInc_Reg"] },
-    { "pair": ["op::OpInc_Reg_NF", "op::OpMov_Load_Ecx", "op::OpInc_Reg_NF", "op::OpInc_Reg"] },
-    { "pair": ["op::OpInc_Reg_NF", "op::OpInc_Reg_NF", "op::OpMov_Load_Ecx", "op::OpInc_Reg"] },
-    { "pair": ["op::OpInc_Reg_NF", "op::OpInc_Reg_NF", "op::OpInc_Reg_NF", "op::OpMov_Load_Ecx"] },
-    { "pair": ["op::OpInc_Reg_NF", "op::OpInc_Reg_NF", "op::OpInc_Reg", "op::OpJcc_NE_Rel8"] }
+    {
+      "pair": [
+        466880386,
+        466880386
+      ]
+    },
+    {
+      "pair": [
+        466880386,
+        135291065
+      ]
+    },
+    {
+      "pair": [
+        466880386,
+        466880386,
+        135291065
+      ]
+    },
+    {
+      "pair": [
+        466880386,
+        466880386,
+        466880386,
+        135291065
+      ]
+    },
+    {
+      "pair": [
+        466880386,
+        843811492,
+        135291065
+      ]
+    },
+    {
+      "pair": [
+        466880386,
+        843811492,
+        466880386,
+        135291065
+      ]
+    },
+    {
+      "pair": [
+        466880386,
+        466880386,
+        843811492,
+        135291065
+      ]
+    },
+    {
+      "pair": [
+        466880386,
+        466880386,
+        466880386,
+        843811492
+      ]
+    },
+    {
+      "pair": [
+        466880386,
+        466880386,
+        135291065,
+        177880110
+      ]
+    }
   ]
 }

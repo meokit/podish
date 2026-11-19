@@ -27,6 +27,15 @@ struct Fallback {
 using FusionAlias = std::pair<HandlerFunc, HandlerFunc>;
 #include "instruction_catalog.inc"
 
+struct TrainingOperation {
+    uint32_t id;
+    HandlerFunc handler;
+    const char* name;
+};
+constexpr TrainingOperation training_operations[] = {
+#include "training_scalar_handlers.inc"
+};
+
 std::vector<X86_InstructionVariant>& MutableCatalog() {
     // Also safe during dispatch table initialization across translation units.
     static std::vector<X86_InstructionVariant> entries;
@@ -99,9 +108,8 @@ void RegisterInstructionVariants() {
 }
 
 HandlerFunc FindGenericInstructionHandler(uint16_t opcode, const DecodedOp* op) {
-    const auto first = std::ranges::lower_bound(semantic_variant_indices, opcode, {}, [](uint16_t index) {
-        return variants[index].opcode;
-    });
+    const auto first = std::ranges::lower_bound(semantic_variant_indices, opcode, {},
+                                                [](uint16_t index) { return variants[index].opcode; });
     const DeclaredInstructionVariant* best = nullptr;
     for (auto it = first; it != std::end(semantic_variant_indices); ++it) {
         const auto& candidate = variants[*it];
@@ -124,10 +132,30 @@ int FindGenericOpcodeIndex(HandlerFunc handler) {
     return -1;
 }
 
+uint32_t FindScalarTrainingId(HandlerFunc handler) {
+    static const auto ids = [] {
+        ankerl::unordered_dense::map<HandlerFunc, uint32_t> result;
+        result.reserve(std::size(training_operations));
+        for (const auto& op : training_operations) result.try_emplace(op.handler, op.id);
+        return result;
+    }();
+    const auto it = ids.find(handler);
+    return it == ids.end() ? 0 : it->second;
+}
+
+uint32_t TrainingOperationIdAt(uint32_t index) {
+    return index < std::size(training_operations) ? training_operations[index].id : 0;
+}
+
+const char* FindTrainingOperationName(uint32_t id) {
+    const auto it = std::ranges::lower_bound(training_operations, id, {}, &TrainingOperation::id);
+    return it != std::end(training_operations) && it->id == id ? it->name : nullptr;
+}
+
 HandlerFunc FindFusionFallbackHandler(HandlerFunc handler) {
     if constexpr (std::size(fusion_aliases) == 1) return handler;
-    static const ankerl::unordered_dense::map<HandlerFunc, HandlerFunc> aliases(
-        std::begin(fusion_aliases), std::end(fusion_aliases) - 1);
+    static const ankerl::unordered_dense::map<HandlerFunc, HandlerFunc> aliases(std::begin(fusion_aliases),
+                                                                                std::end(fusion_aliases) - 1);
     if (const auto it = aliases.find(handler); it != aliases.end()) return it->second;
     return handler;
 }

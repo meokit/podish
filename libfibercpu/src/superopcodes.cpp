@@ -5,6 +5,7 @@
 #include "dynamic_operand_specialization.h"
 #endif
 
+#include <ankerl/unordered_dense.h>
 #include <array>
 #include <vector>
 
@@ -157,6 +158,37 @@ namespace handwritten_superopcodes {
 bool ValidateHandwrittenSuperOpcodes() { return true; }
 }  // namespace handwritten_superopcodes
 #endif
+
+#if FIBERCPU_HAVE_GENERATED_SUPEROPCODES
+#define FIBERCPU_TRAINING_FUSION(name, id)                                                                      \
+    ATTR_PRESERVE_NONE int64_t name(EmuState*, DecodedOp*, int64_t, mem::MicroTlbAbiWord, mem::MicroTlbAbiWord, \
+                                    uint32_t, uint64_t FIBERCPU_PIN_PARAMS);
+#include "training_fusion_handlers.inc"
+#undef FIBERCPU_TRAINING_FUSION
+#endif
+
+uint32_t FindFusionTrainingId(HandlerFunc handler) {
+#if FIBERCPU_ENABLE_SUPEROPCODES
+    static const auto ids = [] {
+        ankerl::unordered_dense::map<HandlerFunc, uint32_t> result;
+#if FIBERCPU_STATIC_SPECIALIZATION
+        for (const auto& fusion : handwritten_superopcodes::kHandwrittenFusions)
+            result.emplace(fusion.handler, fusion.training_id);
+#endif
+#if FIBERCPU_HAVE_GENERATED_SUPEROPCODES
+#define FIBERCPU_TRAINING_FUSION(name, id) result.emplace(name, id);
+#include "training_fusion_handlers.inc"
+#undef FIBERCPU_TRAINING_FUSION
+#endif
+        return result;
+    }();
+    const auto it = ids.find(handler);
+    return it == ids.end() ? 0 : it->second;
+#else
+    (void)handler;
+    return 0;
+#endif
+}
 
 HandlerFunc FindSuperOpcode(const DecodedOp* ops) {
 #if FIBERCPU_STATIC_SPECIALIZATION && !FIBERCPU_GENERATED_WITH_HANDWRITTEN

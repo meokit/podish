@@ -2,7 +2,7 @@
 
 ## GNU long4x32 v1
 
-[`gnu-long4x32-v1.json`](gnu-long4x32-v1.json) is the byte-identical frozen winner
+[`gnu-long4x32-v1.json`](gnu-long4x32-v1.json) contains the frozen winning recipes in schema 3
 from the fourth [selection experiment](../SEARCH_RESULTS.md): **32 base pairs and
 32 observed four-op sequences**, 64 patterns total. All patterns use the existing
 constituent fault/restart/branch handling; longer candidates match longest-first.

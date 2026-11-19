@@ -40,12 +40,18 @@ internal static partial class Program
         var aggregatePairs = new Dictionary<(string, string), PairAggregate>();
         var includedSamples = new List<Dictionary<string, object?>>();
         var skippedSamples = new List<Dictionary<string, object?>>();
+        var trainingOperations = new SortedDictionary<uint, string>();
 
         foreach (var analysisFile in analysisFiles)
         {
             using var stream = File.OpenRead(analysisFile);
             using var data = JsonDocument.Parse(stream);
             var sampleMeta = InferSampleMetadata(analysisFile);
+            if (!data.RootElement.TryGetProperty("metadata", out var metadata) ||
+                !metadata.TryGetProperty("dump_format_version", out var dumpVersion) ||
+                dumpVersion.GetInt32() != BlockDumpFormatV3)
+                throw new InvalidDataException($"Expected analysis of BLK2 version 3: {analysisFile}");
+            var operations = ReadTrainingOperations(data.RootElement);
 
             var sampleAnchors = new Dictionary<string, SampleAnchorStats>(StringComparer.Ordinal);
             var samplePairs = new Dictionary<(string, string), SamplePairStats>();
@@ -104,7 +110,7 @@ internal static partial class Program
                     continue;
                 }
 
-                AnalyzeSampleCandidates(blocksNode, sampleAnchors, samplePairs);
+                AnalyzeSampleCandidates(blocksNode, sampleAnchors, samplePairs, operations);
             }
 
             if (samplePairs.Count == 0)
@@ -123,6 +129,7 @@ internal static partial class Program
             }
 
             includedSamples.Add(sampleMeta);
+            MergeTrainingOperations(trainingOperations, operations);
             foreach (var (anchor, sampleStats) in sampleAnchors)
                 MergeAnchorStats(aggregateAnchors, anchor, sampleMeta, sampleStats);
             foreach (var (pair, sampleStats) in samplePairs)
@@ -166,8 +173,11 @@ internal static partial class Program
         if (candidates.Count > top)
             candidates = candidates.Take(top).ToList();
 
+        var ids = trainingOperations.ToDictionary(op => op.Value, op => op.Key, StringComparer.Ordinal);
         var output = new Dictionary<string, object?>
         {
+            ["schemaVersion"] = CandidateManifestVersion,
+            ["operations"] = trainingOperations,
             ["metadata"] = new Dictionary<string, object?>
             {
                 ["inputs"] = inputs.Select(Path.GetFullPath).ToArray(),
@@ -197,7 +207,10 @@ internal static partial class Program
             ["included_samples"] = includedSamples,
             ["skipped_samples"] = skippedSamples,
             ["anchors"] = anchors.Take(anchorTop).ToList(),
-            ["candidates"] = candidates
+            ["candidates"] = candidates.Select(candidate => new Dictionary<string, object?>(candidate)
+            {
+                ["pair"] = ((string[])candidate["pair"]!).Select(name => ids[name]).ToArray()
+            }).ToArray()
         };
 
         File.WriteAllText(outputJson, JsonSerializer.Serialize(output, JsonOptions), Utf8NoBom);

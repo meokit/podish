@@ -4,7 +4,8 @@ import json,re
 out=Path(__file__).resolve().parent;repo=out.parents[1]
 profile=json.loads((out/'gcc-training/sequence_profile.json').read_text())
 assert profile['buildFeatures']==2 and profile['schemaVersion']==2
-base=json.loads((repo/'benchmark/superopcode/manifests/gnu-long4x32-v1.json').read_text())['candidates']
+reviewed=json.loads((repo/'benchmark/superopcode/manifests/gnu-long4x32-v1.json').read_text())
+base=[dict(row,pair=[reviewed['operations'][str(op)] for op in row['pair']]) for row in reviewed['candidates']]
 seen={tuple(x['pair']) for x in base};patterns=list(base)
 ordinary=re.compile(r'^op::Op(Mov|Lea|Cmp|Test|Add|Sub|And|Or|Xor|Inc|Dec|Neg|Push|Pop|Group[1-5]_|Cmov|Setcc|Shl|Shr|Sar|Rol|Ror|Imul|Mul|Cdq|Cwde)')
 excluded=re.compile(r'Call|Jmp|Ret|String|Movs_|Movs[bdw]|Cmps|Scas|Stos|Lods')

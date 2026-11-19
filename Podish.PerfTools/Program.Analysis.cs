@@ -11,8 +11,7 @@ namespace Podish.PerfTools;
 internal static partial class Program
 {
     private const uint BlockDumpMagic = 0x324b4c42; // "BLK2"
-    private const int BlockDumpFormatV1 = 1;
-    private const int BlockDumpFormatV2 = 2;
+    private const int BlockDumpFormatV3 = 3;
     private static readonly string[] EmptyStrings = [];
     private static readonly BlockDefUseInfo EmptyDefUseNode = new(EmptyStrings, EmptyStrings, EmptyStrings, false, false);
 
@@ -54,15 +53,16 @@ internal static partial class Program
                     parsed.BaseAddr,
                     parsed.DeclaredBlockCount,
                     parsed.ParsedBlockCount,
-                    parsed.FormatVersion,
+                    BlockDumpFormatV3,
                     outputMode == AnalysisOutputMode.Compact ? "compact" : "full",
-                    parsed.HasEmbeddedHandlerMetadata,
+                    true,
                     parsed.HandlerMetadataCount,
-                    parsed.HasEmbeddedHandlerMetadata ? "embedded" : "library"),
+                    "embedded"),
                 validation,
                 parsed.Blocks.Count == 0 ? null : parsed.Blocks,
                 parsed.Ngrams,
-                parsed.CandidateSummary);
+                parsed.CandidateSummary,
+                parsed.TrainingOperations);
 
             Console.Error.WriteLine("[analyze-blocks] analysis object built");
             return output;
@@ -753,12 +753,7 @@ internal static partial class Program
 
         var dumpHeader = ReadBlockDumpHeader(reader);
         var blocks = new List<BlockAnalysisBlock>(Math.Max(dumpHeader.DeclaredBlockCount, 0));
-        if (!dumpHeader.HasEmbeddedHandlerMetadata && symbols.Count == 0 && opIdResolver is null)
-            throw new InvalidOperationException(
-                "blocks.bin dump format v1 does not embed handler metadata; rerun with --lib <libfibercpu> or regenerate the dump with the new runtime.");
-
         var logicFuncCache = new Dictionary<string, string?>(StringComparer.Ordinal);
-        var candidateNameCache = new Dictionary<string, string>(StringComparer.Ordinal);
         var semanticSummaryCache = new Dictionary<string, OpSemanticSummary>(StringComparer.Ordinal);
         var defUseCache = new Dictionary<DefUseCacheKey, CachedDefUse>();
         var compactAnchors = outputMode == AnalysisOutputMode.Compact
@@ -769,8 +764,7 @@ internal static partial class Program
             : null;
         var ngramAccumulator = nGram > 0 ? new NgramAccumulator(nGram) : null;
         var blockHeader = new byte[20];
-        var opBytes = new byte[32];
-        var handlerIdBytes = new byte[4];
+        var opBytes = new byte[36];
         BlockAnalysisOp[]? compactOpsBuffer = null;
         var parsedBlockCount = 0;
 
@@ -798,7 +792,7 @@ internal static partial class Program
                 if (!TryReadExactly(stream, opBytes))
                 {
                     warnings.Add(
-                        $"truncated op payload in block 0x{startEip:x} at op {opIndex}: expected 32 bytes, got {Math.Max(0, stream.Length - stream.Position)}");
+                        $"truncated op payload in block 0x{startEip:x} at op {opIndex}: expected 36 bytes, got {Math.Max(0, stream.Length - stream.Position)}");
                     truncatedBlock = true;
                     break;
                 }
@@ -811,24 +805,9 @@ internal static partial class Program
                 var meta = opBytes[15];
                 var imm = BinaryPrimitives.ReadUInt32LittleEndian(opBytes.AsSpan(16, 4));
                 var handlerPtr = BinaryPrimitives.ReadUInt64LittleEndian(opBytes.AsSpan(24, 8));
-                var handlerId = -1;
-                EmbeddedHandlerInfo? embeddedHandler = null;
-                string? handlerSymbolSource = null;
-                if (dumpHeader.HasEmbeddedHandlerMetadata)
-                {
-                    if (!TryReadExactly(stream, handlerIdBytes))
-                    {
-                        warnings.Add(
-                            $"truncated handler metadata in block 0x{startEip:x} at op {opIndex}: expected 4 bytes, got {Math.Max(0, stream.Length - stream.Position)}");
-                        truncatedBlock = true;
-                        break;
-                    }
-
-                    handlerId = BinaryPrimitives.ReadInt32LittleEndian(handlerIdBytes);
-                    dumpHeader.HandlerMetadataById.TryGetValue(handlerId, out embeddedHandler);
-                    if (embeddedHandler is not null)
-                        handlerSymbolSource = "embedded";
-                }
+                var handlerId = BinaryPrimitives.ReadInt32LittleEndian(opBytes.AsSpan(32, 4));
+                dumpHeader.HandlerMetadataById.TryGetValue(handlerId, out var embeddedHandler);
+                var handlerSymbolSource = embeddedHandler is null ? null : "embedded";
 
                 var memDisp = (uint)(memPacked & 0xFFFFFFFF);
                 var eaDesc = (uint)(memPacked >> 32);
@@ -851,16 +830,10 @@ internal static partial class Program
                     }
                 }
 
-                var candidateSource = logicFunc ?? symbolName;
-                string? candidateName = null;
-                if (!string.IsNullOrWhiteSpace(candidateSource))
-                {
-                    if (!candidateNameCache.TryGetValue(candidateSource, out candidateName))
-                    {
-                        candidateName = NormalizeCandidateName(candidateSource);
-                        candidateNameCache[candidateSource] = candidateName;
-                    }
-                }
+                var trainingId = BinaryPrimitives.ReadUInt32LittleEndian(opBytes.AsSpan(20, 4));
+                var candidateName = trainingId is > 0 && trainingId >> 30 == 0
+                    ? ResolveTrainingOperation(dumpHeader.TrainingOperations, trainingId)
+                    : null;
 
                 var opId = embeddedHandler?.OpId ?? opIdResolver?.Resolve(handlerPtr, handlerOffset);
                 var cacheKey = new DefUseCacheKey(opId, new OpSnapshot(eaDesc, modrm, meta, prefixes));
@@ -903,7 +876,7 @@ internal static partial class Program
                     eaDesc,
                     cachedDefUse.Export,
                     semanticSummary,
-                    candidateName);
+                    candidateName) with { training_id = trainingId };
 
                 if (ops is not null)
                     ops.Add(op);
@@ -934,8 +907,6 @@ internal static partial class Program
         }
 
         return new ParsedBlockDump(
-            dumpHeader.FormatVersion,
-            dumpHeader.HasEmbeddedHandlerMetadata,
             dumpHeader.BaseAddr,
             dumpHeader.DeclaredBlockCount,
             dumpHeader.HandlerMetadataById.Count,
@@ -945,35 +916,22 @@ internal static partial class Program
             ngramAccumulator?.ToResult(topNgrams),
             compactAnchors is not null && compactPairs is not null
                 ? BuildCandidateSummary(compactAnchors, compactPairs)
-                : null);
+                : null,
+            dumpHeader.TrainingOperations);
     }
 
     private static BlockDumpHeader ReadBlockDumpHeader(BinaryReader reader)
     {
-        var stream = reader.BaseStream;
-        if (stream.Length < sizeof(ulong) + sizeof(int))
-            throw new InvalidOperationException("blocks.bin is too small to contain a valid header.");
-
-        var firstWord = reader.ReadUInt32();
-        if (firstWord != BlockDumpMagic)
-        {
-            stream.Position = 0;
-            return new BlockDumpHeader(
-                BlockDumpFormatV1,
-                false,
-                reader.ReadUInt64(),
-                reader.ReadInt32(),
-                new Dictionary<int, EmbeddedHandlerInfo>());
-        }
-
-        var version = reader.ReadInt32();
-        if (version != BlockDumpFormatV2)
-            throw new InvalidOperationException($"Unsupported blocks.bin format version: {version}");
+        if (reader.BaseStream.Length < 24 || reader.ReadUInt32() != BlockDumpMagic ||
+            reader.ReadInt32() != BlockDumpFormatV3)
+            throw new InvalidDataException("Expected BLK2 version 3 blocks.bin. Recapture the block profile.");
 
         var baseAddr = reader.ReadUInt64();
         var declaredBlockCount = reader.ReadInt32();
         var handlerMetadataCount = reader.ReadInt32();
-        var handlerMetadataById = new Dictionary<int, EmbeddedHandlerInfo>(Math.Max(handlerMetadataCount, 0));
+        if (declaredBlockCount < 0 || handlerMetadataCount < 0)
+            throw new InvalidDataException("Negative block or handler count in blocks.bin.");
+        var handlerMetadataById = new Dictionary<int, EmbeddedHandlerInfo>(handlerMetadataCount);
         for (var i = 0; i < handlerMetadataCount; i++)
         {
             var handlerId = reader.ReadInt32();
@@ -987,12 +945,12 @@ internal static partial class Program
                 string.IsNullOrEmpty(symbol) ? null : symbol);
         }
 
-        return new BlockDumpHeader(
-            version,
-            true,
-            baseAddr,
-            declaredBlockCount,
-            handlerMetadataById);
+        var operations = new Dictionary<uint, string>();
+        var operationCount = reader.ReadUInt32();
+        for (uint i = 0; i < operationCount; i++)
+            operations.Add(reader.ReadUInt32(), ReadLengthPrefixedUtf8(reader));
+
+        return new BlockDumpHeader(baseAddr, declaredBlockCount, handlerMetadataById, operations);
     }
 
     private static string ReadLengthPrefixedUtf8(BinaryReader reader)
@@ -1473,15 +1431,12 @@ internal static partial class Program
     private sealed record EmbeddedHandlerInfo(int HandlerId, ulong HandlerPtr, int? OpId, string? Symbol);
 
     private sealed record BlockDumpHeader(
-        int FormatVersion,
-        bool HasEmbeddedHandlerMetadata,
         ulong BaseAddr,
         int DeclaredBlockCount,
-        Dictionary<int, EmbeddedHandlerInfo> HandlerMetadataById);
+        Dictionary<int, EmbeddedHandlerInfo> HandlerMetadataById,
+        Dictionary<uint, string> TrainingOperations);
 
     private sealed record ParsedBlockDump(
-        int FormatVersion,
-        bool HasEmbeddedHandlerMetadata,
         ulong BaseAddr,
         int DeclaredBlockCount,
         int HandlerMetadataCount,
@@ -1489,7 +1444,8 @@ internal static partial class Program
         List<BlockAnalysisBlock> Blocks,
         List<string> Warnings,
         BlocksAnalysisNgrams? Ngrams,
-        BlockCandidateSummary? CandidateSummary);
+        BlockCandidateSummary? CandidateSummary,
+        Dictionary<uint, string> TrainingOperations);
 
     private readonly record struct CachedDefUse(BlockDefUseInfo Export, OpSemanticSummary Summary);
 

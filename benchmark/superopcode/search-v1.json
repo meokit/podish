@@ -70,7 +70,7 @@
     { "id": "slope256", "mode": "slope", "budget": 256 },
     { "id": "cost128", "mode": "cost", "budget": 128, "costPower": 0.75 },
     { "id": "coverage128", "mode": "coverage", "budget": 128 },
-    { "id": "union320", "mode": "union", "budget": 320 }
+    { "id": "union320", "mode": "union", "budget": 320, "baseManifest": "benchmark/superopcode/manifests/gnu-pinned-256-v3.json" }
   ],
   "referenceGenerated": "artifacts/superopcode/experiment-v2/superopcodes.generated.cpp",
   "screenRepeats": 3,

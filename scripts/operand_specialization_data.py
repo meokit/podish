@@ -1,5 +1,6 @@
 """Instruction identities and decoded operand fields shared by the collector and baker."""
 
+import hashlib
 import re
 from dataclasses import dataclass
 
@@ -23,6 +24,74 @@ def generated_fusions(source):
 
 
 FUSION_CALL = re.compile(r'RUN_SUPEROPCODE_OP\(op::(\w+),[^()]*\)')
+
+
+@dataclass(frozen=True)
+class TrainingHandler:
+    name: str
+    operations: tuple[str, ...]
+    kind: str
+
+    @property
+    def cpp(self):
+        return f"DispatchWrapper<op::{self.name}>" if self.kind == "wrapper" else self.name
+
+
+def training_handlers(catalog, fusions):
+    """Assign persistent IDs to catalog entries and the selected fusion recipes."""
+    handlers = {}
+
+    def add(domain, key, name, operations, kind):
+        digest = int.from_bytes(hashlib.sha256(key).digest()[:4], "little")
+        identifier = domain | (digest & 0x3fffffff)
+        if not identifier or identifier in handlers:
+            raise ValueError(f"duplicate training identity: {name} (0x{identifier:08x})")
+        handlers[identifier] = TrainingHandler(name, operations, kind)
+        return identifier
+
+    scalar_ids = {name: add(0, name.encode("ascii"), name, (name,), "wrapper")
+                  for name in sorted(instruction_targets(catalog))}
+
+    def add_fusion(domain, name, operations, kind):
+        if not 2 <= len(operations) <= 4 or any(op not in scalar_ids for op in operations):
+            raise ValueError(f"invalid training fusion recipe: {name}")
+        key = b"".join(scalar_ids[op].to_bytes(4, "little") for op in operations)
+        add(domain, key, name, operations, kind)
+
+    for name, body in sorted(fusions.items()):
+        add_fusion(0x80000000, name, tuple(call[1] for call in FUSION_CALL.finditer(body)), "fused")
+    for row in catalog["handwritten_fusions"]:
+        add_fusion(0xc0000000, row["name"], tuple(row["operations"]), "handwritten")
+    return handlers
+
+
+def training_plan_match(plan):
+    if (not isinstance(plan, dict) or type(plan.get("version")) is not int or plan["version"] != 3
+            or not isinstance(plan.get("entries"), list)):
+        raise ValueError("expected a version 3 operand plan; recapture legacy profiles")
+    match = plan.get("match", "decoded")
+    if match not in ("decoded", "encoding"):
+        raise ValueError(f"unsupported version 3 operand match policy: {match!r}")
+    return match
+
+
+def resolve_training_plan(plan, catalog, fusions, limit=None):
+    handlers = training_handlers(catalog, fusions)
+    rows = []
+    for item in plan["entries"][:limit]:
+        identifier = item["originalId"]
+        if type(identifier) is not int or not 0 < identifier <= 0xffffffff:
+            raise ValueError(f"invalid training handler ID: {identifier!r}")
+        handler = handlers.get(identifier)
+        if handler is None:
+            if identifier >> 30 == 2 and item["kind"] == "fused":
+                # A plan can be baked with fusion disabled or with a different fusion set.
+                continue
+            raise ValueError(f"unknown training handler ID: 0x{identifier:08x}")
+        if (item["kind"], item["width"]) != (handler.kind, len(handler.operations)):
+            raise ValueError(f"invalid shape for training handler ID: 0x{identifier:08x}")
+        rows.append({**item, "original": handler.cpp})
+    return rows
 
 
 def specialize_profile_fusion(body, original, clone, operands):
@@ -69,7 +138,7 @@ class Operand:
         if not self.meta & HAS_IMMEDIATE and self.imm:
             raise ValueError("immediate must be zero when absent")
 
-    def legacy_shape(self):
+    def shape_key(self):
         return self.modrm | self.prefixes << 8 | self.ea_desc << 16
 
     @property

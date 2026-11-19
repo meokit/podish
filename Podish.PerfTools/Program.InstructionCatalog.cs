@@ -13,10 +13,15 @@ internal static partial class Program
 
     internal static string InstructionCatalogSourceHash()
     {
+        var sourceDir = Path.Combine(RepoRoot(), "libfibercpu", "src");
+        using var catalog = JsonDocument.Parse(File.ReadAllText(Path.Combine(sourceDir, "instruction_catalog.json")));
+        var inputs = InstructionCatalogInputs.AsEnumerable();
+        if (catalog.RootElement.TryGetProperty("specialization_sources", out var fragments))
+            inputs = inputs.Concat(fragments.EnumerateArray().Select(fragment => fragment.GetString()!));
         var text = new StringBuilder();
-        foreach (var name in InstructionCatalogInputs)
+        foreach (var name in inputs)
         {
-            var source = File.ReadAllText(Path.Combine(RepoRoot(), "libfibercpu", "src", name)).Replace("\r\n", "\n");
+            var source = File.ReadAllText(Path.Combine(sourceDir, name)).Replace("\r\n", "\n");
             var bytes = Encoding.UTF8.GetBytes(source);
             text.Append(name).Append(':').Append(Convert.ToHexStringLower(SHA256.HashData(bytes))).Append('\n');
         }

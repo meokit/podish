@@ -21,7 +21,7 @@ public enum EngineCloneMemoryMode
 public class Engine : IDisposable
 {
     internal const uint BlockDumpMagic = 0x324b4c42; // "BLK2"
-    internal const int BlockDumpFormatVersion = 2;
+    internal const int BlockDumpFormatVersion = 3;
 
     private static readonly ConcurrentDictionary<nuint, ConcurrentDictionary<nint, byte>> MmuAttachmentRegistry = new();
     private MmuHandle _currentMmu = null!;
@@ -953,19 +953,20 @@ public class Engine : IDisposable
         return buffer;
     }
 
-    public unsafe void DumpBlocks(Stream output)
+    public void DumpBlocks(Stream output) => WriteBlockDump(output, GetBlockPointers());
+
+    internal static unsafe void WriteBlockDump(Stream output, IReadOnlyCollection<IntPtr> blocks)
     {
         ArgumentNullException.ThrowIfNull(output);
 
         using var writer = new BinaryWriter(output, Encoding.UTF8, true);
-        var imageBase = GetNativeImageBase().ToInt64();
-        var blocks = GetBlockPointers();
+        var imageBase = X86Native.GetLibAddress().ToInt64();
         var handlerTable = BuildBlockDumpHandlerTable();
 
         writer.Write(BlockDumpMagic);
         writer.Write(BlockDumpFormatVersion);
         writer.Write((ulong)imageBase);
-        writer.Write(blocks.Length);
+        writer.Write(blocks.Count);
         writer.Write(handlerTable.Count);
         foreach (var handler in handlerTable)
         {
@@ -975,11 +976,20 @@ public class Engine : IDisposable
             WriteLengthPrefixedUtf8(writer, handler.Symbol);
         }
 
+        var operations = GetTrainingOperationIds().ToArray();
+        writer.Write(operations.Length);
+        foreach (var id in operations)
+        {
+            writer.Write(id);
+            WriteLengthPrefixedUtf8(writer, X86Native.GetTrainingOperationName(id)!);
+        }
+
         var handlerIdsByPtr = new Dictionary<nint, int>(handlerTable.Count);
         foreach (var handler in handlerTable)
             if (handler.HandlerPtr != IntPtr.Zero)
                 handlerIdsByPtr[handler.HandlerPtr] = handler.HandlerId;
 
+        var trainingIds = new Dictionary<nint, uint>();
         foreach (var blockPtr in blocks)
         {
             if (blockPtr == IntPtr.Zero) continue;
@@ -1004,13 +1014,28 @@ public class Engine : IDisposable
                 writer.Write(op.prefixes);
                 writer.Write(op.meta);
                 writer.Write(ExtractDumpImm(op));
-                writer.Write(0u);
+                if (!trainingIds.TryGetValue(op.handler, out var trainingId))
+                {
+                    trainingId = X86Native.GetTrainingHandlerId(op.handler);
+                    trainingIds.Add(op.handler, trainingId);
+                }
+                writer.Write(trainingId);
                 writer.Write(op.handler.ToInt64());
                 var handlerId = handlerIdsByPtr.TryGetValue(op.handler, out var knownHandlerId)
                     ? knownHandlerId
                     : X86Native.GetHandlerId(op.handler);
                 writer.Write(handlerId);
             }
+        }
+    }
+
+    internal static IEnumerable<uint> GetTrainingOperationIds()
+    {
+        for (uint index = 0; ; index++)
+        {
+            var id = X86Native.GetTrainingOperationIdAt(index);
+            if (id == 0) yield break;
+            yield return id;
         }
     }
 

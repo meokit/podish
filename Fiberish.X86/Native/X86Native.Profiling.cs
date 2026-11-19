@@ -19,6 +19,18 @@ public unsafe partial class X86Native
         public ulong Count;
     }
 
+    [LibraryImport(LibName, EntryPoint = "X86_GetTrainingHandlerId")]
+    public static partial uint GetTrainingHandlerId(IntPtr handler);
+
+    [LibraryImport(LibName, EntryPoint = "X86_GetTrainingOperationIdAt")]
+    public static partial uint GetTrainingOperationIdAt(uint index);
+
+    [LibraryImport(LibName, EntryPoint = "X86_GetTrainingOperationName")]
+    private static partial IntPtr GetTrainingOperationNameUtf8(uint id);
+
+    public static string? GetTrainingOperationName(uint id) =>
+        Marshal.PtrToStringUTF8(GetTrainingOperationNameUtf8(id));
+
     [LibraryImport(LibName, EntryPoint = "X86_GetNGramProfile")]
     public static partial nuint GetNGramProfile(IntPtr state, NGramProfileEntry* entries, nuint capacity);
 

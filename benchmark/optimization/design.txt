@@ -72,7 +72,7 @@ Build the CLI with block profiling and run the workload with guest stats:
   dotnet Podish.Cli/bin/Release/net10.0/Podish.Cli.dll run --rm \
     --rootfs /path/to/rootfs --guest-stats-dir /tmp/guest-stats /path/to/guest
 
-Export from the new guest stats directory or from existing BLK2 v2 dumps:
+Export from the new guest stats directory or from BLK2 v3 dumps:
 
   python3 scripts/collect_operand_specializations.py /tmp/guest-stats \
     --output /tmp/operand-plan.json
@@ -85,21 +85,31 @@ blocks.bin file or its containing directory. Pass --fusions to the collector
 when profiling with BASE or a custom generated fusion source. CMake also accepts
 the plan through MSBuild's -p:OperandPlanFile=/tmp/operand-plan.json.
 
-The version 2 plan saves all observed decoded shapes by default. --limit trims
+The version 3 plan saves all observed decoded shapes by default. --limit trims
 the exported list. CMake's FIBERCPU_OPERAND_BUDGET controls how many rows become
 handlers, up to 1024. Ranking starts with estimated dispatch count. Block entry
 counts are estimates for constituent execution when a block can exit early.
 
-Each match includes canonical handler identity, instruction length, ModRM
+Each match includes a catalog training ID, instruction length, ModRM
 (also used for opcode-encoded registers), prefixes, decoder metadata, decoded
 base/index/scale/segment, displacement and immediate. It guards every constituent
 of a generated fusion. Addresses after relocation, resolved branch targets and
-guest memory values are runtime inputs. The existing version 1 shape lists
-remain supported by FIBERCPU_OPERAND_PLAN_FILE.
+guest memory values are runtime inputs. Training and analysis require BLK2 v3.
+Recapture older profiles and regenerate their operand plans and fusion manifests.
+Reviewed encoding-only plans use the same v3 IDs with "match": "encoding".
+Their shape keys keep ModRM, prefixes and effective address encoding.
+The BLK2 v3 training ID occupies the previous reserved word in each operation.
+Scalar IDs come from catalog entries. Fusion IDs come from the ordered scalar
+IDs and a generated or handwritten fusion tag. Embedded symbols remain
+available for diagnostic block analysis.
+
+Sequence profiles use schema 3 with numeric pairs and ngrams. Trained fusion
+manifests use schema 3 and store numeric pairs or sequences. The operations dictionary resolves
+IDs to catalog identifiers for code generation.
 
 Dynamic operand templates
 
-Capture BLK2 v2 profiles from several workloads using the same instruction
+Capture BLK2 v3 profiles from several workloads using the same instruction
 and fusion catalog. The collector's default exports every recognized shape:
 
   python3 scripts/collect_operand_specializations.py /tmp/coremark-stats \
@@ -251,8 +261,8 @@ MMU misses go through Restart/Retry with pin reloads; slow callbacks, branch
 exits, opaque/string/stack kernels keep their conservative behavior. Guest
 backing storage must be separate from the emulator's own architectural state.
 No guest addresses, immediates, displacements or data values enter this plan.
-The plan can be regenerated with extend_operand_plan.py from encoding-only
-per-workload dispatch estimates. Scores normalize each workload before ranking,
+The plan can be extended with extend_operand_plan.py from one decoded v3
+operand plan per workload. The tool aggregates dispatch counts by encoding. Scores normalize each workload before ranking,
 so the longest workload does not consume the entire shape budget. Appending
 entries preserves the existing GCC priorities and bounded fusion admission.
 
@@ -272,6 +282,6 @@ concatenated blocks, the decoded metadata marks the entries that were lowered
 so reconstruction only reverse-maps those entries before matching again.
 The metadata bit does not change the decoded record size.
 
-Regenerate the plan with extend_operand_plan.py, the original GNU plan as
---base, the decompressed gnu-shapes.json.gz from results/pin-gnu-20261118
-as --counts, and --fused 48 --wrapper 208.
+To extend a reviewed encoding-only plan, pass it as --base and pass each
+newly captured decoded v3 plan as a separate --counts argument.
+The archived experiment inputs and timings record the original measurement.

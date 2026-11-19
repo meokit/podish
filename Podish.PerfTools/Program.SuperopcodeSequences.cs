@@ -1,20 +1,20 @@
 using System.Text;
 using System.Text.Json;
-using System.Text.RegularExpressions;
 
 namespace Podish.PerfTools;
 
 internal static partial class Program
 {
-    private static string GenerateSuperopcodeSequences(string input, JsonElement data, int top)
+    private static string GenerateSuperopcodeSequences(string input, JsonElement data,
+        IReadOnlyDictionary<uint, string> operations, int top)
     {
         var patterns = new List<string[]>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
         foreach (var candidate in data.GetProperty("candidates").EnumerateArray())
         {
-            var ops = candidate.GetProperty("pair").EnumerateArray().Select(element => CanonicalLogicName(element.GetString() ?? "")).ToArray();
-            if (ops.Length is < 2 or > 4 || ops.Any(op => !Regex.IsMatch(op, @"^op::Op[A-Za-z0-9_]+$")))
-                throw new InvalidDataException("Generated sequences require 2..4 valid handler names");
+            var ops = ReadCandidatePair(candidate.GetProperty("pair"), operations);
+            if (ops.Length is < 2 or > 4)
+                throw new InvalidDataException("Generated sequences require 2..4 operation IDs");
             if (seen.Add(string.Join('\t', ops))) patterns.Add(ops);
             if (patterns.Count == top) break;
         }
@@ -41,9 +41,9 @@ internal static partial class Program
         // Bake preservation into the match record; no runtime baseline-set search.
         using var baselineDocument = JsonDocument.Parse(File.ReadAllText(Path.Combine(RepoRoot(),
             "benchmark", "superopcode", "manifests", "gnu-long4x32-v1.json")));
+        var baselineOperations = ReadCandidateOperations(baselineDocument.RootElement);
         var preserved = baselineDocument.RootElement.GetProperty("candidates").EnumerateArray()
-            .Select(candidate => candidate.GetProperty("pair").EnumerateArray()
-                .Select(element => CanonicalLogicName(element.GetString()!)).ToArray())
+            .Select(candidate => ReadCandidatePair(candidate.GetProperty("pair"), baselineOperations))
             .SelectMany(Expand).Select(ops => string.Join('\t', ops)).ToHashSet(StringComparer.Ordinal);
         string Name(int index) => $"SuperOpcode_{patterns[index].Length}_{index:000}_" +
                                   string.Join("__", patterns[index].Select(op => SanitizeName(op[4..])));

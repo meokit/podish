@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 
 namespace Podish.PerfTools;
@@ -172,7 +173,7 @@ internal static partial class Program
         if (File.Exists(path))
         {
             var cached = ReadTraining<TrainingRun>(path);
-            if (cached.SuiteHash != TrainingHash(suitePath) || cached.NativeHash != build.NativeHash ||
+            if (cached.SchemaVersion != TrainingProfileVersion || cached.SuiteHash != TrainingHash(suitePath) || cached.NativeHash != build.NativeHash ||
                 cached.RootfsLockHash != ValidateTrainingRootfs(rootfs) || cached.RuntimePackageHash != TrainingRuntimeHash(build) ||
                 cached.CollectorSourceHash != TrainingCollectorHash()) throw new InvalidDataException("Incompatible search profile: " + path);
             return cached;
@@ -190,6 +191,25 @@ internal static partial class Program
             .Where(pair => pair.Value > 0).ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
     }
 
+    private static string SelectionPairName(TrainingSample sample, TrainingPair pair) =>
+        ResolveTrainingOperation(sample.Operations, pair.First) + "\t" +
+        ResolveTrainingOperation(sample.Operations, pair.Second);
+
+    private static SortedDictionary<uint, string> SelectionOperations(SelectionProfiles[] profiles)
+    {
+        var operations = new SortedDictionary<uint, string>();
+        MergeTrainingOperations(operations, profiles.SelectMany(profile => profile.Heavy.Samples)
+            .SelectMany(sample => sample.Operations));
+        return operations;
+    }
+
+    private static Dictionary<string, ulong> SelectionRawPairCounts(SelectionProfiles[] profiles) =>
+        profiles.SelectMany(profile => profile.Heavy.Samples)
+            .SelectMany(sample => sample.Pairs.Select(pair => (Name: SelectionPairName(sample, pair), pair.Count)))
+            .GroupBy(pair => pair.Name, StringComparer.Ordinal)
+            .ToDictionary(group => group.Key, group => group.Aggregate(0UL, (sum, pair) => checked(sum + pair.Count)),
+                StringComparer.Ordinal);
+
     private static List<Dictionary<string, double>> SelectionDistributions(SelectionProfiles[] profiles, string mode)
     {
         var distributions = new List<Dictionary<string, double>>();
@@ -198,7 +218,7 @@ internal static partial class Program
         {
             var light = profile.Light.Samples.Single(sample => sample.Case == heavy.Case);
             Dictionary<string, double> Counts(TrainingSample sample) => sample.Pairs.ToDictionary(
-                pair => pair.First + "\t" + pair.Second, pair => (double)pair.Count, StringComparer.Ordinal);
+                pair => SelectionPairName(sample, pair), pair => (double)pair.Count, StringComparer.Ordinal);
             var counts = mode == "light" ? Counts(light) : mode == "heavy" ? Counts(heavy) :
                 PositiveTrainingSlope(Counts(heavy), Counts(light), heavy.Bytes - light.Bytes);
             var total = counts.Values.Sum();
@@ -277,29 +297,36 @@ internal static partial class Program
         var distributions = SelectionDistributions(profiles, strategy.Mode);
         var ranked = RankSelectionPairs(distributions, strategy.Budget, strategy.Mode, strategy.CostPower);
         var selected = new List<string>();
+        var operations = SelectionOperations(profiles);
         if (strategy.Mode == "union")
         {
-            var pinned = File.ReadAllText(Path.Combine(root, "libfibercpu", "src", "generated", "superopcodes.generated.cpp"));
-            selected.AddRange(Regex.Matches(pinned,
-                    @"GeneratedSuperOpcodeKey\{\s*\(HandlerFunc\)DispatchWrapper<(op::Op\w+)>,\s*\(HandlerFunc\)DispatchWrapper<(op::Op\w+)>")
-                .Select(match => match.Groups[1].Value + "\t" + match.Groups[2].Value));
+            if (strategy.BaseManifest is null) throw new InvalidDataException("Pinned union requires a reviewed base manifest");
+            using var pinned = JsonDocument.Parse(File.ReadAllText(Path.Combine(root, strategy.BaseManifest)));
+            var pinnedOperations = ReadCandidateOperations(pinned.RootElement);
+            MergeTrainingOperations(operations, pinnedOperations);
+            foreach (var candidate in pinned.RootElement.GetProperty("candidates").EnumerateArray())
+            {
+                var pair = ReadCandidatePair(candidate.GetProperty("pair"), pinnedOperations);
+                if (pair.Length != 2) throw new InvalidDataException("Pinned union requires operation pairs");
+                selected.Add(string.Join('\t', pair));
+            }
             if (selected.Distinct(StringComparer.Ordinal).Count() != 256 || strategy.Budget < selected.Count)
                 throw new InvalidDataException("Pinned union requires the reviewed 256-pair table and sufficient budget");
         }
         selected.AddRange(ranked.Where(key => !selected.Contains(key, StringComparer.Ordinal)).Take(strategy.Budget - selected.Count));
         var weights = distributions.SelectMany(distribution => distribution.Keys).Distinct(StringComparer.Ordinal)
             .ToDictionary(key => key, key => distributions.Average(distribution => distribution.GetValueOrDefault(key)), StringComparer.Ordinal);
-        var raw = profiles.SelectMany(profile => profile.Heavy.Samples).SelectMany(sample => sample.Pairs)
-            .GroupBy(pair => pair.First + "\t" + pair.Second, StringComparer.Ordinal)
-            .ToDictionary(group => group.Key, group => group.Aggregate(0UL, (sum, pair) => checked(sum + pair.Count)), StringComparer.Ordinal);
+        var raw = SelectionRawPairCounts(profiles);
+        var ids = operations.ToDictionary(op => op.Value, op => op.Key, StringComparer.Ordinal);
         var manifest = Path.Combine(directory, "selected.json");
-        WriteTraining(manifest, new { schemaVersion = 1, metadata = new { strategy.Id, strategy.Mode, strategy.Budget,
+        WriteTraining(manifest, new { schemaVersion = CandidateManifestVersion, operations, metadata = new { strategy.Id, strategy.Mode, strategy.Budget,
                 strategy.CostPower, normalization = strategy.Mode.StartsWith("density", StringComparison.Ordinal)
                     ? "positive payload slope times heavy bytes per instrumented command second; equal cell averaging, NOT unit-normalized cells"
                     : "equal dataset/workload; positive heavy-minus-light payload slope unless light/heavy mode",
                 profiles = profiles.Select(profile => new { dataset = profile.Suite.Id, heavySuiteHash = profile.Heavy.SuiteHash,
                     lightSuiteHash = profile.Light.SuiteHash }).ToArray() },
-            candidates = selected.Select(key => new { pair = key.Split('\t'), weighted_exec_count = raw.GetValueOrDefault(key),
+            candidates = selected.Select(key => new { pair = key.Split('\t').Select(op => ids[op]).ToArray(),
+                weighted_exec_count = raw.GetValueOrDefault(key),
                 score = weights.GetValueOrDefault(key), relation_kind = strategy.Mode }).ToArray() });
         File.WriteAllText(source, GenerateSuperopcodes(manifest, strategy.Budget), Utf8NoBom);
         return new(strategy.Id, "tune-" + strategy.Id, source, TrainingHash(source), selected.Count);
@@ -313,9 +340,10 @@ internal static partial class Program
     {
         if (strategy.BaseManifest is null) throw new InvalidDataException("Sequence search requires a reviewed base manifest");
         var baseManifest = Path.GetFullPath(Path.Combine(root, strategy.BaseManifest));
-        using var document = System.Text.Json.JsonDocument.Parse(File.ReadAllText(baseManifest));
+        using var document = JsonDocument.Parse(File.ReadAllText(baseManifest));
+        var baseOperations = ReadCandidateOperations(document.RootElement);
         var basePatterns = document.RootElement.GetProperty("candidates").EnumerateArray().Select(candidate =>
-            candidate.GetProperty("pair").EnumerateArray().Select(op => op.GetString()!).ToArray()).ToArray();
+            ReadCandidatePair(candidate.GetProperty("pair"), baseOperations)).ToArray();
         if (basePatterns.Any(ops => ops.Length != 2 || !TrainingSequenceAllowed(ops)) || basePatterns.Length > strategy.Budget)
             throw new InvalidDataException("Invalid reviewed base pairs/budget");
         var distributions = new List<Dictionary<string, double>>();
@@ -325,15 +353,17 @@ internal static partial class Program
         {
             var light = profile.Light.Samples.Single(sample => sample.Case == heavy.Case);
             if (heavy.Ngrams is null || light.Ngrams is null) throw new InvalidDataException("Sequence search requires new exact 3/4-gram profiles");
+            string SequenceName(TrainingSample sample, TrainingNGram entry) =>
+                string.Join('\t', entry.Ops.Select(id => ResolveTrainingOperation(sample.Operations, id)));
             foreach (var entry in heavy.Ngrams)
             {
-                var key = string.Join('\t', entry.Ops);
+                var key = SequenceName(heavy, entry);
                 raw[key] = checked(raw.GetValueOrDefault(key) + entry.Count);
             }
             var large = heavy.Ngrams.Where(entry => entry.Ops.Length == strategy.Width)
-                .ToDictionary(entry => string.Join('\t', entry.Ops), entry => (double)entry.Count, StringComparer.Ordinal);
+                .ToDictionary(entry => SequenceName(heavy, entry), entry => (double)entry.Count, StringComparer.Ordinal);
             var small = light.Ngrams.Where(entry => entry.Ops.Length == strategy.Width)
-                .ToDictionary(entry => string.Join('\t', entry.Ops), entry => (double)entry.Count, StringComparer.Ordinal);
+                .ToDictionary(entry => SequenceName(light, entry), entry => (double)entry.Count, StringComparer.Ordinal);
             var slopes = PositiveTrainingSlope(large, small, heavy.Bytes - light.Bytes);
             var edgeTotal = heavy.Pairs.Sum(pair => (double)pair.Count);
             // Each width-N match removes N-1 dispatches, but matches can overlap.
@@ -348,16 +378,17 @@ internal static partial class Program
                 .Take(strategy.Budget - basePatterns.Length).ToArray();
         if (strategy.Mode == "sequence" && selected.Length == 0)
             throw new InvalidDataException("No observed eligible long sequences; do not report a base-only table as a long-sequence strategy");
-        var baseRaw = profiles.SelectMany(profile => profile.Heavy.Samples).SelectMany(sample => sample.Pairs)
-            .GroupBy(pair => pair.First + "\t" + pair.Second, StringComparer.Ordinal)
-            .ToDictionary(group => group.Key, group => group.Aggregate(0UL, (sum, pair) => checked(sum + pair.Count)), StringComparer.Ordinal);
+        var baseRaw = SelectionRawPairCounts(profiles);
+        var operations = SelectionOperations(profiles);
+        if (baseOperations is not null) MergeTrainingOperations(operations, baseOperations);
+        var ids = operations.ToDictionary(op => op.Value, op => op.Key, StringComparer.Ordinal);
         var patterns = basePatterns.Select(ops => (Ops: ops, Count: baseRaw.GetValueOrDefault(string.Join('\t', ops)), Score: 0.0, Kind: "reviewed-base-pair"))
             .Concat(selected.Select(key => (Ops: key.Split('\t'), Count: raw[key], Score: weights[key], Kind: "observed-exact-ngram"))).ToArray();
         var manifest = Path.Combine(directory, "selected.json");
-        WriteTraining(manifest, new { schemaVersion = 2, metadata = new { strategy.Id, strategy.Mode, strategy.Width,
+        WriteTraining(manifest, new { schemaVersion = CandidateManifestVersion, operations, metadata = new { strategy.Id, strategy.Mode, strategy.Width,
                 extended_lookup = true, baseManifestHash = TrainingHash(baseManifest), counter = "consecutive-within-block-dispatch-entries-v1",
                 ranking = "positive heavy-light ngram slope, normalized by heavy Continue edges, times width-minus-one; not additive realized savings" },
-            candidates = patterns.Select(pattern => new { pair = pattern.Ops, weighted_exec_count = pattern.Count,
+            candidates = patterns.Select(pattern => new { pair = pattern.Ops.Select(op => ids[op]).ToArray(), weighted_exec_count = pattern.Count,
                 score = pattern.Score, relation_kind = pattern.Kind }).ToArray() });
         File.WriteAllText(source, GenerateSuperopcodes(manifest, strategy.Budget), Utf8NoBom);
         return new(strategy.Id, "tune-" + strategy.Id, source, TrainingHash(source), patterns.Length);

@@ -7,7 +7,8 @@ internal sealed record BlocksAnalysisOutput(
     BlocksAnalysisValidation validation,
     List<BlockAnalysisBlock>? blocks = null,
     BlocksAnalysisNgrams? ngrams = null,
-    BlockCandidateSummary? candidate_summary = null);
+    BlockCandidateSummary? candidate_summary = null,
+    Dictionary<uint, string>? operations = null);
 
 internal sealed record BlocksAnalysisMetadata(
     string input_path,
@@ -70,6 +71,8 @@ internal readonly record struct BlockAnalysisOp(
 {
     [JsonIgnore]
     public string? candidate_name { get; init; }
+
+    public uint training_id { get; init; }
 
     [JsonIgnore]
     public OpSemanticSummary semantic_summary { get; init; }

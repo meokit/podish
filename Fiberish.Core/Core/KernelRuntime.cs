@@ -1,5 +1,4 @@
 using System.Collections.Concurrent;
-using System.Text;
 using Fiberish.Core.VFS.TTY;
 using Fiberish.Memory;
 using Fiberish.Syscalls;
@@ -46,22 +45,17 @@ public sealed class KernelRuntime : IDisposable
     /// <summary>Export quiescent engines' cumulative Continue edges, without ASLR addresses.</summary>
     public unsafe void DumpSequenceProfile(Stream output)
     {
-        var pairs = new Dictionary<(string First, string Second), ulong>();
-        var ngrams = new Dictionary<(string First, string Second, string Third, string? Fourth), ulong>();
-        var symbols = new Dictionary<IntPtr, string>();
-        string Symbol(IntPtr handler)
+        var pairs = new Dictionary<(uint First, uint Second), ulong>();
+        var ngrams = new Dictionary<(uint First, uint Second, uint Third, uint? Fourth), ulong>();
+        var handlerIds = new Dictionary<IntPtr, uint>();
+        uint OperationId(IntPtr handler)
         {
-            if (!symbols.TryGetValue(handler, out var symbol))
-            {
-                var id = X86Native.GetHandlerId(handler);
-                symbol = id < 0 ? "" : X86Native.GetHandlerSymbolById(id) ?? "";
-                if (symbol.Length == 0) throw new InvalidDataException("Unresolved training handler");
-                var names = System.Text.RegularExpressions.Regex.Matches(symbol, @"(?:fiberish::)?op::(Op[A-Za-z0-9_]+)");
-                if (names.Count != 1) throw new InvalidDataException("Ambiguous training handler: " + symbol);
-                symbol = "op::" + names[0].Groups[1].Value;
-                symbols.Add(handler, symbol);
-            }
-            return symbol;
+            if (handlerIds.TryGetValue(handler, out var id)) return id;
+            id = X86Native.GetTrainingHandlerId(handler);
+            if (id == 0 || id >> 30 != 0)
+                throw new InvalidDataException($"Sequence profile handler has no scalar training ID (0x{id:x8})");
+            handlerIds.Add(handler, id);
+            return id;
         }
         foreach (var engine in new[] { Engine }.Concat(RetiredEngines).DistinctBy(engine => engine.State))
         {
@@ -72,7 +66,7 @@ public sealed class KernelRuntime : IDisposable
                     throw new InvalidOperationException("Profile changed during quiescent export");
             foreach (var entry in entries)
             {
-                var key = (Symbol(entry.First), Symbol(entry.Second));
+                var key = (OperationId(entry.First), OperationId(entry.Second));
                 pairs[key] = checked(pairs.GetValueOrDefault(key) + entry.Count);
             }
             var ngramCount = checked((int)X86Native.GetNGramProfile(engine.State, null, 0));
@@ -82,38 +76,45 @@ public sealed class KernelRuntime : IDisposable
                     throw new InvalidOperationException("NGram profile changed during quiescent export");
             foreach (var entry in ngramEntries)
             {
-                var key = (Symbol(entry.First), Symbol(entry.Second), Symbol(entry.Third),
-                    entry.Fourth == IntPtr.Zero ? null : Symbol(entry.Fourth));
+                var key = (OperationId(entry.First), OperationId(entry.Second), OperationId(entry.Third),
+                    entry.Fourth == IntPtr.Zero ? (uint?)null : OperationId(entry.Fourth));
                 ngrams[key] = checked(ngrams.GetValueOrDefault(key) + entry.Count);
             }
         }
         using var writer = new System.Text.Json.Utf8JsonWriter(output, new() { Indented = true });
         writer.WriteStartObject();
-        writer.WriteNumber("schemaVersion", 2);
+        writer.WriteNumber("schemaVersion", 3);
         writer.WriteString("counterSemantics", "within-block-continue-edges-v1");
         writer.WriteNumber("buildFeatures", X86Native.GetBuildFeatures());
         writer.WriteString("superOpcodeSetHash", X86Native.GetSuperOpcodeSetHash());
+        writer.WriteStartObject("operations");
+        if (pairs.Count != 0)
+            foreach (var id in Engine.GetTrainingOperationIds())
+                writer.WriteString(id.ToString(System.Globalization.CultureInfo.InvariantCulture), X86Native.GetTrainingOperationName(id));
+        writer.WriteEndObject();
         writer.WriteStartArray("pairs");
-        foreach (var (pair, count) in pairs.OrderBy(entry => entry.Key.First, StringComparer.Ordinal)
-                     .ThenBy(entry => entry.Key.Second, StringComparer.Ordinal))
+        foreach (var (pair, count) in pairs.OrderBy(entry => entry.Key.First)
+                     .ThenBy(entry => entry.Key.Second))
         {
             writer.WriteStartObject();
-            writer.WriteString("first", pair.First);
-            writer.WriteString("second", pair.Second);
+            writer.WriteNumber("first", pair.First);
+            writer.WriteNumber("second", pair.Second);
             writer.WriteNumber("count", count);
             writer.WriteEndObject();
         }
         writer.WriteEndArray();
         writer.WriteString("ngramSemantics", "consecutive-within-block-dispatch-entries-v1");
         writer.WriteStartArray("ngrams");
-        foreach (var (sequence, count) in ngrams.OrderBy(entry => entry.Key.First, StringComparer.Ordinal)
-                     .ThenBy(entry => entry.Key.Second, StringComparer.Ordinal).ThenBy(entry => entry.Key.Third, StringComparer.Ordinal)
-                     .ThenBy(entry => entry.Key.Fourth, StringComparer.Ordinal))
+        foreach (var (sequence, count) in ngrams.OrderBy(entry => entry.Key.First)
+                     .ThenBy(entry => entry.Key.Second).ThenBy(entry => entry.Key.Third)
+                     .ThenBy(entry => entry.Key.Fourth))
         {
             writer.WriteStartObject();
             writer.WriteStartArray("ops");
-            writer.WriteStringValue(sequence.First); writer.WriteStringValue(sequence.Second); writer.WriteStringValue(sequence.Third);
-            if (sequence.Fourth is not null) writer.WriteStringValue(sequence.Fourth);
+            writer.WriteNumberValue(sequence.First);
+            writer.WriteNumberValue(sequence.Second);
+            writer.WriteNumberValue(sequence.Third);
+            if (sequence.Fourth is uint fourth) writer.WriteNumberValue(fourth);
             writer.WriteEndArray();
             writer.WriteNumber("count", count);
             writer.WriteEndObject();
@@ -122,78 +123,13 @@ public sealed class KernelRuntime : IDisposable
         writer.WriteEndObject();
     }
 
-    public unsafe void DumpAllBlocks(Stream output)
+    public void DumpAllBlocks(Stream output)
     {
-        ArgumentNullException.ThrowIfNull(output);
-
-        using var writer = new BinaryWriter(output, Encoding.UTF8, true);
-        var imageBase = Engine.GetNativeImageBase().ToInt64();
-
-        // Deduplicate blocks by ptr
-        var allBlocks = new HashSet<IntPtr>();
-        foreach (var ptr in Engine.GetBlockPointers())
-            allBlocks.Add(ptr);
-
+        var blocks = new HashSet<IntPtr>(Engine.GetBlockPointers());
         foreach (var engine in RetiredEngines)
-        foreach (var ptr in engine.GetBlockPointers())
-            allBlocks.Add(ptr);
+            blocks.UnionWith(engine.GetBlockPointers());
 
-        var blocks = allBlocks.ToArray();
-
-        // Handlers are identical across engines since they map to native library functions
-        var handlerTable = Engine.BuildBlockDumpHandlerTable();
-
-        writer.Write(Engine.BlockDumpMagic);
-        writer.Write(Engine.BlockDumpFormatVersion);
-        writer.Write((ulong)imageBase);
-        writer.Write(blocks.Length);
-        writer.Write(handlerTable.Count);
-        foreach (var handler in handlerTable)
-        {
-            writer.Write(handler.HandlerId);
-            writer.Write(handler.OpId);
-            writer.Write(unchecked((ulong)handler.HandlerPtr.ToInt64()));
-            Engine.WriteLengthPrefixedUtf8(writer, handler.Symbol);
-        }
-
-        var handlerIdsByPtr = new Dictionary<nint, int>(handlerTable.Count);
-        foreach (var handler in handlerTable)
-            if (handler.HandlerPtr != IntPtr.Zero)
-                handlerIdsByPtr[handler.HandlerPtr] = handler.HandlerId;
-
-        foreach (var blockPtr in blocks)
-        {
-            if (blockPtr == IntPtr.Zero) continue;
-
-            var nativeBlock = (X86Native.BasicBlock*)blockPtr;
-            var startEip = nativeBlock->start_eip;
-            var instCount = (uint)nativeBlock->inst_count;
-            writer.Write(startEip);
-            writer.Write(nativeBlock->end_eip);
-            writer.Write(instCount);
-            writer.Write(nativeBlock->exec_count);
-
-            var ops = (X86Native.DecodedOp*)((byte*)nativeBlock +
-                                             sizeof(X86Native.BasicBlock));
-            for (var i = 0; i < instCount; i++)
-            {
-                var op = ops[i];
-                var memPacked = Engine.PackDumpMem(op);
-                writer.Write(memPacked);
-                writer.Write(op.next_eip);
-                writer.Write(op.len);
-                writer.Write(op.modrm);
-                writer.Write(op.prefixes);
-                writer.Write(op.meta);
-                writer.Write(Engine.ExtractDumpImm(op));
-                writer.Write(0u);
-                writer.Write(op.handler.ToInt64());
-                var handlerId = handlerIdsByPtr.TryGetValue(op.handler, out var knownHandlerId)
-                    ? knownHandlerId
-                    : X86Native.GetHandlerId(op.handler);
-                writer.Write(handlerId);
-            }
-        }
+        Engine.WriteBlockDump(output, blocks);
     }
 
     public static KernelRuntime BootstrapBare(bool strace, TtyDiscipline? tty = null,

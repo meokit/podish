@@ -280,29 +280,6 @@ internal static partial class Program
         return long.TryParse(symbol[2..], NumberStyles.HexNumber, CultureInfo.InvariantCulture, out value);
     }
 
-    private static string NormalizeCandidateName(string? name)
-    {
-        if (string.IsNullOrWhiteSpace(name))
-            return "";
-        var text = name.Trim();
-        if (text.Contains("SuperOpcode_", StringComparison.Ordinal))
-            return "";
-        if (text.StartsWith("op::Op", StringComparison.Ordinal))
-            return text;
-        if (text.StartsWith("Op", StringComparison.Ordinal))
-            return "op::" + text;
-        var wrapper = DispatchWrapperRegex.Match(text);
-        if (wrapper.Success)
-            return wrapper.Groups[1].Value;
-        var direct = DirectLogicRegex.Match(text);
-        if (direct.Success)
-            return direct.Groups[1].Value;
-        var mangled = MangledLogicRegex.Match(text);
-        if (mangled.Success)
-            return "op::" + mangled.Groups[1].Value;
-        return "";
-    }
-
     private static string? GetValue(string[] args, string option)
     {
         for (var i = 0; i < args.Length - 1; i++)
@@ -415,26 +392,6 @@ internal static partial class Program
             reasons.Add("blocks list is empty");
             return true;
         }
-
-        var symbolCount = 0;
-        var unknownCount = 0;
-        foreach (var block in blocks.EnumerateArray().Take(200))
-        {
-            if (!block.TryGetProperty("ops", out var ops) || ops.ValueKind != JsonValueKind.Array)
-                continue;
-            foreach (var op in ops.EnumerateArray().Take(32))
-            {
-                var symbol = op.TryGetProperty("symbol", out var sym) ? sym.GetString() ?? "" : "";
-                if (string.IsNullOrWhiteSpace(symbol))
-                    continue;
-                symbolCount++;
-                if (symbol == "<unknown>" || symbol.StartsWith("func_", StringComparison.Ordinal))
-                    unknownCount++;
-            }
-        }
-
-        if (symbolCount > 0 && (double)unknownCount / symbolCount >= 0.5)
-            reasons.Add($"symbol resolution looks invalid ({unknownCount}/{symbolCount} sampled ops unresolved)");
 
         return reasons.Count > 0;
     }

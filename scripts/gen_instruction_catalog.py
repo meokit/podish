@@ -7,6 +7,8 @@ import json
 import re
 from pathlib import Path
 
+from operand_specialization_data import generated_fusions, training_handlers
+
 
 CATALOG = Path(__file__).resolve().parents[1] / "libfibercpu/src/instruction_catalog.json"
 
@@ -439,6 +441,24 @@ def generate(catalog, output, fusion_source=None):
     ]
     llvm_entries = [f"FIBERCPU_LLVM_STEP({i});" for i in range(64)]
 
+    fusions = generated_fusions(fusion_source.read_text()) if fusion_source else {}
+    training = training_handlers(catalog, fusions)
+    training_ids = {(handler.kind, handler.name): op_id for op_id, handler in training.items()}
+    always_available = set(catalog["fallbacks"].values()) | set(catalog.get("generic_fallbacks", {}).values())
+    always_available.update(row["logic"] for row in catalog["variants"] if is_semantic_variant(row))
+    scalar_training = ["// Generated scalar training IDs."]
+    fused_training = ["// Generated fusion training IDs."]
+    for op_id, handler in sorted(training.items()):
+        name = identifier(handler.name)
+        if handler.kind == "wrapper":
+            if name not in always_available:
+                scalar_training.append("#if FIBERCPU_STATIC_SPECIALIZATION")
+            scalar_training.append(f'    {{0x{op_id:08x}u, DispatchWrapper<op::{name}>, "op::{name}"}},')
+            if name not in always_available:
+                scalar_training.append("#endif")
+        elif handler.kind == "fused":
+            fused_training.append(f"FIBERCPU_TRAINING_FUSION({name}, 0x{op_id:08x}u)")
+
     handwritten = []
     patterns = []
     for row in catalog["handwritten_fusions"]:
@@ -448,14 +468,16 @@ def generate(catalog, output, fusion_source=None):
             raise ValueError(f"invalid fusion width for {name}")
         handwritten.append(f"DEFINE_HANDWRITTEN_SUPEROPCODE_{len(ops)}({name}, {', '.join(ops)})")
         handlers = ", ".join(f"DispatchWrapper<{op}>" for op in ops)
-        patterns.append(f"    {{{{{handlers}}}, {name}, {len(ops)}}},")
-    handwritten += ["struct HandwrittenFusion { HandlerFunc operations[4]; HandlerFunc handler; unsigned width; };",
+        op_id = training_ids["handwritten", name]
+        patterns.append(f"    {{{{{handlers}}}, {name}, {len(ops)}, 0x{op_id:08x}u}},")
+    handwritten += ["struct HandwrittenFusion { HandlerFunc operations[4]; HandlerFunc handler; unsigned width; uint32_t training_id; };",
                     "constexpr HandwrittenFusion kHandwrittenFusions[] = {", *patterns, "};"]
 
     for name, lines in (("instruction_families.h", families), ("instruction_catalog.inc", catalog_lines),
                         ("instruction_kernel_bindings.inc", bindings), ("llvm_block_operations.inc", llvm_operations),
                         ("llvm_block_entries.inc", llvm_entries), ("llvm_op_ids.h", llvm_op_ids),
-                        ("handwritten_fusions.inc", handwritten)):
+                        ("handwritten_fusions.inc", handwritten), ("training_scalar_handlers.inc", scalar_training),
+                        ("training_fusion_handlers.inc", fused_training)):
         path = output / name
         content = "\n".join(lines) + "\n"
         if not path.exists() or path.read_text() != content:

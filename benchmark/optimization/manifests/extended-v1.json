@@ -1,4 +1,99 @@
 {
+  "schemaVersion": 3,
+  "operations": {
+    "16637281": "op::OpMovzx_Byte_32_Edx",
+    "53076809": "op::OpTest_EvGv_32_ModReg_Eax",
+    "68047131": "op::OpCmp_EbGb",
+    "88061088": "op::OpMov_Load_Edi",
+    "89946617": "op::OpMovsx_Word_32_Eax",
+    "95969792": "op::OpAnd_EaxImm_NF",
+    "107440469": "op::OpTest_EvGv_32_ModReg_Edx",
+    "118024057": "op::OpOr_EvGv_NF_32_ModReg",
+    "127488520": "op::OpImul_GvEv",
+    "145248965": "op::OpMovzx_Byte",
+    "148846463": "op::OpMov_Load_Eax_EaxBaseNoIndexNoSegment",
+    "154286324": "op::OpMovsx_Word_32_Edx",
+    "158624894": "op::OpMov_Load_Eax",
+    "164080901": "op::OpGroup1_EvIb_Sub_32_NoFlags_Edx",
+    "169874903": "op::OpMovzx_Word",
+    "177880110": "op::OpJcc_NE_Rel8",
+    "206663911": "op::OpGroup1_EvIz_Cmp_32_Flags",
+    "208351055": "op::OpXor_EvGv_NF_32_ModReg",
+    "209991602": "op::OpCmp_EvGv_16",
+    "218503242": "op::OpPop_Reg32_Ebp",
+    "227564214": "op::OpGroup1_EbIb_Cmp_ModReg_Reg3_Flags",
+    "230745163": "op::OpJcc_LE_Rel32",
+    "243057820": "op::OpTest_EbGb",
+    "243772035": "op::OpJcc_L_Rel32",
+    "245930428": "op::OpGroup1_EvIz_Add_16_NoFlags",
+    "264408817": "op::OpMov_EvGv_Ebx",
+    "278907765": "op::OpMovzx_Byte_32_Ecx",
+    "279046358": "op::OpAdd_EvGv_NF_32_ModReg",
+    "304499112": "op::OpPush_Reg32_Esi",
+    "341641158": "op::OpMovsx_Byte",
+    "351976141": "op::OpPush_Reg32_Ebx",
+    "353632188": "op::OpGroup5_Ev_Inc_32_Flags",
+    "357927349": "op::OpPush_Reg32_Edi",
+    "366546829": "op::OpTest_EvGv_32_ModReg",
+    "393740692": "op::OpJcc_E_Rel32",
+    "397841557": "op::OpMov_RegImm8",
+    "402218654": "op::OpLea_32_Ecx",
+    "403503979": "op::OpGroup2_EvIb_Sar_ModReg",
+    "413570705": "op::OpTest_EvGv_32_ModReg_Ecx",
+    "443099724": "op::OpMov_EvGv_Esi",
+    "458250018": "op::OpMov_EvGv",
+    "463589706": "op::OpGroup1_EbIb_Cmp_ModReg_Reg2_Flags",
+    "466880386": "op::OpInc_Reg_NF",
+    "471314767": "op::OpGroup3_Ev_Not_32_Flags",
+    "473606899": "op::OpGroup1_EvIz_And_16_NoFlags",
+    "474855287": "op::OpPop_Reg32_Esi",
+    "517240663": "op::OpGroup2_EvIb_Shl_ModReg",
+    "526239361": "op::OpMov_EvGv_Ecx",
+    "529633136": "op::OpGroup2_EvIb_Shr",
+    "529949964": "op::OpXor_GvEv_NF",
+    "538203795": "op::OpGroup2_EvIb_Shr_ModReg",
+    "546501918": "op::OpMov_EvGv_Eax",
+    "565645967": "op::OpSub_GvEv",
+    "587190426": "op::OpGroup1_EvIb_Sub_32_Flags_Eax",
+    "592616420": "op::OpGroup5_Ev_Dec_32_Flags",
+    "600036728": "op::OpJcc_BE_Rel8",
+    "606219231": "op::OpMov_Load_Edx",
+    "611144930": "op::OpJcc_B_Rel32",
+    "621344446": "op::OpGroup1_EvIz_And_32_Flags",
+    "631740461": "op::OpMov_Load_Eax_EspBaseNoIndexNoSegment",
+    "642872958": "op::OpGroup1_EvIb_And_32_NoFlags_ModReg",
+    "660840039": "op::OpAnd_EvGv_NF_32_ModReg",
+    "697178202": "op::OpMov_Load_Ecx_EaxBaseNoIndexNoSegment",
+    "705496249": "op::OpJcc_E_Rel8",
+    "749228288": "op::OpCmp_EvGv_32_ModReg",
+    "776835316": "op::OpGroup1_EvIb_Add_32_NoFlags_Eax",
+    "780621308": "op::OpLea_32",
+    "785941859": "op::OpJcc_BE_Rel32",
+    "795567635": "op::OpPush_Reg32_Ebp",
+    "821948012": "op::OpMov_Load_Edx_EaxBaseNoIndexNoSegment",
+    "828683660": "op::OpMov_Load_Edi_EspBaseNoIndexNoSegment",
+    "828971140": "op::OpMovsx_Word",
+    "841367141": "op::OpMov_EvGv_Edx",
+    "843811492": "op::OpMov_Load_Ecx",
+    "854625039": "op::OpGroup1_EbIb_Cmp_Flags",
+    "862019004": "op::OpCmp_EvGv_32",
+    "862756640": "op::OpMovzx_Byte_32_Eax",
+    "870708234": "op::OpAdd_EvGv",
+    "878923552": "op::OpCmp_GvEv_32",
+    "892743760": "op::OpJcc_AE_Rel32",
+    "900498243": "op::OpMov_Load_Edx_EsiBaseNoIndexNoSegment",
+    "916292517": "op::OpGroup1_EvIb_Add_32_NoFlags_Ecx",
+    "940669166": "op::OpMov_Store_Edx_EsiBaseNoIndexNoSegment",
+    "955487773": "op::OpGroup1_EbIb_Cmp_ModReg_Reg1_Flags",
+    "968678833": "op::OpPop_Reg32_Ebx",
+    "973756555": "op::OpJcc_NE_Rel32",
+    "1030995241": "op::OpGroup1_EvIz_Cmp_32_Flags_Ecx",
+    "1033157170": "op::OpPop_Reg32_Edi",
+    "1037377700": "op::OpGroup1_EvIb_Cmp_32_Flags",
+    "1045634527": "op::OpMov_Load_Esi",
+    "1049010914": "op::OpTest_AlImm",
+    "1065995012": "op::OpMov_Store_Ecx_EsiBaseNoIndexNoSegment"
+  },
   "metadata": {
     "extended_lookup": true,
     "purpose": "Current GNU base + current GCC CoreMark 64 observed pairs and 32 four-op sequences",
@@ -7,8 +102,8 @@
   "candidates": [
     {
       "pair": [
-        "op::OpGroup1_EvIz_And_32_Flags",
-        "op::OpJcc_NE_Rel32"
+        621344446,
+        973756555
       ],
       "weighted_exec_count": 14613400,
       "score": 0,
@@ -16,8 +111,8 @@
     },
     {
       "pair": [
-        "op::OpCmp_EvGv_32_ModReg",
-        "op::OpJcc_NE_Rel32"
+        749228288,
+        973756555
       ],
       "weighted_exec_count": 104635433,
       "score": 0,
@@ -25,8 +120,8 @@
     },
     {
       "pair": [
-        "op::OpGroup1_EvIz_Cmp_32_Flags_Ecx",
-        "op::OpJcc_NE_Rel32"
+        1030995241,
+        973756555
       ],
       "weighted_exec_count": 390582,
       "score": 0,
@@ -34,8 +129,8 @@
     },
     {
       "pair": [
-        "op::OpCmp_EvGv_32",
-        "op::OpJcc_NE_Rel32"
+        862019004,
+        973756555
       ],
       "weighted_exec_count": 52928971,
       "score": 0,
@@ -43,8 +138,8 @@
     },
     {
       "pair": [
-        "op::OpCmp_EvGv_32_ModReg",
-        "op::OpJcc_B_Rel32"
+        749228288,
+        611144930
       ],
       "weighted_exec_count": 10977855,
       "score": 0,
@@ -52,8 +147,8 @@
     },
     {
       "pair": [
-        "op::OpGroup1_EvIz_Cmp_32_Flags",
-        "op::OpJcc_NE_Rel32"
+        206663911,
+        973756555
       ],
       "weighted_exec_count": 2458215,
       "score": 0,
@@ -61,8 +156,8 @@
     },
     {
       "pair": [
-        "op::OpCmp_EvGv_32",
-        "op::OpJcc_AE_Rel32"
+        862019004,
+        892743760
       ],
       "weighted_exec_count": 45498897,
       "score": 0,
@@ -70,8 +165,8 @@
     },
     {
       "pair": [
-        "op::OpCmp_EvGv_32_ModReg",
-        "op::OpJcc_E_Rel32"
+        749228288,
+        393740692
       ],
       "weighted_exec_count": 12507814,
       "score": 0,
@@ -79,8 +174,8 @@
     },
     {
       "pair": [
-        "op::OpGroup1_EbIb_Cmp_Flags",
-        "op::OpJcc_E_Rel32"
+        854625039,
+        393740692
       ],
       "weighted_exec_count": 14332667,
       "score": 0,
@@ -88,8 +183,8 @@
     },
     {
       "pair": [
-        "op::OpTest_EvGv_32_ModReg_Edx",
-        "op::OpJcc_E_Rel32"
+        107440469,
+        393740692
       ],
       "weighted_exec_count": 12972276,
       "score": 0,
@@ -97,8 +192,8 @@
     },
     {
       "pair": [
-        "op::OpTest_EbGb",
-        "op::OpJcc_E_Rel32"
+        243057820,
+        393740692
       ],
       "weighted_exec_count": 6977265,
       "score": 0,
@@ -106,8 +201,8 @@
     },
     {
       "pair": [
-        "op::OpGroup1_EvIb_Cmp_32_Flags",
-        "op::OpJcc_NE_Rel32"
+        1037377700,
+        973756555
       ],
       "weighted_exec_count": 12841564,
       "score": 0,
@@ -115,8 +210,8 @@
     },
     {
       "pair": [
-        "op::OpGroup1_EbIb_Cmp_Flags",
-        "op::OpJcc_NE_Rel32"
+        854625039,
+        973756555
       ],
       "weighted_exec_count": 26272729,
       "score": 0,
@@ -124,8 +219,8 @@
     },
     {
       "pair": [
-        "op::OpCmp_EvGv_32_ModReg",
-        "op::OpJcc_L_Rel32"
+        749228288,
+        243772035
       ],
       "weighted_exec_count": 26945206,
       "score": 0,
@@ -133,8 +228,8 @@
     },
     {
       "pair": [
-        "op::OpCmp_EbGb",
-        "op::OpJcc_NE_Rel32"
+        68047131,
+        973756555
       ],
       "weighted_exec_count": 54649852,
       "score": 0,
@@ -142,8 +237,8 @@
     },
     {
       "pair": [
-        "op::OpTest_EvGv_32_ModReg_Eax",
-        "op::OpJcc_E_Rel32"
+        53076809,
+        393740692
       ],
       "weighted_exec_count": 12138308,
       "score": 0,
@@ -151,8 +246,8 @@
     },
     {
       "pair": [
-        "op::OpTest_EvGv_32_ModReg",
-        "op::OpJcc_E_Rel32"
+        366546829,
+        393740692
       ],
       "weighted_exec_count": 10875366,
       "score": 0,
@@ -160,8 +255,8 @@
     },
     {
       "pair": [
-        "op::OpGroup1_EvIb_Cmp_32_Flags",
-        "op::OpJcc_E_Rel32"
+        1037377700,
+        393740692
       ],
       "weighted_exec_count": 21383533,
       "score": 0,
@@ -169,8 +264,8 @@
     },
     {
       "pair": [
-        "op::OpCmp_EbGb",
-        "op::OpJcc_E_Rel32"
+        68047131,
+        393740692
       ],
       "weighted_exec_count": 22810795,
       "score": 0,
@@ -178,8 +273,8 @@
     },
     {
       "pair": [
-        "op::OpTest_EvGv_32_ModReg_Ecx",
-        "op::OpJcc_E_Rel32"
+        413570705,
+        393740692
       ],
       "weighted_exec_count": 7418761,
       "score": 0,
@@ -187,8 +282,8 @@
     },
     {
       "pair": [
-        "op::OpCmp_EvGv_32_ModReg",
-        "op::OpJcc_AE_Rel32"
+        749228288,
+        892743760
       ],
       "weighted_exec_count": 9840743,
       "score": 0,
@@ -196,8 +291,8 @@
     },
     {
       "pair": [
-        "op::OpTest_AlImm",
-        "op::OpJcc_E_Rel32"
+        1049010914,
+        393740692
       ],
       "weighted_exec_count": 5749745,
       "score": 0,
@@ -205,8 +300,8 @@
     },
     {
       "pair": [
-        "op::OpSub_GvEv",
-        "op::OpJcc_E_Rel32"
+        565645967,
+        393740692
       ],
       "weighted_exec_count": 5879361,
       "score": 0,
@@ -214,8 +309,8 @@
     },
     {
       "pair": [
-        "op::OpCmp_GvEv_32",
-        "op::OpJcc_AE_Rel32"
+        878923552,
+        892743760
       ],
       "weighted_exec_count": 9821366,
       "score": 0,
@@ -223,8 +318,8 @@
     },
     {
       "pair": [
-        "op::OpTest_EvGv_32_ModReg_Eax",
-        "op::OpJcc_NE_Rel32"
+        53076809,
+        973756555
       ],
       "weighted_exec_count": 2145589,
       "score": 0,
@@ -232,8 +327,8 @@
     },
     {
       "pair": [
-        "op::OpTest_EbGb",
-        "op::OpJcc_NE_Rel32"
+        243057820,
+        973756555
       ],
       "weighted_exec_count": 4332301,
       "score": 0,
@@ -241,8 +336,8 @@
     },
     {
       "pair": [
-        "op::OpCmp_EvGv_32_ModReg",
-        "op::OpJcc_LE_Rel32"
+        749228288,
+        230745163
       ],
       "weighted_exec_count": 7373018,
       "score": 0,
@@ -250,8 +345,8 @@
     },
     {
       "pair": [
-        "op::OpCmp_EvGv_32",
-        "op::OpJcc_LE_Rel32"
+        862019004,
+        230745163
       ],
       "weighted_exec_count": 9246020,
       "score": 0,
@@ -259,8 +354,8 @@
     },
     {
       "pair": [
-        "op::OpGroup5_Ev_Dec_32_Flags",
-        "op::OpJcc_NE_Rel32"
+        592616420,
+        973756555
       ],
       "weighted_exec_count": 30597267,
       "score": 0,
@@ -268,8 +363,8 @@
     },
     {
       "pair": [
-        "op::OpGroup1_EvIz_And_32_Flags",
-        "op::OpJcc_E_Rel32"
+        621344446,
+        393740692
       ],
       "weighted_exec_count": 6848999,
       "score": 0,
@@ -277,8 +372,8 @@
     },
     {
       "pair": [
-        "op::OpCmp_EvGv_32",
-        "op::OpJcc_B_Rel32"
+        862019004,
+        611144930
       ],
       "weighted_exec_count": 1596141,
       "score": 0,
@@ -286,8 +381,8 @@
     },
     {
       "pair": [
-        "op::OpGroup1_EvIb_Cmp_32_Flags",
-        "op::OpJcc_BE_Rel32"
+        1037377700,
+        785941859
       ],
       "weighted_exec_count": 4239154,
       "score": 0,
@@ -295,10 +390,10 @@
     },
     {
       "pair": [
-        "op::OpGroup3_Ev_Not_32_Flags",
-        "op::OpAnd_EvGv_NF_32_ModReg",
-        "op::OpGroup1_EvIz_And_32_Flags",
-        "op::OpJcc_NE_Rel32"
+        471314767,
+        660840039,
+        621344446,
+        973756555
       ],
       "weighted_exec_count": 14612156,
       "score": 0.047234386722153326,
@@ -306,10 +401,10 @@
     },
     {
       "pair": [
-        "op::OpLea_32_Ecx",
-        "op::OpGroup3_Ev_Not_32_Flags",
-        "op::OpAnd_EvGv_NF_32_ModReg",
-        "op::OpGroup1_EvIz_And_32_Flags"
+        402218654,
+        471314767,
+        660840039,
+        621344446
       ],
       "weighted_exec_count": 12668802,
       "score": 0.04175698355807829,
@@ -317,10 +412,10 @@
     },
     {
       "pair": [
-        "op::OpMov_Load_Edx_EaxBaseNoIndexNoSegment",
-        "op::OpLea_32_Ecx",
-        "op::OpGroup3_Ev_Not_32_Flags",
-        "op::OpAnd_EvGv_NF_32_ModReg"
+        821948012,
+        402218654,
+        471314767,
+        660840039
       ],
       "weighted_exec_count": 12653199,
       "score": 0.041710651711573836,
@@ -328,10 +423,10 @@
     },
     {
       "pair": [
-        "op::OpMov_Load_Ecx",
-        "op::OpXor_GvEv_NF",
-        "op::OpCmp_EvGv_32_ModReg",
-        "op::OpJcc_NE_Rel32"
+        843811492,
+        529949964,
+        749228288,
+        973756555
       ],
       "weighted_exec_count": 50332298,
       "score": 0.029207676631501076,
@@ -339,10 +434,10 @@
     },
     {
       "pair": [
-        "op::OpMovzx_Byte",
-        "op::OpMov_Load_Ecx",
-        "op::OpXor_GvEv_NF",
-        "op::OpCmp_EvGv_32_ModReg"
+        145248965,
+        843811492,
+        529949964,
+        749228288
       ],
       "weighted_exec_count": 50332298,
       "score": 0.029207676631501076,
@@ -350,10 +445,10 @@
     },
     {
       "pair": [
-        "op::OpGroup2_EvIb_Shr",
-        "op::OpMov_EvGv_Esi",
-        "op::OpMovzx_Byte",
-        "op::OpMov_Load_Ecx"
+        529633136,
+        443099724,
+        145248965,
+        843811492
       ],
       "weighted_exec_count": 50332300,
       "score": 0.02920767593444219,
@@ -361,10 +456,10 @@
     },
     {
       "pair": [
-        "op::OpInc_Reg_NF",
-        "op::OpXor_EvGv_NF_32_ModReg",
-        "op::OpGroup2_EvIb_Shr",
-        "op::OpMov_EvGv_Esi"
+        466880386,
+        208351055,
+        529633136,
+        443099724
       ],
       "weighted_exec_count": 50332300,
       "score": 0.02920767593444219,
@@ -372,10 +467,10 @@
     },
     {
       "pair": [
-        "op::OpMov_EvGv_Esi",
-        "op::OpMovzx_Byte",
-        "op::OpMov_Load_Ecx",
-        "op::OpXor_GvEv_NF"
+        443099724,
+        145248965,
+        843811492,
+        529949964
       ],
       "weighted_exec_count": 50332300,
       "score": 0.02920767593444219,
@@ -383,10 +478,10 @@
     },
     {
       "pair": [
-        "op::OpMovzx_Byte",
-        "op::OpInc_Reg_NF",
-        "op::OpXor_EvGv_NF_32_ModReg",
-        "op::OpGroup2_EvIb_Shr"
+        145248965,
+        466880386,
+        208351055,
+        529633136
       ],
       "weighted_exec_count": 50332300,
       "score": 0.02920767593444219,
@@ -394,10 +489,10 @@
     },
     {
       "pair": [
-        "op::OpXor_EvGv_NF_32_ModReg",
-        "op::OpGroup2_EvIb_Shr",
-        "op::OpMov_EvGv_Esi",
-        "op::OpMovzx_Byte"
+        208351055,
+        529633136,
+        443099724,
+        145248965
       ],
       "weighted_exec_count": 50332300,
       "score": 0.02920767593444219,
@@ -405,10 +500,10 @@
     },
     {
       "pair": [
-        "op::OpGroup5_Ev_Inc_32_Flags",
-        "op::OpMovzx_Byte",
-        "op::OpCmp_EvGv_32",
-        "op::OpJcc_NE_Rel32"
+        353632188,
+        145248965,
+        862019004,
+        973756555
       ],
       "weighted_exec_count": 29710009,
       "score": 0.012577838546047156,
@@ -416,10 +511,10 @@
     },
     {
       "pair": [
-        "op::OpMov_Load_Edx",
-        "op::OpMov_Load_Eax",
-        "op::OpGroup5_Ev_Inc_32_Flags",
-        "op::OpMovzx_Byte"
+        606219231,
+        158624894,
+        353632188,
+        145248965
       ],
       "weighted_exec_count": 29710082,
       "score": 0.012576672253618111,
@@ -427,10 +522,10 @@
     },
     {
       "pair": [
-        "op::OpMov_Load_Eax",
-        "op::OpGroup5_Ev_Inc_32_Flags",
-        "op::OpMovzx_Byte",
-        "op::OpCmp_EvGv_32"
+        158624894,
+        353632188,
+        145248965,
+        862019004
       ],
       "weighted_exec_count": 29710013,
       "score": 0.012576620521232445,
@@ -438,10 +533,10 @@
     },
     {
       "pair": [
-        "op::OpPop_Reg32_Ebx",
-        "op::OpPop_Reg32_Esi",
-        "op::OpPop_Reg32_Edi",
-        "op::OpPop_Reg32_Ebp"
+        968678833,
+        474855287,
+        1033157170,
+        218503242
       ],
       "weighted_exec_count": 22042766,
       "score": 0.0123400234653181,
@@ -449,10 +544,10 @@
     },
     {
       "pair": [
-        "op::OpGroup1_EvIz_Add_16_NoFlags",
-        "op::OpMov_EvGv",
-        "op::OpCmp_EvGv_32_ModReg",
-        "op::OpJcc_NE_Rel32"
+        245930428,
+        458250018,
+        749228288,
+        973756555
       ],
       "weighted_exec_count": 50135040,
       "score": 0.00972831295403136,
@@ -460,10 +555,10 @@
     },
     {
       "pair": [
-        "op::OpLea_32",
-        "op::OpGroup3_Ev_Not_32_Flags",
-        "op::OpAnd_EvGv_NF_32_ModReg",
-        "op::OpGroup1_EvIz_And_32_Flags"
+        780621308,
+        471314767,
+        660840039,
+        621344446
       ],
       "weighted_exec_count": 8791504,
       "score": 0.009551998495896444,
@@ -471,10 +566,10 @@
     },
     {
       "pair": [
-        "op::OpXor_EvGv_NF_32_ModReg",
-        "op::OpLea_32",
-        "op::OpGroup3_Ev_Not_32_Flags",
-        "op::OpAnd_EvGv_NF_32_ModReg"
+        208351055,
+        780621308,
+        471314767,
+        660840039
       ],
       "weighted_exec_count": 8791504,
       "score": 0.009551998495896444,
@@ -482,10 +577,10 @@
     },
     {
       "pair": [
-        "op::OpInc_Reg_NF",
-        "op::OpAdd_EvGv_NF_32_ModReg",
-        "op::OpGroup1_EvIz_Cmp_32_Flags_Ecx",
-        "op::OpJcc_NE_Rel32"
+        466880386,
+        279046358,
+        1030995241,
+        973756555
       ],
       "weighted_exec_count": 347136,
       "score": 0.00948876216411094,
@@ -493,10 +588,10 @@
     },
     {
       "pair": [
-        "op::OpMovzx_Byte",
-        "op::OpInc_Reg_NF",
-        "op::OpAdd_EvGv_NF_32_ModReg",
-        "op::OpGroup1_EvIz_Cmp_32_Flags_Ecx"
+        145248965,
+        466880386,
+        279046358,
+        1030995241
       ],
       "weighted_exec_count": 347136,
       "score": 0.00948876216411094,
@@ -504,10 +599,10 @@
     },
     {
       "pair": [
-        "op::OpAdd_EvGv",
-        "op::OpMovsx_Byte",
-        "op::OpInc_Reg_NF",
-        "op::OpAdd_EvGv_NF_32_ModReg"
+        870708234,
+        341641158,
+        466880386,
+        279046358
       ],
       "weighted_exec_count": 350208,
       "score": 0.008450147672878253,
@@ -515,10 +610,10 @@
     },
     {
       "pair": [
-        "op::OpInc_Reg_NF",
-        "op::OpAdd_EvGv_NF_32_ModReg",
-        "op::OpGroup1_EvIz_Cmp_32_Flags",
-        "op::OpJcc_NE_Rel32"
+        466880386,
+        279046358,
+        206663911,
+        973756555
       ],
       "weighted_exec_count": 350208,
       "score": 0.008450147672878253,
@@ -526,10 +621,10 @@
     },
     {
       "pair": [
-        "op::OpMovsx_Byte",
-        "op::OpInc_Reg_NF",
-        "op::OpAdd_EvGv_NF_32_ModReg",
-        "op::OpGroup1_EvIz_Cmp_32_Flags"
+        341641158,
+        466880386,
+        279046358,
+        206663911
       ],
       "weighted_exec_count": 350208,
       "score": 0.008450147672878253,
@@ -537,10 +632,10 @@
     },
     {
       "pair": [
-        "op::OpMovzx_Byte",
-        "op::OpAdd_EvGv",
-        "op::OpMovsx_Byte",
-        "op::OpInc_Reg_NF"
+        145248965,
+        870708234,
+        341641158,
+        466880386
       ],
       "weighted_exec_count": 350208,
       "score": 0.008450147672878253,
@@ -548,10 +643,10 @@
     },
     {
       "pair": [
-        "op::OpMovzx_Byte_32_Eax",
-        "op::OpMovzx_Byte_32_Eax",
-        "op::OpAdd_EvGv",
-        "op::OpMovzx_Byte_32_Eax"
+        862756640,
+        862756640,
+        870708234,
+        862756640
       ],
       "weighted_exec_count": 1942370,
       "score": 0.00704304581079964,
@@ -559,10 +654,10 @@
     },
     {
       "pair": [
-        "op::OpMov_Load_Edi",
-        "op::OpMov_EvGv_Eax",
-        "op::OpCmp_EvGv_32_ModReg",
-        "op::OpJcc_L_Rel32"
+        88061088,
+        546501918,
+        749228288,
+        243772035
       ],
       "weighted_exec_count": 24809388,
       "score": 0.006598668351408579,
@@ -570,10 +665,10 @@
     },
     {
       "pair": [
-        "op::OpMovzx_Byte",
-        "op::OpInc_Reg_NF",
-        "op::OpGroup1_EbIb_Cmp_Flags",
-        "op::OpJcc_NE_Rel32"
+        145248965,
+        466880386,
+        854625039,
+        973756555
       ],
       "weighted_exec_count": 24527198,
       "score": 0.006536617575416525,
@@ -581,10 +676,10 @@
     },
     {
       "pair": [
-        "op::OpMov_Load_Edi",
-        "op::OpMovzx_Byte",
-        "op::OpInc_Reg_NF",
-        "op::OpGroup1_EbIb_Cmp_Flags"
+        88061088,
+        145248965,
+        466880386,
+        854625039
       ],
       "weighted_exec_count": 24527196,
       "score": 0.006536616559306998,
@@ -592,10 +687,10 @@
     },
     {
       "pair": [
-        "op::OpMov_Load_Esi",
-        "op::OpMov_Load_Edi",
-        "op::OpMovzx_Byte",
-        "op::OpInc_Reg_NF"
+        1045634527,
+        88061088,
+        145248965,
+        466880386
       ],
       "weighted_exec_count": 24527196,
       "score": 0.006536616559306998,
@@ -603,10 +698,10 @@
     },
     {
       "pair": [
-        "op::OpMov_RegImm8",
-        "op::OpMov_Load_Edi",
-        "op::OpMov_EvGv_Eax",
-        "op::OpCmp_EvGv_32_ModReg"
+        397841557,
+        88061088,
+        546501918,
+        749228288
       ],
       "weighted_exec_count": 24052937,
       "score": 0.006420545820724553,
@@ -614,10 +709,10 @@
     },
     {
       "pair": [
-        "op::OpGroup1_EvIb_Sub_32_Flags_Eax",
-        "op::OpMovzx_Byte_32_Ecx",
-        "op::OpCmp_EvGv_32_ModReg",
-        "op::OpJcc_NE_Rel32"
+        587190426,
+        278907765,
+        749228288,
+        973756555
       ],
       "weighted_exec_count": 1760847,
       "score": 0.006243867937471764,
@@ -625,10 +720,10 @@
     },
     {
       "pair": [
-        "op::OpMov_EvGv_Eax",
-        "op::OpGroup1_EvIb_Sub_32_Flags_Eax",
-        "op::OpMovzx_Byte_32_Ecx",
-        "op::OpCmp_EvGv_32_ModReg"
+        546501918,
+        587190426,
+        278907765,
+        749228288
       ],
       "weighted_exec_count": 1760847,
       "score": 0.006243867937471764,
@@ -636,10 +731,10 @@
     },
     {
       "pair": [
-        "op::OpMov_Load_Edx_EaxBaseNoIndexNoSegment",
-        "op::OpXor_EvGv_NF_32_ModReg",
-        "op::OpLea_32",
-        "op::OpGroup3_Ev_Not_32_Flags"
+        821948012,
+        208351055,
+        780621308,
+        471314767
       ],
       "weighted_exec_count": 1958957,
       "score": 0.005523735010579485,
@@ -647,737 +742,737 @@
     },
     {
       "pair": [
-        "op::OpAdd_EvGv_NF_32_ModReg",
-        "op::OpCmp_EvGv_32_ModReg"
+        279046358,
+        749228288
       ],
       "training_count": 35060034
     },
     {
       "pair": [
-        "op::OpCmp_EvGv_32_ModReg",
-        "op::OpJcc_NE_Rel8"
+        749228288,
+        177880110
       ],
       "training_count": 31926034
     },
     {
       "pair": [
-        "op::OpTest_EvGv_32_ModReg_Edx",
-        "op::OpJcc_NE_Rel8"
+        107440469,
+        177880110
       ],
       "training_count": 30600129
     },
     {
       "pair": [
-        "op::OpMov_EvGv_Esi",
-        "op::OpTest_EvGv_32_ModReg_Edx"
+        443099724,
+        107440469
       ],
       "training_count": 30600006
     },
     {
       "pair": [
-        "op::OpMov_Load_Edx_EsiBaseNoIndexNoSegment",
-        "op::OpMov_Store_Ecx_EsiBaseNoIndexNoSegment"
+        900498243,
+        1065995012
       ],
       "training_count": 30600000
     },
     {
       "pair": [
-        "op::OpMov_Store_Ecx_EsiBaseNoIndexNoSegment",
-        "op::OpMov_EvGv_Esi"
+        1065995012,
+        443099724
       ],
       "training_count": 30600000
     },
     {
       "pair": [
-        "op::OpMov_EvGv_Edx",
-        "op::OpMov_Load_Edx_EsiBaseNoIndexNoSegment"
+        841367141,
+        900498243
       ],
       "training_count": 29580000
     },
     {
       "pair": [
-        "op::OpImul_GvEv",
-        "op::OpAdd_EvGv_NF_32_ModReg"
+        127488520,
+        279046358
       ],
       "training_count": 29340000
     },
     {
       "pair": [
-        "op::OpAdd_EvGv_NF_32_ModReg",
-        "op::OpImul_GvEv"
+        279046358,
+        127488520
       ],
       "training_count": 29160000
     },
     {
       "pair": [
-        "op::OpCmp_EvGv_16",
-        "op::OpJcc_NE_Rel8"
+        209991602,
+        177880110
       ],
       "training_count": 28575000
     },
     {
       "pair": [
-        "op::OpMov_Load_Eax_EaxBaseNoIndexNoSegment",
-        "op::OpTest_EvGv_32_ModReg_Eax"
+        148846463,
+        53076809
       ],
       "training_count": 28325006
     },
     {
       "pair": [
-        "op::OpGroup1_EvIb_And_32_NoFlags_ModReg",
-        "op::OpGroup1_EvIb_And_32_NoFlags_ModReg"
+        642872958,
+        642872958
       ],
       "training_count": 20420124
     },
     {
       "pair": [
-        "op::OpGroup1_EbIb_Cmp_ModReg_Reg2_Flags",
-        "op::OpJcc_E_Rel32"
+        463589706,
+        393740692
       ],
       "training_count": 16400003
     },
     {
       "pair": [
-        "op::OpMov_EvGv_Eax",
-        "op::OpAnd_EaxImm_NF"
+        546501918,
+        95969792
       ],
       "training_count": 16060044
     },
     {
       "pair": [
-        "op::OpGroup2_EvIb_Sar_ModReg",
-        "op::OpGroup1_EvIb_And_32_NoFlags_ModReg"
+        403503979,
+        642872958
       ],
       "training_count": 15600089
     },
     {
       "pair": [
-        "op::OpTest_EvGv_32_ModReg_Eax",
-        "op::OpJcc_E_Rel8"
+        53076809,
+        705496249
       ],
       "training_count": 15502831
     },
     {
       "pair": [
-        "op::OpGroup2_EvIb_Shl_ModReg",
-        "op::OpOr_EvGv_NF_32_ModReg"
+        517240663,
+        118024057
       ],
       "training_count": 15420044
     },
     {
       "pair": [
-        "op::OpMovsx_Word_32_Edx",
-        "op::OpMovsx_Word_32_Eax"
+        154286324,
+        89946617
       ],
       "training_count": 15135294
     },
     {
       "pair": [
-        "op::OpAnd_EaxImm_NF",
-        "op::OpGroup1_EvIz_And_16_NoFlags"
+        95969792,
+        473606899
       ],
       "training_count": 14920040
     },
     {
       "pair": [
-        "op::OpOr_EvGv_NF_32_ModReg",
-        "op::OpMov_EvGv_Eax"
+        118024057,
+        546501918
       ],
       "training_count": 14600040
     },
     {
       "pair": [
-        "op::OpImul_GvEv",
-        "op::OpMov_EvGv_Eax"
+        127488520,
+        546501918
       ],
       "training_count": 14580081
     },
     {
       "pair": [
-        "op::OpMov_EvGv_Eax",
-        "op::OpGroup2_EvIb_Sar_ModReg"
+        546501918,
+        403503979
       ],
       "training_count": 14580081
     },
     {
       "pair": [
-        "op::OpGroup1_EvIb_Add_32_NoFlags_Eax",
-        "op::OpAdd_EvGv_NF_32_ModReg"
+        776835316,
+        279046358
       ],
       "training_count": 14580006
     },
     {
       "pair": [
-        "op::OpGroup1_EvIb_Add_32_NoFlags_Ecx",
-        "op::OpAdd_EvGv_NF_32_ModReg"
+        916292517,
+        279046358
       ],
       "training_count": 14580000
     },
     {
       "pair": [
-        "op::OpGroup1_EvIb_And_32_NoFlags_ModReg",
-        "op::OpImul_GvEv"
+        642872958,
+        127488520
       ],
       "training_count": 14580000
     },
     {
       "pair": [
-        "op::OpGroup2_EvIb_Sar_ModReg",
-        "op::OpGroup2_EvIb_Sar_ModReg"
+        403503979,
+        403503979
       ],
       "training_count": 14580000
     },
     {
       "pair": [
-        "op::OpMovsx_Word",
-        "op::OpGroup1_EvIb_Add_32_NoFlags_Eax"
+        828971140,
+        776835316
       ],
       "training_count": 14580000
     },
     {
       "pair": [
-        "op::OpMovsx_Word_32_Eax",
-        "op::OpGroup1_EvIb_Add_32_NoFlags_Ecx"
+        89946617,
+        916292517
       ],
       "training_count": 14580000
     },
     {
       "pair": [
-        "op::OpMovsx_Word_32_Edx",
-        "op::OpMovsx_Word"
+        154286324,
+        828971140
       ],
       "training_count": 14580000
     },
     {
       "pair": [
-        "op::OpMovzx_Word",
-        "op::OpCmp_EvGv_16"
+        169874903,
+        209991602
       ],
       "training_count": 14475003
     },
     {
       "pair": [
-        "op::OpMov_Load_Ecx_EaxBaseNoIndexNoSegment",
-        "op::OpMovzx_Word"
+        697178202,
+        169874903
       ],
       "training_count": 14475000
     },
     {
       "pair": [
-        "op::OpGroup1_EvIb_Add_32_NoFlags_Ecx",
-        "op::OpTest_EbGb"
+        916292517,
+        243057820
       ],
       "training_count": 14440000
     },
     {
       "pair": [
-        "op::OpMovzx_Byte_32_Edx",
-        "op::OpGroup1_EvIb_Add_32_NoFlags_Ecx"
+        16637281,
+        916292517
       ],
       "training_count": 14440000
     },
     {
       "pair": [
-        "op::OpMov_Load_Ecx_EaxBaseNoIndexNoSegment",
-        "op::OpMovzx_Byte"
+        697178202,
+        145248965
       ],
       "training_count": 13955000
     },
     {
       "pair": [
-        "op::OpMovzx_Byte",
-        "op::OpCmp_EvGv_16"
+        145248965,
+        209991602
       ],
       "training_count": 13955000
     },
     {
       "pair": [
-        "op::OpGroup2_EvIb_Shr_ModReg",
-        "op::OpGroup2_EvIb_Shl_ModReg"
+        538203795,
+        517240663
       ],
       "training_count": 12060032
     },
     {
       "pair": [
-        "op::OpGroup1_EvIz_And_16_NoFlags",
-        "op::OpGroup2_EvIb_Shr_ModReg"
+        473606899,
+        538203795
       ],
       "training_count": 11680032
     },
     {
       "pair": [
-        "op::OpGroup1_EvIb_Sub_32_NoFlags_Edx",
-        "op::OpGroup1_EbIb_Cmp_ModReg_Reg2_Flags"
+        164080901,
+        463589706
       ],
       "training_count": 11640000
     },
     {
       "pair": [
-        "op::OpGroup1_EbIb_Cmp_ModReg_Reg1_Flags",
-        "op::OpJcc_E_Rel32"
+        955487773,
+        393740692
       ],
       "training_count": 10720000
     },
     {
       "pair": [
-        "op::OpMov_EvGv_Edx",
-        "op::OpGroup1_EvIb_And_32_NoFlags_ModReg"
+        841367141,
+        642872958
       ],
       "training_count": 9680010
     },
     {
       "pair": [
-        "op::OpPop_Reg32_Ebx",
-        "op::OpPop_Reg32_Esi"
+        968678833,
+        474855287
       ],
       "training_count": 7836048
     },
     {
       "pair": [
-        "op::OpPush_Reg32_Esi",
-        "op::OpPush_Reg32_Ebx"
+        304499112,
+        351976141
       ],
       "training_count": 7835946
     },
     {
       "pair": [
-        "op::OpGroup1_EbIb_Cmp_ModReg_Reg3_Flags",
-        "op::OpJcc_NE_Rel32"
+        227564214,
+        973756555
       ],
       "training_count": 7400036
     },
     {
       "pair": [
-        "op::OpGroup1_EvIb_And_32_NoFlags_ModReg",
-        "op::OpGroup1_EbIb_Cmp_ModReg_Reg3_Flags"
+        642872958,
+        227564214
       ],
       "training_count": 7400001
     },
     {
       "pair": [
-        "op::OpGroup1_EbIb_Cmp_ModReg_Reg2_Flags",
-        "op::OpJcc_E_Rel8"
+        463589706,
+        705496249
       ],
       "training_count": 7060009
     },
     {
       "pair": [
-        "op::OpPop_Reg32_Esi",
-        "op::OpPop_Reg32_Edi"
+        474855287,
+        1033157170
       ],
       "training_count": 6676028
     },
     {
       "pair": [
-        "op::OpPush_Reg32_Edi",
-        "op::OpPush_Reg32_Esi"
+        357927349,
+        304499112
       ],
       "training_count": 6675803
     },
     {
       "pair": [
-        "op::OpTest_EbGb",
-        "op::OpJcc_NE_Rel8"
+        243057820,
+        177880110
       ],
       "training_count": 6521319
     },
     {
       "pair": [
-        "op::OpMov_EvGv_Ebx",
-        "op::OpCmp_EvGv_32_ModReg"
+        264408817,
+        749228288
       ],
       "training_count": 6480012
     },
     {
       "pair": [
-        "op::OpGroup1_EbIb_Cmp_ModReg_Reg2_Flags",
-        "op::OpJcc_BE_Rel32"
+        463589706,
+        785941859
       ],
       "training_count": 6440000
     },
     {
       "pair": [
-        "op::OpPop_Reg32_Edi",
-        "op::OpPop_Reg32_Ebp"
+        1033157170,
+        218503242
       ],
       "training_count": 6356008
     },
     {
       "pair": [
-        "op::OpPush_Reg32_Ebp",
-        "op::OpPush_Reg32_Edi"
+        795567635,
+        357927349
       ],
       "training_count": 6335923
     },
     {
       "pair": [
-        "op::OpLea_32",
-        "op::OpLea_32"
+        780621308,
+        780621308
       ],
       "training_count": 5495042
     },
     {
       "pair": [
-        "op::OpGroup1_EbIb_Cmp_ModReg_Reg2_Flags",
-        "op::OpJcc_BE_Rel8"
+        463589706,
+        600036728
       ],
       "training_count": 5200000
     },
     {
       "pair": [
-        "op::OpPush_Reg32_Esi",
-        "op::OpPush_Reg32_Edi"
+        304499112,
+        357927349
       ],
       "training_count": 5120125
     },
     {
       "pair": [
-        "op::OpGroup1_EbIb_Cmp_Flags",
-        "op::OpJcc_NE_Rel8"
+        854625039,
+        177880110
       ],
       "training_count": 5120114
     },
     {
       "pair": [
-        "op::OpMovzx_Byte_32_Ecx",
-        "op::OpTest_EbGb"
+        278907765,
+        243057820
       ],
       "training_count": 5120011
     },
     {
       "pair": [
-        "op::OpPush_Reg32_Ebx",
-        "op::OpMov_Load_Edi_EspBaseNoIndexNoSegment"
+        351976141,
+        828683660
       ],
       "training_count": 5120002
     },
     {
       "pair": [
-        "op::OpMov_Load_Eax_EspBaseNoIndexNoSegment",
-        "op::OpGroup1_EbIb_Cmp_Flags"
+        631740461,
+        854625039
       ],
       "training_count": 5120001
     },
     {
       "pair": [
-        "op::OpMov_Load_Eax_EspBaseNoIndexNoSegment",
-        "op::OpMov_Load_Edx"
+        631740461,
+        606219231
       ],
       "training_count": 5120000
     },
     {
       "pair": [
-        "op::OpMov_Load_Edi_EspBaseNoIndexNoSegment",
-        "op::OpMov_Load_Eax_EspBaseNoIndexNoSegment"
+        828683660,
+        631740461
       ],
       "training_count": 5120000
     },
     {
       "pair": [
-        "op::OpMov_Load_Edx",
-        "op::OpMovzx_Byte_32_Ecx"
+        606219231,
+        278907765
       ],
       "training_count": 5120000
     },
     {
       "pair": [
-        "op::OpMov_Store_Edx_EsiBaseNoIndexNoSegment",
-        "op::OpPop_Reg32_Ebx"
+        940669166,
+        968678833
       ],
       "training_count": 5120000
     },
     {
       "pair": [
-        "op::OpMov_EvGv_Ecx",
-        "op::OpMov_Load_Ecx_EaxBaseNoIndexNoSegment"
+        526239361,
+        697178202
       ],
       "training_count": 4860000
     },
     {
       "pair": [
-        "op::OpMov_Load_Edx_EsiBaseNoIndexNoSegment",
-        "op::OpMov_Store_Ecx_EsiBaseNoIndexNoSegment",
-        "op::OpMov_EvGv_Esi",
-        "op::OpTest_EvGv_32_ModReg_Edx"
+        900498243,
+        1065995012,
+        443099724,
+        107440469
       ],
       "training_count": 30600000
     },
     {
       "pair": [
-        "op::OpMov_Store_Ecx_EsiBaseNoIndexNoSegment",
-        "op::OpMov_EvGv_Esi",
-        "op::OpTest_EvGv_32_ModReg_Edx",
-        "op::OpJcc_NE_Rel8"
+        1065995012,
+        443099724,
+        107440469,
+        177880110
       ],
       "training_count": 30600000
     },
     {
       "pair": [
-        "op::OpMov_EvGv_Edx",
-        "op::OpMov_Load_Edx_EsiBaseNoIndexNoSegment",
-        "op::OpMov_Store_Ecx_EsiBaseNoIndexNoSegment",
-        "op::OpMov_EvGv_Esi"
+        841367141,
+        900498243,
+        1065995012,
+        443099724
       ],
       "training_count": 29580000
     },
     {
       "pair": [
-        "op::OpImul_GvEv",
-        "op::OpAdd_EvGv_NF_32_ModReg",
-        "op::OpCmp_EvGv_32_ModReg",
-        "op::OpJcc_NE_Rel8"
+        127488520,
+        279046358,
+        749228288,
+        177880110
       ],
       "training_count": 29160000
     },
     {
       "pair": [
-        "op::OpAdd_EvGv_NF_32_ModReg",
-        "op::OpImul_GvEv",
-        "op::OpAdd_EvGv_NF_32_ModReg",
-        "op::OpCmp_EvGv_32_ModReg"
+        279046358,
+        127488520,
+        279046358,
+        749228288
       ],
       "training_count": 14580000
     },
     {
       "pair": [
-        "op::OpAdd_EvGv_NF_32_ModReg",
-        "op::OpImul_GvEv",
-        "op::OpMov_EvGv_Eax",
-        "op::OpGroup2_EvIb_Sar_ModReg"
+        279046358,
+        127488520,
+        546501918,
+        403503979
       ],
       "training_count": 14580000
     },
     {
       "pair": [
-        "op::OpGroup1_EvIb_Add_32_NoFlags_Eax",
-        "op::OpAdd_EvGv_NF_32_ModReg",
-        "op::OpImul_GvEv",
-        "op::OpAdd_EvGv_NF_32_ModReg"
+        776835316,
+        279046358,
+        127488520,
+        279046358
       ],
       "training_count": 14580000
     },
     {
       "pair": [
-        "op::OpGroup1_EvIb_Add_32_NoFlags_Ecx",
-        "op::OpAdd_EvGv_NF_32_ModReg",
-        "op::OpImul_GvEv",
-        "op::OpMov_EvGv_Eax"
+        916292517,
+        279046358,
+        127488520,
+        546501918
       ],
       "training_count": 14580000
     },
     {
       "pair": [
-        "op::OpGroup1_EvIb_And_32_NoFlags_ModReg",
-        "op::OpGroup1_EvIb_And_32_NoFlags_ModReg",
-        "op::OpImul_GvEv",
-        "op::OpAdd_EvGv_NF_32_ModReg"
+        642872958,
+        642872958,
+        127488520,
+        279046358
       ],
       "training_count": 14580000
     },
     {
       "pair": [
-        "op::OpGroup1_EvIb_And_32_NoFlags_ModReg",
-        "op::OpImul_GvEv",
-        "op::OpAdd_EvGv_NF_32_ModReg",
-        "op::OpCmp_EvGv_32_ModReg"
+        642872958,
+        127488520,
+        279046358,
+        749228288
       ],
       "training_count": 14580000
     },
     {
       "pair": [
-        "op::OpGroup2_EvIb_Sar_ModReg",
-        "op::OpGroup1_EvIb_And_32_NoFlags_ModReg",
-        "op::OpGroup1_EvIb_And_32_NoFlags_ModReg",
-        "op::OpImul_GvEv"
+        403503979,
+        642872958,
+        642872958,
+        127488520
       ],
       "training_count": 14580000
     },
     {
       "pair": [
-        "op::OpGroup2_EvIb_Sar_ModReg",
-        "op::OpGroup2_EvIb_Sar_ModReg",
-        "op::OpGroup1_EvIb_And_32_NoFlags_ModReg",
-        "op::OpGroup1_EvIb_And_32_NoFlags_ModReg"
+        403503979,
+        403503979,
+        642872958,
+        642872958
       ],
       "training_count": 14580000
     },
     {
       "pair": [
-        "op::OpImul_GvEv",
-        "op::OpMov_EvGv_Eax",
-        "op::OpGroup2_EvIb_Sar_ModReg",
-        "op::OpGroup2_EvIb_Sar_ModReg"
+        127488520,
+        546501918,
+        403503979,
+        403503979
       ],
       "training_count": 14580000
     },
     {
       "pair": [
-        "op::OpMov_EvGv_Eax",
-        "op::OpGroup2_EvIb_Sar_ModReg",
-        "op::OpGroup2_EvIb_Sar_ModReg",
-        "op::OpGroup1_EvIb_And_32_NoFlags_ModReg"
+        546501918,
+        403503979,
+        403503979,
+        642872958
       ],
       "training_count": 14580000
     },
     {
       "pair": [
-        "op::OpMovsx_Word",
-        "op::OpGroup1_EvIb_Add_32_NoFlags_Eax",
-        "op::OpAdd_EvGv_NF_32_ModReg",
-        "op::OpImul_GvEv"
+        828971140,
+        776835316,
+        279046358,
+        127488520
       ],
       "training_count": 14580000
     },
     {
       "pair": [
-        "op::OpMovsx_Word_32_Eax",
-        "op::OpGroup1_EvIb_Add_32_NoFlags_Ecx",
-        "op::OpAdd_EvGv_NF_32_ModReg",
-        "op::OpImul_GvEv"
+        89946617,
+        916292517,
+        279046358,
+        127488520
       ],
       "training_count": 14580000
     },
     {
       "pair": [
-        "op::OpMovsx_Word_32_Edx",
-        "op::OpMovsx_Word",
-        "op::OpGroup1_EvIb_Add_32_NoFlags_Eax",
-        "op::OpAdd_EvGv_NF_32_ModReg"
+        154286324,
+        828971140,
+        776835316,
+        279046358
       ],
       "training_count": 14580000
     },
     {
       "pair": [
-        "op::OpMovsx_Word_32_Edx",
-        "op::OpMovsx_Word_32_Eax",
-        "op::OpGroup1_EvIb_Add_32_NoFlags_Ecx",
-        "op::OpAdd_EvGv_NF_32_ModReg"
+        154286324,
+        89946617,
+        916292517,
+        279046358
       ],
       "training_count": 14580000
     },
     {
       "pair": [
-        "op::OpMov_Load_Ecx_EaxBaseNoIndexNoSegment",
-        "op::OpMovzx_Word",
-        "op::OpCmp_EvGv_16",
-        "op::OpJcc_NE_Rel8"
+        697178202,
+        169874903,
+        209991602,
+        177880110
       ],
       "training_count": 14475000
     },
     {
       "pair": [
-        "op::OpMov_Load_Ecx_EaxBaseNoIndexNoSegment",
-        "op::OpMovzx_Byte",
-        "op::OpCmp_EvGv_16",
-        "op::OpJcc_NE_Rel8"
+        697178202,
+        145248965,
+        209991602,
+        177880110
       ],
       "training_count": 13955000
     },
     {
       "pair": [
-        "op::OpGroup1_EvIz_And_16_NoFlags",
-        "op::OpGroup2_EvIb_Shr_ModReg",
-        "op::OpGroup2_EvIb_Shl_ModReg",
-        "op::OpOr_EvGv_NF_32_ModReg"
+        473606899,
+        538203795,
+        517240663,
+        118024057
       ],
       "training_count": 11680032
     },
     {
       "pair": [
-        "op::OpGroup2_EvIb_Shr_ModReg",
-        "op::OpGroup2_EvIb_Shl_ModReg",
-        "op::OpOr_EvGv_NF_32_ModReg",
-        "op::OpMov_EvGv_Eax"
+        538203795,
+        517240663,
+        118024057,
+        546501918
       ],
       "training_count": 11680032
     },
     {
       "pair": [
-        "op::OpAnd_EaxImm_NF",
-        "op::OpGroup1_EvIz_And_16_NoFlags",
-        "op::OpGroup2_EvIb_Shr_ModReg",
-        "op::OpGroup2_EvIb_Shl_ModReg"
+        95969792,
+        473606899,
+        538203795,
+        517240663
       ],
       "training_count": 10540028
     },
     {
       "pair": [
-        "op::OpMov_EvGv_Eax",
-        "op::OpAnd_EaxImm_NF",
-        "op::OpGroup1_EvIz_And_16_NoFlags",
-        "op::OpGroup2_EvIb_Shr_ModReg"
+        546501918,
+        95969792,
+        473606899,
+        538203795
       ],
       "training_count": 10540028
     },
     {
       "pair": [
-        "op::OpGroup2_EvIb_Shl_ModReg",
-        "op::OpOr_EvGv_NF_32_ModReg",
-        "op::OpMov_EvGv_Eax",
-        "op::OpAnd_EaxImm_NF"
+        517240663,
+        118024057,
+        546501918,
+        95969792
       ],
       "training_count": 10220028
     },
     {
       "pair": [
-        "op::OpOr_EvGv_NF_32_ModReg",
-        "op::OpMov_EvGv_Eax",
-        "op::OpAnd_EaxImm_NF",
-        "op::OpGroup1_EvIz_And_16_NoFlags"
+        118024057,
+        546501918,
+        95969792,
+        473606899
       ],
       "training_count": 10220028
     },
     {
       "pair": [
-        "op::OpMovzx_Byte_32_Edx",
-        "op::OpGroup1_EvIb_Add_32_NoFlags_Ecx",
-        "op::OpTest_EbGb",
-        "op::OpJcc_E_Rel32"
+        16637281,
+        916292517,
+        243057820,
+        393740692
       ],
       "training_count": 7920000
     },
     {
       "pair": [
-        "op::OpMov_EvGv_Edx",
-        "op::OpGroup1_EvIb_And_32_NoFlags_ModReg",
-        "op::OpGroup1_EbIb_Cmp_ModReg_Reg3_Flags",
-        "op::OpJcc_NE_Rel32"
+        841367141,
+        642872958,
+        227564214,
+        973756555
       ],
       "training_count": 7400000
     },
     {
       "pair": [
-        "op::OpMovzx_Byte_32_Edx",
-        "op::OpGroup1_EvIb_Add_32_NoFlags_Ecx",
-        "op::OpTest_EbGb",
-        "op::OpJcc_NE_Rel8"
+        16637281,
+        916292517,
+        243057820,
+        177880110
       ],
       "training_count": 6520000
     },
     {
       "pair": [
-        "op::OpPush_Reg32_Ebp",
-        "op::OpPush_Reg32_Edi",
-        "op::OpPush_Reg32_Esi",
-        "op::OpPush_Reg32_Ebx"
+        795567635,
+        357927349,
+        304499112,
+        351976141
       ],
       "training_count": 6335755
     },
     {
       "pair": [
-        "op::OpPush_Reg32_Edi",
-        "op::OpPush_Reg32_Esi",
-        "op::OpPush_Reg32_Ebx",
-        "op::OpMov_Load_Edi_EspBaseNoIndexNoSegment"
+        357927349,
+        304499112,
+        351976141,
+        828683660
       ],
       "training_count": 5120002
     },
     {
       "pair": [
-        "op::OpMov_Load_Eax_EspBaseNoIndexNoSegment",
-        "op::OpMov_Load_Edx",
-        "op::OpMovzx_Byte_32_Ecx",
-        "op::OpTest_EbGb"
+        631740461,
+        606219231,
+        278907765,
+        243057820
       ],
       "training_count": 5120000
     }

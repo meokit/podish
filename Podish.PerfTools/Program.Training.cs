@@ -14,16 +14,20 @@ namespace Podish.PerfTools;
 
 internal static partial class Program
 {
+    private const int TrainingProfileVersion = 3;
+
     internal sealed record TrainingSuite(int SchemaVersion, string Id, uint Seed, int Bytes, int Iterations,
         string[] Cases, int[] LightSizes, int TopPairs, double MinimumHotMass, double MinimumTopOverlap,
         double MaximumJensenShannon, int TimeoutSeconds, string Corpus = "records-v1", int TarFileBytes = 65536,
         string Purpose = "unspecified");
-    private sealed record TrainingPair(string First, string Second, ulong Count);
-    private sealed record TrainingNGram(string[] Ops, ulong Count);
+    private sealed record TrainingPair(uint First, uint Second, ulong Count);
+    private sealed record TrainingNGram(uint[] Ops, ulong Count);
     private sealed record TrainingProfile(int SchemaVersion, string CounterSemantics, uint BuildFeatures,
-        string SuperOpcodeSetHash, TrainingPair[] Pairs, string? NgramSemantics = null, TrainingNGram[]? Ngrams = null);
+        string SuperOpcodeSetHash, Dictionary<uint, string> Operations, TrainingPair[] Pairs,
+        string NgramSemantics, TrainingNGram[] Ngrams);
     private sealed record TrainingSample(string Case, int Bytes, double Seconds, string OutputHash,
-        string NativeHash, uint BuildFeatures, string SetHash, TrainingPair[] Pairs, TrainingNGram[]? Ngrams = null);
+        string NativeHash, uint BuildFeatures, string SetHash, Dictionary<uint, string> Operations,
+        TrainingPair[] Pairs, TrainingNGram[] Ngrams);
     private sealed record TrainingRun(int SchemaVersion, string SuiteHash, string SuiteId, string RootfsLockHash,
         string NativeHash, string Host, string Runtime, TrainingSample[] Samples, string RuntimePackageHash = "",
         string CollectorSourceHash = "", string Scope = "whole guest invocation including GNU bash and dynamic loader",
@@ -106,7 +110,7 @@ internal static partial class Program
             "-p:RollForward=Major", $"-p:SuperOpcodeFlavor={flavor}", $"-p:NativeBuildDir=build_native/{flavor}",
             $"-p:EnableSuperOpcodes={enabled.ToString().ToLowerInvariant()}",
             $"-p:EnableSequenceProfile={(flavor == "training").ToString().ToLowerInvariant()}",
-            "-p:EnableBlockProfile=false", "-p:EnableHandlerProfile=false"
+            "-p:EnableBlockProfile=false", "-p:EnableHandlerProfile=false", "-p:StaticInstructionSpecialization=ON"
         };
         if (generated is not null) arguments.Add("-p:SuperOpcodeSource=" + Path.GetFullPath(generated));
         TrainingProcess("dotnet", arguments, root, 1800);
@@ -173,7 +177,7 @@ internal static partial class Program
             samples.Add(sample);
             Console.WriteLine($"[training] {name} bytes={suite.Bytes} elapsed={sample.Seconds:F3}s pairs={sample.Pairs.Length}");
         }
-        return new(1, TrainingHash(suitePath), suite.Id, lockHash, build.NativeHash,
+        return new(TrainingProfileVersion, TrainingHash(suitePath), suite.Id, lockHash, build.NativeHash,
             RuntimeInformation.OSDescription + "/" + RuntimeInformation.ProcessArchitecture,
             RuntimeInformation.FrameworkDescription, samples.ToArray(), TrainingRuntimeHash(build),
             TrainingCollectorHash(),
@@ -282,63 +286,80 @@ internal static partial class Program
         }
         if (!actual.SequenceEqual(expected)) throw new InvalidDataException("Independent output validation failed: " + name);
         var profile = ReadTraining<TrainingProfile>(Path.Combine(stats, "sequence_profile.json"));
+        if (profile.SchemaVersion != TrainingProfileVersion || profile.NgramSemantics != "consecutive-within-block-dispatch-entries-v1" ||
+            profile.Pairs is null || profile.Ngrams is null || profile.Operations is null)
+            throw new InvalidDataException("Expected sequence profile schema 3 with numeric operation IDs");
         var enabled = IsOptimizedTrainingFlavor(build.Flavor);
-        var expectedFeatures = (enabled ? 1u : 0u) | (collect ? 2u : 0u);
+        const uint staticSpecialization = 1u << 12;
+        var expectedFeatures = staticSpecialization | (enabled ? 1u : 0u) | (collect ? 2u : 0u);
         if (profile.BuildFeatures != expectedFeatures) throw new InvalidDataException("Wrong native flavor loaded");
         if (profile.SuperOpcodeSetHash != build.SetHash)
             throw new InvalidDataException("Superopcode identity mismatch");
         if (profile.CounterSemantics != "within-block-continue-edges-v1" || collect && profile.Pairs.Length == 0)
             throw new InvalidDataException("Empty or incompatible sequence profile");
-        var normalized = profile.Pairs.GroupBy(pair => (NormalizeTrainingHandler(pair.First), NormalizeTrainingHandler(pair.Second)))
-            .Select(group => new TrainingPair(group.Key.Item1, group.Key.Item2, group.Aggregate(0UL, (sum, pair) => checked(sum + pair.Count))))
-            .OrderBy(pair => pair.First, StringComparer.Ordinal).ThenBy(pair => pair.Second, StringComparer.Ordinal).ToArray();
-        if (profile.SchemaVersion != 2 || profile.NgramSemantics != "consecutive-within-block-dispatch-entries-v1" || profile.Ngrams is null)
-            throw new InvalidDataException("Missing exact ngram profile schema");
-        var ngrams = profile.Ngrams.Select(ngram => new TrainingNGram(ngram.Ops.Select(NormalizeTrainingHandler).ToArray(), ngram.Count))
-            .GroupBy(ngram => string.Join('\t', ngram.Ops), StringComparer.Ordinal)
-            .Select(group => new TrainingNGram(group.First().Ops, group.Aggregate(0UL, (sum, entry) => checked(sum + entry.Count))))
-            .OrderBy(ngram => string.Join('\t', ngram.Ops), StringComparer.Ordinal).ToArray();
+        foreach (var pair in profile.Pairs)
+        {
+            ResolveTrainingOperation(profile.Operations, pair.First);
+            ResolveTrainingOperation(profile.Operations, pair.Second);
+        }
+        foreach (var ngram in profile.Ngrams)
+        {
+            if (ngram.Ops.Length is not (3 or 4)) throw new InvalidDataException("Invalid training ngram width");
+            foreach (var id in ngram.Ops) ResolveTrainingOperation(profile.Operations, id);
+        }
         var sample = new TrainingSample(name, input.Length, result.Seconds, Convert.ToHexString(SHA256.HashData(actual)),
-            build.NativeHash, profile.BuildFeatures, profile.SuperOpcodeSetHash, normalized, ngrams);
+            build.NativeHash, profile.BuildFeatures, profile.SuperOpcodeSetHash, profile.Operations, profile.Pairs, profile.Ngrams);
         WriteTraining(Path.Combine(output, "sample.json"), sample);
         // Only the freshly created GUID-owned workload directory is removed.
         Directory.Delete(host, true);
         return sample;
     }
 
-    internal static string NormalizeTrainingHandler(string symbol)
+    internal static string ResolveTrainingOperation(IReadOnlyDictionary<uint, string> operations, uint id)
     {
-        var matches = Regex.Matches(symbol, @"(?:fiberish::)?op::(Op[A-Za-z0-9_]+)");
-        if (matches.Count != 1) throw new InvalidDataException("Cannot normalize training handler: " + symbol);
-        return "op::" + matches[0].Groups[1].Value;
+        if (id == 0 || id >> 30 != 0 || !operations.TryGetValue(id, out var name) ||
+            !Regex.IsMatch(name, @"\Aop::Op[A-Za-z0-9_]+\z", RegexOptions.CultureInvariant))
+            throw new InvalidDataException($"Invalid scalar training operation ID 0x{id:x8}");
+        return name;
     }
 
-    private static Dictionary<string, double> TrainingDistribution(TrainingRun run)
+    private static void MergeTrainingOperations(SortedDictionary<uint, string> operations,
+        IEnumerable<KeyValuePair<uint, string>> entries)
     {
-        var distribution = new Dictionary<string, double>(StringComparer.Ordinal);
+        foreach (var (id, name) in entries)
+        {
+            if (operations.TryGetValue(id, out var existing) && existing != name)
+                throw new InvalidDataException($"Inconsistent training operation ID 0x{id:x8}");
+            operations[id] = name;
+        }
+    }
+
+    private static Dictionary<(uint First, uint Second), double> TrainingDistribution(TrainingRun run)
+    {
+        var distribution = new Dictionary<(uint First, uint Second), double>();
         foreach (var sample in run.Samples)
         {
             var total = sample.Pairs.Sum(pair => (double)pair.Count);
             if (total <= 0) throw new InvalidDataException("A required training sample has no edges");
             foreach (var pair in sample.Pairs)
             {
-                var key = pair.First + "\t" + pair.Second;
+                var key = (pair.First, pair.Second);
                 distribution[key] = distribution.GetValueOrDefault(key) + pair.Count / total / run.Samples.Length;
             }
         }
         return distribution;
     }
 
-    internal static DistributionQuality CompareTrainingDistributions(Dictionary<string, double> reference,
-        Dictionary<string, double> sample, int top)
+    internal static DistributionQuality CompareTrainingDistributions(Dictionary<(uint First, uint Second), double> reference,
+        Dictionary<(uint First, uint Second), double> sample, int top)
     {
-        var hot = reference.OrderByDescending(pair => pair.Value).ThenBy(pair => pair.Key, StringComparer.Ordinal).Take(top).ToArray();
-        var selected = sample.OrderByDescending(pair => pair.Value).ThenBy(pair => pair.Key, StringComparer.Ordinal)
-            .Take(top).Select(pair => pair.Key).ToHashSet(StringComparer.Ordinal);
+        var hot = reference.OrderByDescending(pair => pair.Value).ThenBy(pair => pair.Key).Take(top).ToArray();
+        var selected = sample.OrderByDescending(pair => pair.Value).ThenBy(pair => pair.Key)
+            .Take(top).Select(pair => pair.Key).ToHashSet();
         var mass = hot.Where(pair => sample.ContainsKey(pair.Key)).Sum(pair => pair.Value) / hot.Sum(pair => pair.Value);
         var overlap = hot.Count(pair => selected.Contains(pair.Key)) / (double)hot.Length;
         double divergence = 0;
-        foreach (var key in reference.Keys.Concat(sample.Keys).Distinct(StringComparer.Ordinal))
+        foreach (var key in reference.Keys.Concat(sample.Keys).Distinct())
         {
             var p = reference.GetValueOrDefault(key);
             var q = sample.GetValueOrDefault(key);
@@ -361,7 +382,7 @@ internal static partial class Program
             if (File.Exists(profilePath))
             {
                 var cached = ReadTraining<TrainingRun>(profilePath);
-                if (cached.SuiteHash == TrainingHash(path) && cached.NativeHash == build.NativeHash &&
+                if (cached.SchemaVersion == TrainingProfileVersion && cached.SuiteHash == TrainingHash(path) && cached.NativeHash == build.NativeHash &&
                     cached.RootfsLockHash == ValidateTrainingRootfs(rootfs) &&
                     cached.RuntimePackageHash == TrainingRuntimeHash(build) &&
                     cached.CollectorSourceHash == TrainingCollectorHash()) return cached;
@@ -403,22 +424,24 @@ internal static partial class Program
         if (distilled is null || selectedSuite is null) throw new InvalidDataException("No measured lightweight sample passed distillation thresholds");
         WriteTraining(Path.Combine(output, "distilled-suite.json"), selectedSuite);
         var normalized = TrainingDistribution(distilled);
+        var operations = new SortedDictionary<uint, string>();
+        MergeTrainingOperations(operations, distilled.Samples.SelectMany(sample => sample.Operations));
         var rawCounts = distilled.Samples.SelectMany(sample => sample.Pairs)
-            .GroupBy(pair => pair.First + "\t" + pair.Second, StringComparer.Ordinal)
+            .GroupBy(pair => (pair.First, pair.Second))
             .ToDictionary(group => group.Key, group => (Count: group.Aggregate(0UL, (sum, pair) => checked(sum + pair.Count)),
-                Workloads: group.Count()), StringComparer.Ordinal);
-        var candidates = normalized.OrderByDescending(pair => pair.Value).ThenBy(pair => pair.Key, StringComparer.Ordinal)
-            .Where(pair => TrainingPairAllowed(pair.Key.Split('\t')[0], pair.Key.Split('\t')[1]))
+                Workloads: group.Count()));
+        var candidates = normalized.OrderByDescending(pair => pair.Value).ThenBy(pair => pair.Key)
+            .Where(pair => TrainingPairAllowed(operations[pair.Key.First], operations[pair.Key.Second]))
             .Take(suite.TopPairs).Select(pair => new
             {
-                pair = pair.Key.Split('\t'), weighted_exec_count = rawCounts[pair.Key].Count,
+                pair = new[] { pair.Key.First, pair.Key.Second }, weighted_exec_count = rawCounts[pair.Key].Count,
                 occurrences = rawCounts[pair.Key].Workloads, score = pair.Value,
-                relation_kind = "exact-continue-edge", anchor_display = pair.Key.Split('\t')[0],
+                relation_kind = "exact-continue-edge", anchor_display = operations[pair.Key.First],
                 direction = "successor"
             }).ToArray();
         if (candidates.Length == 0) throw new InvalidDataException("No legal candidates");
         var selected = Path.Combine(output, "selected.json");
-        WriteTraining(selected, new { schemaVersion = 1, metadata = new
+        WriteTraining(selected, new { schemaVersion = CandidateManifestVersion, operations, metadata = new
         {
             strategy = "equal-workload-normalized-exact-edges-v1", sourceSuiteHash = distilled.SuiteHash,
             referenceSuiteHash = heavy.SuiteHash, superopcode_width = 2

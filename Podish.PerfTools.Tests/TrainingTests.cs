@@ -30,9 +30,8 @@ public sealed class TrainingTests
         {
             var path = Path.Combine(directory, "selected.json");
             File.WriteAllText(path, """
-                {"candidates":[
-                  {"pair":["op::OpGroup2_EvIb_Shr","op::OpAdd_EvGv","op::OpInc_Reg"]}
-                ]}
+                {"schemaVersion":3,"operations":{"1":"op::OpGroup2_EvIb_Shr","2":"op::OpAdd_EvGv","3":"op::OpInc_Reg"},
+                 "candidates":[{"pair":[1,2,3]}]}
                 """);
             var generated = Tool.GenerateSuperopcodes(path, 1);
             Assert.Equal(generated, Tool.GenerateSuperopcodes(path, 1));
@@ -49,11 +48,9 @@ public sealed class TrainingTests
             // A preselected specialized pattern must retain its original ID and
             // must not be generated a second time by its generic family.
             File.WriteAllText(path, """
-                {"candidates":[
-                  {"pair":["op::OpGroup2_EvIb_Shr","op::OpInc_Reg","op::OpInc_Reg"]},
-                  {"pair":["op::OpGroup2_EvIb_Shr_ModReg","op::OpInc_Reg","op::OpInc_Reg"]},
-                  {"pair":["op::OpAdc_EvGv","op::OpInc_Reg","op::OpInc_Reg"]}
-                ]}
+                {"schemaVersion":3,"operations":{"1":"op::OpGroup2_EvIb_Shr","2":"op::OpGroup2_EvIb_Shr_ModReg",
+                    "3":"op::OpInc_Reg","4":"op::OpAdc_EvGv"},
+                 "candidates":[{"pair":[1,3,3]},{"pair":[2,3,3]},{"pair":[4,3,3]}]}
                 """);
             generated = Tool.GenerateSuperopcodes(path, 3);
             Assert.Contains("// specialization_expansion_count=0\n", generated);
@@ -82,10 +79,12 @@ public sealed class TrainingTests
         {
             var path = Path.Combine(directory, "selected.json");
             File.WriteAllText(path, """
-                {"candidates":[
-                  {"pair":["op::OpInc_Reg_NF","op::OpInc_Reg_NF"]},
-                  {"pair":["op::OpInc_Reg_NF","op::OpInc_Reg_NF","op::OpInc_Reg"]},
-                  {"pair":["op::OpInc_Reg_NF","op::OpInc_Reg_NF","op::OpInc_Reg_NF","op::OpInc_Reg"]}
+                {"schemaVersion":3,
+                 "operations":{"1":"op::OpInc_Reg_NF","2":"op::OpInc_Reg"},
+                 "candidates":[
+                  {"pair":[1,1]},
+                  {"pair":[1,1,2]},
+                  {"pair":[1,1,1,2]}
                 ]}
                 """);
             var generated = Tool.GenerateSuperopcodes(path, 3);
@@ -97,7 +96,7 @@ public sealed class TrainingTests
             var bucket = generated[generated.IndexOf("std::vector<GeneratedSequenceMatch>{", StringComparison.Ordinal)..];
             Assert.True(bucket.IndexOf("SuperOpcode_4_", StringComparison.Ordinal) < bucket.IndexOf("SuperOpcode_3_", StringComparison.Ordinal));
             Assert.True(bucket.IndexOf("SuperOpcode_3_", StringComparison.Ordinal) < bucket.IndexOf("SuperOpcode_2_", StringComparison.Ordinal));
-            File.WriteAllText(path, "{\"candidates\":[{\"pair\":[\"OpA\",\"OpB\",\"OpC\",\"OpD\",\"OpE\"]}]}");
+            File.WriteAllText(path, """{"schemaVersion":3,"operations":{"1":"op::OpInc_Reg"},"candidates":[{"pair":[1,42,1]}]}""");
             Assert.Throws<InvalidDataException>(() => Tool.GenerateSuperopcodes(path, 5));
         }
         finally { Directory.Delete(directory, true); }
@@ -191,7 +190,7 @@ public sealed class TrainingTests
     [Fact]
     public void IdenticalDistributionsHavePerfectQuality()
     {
-        var reference = new Dictionary<string, double> { ["A"] = 0.75, ["B"] = 0.25 };
+        var reference = new Dictionary<(uint, uint), double> { [(1, 2)] = 0.75, [(2, 1)] = 0.25 };
         var quality = Tool.CompareTrainingDistributions(reference, reference, 2);
         Assert.Equal(1, quality.HotMass);
         Assert.Equal(1, quality.TopOverlap);
@@ -201,24 +200,26 @@ public sealed class TrainingTests
     [Fact]
     public void DisjointDistributionsCannotBeAcceptedAsDistillation()
     {
-        var quality = Tool.CompareTrainingDistributions(new() { ["A"] = 1 }, new() { ["B"] = 1 }, 1);
+        var quality = Tool.CompareTrainingDistributions(new() { [(1, 2)] = 1 }, new() { [(1, 3)] = 1 }, 1);
         Assert.Equal(0, quality.HotMass);
         Assert.Equal(0, quality.TopOverlap);
         Assert.Equal(1, quality.JensenShannon);
     }
 
-    [Theory]
-    [InlineData("fiberish::DispatchWrapper<&fiberish::op::OpMov_Load_Eax>", "op::OpMov_Load_Eax")]
-    [InlineData("__int64 fiberish::DispatchWrapper<&enum fiberish::LogicFlow fiberish::op::OpAdd_EaxImm(struct fiberish::EmuState *)>", "op::OpAdd_EaxImm")]
-    public void CompilerSpecificSpellingNeverBecomesProfileIdentity(string symbol, string expected) =>
-        Assert.Equal(expected, Tool.NormalizeTrainingHandler(symbol));
+    [Fact]
+    public void TrainingResolvesCatalogIdToExactSourceIdentifier() =>
+        Assert.Equal("op::OpMov_Load_Eax", Tool.ResolveTrainingOperation(new Dictionary<uint, string>
+        {
+            [17] = "op::OpMov_Load_Eax"
+        }, 17));
 
     [Theory]
-    [InlineData("0x12345678")]
-    [InlineData("SuperOpcode_bad")]
-    [InlineData("op::OpA and op::OpB")]
-    public void UnknownOrAmbiguousHandlersFailClosed(string symbol) =>
-        Assert.Throws<InvalidDataException>(() => Tool.NormalizeTrainingHandler(symbol));
+    [InlineData(0u, "op::OpMov_Load_Eax")]
+    [InlineData(2147483648u, "op::OpMov_Load_Eax")]
+    [InlineData(2u, "fiberish::DispatchWrapper<&fiberish::op::OpMov_Load_Eax>")]
+    [InlineData(2u, "op::OpA and op::OpB")]
+    public void InvalidTrainingOperationsFailClosed(uint id, string name) =>
+        Assert.Throws<InvalidDataException>(() => Tool.ResolveTrainingOperation(new Dictionary<uint, string> { [id] = name }, id));
 
     [Theory]
     [InlineData("op::OpMov_Load_Eax", "op::OpCmp_EaxImm", true)]
@@ -239,15 +240,25 @@ public sealed class TrainingTests
         {
             var first = Path.Combine(directory, "first.json");
             var second = Path.Combine(directory, "second.json");
-            const string json = "{\"candidates\":[{\"pair\":[\"op::OpMov_Load_Eax\",\"op::OpCmp_EaxImm\"]}]}";
+            const string json = """
+                {"schemaVersion":3,"operations":{"1":"op::OpMov_Load_Eax","2":"op::OpCmp_EaxImm"},
+                 "candidates":[{"pair":[1,2]}]}
+                """;
             File.WriteAllText(first, json); File.WriteAllText(second, json);
             var generated = Tool.GenerateSuperopcodes(first, 1);
             Assert.Equal(generated, Tool.GenerateSuperopcodes(second, 1));
             Assert.DoesNotContain('\r', generated);
             Assert.DoesNotContain(directory, generated);
-            File.WriteAllText(first, "{\"candidates\":[]}");
+            File.WriteAllText(first, """{"schemaVersion":3,"operations":{},"candidates":[]}""");
             Assert.Throws<InvalidDataException>(() => Tool.GenerateSuperopcodes(first, 1));
-            File.WriteAllText(first, "{\"candidates\":[{\"pair\":[\"op::OpBad();\",\"op::OpCmp_EaxImm\"]}]}");
+            File.WriteAllText(first, """{"schemaVersion":3,"operations":{"1":"op::OpBad();","2":"op::OpCmp_EaxImm"},"candidates":[{"pair":[1,2]}]}""");
+            Assert.Throws<InvalidDataException>(() => Tool.GenerateSuperopcodes(first, 1));
+            foreach (var version in new[] { 1, 2 })
+            {
+                File.WriteAllText(first, json.Replace("\"schemaVersion\":3", $"\"schemaVersion\":{version}", StringComparison.Ordinal));
+                Assert.Throws<InvalidDataException>(() => Tool.GenerateSuperopcodes(first, 1));
+            }
+            File.WriteAllText(first, json.Replace("[1,2]", """["op::OpMov_Load_Eax","op::OpCmp_EaxImm"]""", StringComparison.Ordinal));
             Assert.Throws<InvalidDataException>(() => Tool.GenerateSuperopcodes(first, 1));
         }
         finally { Directory.Delete(directory, true); }

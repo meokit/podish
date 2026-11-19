@@ -373,11 +373,14 @@ set(_catalog_products "${CMAKE_CURRENT_BINARY_DIR}/generated/instruction_familie
                       "${CMAKE_CURRENT_BINARY_DIR}/generated/llvm_block_operations.inc"
                       "${CMAKE_CURRENT_BINARY_DIR}/generated/llvm_block_entries.inc"
                       "${CMAKE_CURRENT_BINARY_DIR}/generated/llvm_op_ids.h"
-                      "${CMAKE_CURRENT_BINARY_DIR}/generated/handwritten_fusions.inc")
+                      "${CMAKE_CURRENT_BINARY_DIR}/generated/handwritten_fusions.inc"
+                      "${CMAKE_CURRENT_BINARY_DIR}/generated/training_scalar_handlers.inc"
+                      "${CMAKE_CURRENT_BINARY_DIR}/generated/training_fusion_handlers.inc")
 add_custom_command(OUTPUT ${_catalog_products}
     COMMAND "${Python3_EXECUTABLE}" "${_catalog_generator}" --catalog "${_instruction_catalog}"
         --output "${CMAKE_CURRENT_BINARY_DIR}/generated" ${_catalog_fusion_args}
-    DEPENDS "${_catalog_generator}" ${_catalog_inputs} ${_catalog_fusion_input}
+    DEPENDS "${_catalog_generator}" "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/operand_specialization_data.py"
+        ${_catalog_inputs} ${_catalog_fusion_input}
     VERBATIM)
 add_custom_target(fibercpu_instruction_catalog DEPENDS ${_catalog_products})
 

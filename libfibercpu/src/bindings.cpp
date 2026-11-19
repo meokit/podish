@@ -26,8 +26,10 @@
 #include "dynamic_operand_specialization.h"
 #endif
 #include "hooks.h"
+#include "instruction_variants.h"
 #include "logger.h"
 #include "mem/mmu.h"
+#include "operand_specialization.h"
 #include "ops.h"
 #include "state.h"
 #include "superopcodes.h"
@@ -1489,6 +1491,23 @@ int32_t X86_GetOpIdForHandler(void* handler) {
 #endif
     return static_cast<int32_t>(FindOpcodeIndexForHandler(fn));
 }
+
+uint32_t X86_GetTrainingHandlerId(void* handler) {
+    auto fn = reinterpret_cast<HandlerFunc>(handler);
+    if (!fn) return 0;
+#if FIBERCPU_DYNAMIC_OPERANDS
+    fn = CanonicalDynamicOperandHandler(fn);
+#endif
+#if FIBERCPU_LOWER_OPERANDS
+    fn = CanonicalOperandHandler(fn);
+#endif
+    if (const auto id = FindScalarTrainingId(fn)) return id;
+    return FindFusionTrainingId(fn);
+}
+
+uint32_t X86_GetTrainingOperationIdAt(uint32_t index) { return TrainingOperationIdAt(index); }
+
+const char* X86_GetTrainingOperationName(uint32_t id) { return FindTrainingOperationName(id); }
 
 uint64_t X86_GetLLVMJitBlockCount() {
 #if FIBERCPU_LLVM_JIT

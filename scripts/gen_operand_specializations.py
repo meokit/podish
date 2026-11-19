@@ -4,7 +4,8 @@ import argparse, json, pathlib, re
 
 from gen_instruction_catalog import read_catalog
 from operand_specialization_data import (
-    FUSION_CALL, Operand, generated_fusions, instruction_targets, specialize_profile_fusion,
+    FUSION_CALL, Operand, generated_fusions, instruction_targets, resolve_training_plan, specialize_profile_fusion,
+    training_plan_match,
 )
 
 p = argparse.ArgumentParser()
@@ -32,13 +33,12 @@ source = pathlib.Path(a.source).read_text()
 catalog = read_catalog(a.catalog)
 targets = instruction_targets(catalog)
 plan = json.loads(pathlib.Path(a.plan).read_text())
-full_profile = isinstance(plan, dict)
-if full_profile:
-    if type(plan.get("version")) is not int or plan["version"] != 2 or not isinstance(plan.get("entries"), list):
-        p.error("expected a version 2 decoded operand plan")
-    plan = plan["entries"]
-elif not isinstance(plan, list):
-    p.error("expected a legacy operand shape list or version 2 decoded operand plan")
+fusions = generated_fusions(source)
+try:
+    decoded_match = training_plan_match(plan) == "decoded"
+    plan = resolve_training_plan(plan, catalog, fusions, None if decoded_match else a.budget)
+except ValueError as error:
+    p.error(str(error))
 pin_rules = {opcode: row for row in catalog["pin_rules"] for opcode in row["opcodes"]}
 
 def traits(opcode):
@@ -69,16 +69,15 @@ def keep_for(name, shape):
     return all_pins & ~pin_bits.get(idx, 0)
 
 code = ['// Generated decoded operand lowering.', '#include "operand_specialization.h"']
-if full_profile:
+if decoded_match:
     # Custom fusion source may include only the kernels used in that table.
     headers = a.catalog.parent / "ops"
     code.extend(f'#include "ops/{header.name}"' for header in sorted(headers.glob("*_impl.h")))
 code.append('namespace fiberish {')
-fusions = generated_fusions(source)
 entries = []
 skipped = 0
-if a.mode in (1, 3) and (full_profile or not basic_pin):
-    for i, item in enumerate(plan if full_profile else plan[:a.budget]):
+if a.mode in (1, 3) and (decoded_match or not basic_pin):
+    for i, item in enumerate(plan):
         if len(entries) >= a.budget:
             break
         if a.fused_only and item['kind'] != 'fused': continue
@@ -87,24 +86,24 @@ if a.mode in (1, 3) and (full_profile or not basic_pin):
             raise ValueError('Invalid operand plan width: ' + original)
         if item['kind'] not in ('wrapper', 'fused') or item['kind'] == 'wrapper' and width != 1:
             raise ValueError('Invalid operand plan kind/width: ' + original)
-        if full_profile:
+        if decoded_match:
             operands = [Operand(**fields) for fields in item['operands']]
             if len(operands) != width:
                 raise ValueError('Invalid decoded operand count: ' + original)
-            shapes = [op.legacy_shape() for op in operands]
+            shapes = [op.shape_key() for op in operands]
             cpp_shapes = [op.cpp() for op in operands]
         else:
-            shapes = item['shapes']
-            if len(shapes) != 4 or any(type(v) is not int or not 0 <= v < 2**48 for v in shapes):
+            shapes = item['shapeKeys']
+            if len(shapes) != width or any(type(v) is not int or not 0 <= v < 2**48 for v in shapes):
                 raise ValueError('Invalid operand plan entry: ' + original)
-            cpp_shapes = [f'{shape}ULL' for shape in shapes]
+            cpp_shapes = [f'{shape}ULL' for shape in shapes] + ['0ULL'] * (4 - width)
         if item['kind'] == 'wrapper':
             match = re.fullmatch(r'DispatchWrapper<op::(\w+)>', original)
             if not match or match[1] not in targets:
                 skipped += 1
                 continue
             name = match[1]
-            policy = 'OperandSpec::Profile' if full_profile else 'OperandSpec::Exact'
+            policy = 'OperandSpec::Profile' if decoded_match else 'OperandSpec::Exact'
             target = f'DispatchWrapper<op::{name}, {policy}<{cpp_shapes[0]}, {keep_for(name, shapes[0])}>>'
         else:
             body = fusions.get(original)
@@ -115,7 +114,7 @@ if a.mode in (1, 3) and (full_profile or not basic_pin):
             if len(calls) != width:
                 raise ValueError('Fusion width does not match selected source: ' + original)
             clone = f'OperandClone_{i:03d}_{original}'
-            if full_profile:
+            if decoded_match:
                 body = specialize_profile_fusion(body, original, clone, operands)
             else:
                 assumptions = [f'    OperandSpec::AssumeOperandShape<{cpp_shapes[j]}>(op + {j});\n' for j in range(width)]
@@ -135,8 +134,8 @@ if a.mode in (1, 3) and (full_profile or not basic_pin):
         vals = ','.join(cpp_shapes)
         entries.append(f'    {{{original}, {target}, {{{vals}}}, {width}}},')
 code += ['namespace {']
-shape_entry = 'ProfileOperandShapeEntry' if full_profile else 'OperandShapeEntry'
-shape_template = ', DecodedOperandShape' if full_profile else ''
+shape_entry = 'ProfileOperandShapeEntry' if decoded_match else 'OperandShapeEntry'
+shape_template = ', DecodedOperandShape' if decoded_match else ''
 code += [f'static const {shape_entry} shapes[] = {{'] + (entries or ['    {},']) + ['};',
          f'constexpr size_t shape_count = {len(entries)};']
 registers = []
@@ -177,5 +176,5 @@ code += ['static const RegisterOperandEntry registers[] = {'] + (registers or ['
          '}', '} // namespace fiberish']
 path = pathlib.Path(a.output); path.parent.mkdir(parents=True, exist_ok=True); path.write_text('\n'.join(code) + '\n')
 print(f'Operand lowering: {len(entries)} exact shapes, {len(registers)} register families')
-if full_profile and skipped:
+if decoded_match and skipped:
     print(f'Skipped {skipped} operand entries absent from the selected instruction or fusion source')
