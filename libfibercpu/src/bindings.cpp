@@ -16,6 +16,9 @@
 #include <utility>
 #include "decoder.h"
 #include "dispatch.h"
+#if FIBERCPU_DYNAMIC_OPERANDS || FIBERCPU_LLVM_JIT
+#include "jit/executable_arena.h"
+#endif
 #if FIBERCPU_LLVM_JIT
 #include "jit/llvm_block_jit.h"
 #endif
@@ -903,6 +906,9 @@ static bool ExecuteSingleInstructionOnStack(EmuState* state) {
 
 int X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
     if (!state || g_native_execution_active || state->native_execution_active) return 0;
+#if FIBERCPU_LLVM_JIT
+    ScopedLLVMJitExecution jit_execution;
+#endif
     state->mmu.flush_pending_code_cache_before_run();
     ScopedNativeExecution execution(state);
 #ifdef FIBERCPU_ENABLE_SEQUENCE_PROFILE
@@ -1270,6 +1276,11 @@ void X86_EmuYield(EmuState* state) {
 }
 
 int X86_Step(EmuState* state) {
+#if FIBERCPU_LLVM_JIT
+    if (!state || g_native_execution_active || state->native_execution_active) return -1;
+    ScopedLLVMJitExecution jit_execution;
+    state->mmu.flush_pending_code_cache_before_run();
+#endif
     ScopedNativeExecution execution(state);
     if (!execution) return -1;
 #ifdef FIBERCPU_ENABLE_SEQUENCE_PROFILE
@@ -1382,6 +1393,24 @@ void X86_InvalidateCodeCacheHostPages(EmuState* state, const void* const* host_p
     state->mmu.invalidate_code_cache_host_pages(page_bases);
 }
 
+int X86_ConfigureCodeCache(EmuState* state, uint64_t block_bytes, uint64_t arena_bytes) {
+    constexpr auto max_size = std::numeric_limits<size_t>::max();
+    if (!state || block_bytes > max_size || arena_bytes > max_size) return 0;
+
+    auto* core = state->mmu.core_handle();
+    if (!core || core->execution_active || core->code_cache.requested_block_bytes) return 0;
+    if (arena_bytes) {
+#if FIBERCPU_DYNAMIC_OPERANDS || FIBERCPU_LLVM_JIT
+        if (!ExecutableArena::Shared(static_cast<size_t>(arena_bytes))) return 0;
+#else
+        return 0;
+#endif
+    }
+
+    core->code_cache.SetBlockBudgetBytes(static_cast<size_t>(block_bytes));
+    return 1;
+}
+
 void X86_SetCodeCacheBudgetBytes(EmuState* state, uint64_t bytes) {
     if (!state) return;
 
@@ -1436,6 +1465,15 @@ void X86_ResetTlbStats(EmuState* state) {
 int X86_DumpStats(EmuState* state, char* buffer, size_t buffer_size) {
     if (!state || !buffer || buffer_size == 0) return -1;
     const auto& code_cache = state->mmu.code_cache();
+#if FIBERCPU_DYNAMIC_OPERANDS || FIBERCPU_LLVM_JIT
+    const auto arena = ExecutableArena::SharedUsage();
+#else
+    constexpr struct {
+        size_t capacity = 0;
+        size_t total = 0;
+        size_t llvm = 0;
+    } arena;
+#endif
 #ifdef ENABLE_TLB_STATS
     auto& s = state->mmu.stats;
     int n = snprintf(buffer, buffer_size,
@@ -1445,7 +1483,8 @@ int X86_DumpStats(EmuState* state, char* buffer, size_t buffer_size) {
                      "\"total_reads\":%llu,\"total_writes\":%llu,"
                      "\"all_blocks_count\":%zu,\"block_cache_size\":%zu,\"page_to_blocks_size\":%zu,"
                      "\"code_cache_bytes_requested\":%llu,\"code_cache_limit_bytes\":%llu,"
-                     "\"code_cache_flush_count\":%llu,\"code_cache_generation\":%llu,\"llvm_code_cache_bytes\":%zu}",
+                     "\"code_cache_flush_count\":%llu,\"code_cache_generation\":%llu,\"llvm_code_cache_bytes\":%zu,"
+                     "\"jit_arena_used_bytes\":%zu,\"jit_arena_capacity_bytes\":%zu}",
                      (unsigned long long)s.l1_read_hits, (unsigned long long)s.l1_write_hits,
                      (unsigned long long)s.l2_read_hits, (unsigned long long)s.l2_write_hits,
                      (unsigned long long)s.read_misses, (unsigned long long)s.write_misses,
@@ -1453,27 +1492,28 @@ int X86_DumpStats(EmuState* state, char* buffer, size_t buffer_size) {
                      code_cache.all_blocks.size(), code_cache.CountValidBlocks(), code_cache.page_to_blocks.size(),
                      (unsigned long long)code_cache.requested_block_bytes,
                      (unsigned long long)code_cache.block_budget_bytes, (unsigned long long)code_cache.flush_count,
-                     (unsigned long long)code_cache.generation, code_cache.llvm_block_bytes);
+                     (unsigned long long)code_cache.generation, arena.llvm, arena.total, arena.capacity);
     return n;
 #else
     return snprintf(buffer, buffer_size,
                     "{\"all_blocks_count\":%zu,\"block_cache_size\":%zu,\"page_to_blocks_size\":%zu,"
                     "\"code_cache_bytes_requested\":%llu,\"code_cache_limit_bytes\":%llu,"
-                    "\"code_cache_flush_count\":%llu,\"code_cache_generation\":%llu,\"llvm_code_cache_bytes\":%zu}",
+                    "\"code_cache_flush_count\":%llu,\"code_cache_generation\":%llu,\"llvm_code_cache_bytes\":%zu,"
+                     "\"jit_arena_used_bytes\":%zu,\"jit_arena_capacity_bytes\":%zu}",
                     code_cache.all_blocks.size(), code_cache.CountValidBlocks(), code_cache.page_to_blocks.size(),
                     (unsigned long long)code_cache.requested_block_bytes,
                     (unsigned long long)code_cache.block_budget_bytes, (unsigned long long)code_cache.flush_count,
-                    (unsigned long long)code_cache.generation, code_cache.llvm_block_bytes);
+                    (unsigned long long)code_cache.generation, arena.llvm, arena.total, arena.capacity);
 #endif
 }
 
 size_t X86_GetBlockCount(EmuState* state) {
-    if (!state) return 0;
+    if (!state || !state->mmu.code_cache_epoch_current()) return 0;
     return state->mmu.code_cache().all_blocks.size();
 }
 
 size_t X86_GetBlockList(EmuState* state, BasicBlock** buffer, size_t max_count) {
-    if (!state || !buffer || max_count == 0) return 0;
+    if (!state || !buffer || max_count == 0 || !state->mmu.code_cache_epoch_current()) return 0;
 
     size_t count = 0;
     for (BasicBlock* block : state->mmu.code_cache().all_blocks) {

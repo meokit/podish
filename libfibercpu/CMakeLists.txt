@@ -1010,6 +1010,7 @@ if(FIBERCPU_TEST_SPECIALIZATION_INDEX)
             ENVIRONMENT "FIBERCPU_LLVM_JIT=0;FIBERCPU_LINKED_BLOCK_CACHE=0")
     endif()
     if(FIBERCPU_ENABLE_LLVM_JIT)
+        target_compile_definitions(llvm_block_test PRIVATE FIBERCPU_LLVM_JIT=1)
         add_test(NAME llvm_block_generic COMMAND llvm_block_test enabled)
         set_tests_properties(llvm_block_generic PROPERTIES ENVIRONMENT
             "FIBERCPU_LLVM_JIT=generic;FIBERCPU_LLVM_JIT_HOT_THRESHOLD=1;FIBERCPU_LLVM_JIT_WORKERS=0")
@@ -1027,7 +1028,7 @@ if(FIBERCPU_TEST_SPECIALIZATION_INDEX)
             "FIBERCPU_LLVM_JIT=generic;FIBERCPU_LLVM_JIT_HOT_THRESHOLD=1;FIBERCPU_LLVM_JIT_WORKERS=0")
         add_test(NAME llvm_block_budget COMMAND llvm_block_test budget)
         set_tests_properties(llvm_block_budget PROPERTIES ENVIRONMENT
-            "FIBERCPU_LLVM_JIT=1;FIBERCPU_LLVM_JIT_HOT_THRESHOLD=1;FIBERCPU_LLVM_JIT_WORKERS=0;FIBERCPU_LLVM_JIT_CODE_BUDGET=1024")
+            "FIBERCPU_LLVM_JIT=1;FIBERCPU_LLVM_JIT_HOT_THRESHOLD=1;FIBERCPU_LLVM_JIT_WORKERS=0")
         add_test(NAME llvm_block_packed COMMAND llvm_block_test packed)
         set_tests_properties(llvm_block_packed PROPERTIES ENVIRONMENT
             "FIBERCPU_LLVM_JIT=1;FIBERCPU_LLVM_JIT_HOT_THRESHOLD=1;FIBERCPU_LLVM_JIT_WORKERS=0")

@@ -132,6 +132,8 @@ int X86_ResetMemory(EmuState* state);
 int X86_IsExecuting(EmuState* state);
 void X86_ResetCodeCacheByRange(EmuState* state, uint32_t addr, uint32_t size);
 void X86_InvalidateCodeCacheHostPages(EmuState* state, const void* const* host_pages, size_t count);
+// Configure a fresh MMU. Zero selects the default for each budget and leaves the shared arena implicit.
+int X86_ConfigureCodeCache(EmuState* state, uint64_t block_bytes, uint64_t arena_bytes);
 void X86_SetCodeCacheBudgetBytes(EmuState* state, uint64_t bytes);
 
 // Diagnostics

@@ -1,11 +1,16 @@
 #include "bindings.h"
 #include "decoder.h"
+#if FIBERCPU_LLVM_JIT
+#include "jit/llvm_block_jit.h"
+#endif
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <thread>
 #include <vector>
@@ -27,11 +32,11 @@ State LoadCode(const uint8_t* code, unsigned size) {
     return state;
 }
 
-BasicBlock* FindCompiledBlock(EmuState* state) {
+BasicBlock* FindCompiledBlock(EmuState* state, uint32_t address = code_address) {
     std::vector<BasicBlock*> blocks(X86_GetBlockCount(state));
     X86_GetBlockList(state, blocks.data(), blocks.size());
     for (auto* block : blocks) {
-        if (block->is_valid() && block->start_eip() == code_address && block->entry != block->FirstOp()->handler)
+        if (block->is_valid() && block->start_eip() == address && block->entry != block->FirstOp()->handler)
             return block;
     }
     return nullptr;
@@ -75,13 +80,13 @@ bool VerifyLongBlock(bool enabled, bool linked) {
         return false;
 
     X86_ResetAllCodeCache(peer.get());
-    if (X86_GetLLVMJitLiveBlockCount() != 0)
+    if (X86_GetLLVMJitLiveBlockCount() != unsigned(enabled && !linked))
         return false;
     const auto compilation_count = linked ? X86_GetLinkedBlockHitCount : X86_GetLLVMJitBlockCount;
     const auto compiled = compilation_count();
     X86_SetEIP(peer.get(), code_address);
     return X86_Run(peer.get(), end, 64) && X86_RegRead(peer.get(), 0) == 14 &&
-           compilation_count() == compiled + unsigned(enabled);
+           compilation_count() == compiled + unsigned(enabled && linked);
 }
 
 struct FaultData {
@@ -608,6 +613,14 @@ bool VerifyCodeReuse() {
     return restored && restored->entry == original && X86_GetLLVMJitBlockCount() == 2 + unsigned(exact);
 }
 
+uint64_t ReadJitCacheBytes(EmuState* state) {
+    char stats[512];
+    X86_DumpStats(state, stats, sizeof(stats));
+    constexpr char key[] = "\"llvm_code_cache_bytes\":";
+    const char* field = std::strstr(stats, key);
+    return field ? std::strtoull(field + sizeof(key) - 1, nullptr, 10) : std::numeric_limits<uint64_t>::max();
+}
+
 bool VerifyPackedArena() {
     const uint8_t add[] = {0xb8, 2, 0, 0, 0, 0x05, 1, 0, 0, 0};
     const uint8_t sub[] = {0xb8, 7, 0, 0, 0, 0x2d, 1, 0, 0, 0};
@@ -615,11 +628,25 @@ bool VerifyPackedArena() {
     auto a = LoadCode(add, sizeof(add));
     auto b = LoadCode(sub, sizeof(sub));
     auto peer = LoadCode(add, sizeof(add));
+    constexpr size_t arena_bytes = 32 * 1024 * 1024;
+    if (!X86_ConfigureCodeCache(a.get(), 0, arena_bytes) ||
+        !X86_ConfigureCodeCache(b.get(), 0, arena_bytes) ||
+        X86_ConfigureCodeCache(peer.get(), 0, arena_bytes * 2))
+        return false;
+
+    char stats[512];
+    X86_DumpStats(a.get(), stats, sizeof(stats));
+    if (!std::strstr(stats, "\"jit_arena_capacity_bytes\":33554432"))
+        return false;
+
     const auto run = [&](EmuState* state, uint32_t expected) {
         X86_SetEIP(state, code_address);
         return X86_Run(state, end, 16) && X86_RegRead(state, 0) == expected;
     };
-    if (!run(a.get(), 3) || !run(b.get(), 6) || !run(peer.get(), 3))
+    if (!run(a.get(), 3))
+        return false;
+    const auto first_charge = ReadJitCacheBytes(a.get());
+    if (!first_charge || ReadJitCacheBytes(b.get()) != first_charge || !run(b.get(), 6) || !run(peer.get(), 3))
         return false;
     const auto* first = FindCompiledBlock(a.get());
     const auto* second = FindCompiledBlock(b.get());
@@ -632,45 +659,126 @@ bool VerifyPackedArena() {
     if (first_address / page_size != second_address / page_size || X86_GetLLVMJitBlockCount() != 2)
         return false;
 
+    const auto original_charge = ReadJitCacheBytes(a.get());
+    if (original_charge != first_charge || ReadJitCacheBytes(b.get()) != original_charge ||
+        ReadJitCacheBytes(peer.get()) != original_charge)
+        return false;
+
+    // Installing the same entry at another guest address adds no JIT allocation.
+    constexpr uint32_t alias = code_address + 4096;
+    X86_MemMap(a.get(), alias, 4096, 7);
+    X86_MemWrite(a.get(), alias, add, sizeof(add));
+    X86_SetEIP(a.get(), alias);
+    if (!X86_Run(a.get(), alias + sizeof(add), 16) || X86_RegRead(a.get(), 0) != 3)
+        return false;
+    const auto* alias_block = FindCompiledBlock(a.get(), alias);
+    if (!alias_block || alias_block->entry != first->entry || ReadJitCacheBytes(a.get()) != original_charge ||
+        X86_GetLLVMJitBlockCount() != 2)
+        return false;
+
     X86_ResetAllCodeCache(a.get());
-    if (!run(peer.get(), 3) || !run(b.get(), 6) || X86_GetLLVMJitLiveBlockCount() != 2)
+    if (ReadJitCacheBytes(a.get()) != original_charge || !run(peer.get(), 3) || !run(b.get(), 6) ||
+        X86_GetLLVMJitLiveBlockCount() != 2)
         return false;
     X86_ResetAllCodeCache(peer.get());
-    if (!run(b.get(), 6) || X86_GetLLVMJitLiveBlockCount() != 1)
-        return false;
     X86_ResetAllCodeCache(b.get());
-    if (X86_GetLLVMJitLiveBlockCount() != 0 || !run(a.get(), 3))
+    if (X86_GetLLVMJitLiveBlockCount() != 2 || !run(a.get(), 3))
         return false;
     const auto* reused = FindCompiledBlock(a.get());
-    return reused && reinterpret_cast<uintptr_t>(reused->entry) == first_address && X86_GetLLVMJitBlockCount() == 3;
+    return reused && reinterpret_cast<uintptr_t>(reused->entry) == first_address &&
+           ReadJitCacheBytes(a.get()) == original_charge && X86_GetLLVMJitBlockCount() == 2;
+}
+
+#if FIBERCPU_LLVM_JIT
+bool VerifyFlushWithActivePeer(const auto& trigger_flush) {
+    constexpr uint8_t interrupt[] = {0xcd, 0x80};
+    auto peer = LoadCode(interrupt, sizeof(interrupt));
+    struct FlushSignal {
+        std::atomic<bool> entered{false};
+        bool saw_live_generation = false;
+    } signal;
+    X86_SetInterruptHook(peer.get(), 0x80,
+        +[](EmuState*, uint32_t, void* userdata) -> int {
+            auto& signal = *static_cast<FlushSignal*>(userdata);
+            signal.entered.store(true, std::memory_order_release);
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+            while (!fiberish::LLVMJitCacheFlushPending() && std::chrono::steady_clock::now() < deadline)
+                std::this_thread::yield();
+            signal.saw_live_generation = fiberish::LLVMJitCacheFlushPending() && X86_GetLLVMJitLiveBlockCount() != 0;
+            return 1;
+        }, &signal);
+
+    std::thread running_peer([&] { X86_Run(peer.get(), code_address + sizeof(interrupt), 1); });
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (!signal.entered.load(std::memory_order_acquire) && std::chrono::steady_clock::now() < deadline)
+        std::this_thread::yield();
+    const bool flushed = signal.entered.load(std::memory_order_acquire) && trigger_flush();
+    running_peer.join();
+    return flushed && signal.saw_live_generation;
 }
 
 bool VerifyPackedBudget() {
-    uint8_t code[] = {0xb8, 1, 0, 0, 0, 0x05, 1, 0, 0, 0};
+    uint8_t code[] = {
+        0xb8, 1, 0, 0, 0, 0x05, 1, 0, 0, 0, // MOV EAX, 1; ADD EAX, 1
+        0xd9, 0xe8, 0xd9, 0xe8,              // FLD1 uses a resident LLVM constant.
+        0xde, 0xc1, 0xd9, 0x19,              // FADDP; FSTP dword [ECX]
+    };
+    constexpr size_t slab_bytes = 256 * 1024;
+    const size_t page_size = getpagesize();
+    const size_t arena_bytes = slab_bytes + 3 * page_size;
+    const auto arena_field = "\"jit_arena_capacity_bytes\":" + std::to_string(arena_bytes);
     const auto end = code_address + sizeof(code);
     auto state = LoadCode(code, sizeof(code));
+    if (!X86_ConfigureCodeCache(state.get(), 1024 * 1024, arena_bytes))
+        return false;
+    X86_MemMap(state.get(), data_address, 4096, 3);
+    X86_RegWrite(state.get(), 1, data_address);
+    State forked(X86_Clone(state.get(), 0), X86_Destroy);
+    char stats[512];
+    X86_DumpStats(forked.get(), stats, sizeof(stats));
+    if (!std::strstr(stats, "\"code_cache_limit_bytes\":1048576") ||
+        !std::strstr(stats, arena_field.c_str()))
+        return false;
     const auto run = [&](uint32_t expected) {
         X86_SetEIP(state.get(), code_address);
         return X86_Run(state.get(), end, 16) && X86_RegRead(state.get(), 0) == expected;
     };
-    if (!run(2) || !HasCompiledEntry(state.get()))
+    if (!run(2) || !HasCompiledEntry(state.get()) || ReadJitCacheBytes(state.get()) != slab_bytes + page_size ||
+        !X86_Run(forked.get(), end, 16) || !HasCompiledEntry(forked.get()))
         return false;
-    for (uint8_t immediate = 2; immediate <= 64; ++immediate) {
-        code[1] = immediate;
-        X86_MemWrite(state.get(), code_address, code, sizeof(code));
-        X86_ResetCodeCacheByRange(state.get(), code_address, sizeof(code));
-        if (!run(immediate + 1))
-            return false;
-        if (HasCompiledEntry(state.get()))
-            continue;
-        if (!run(immediate + 1) || !HasCompiledEntry(state.get()) || X86_GetLLVMJitLiveBlockCount() != 1)
-            return false;
-        char stats[512];
-        X86_DumpStats(state.get(), stats, sizeof(stats));
-        return std::strstr(stats, "\"code_cache_flush_count\":1") != nullptr;
-    }
-    return false;
+    uint8_t immediate = 2;
+    const auto trigger_flush = [&] {
+        for (; immediate <= 64; ++immediate) {
+            code[1] = immediate;
+            X86_MemWrite(state.get(), code_address, code, sizeof(code));
+            X86_ResetCodeCacheByRange(state.get(), code_address, sizeof(code));
+            if (!run(immediate + 1))
+                return false;
+            if (!HasCompiledEntry(state.get()))
+                return X86_GetLLVMJitLiveBlockCount() == 0 && ReadJitCacheBytes(state.get()) == 0 &&
+                       ReadJitCacheBytes(forked.get()) == 0;
+        }
+        return false;
+    };
+    if (!VerifyFlushWithActivePeer(trigger_flush) || !run(immediate + 1) ||
+        !HasCompiledEntry(state.get()) || X86_GetLLVMJitLiveBlockCount() != 1)
+        return false;
+    X86_DumpStats(state.get(), stats, sizeof(stats));
+    if (!std::strstr(stats, "\"code_cache_flush_count\":1"))
+        return false;
+    // This peer was idle throughout the flush. It must drop its old
+    // decoded entry before dispatching from that guest address again.
+    if (X86_GetBlockCount(forked.get()) != 0 || ReadJitCacheBytes(forked.get()) != ReadJitCacheBytes(state.get()))
+        return false;
+    X86_SetEIP(forked.get(), code_address);
+    if (!X86_Run(forked.get(), end, 16) || X86_RegRead(forked.get(), 0) != 2 ||
+        !HasCompiledEntry(forked.get()) || X86_GetLLVMJitLiveBlockCount() != 2)
+        return false;
+    X86_DumpStats(forked.get(), stats, sizeof(stats));
+    return std::strstr(stats, "\"code_cache_flush_count\":1") &&
+           std::strstr(stats, arena_field.c_str());
 }
+#endif
 
 bool VerifyAsyncCompilations() {
     // Both blocks share a recipe initially. Replace one before the VM polls
@@ -748,12 +856,14 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "LLVM packed allocation, shared ownership or slab reuse mismatch\n");
         return 1;
     }
+#if FIBERCPU_LLVM_JIT
     if (argc == 2 && std::strcmp(argv[1], "budget") == 0) {
         if (VerifyPackedBudget())
             return 0;
-        std::fprintf(stderr, "LLVM packed allocator did not enforce the byte budget\n");
+        std::fprintf(stderr, "LLVM cache pressure did not safely reset the shared generation\n");
         return 1;
     }
+#endif
     if (argc == 2 && std::strcmp(argv[1], "async") == 0) {
         if (VerifyAsyncCompilations())
             return 0;

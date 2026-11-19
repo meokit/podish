@@ -57,32 +57,18 @@ namespace {
 enum class JitMode { Off, Generic, Exact, Profile };
 using block_recipe::BlockKeyView;
 using block_recipe::kMaxOps;
-constexpr size_t kDefaultJitCodeBudget = 16 * 1024 * 1024;
 constexpr uint16_t kDefaultHotThreshold = 64;
 std::atomic<uint64_t> live_blocks{0};
 std::atomic<uint64_t> materializations{0};
+std::atomic<uint64_t> cache_epoch{0};
+std::atomic<bool> flush_requested{false};
+std::atomic<size_t> mmu_count{0};
+std::shared_mutex execution_gate;
 
-}  // namespace
-
-struct LLVMBlockCode {
-    HandlerFunc handler;
-    size_t allocated_bytes;
-    // The ORC session must outlive the resource and any cache that holds it.
-    std::shared_ptr<llvm::orc::LLJIT> engine;
-    llvm::orc::ResourceTrackerSP tracker;
-
-    LLVMBlockCode(HandlerFunc fn, size_t bytes, std::shared_ptr<llvm::orc::LLJIT> jit,
-                  llvm::orc::ResourceTrackerSP resource)
-        : handler(fn), allocated_bytes(bytes), engine(std::move(jit)), tracker(std::move(resource)) {
-        live_blocks.fetch_add(1, std::memory_order_relaxed);
-    }
-    ~LLVMBlockCode() {
-        llvm::consumeError(tracker->remove());
-        live_blocks.fetch_sub(1, std::memory_order_relaxed);
-    }
-};
-
-namespace {
+bool AcceptsJobs(uint64_t epoch) {
+    return !flush_requested.load(std::memory_order_acquire) &&
+           cache_epoch.load(std::memory_order_acquire) == epoch;
+}
 
 struct BlockKey {
     explicit BlockKey(BlockKeyView key)
@@ -210,11 +196,6 @@ T ReadPositiveSetting(const char* name, T fallback) {
 
 std::string ObjectEntryName(uint64_t index) { return "FiberCachedBlock_" + std::to_string(index); }
 
-struct BlockLookup {
-    std::shared_ptr<const LLVMBlockCode> code;
-    size_t blocked_bytes = 0;
-};
-
 std::unique_ptr<llvm::Module> ReadBlockIR(llvm::LLVMContext& context) {
     auto input = llvm::MemoryBufferRef(llvm::StringRef(reinterpret_cast<const char*>(kBitcode), sizeof(kBitcode)),
                                        "fibercpu-blocks");
@@ -231,37 +212,53 @@ struct BlockIR {
 };
 
 class BlockCompiler {
-    std::shared_ptr<llvm::orc::LLJIT> jit_;
+    std::unique_ptr<llvm::orc::LLJIT> jit_;
     BlockMemoryManager* memory_ = nullptr;
+    llvm::orc::ResourceTrackerSP generation_tracker_{};
     std::mutex mutex_;
+    std::mutex link_mutex_;
     std::condition_variable compilation_done_;
-    ankerl::unordered_dense::map<BlockKey, std::weak_ptr<const LLVMBlockCode>, BlockKeyHash, BlockKeyEqual> compiled_;
+    ankerl::unordered_dense::map<BlockKey, HandlerFunc, BlockKeyHash, BlockKeyEqual> compiled_;
     BlockKeySet compiling_;
     uint64_t next_symbol_ = 0;
 
-    BlockLookup Materialize(llvm::StringRef name, size_t budget, std::unique_ptr<llvm::MemoryBuffer> object) {
+    unsigned failed_links_ = 0;
+
+    void ClearDeadSymbols() {
+        jit_->getExecutionSession().getSymbolStringPool()->clearDeadEntries();
+        failed_links_ = 0;
+    }
+
+    HandlerFunc Materialize(llvm::StringRef name, std::unique_ptr<llvm::MemoryBuffer> object) {
+        memory_->BeginLink();
+        // Use a scratch tracker so a failed link cannot remove earlier
+        // objects. Successful objects leave only the generation tracker live.
         auto tracker = jit_->getMainJITDylib().createResourceTracker();
-        auto error = jit_->addObjectFile(tracker, std::move(object));
-        if (error) {
-            llvm::consumeError(std::move(error));
+        const auto fail_link = [&] {
             llvm::consumeError(tracker->remove());
-            return {};
+            if (++failed_links_ == 256) ClearDeadSymbols();
+            if (live_blocks.load(std::memory_order_relaxed) && memory_->NeedsFlush())
+                flush_requested.store(true, std::memory_order_release);
+        };
+        if (auto error = jit_->addObjectFile(tracker, std::move(object))) {
+            llvm::consumeError(std::move(error));
+            fail_link();
+            return nullptr;
         }
-        memory_->allocated_bytes = 0;
-        memory_->blocked_bytes = 0;
-        memory_->budget = budget;
         auto code = jit_->lookup(name);
-        memory_->budget = std::numeric_limits<size_t>::max();
         if (!code) {
             llvm::consumeError(code.takeError());
-            llvm::consumeError(tracker->remove());
-            return {nullptr, memory_->blocked_bytes};
+            fail_link();
+            return nullptr;
         }
-        return {std::make_shared<LLVMBlockCode>(code->toPtr<HandlerFunc>(), memory_->allocated_bytes, jit_,
-                                                std::move(tracker))};
+        if (!generation_tracker_) generation_tracker_ = jit_->getMainJITDylib().createResourceTracker();
+        tracker->transferTo(*generation_tracker_);
+        return code->toPtr<HandlerFunc>();
     }
 
 public:
+    ~BlockCompiler() { live_blocks.store(0, std::memory_order_relaxed); }
+
     BlockCompiler() {
         if (!InitializeLLVMTarget()) return;
         BlockIR ir;
@@ -371,42 +368,56 @@ public:
         memory_ = memory_ptr;
     }
 
-    BlockLookup FindOrCompile(BlockKeyView key, size_t budget) {
-        if (!jit_) return {};
+    HandlerFunc FindOrCompile(BlockKeyView key, uint64_t epoch) {
+        if (!jit_ || !AcceptsJobs(epoch)) return nullptr;
         std::unique_lock lock(mutex_);
-        compilation_done_.wait(lock, [&] { return !compiling_.contains(key); });
-        const auto found = compiled_.find(key);
-        if (found != compiled_.end()) {
-            if (auto code = found->second.lock()) return {std::move(code)};
-            compiled_.erase(found);
-        }
-        if (budget < memory_->MinimumAllocationSize()) return {nullptr, memory_->MinimumAllocationSize()};
-        if (compiled_.size() > live_blocks.load(std::memory_order_relaxed) + 128)
-            std::erase_if(compiled_, [](const auto& entry) { return entry.second.expired(); });
+        compilation_done_.wait(lock, [&] { return !AcceptsJobs(epoch) || !compiling_.contains(key); });
+        if (!AcceptsJobs(epoch)) return nullptr;
+        if (auto found = compiled_.find(key); found != compiled_.end()) return found->second;
         const auto name = "FiberJitBlock_" + std::to_string(next_symbol_++);
         compiling_.emplace(key);
         lock.unlock();
-        // Each caller owns its IR and target machine while optimizing and
-        // emitting the object. Only ORC linking and budget tracking serialize.
+
+        // An old job can finish optimizing after a reset. Recheck the epoch
+        // under the same lock that serializes the linker and arena reset.
         thread_local BlockIR worker_ir;
         std::unique_ptr<llvm::MemoryBuffer> object;
         if (auto module = PrepareLLVMBlock(worker_ir.templates, key, name)) {
-            auto compiled = jit_->getIRCompileLayer().getCompiler()(*module);
-            if (compiled)
-                object = std::move(*compiled);
+            auto result = jit_->getIRCompileLayer().getCompiler()(*module);
+            if (result)
+                object = std::move(*result);
             else
-                llvm::consumeError(compiled.takeError());
+                llvm::consumeError(result.takeError());
         }
+
+        std::lock_guard link_lock(link_mutex_);
+        auto entry = object && AcceptsJobs(epoch) ? Materialize(name, std::move(object)) : nullptr;
         lock.lock();
-        auto owned_key = compiling_.extract(key);
-        compilation_done_.notify_all();
-        if (!object) return {};
-        auto result = Materialize(name, budget, std::move(object));
-        if (result.code) {
-            compiled_.emplace(std::move(*owned_key), result.code);
+        auto recipe = compiling_.extract(key);
+        if (entry) {
+            compiled_.emplace(std::move(*recipe), entry);
+            live_blocks.fetch_add(1, std::memory_order_relaxed);
             materializations.fetch_add(1, std::memory_order_relaxed);
         }
-        return result;
+        compilation_done_.notify_all();
+        return entry;
+    }
+
+    void ResetGeneration() {
+        std::lock_guard link_lock(link_mutex_);
+        std::lock_guard lock(mutex_);
+        // Invalidate idle MMU caches before releasing their entry addresses.
+        cache_epoch.fetch_add(1, std::memory_order_release);
+        compiled_.clear();
+        if (generation_tracker_) {
+            if (auto error = generation_tracker_->remove())
+                llvm::logAllUnhandledErrors(std::move(error), llvm::errs(), "JIT cache flush: ");
+            generation_tracker_.reset();
+            ClearDeadSymbols();
+        }
+        live_blocks.store(0, std::memory_order_relaxed);
+        flush_requested.store(false, std::memory_order_release);
+        compilation_done_.notify_all();
     }
 
     static int BuildLinkedCache(std::string_view profile, llvm::raw_ostream& output) {
@@ -471,7 +482,7 @@ constexpr uint16_t kRetryHotCount = 256;
 
 struct AsyncResult {
     std::atomic<bool> done{false};
-    BlockLookup lookup;
+    HandlerFunc entry = nullptr;
     std::vector<HandlerFunc> replay;
 };
 
@@ -539,12 +550,12 @@ struct CompilationJob {
     std::weak_ptr<AsyncResult> result;
     std::weak_ptr<AsyncSignals> signals;
     size_t sentinel;
-    size_t budget;
+    uint64_t epoch;
     LLVMBlockExit exit;
     bool exact;
 
     void Compile(AsyncSignals& control) {
-        if (result.expired()) return;
+        if (result.expired() || !AcceptsJobs(epoch)) return;
         block_recipe::Plan plan;
         auto input = std::span<const uint8_t>(bytes);
         const auto redecode = [&](const DecodedOp& op, DecodedOp& generic) {
@@ -552,13 +563,12 @@ struct CompilationJob {
             input = input.subspan(op.len);
             return RedecodeGenericInstruction(instruction, op, generic);
         };
-        BlockLookup lookup;
         const bool planned = block_recipe::PlanBlock(ops, sentinel, exit, exact, redecode, plan);
-        if (result.expired()) return;
-        if (planned) lookup = Compiler().FindOrCompile(plan.Key(exact), budget);
+        if (result.expired() || !AcceptsJobs(epoch)) return;
+        const auto entry = planned ? Compiler().FindOrCompile(plan.Key(exact), epoch) : nullptr;
         if (auto output = result.lock()) {
-            output->lookup = std::move(lookup);
-            if (output->lookup.code) output->replay.assign(plan.ReplayHandlers().begin(), plan.ReplayHandlers().end());
+            output->entry = entry;
+            if (entry) output->replay.assign(plan.ReplayHandlers().begin(), plan.ReplayHandlers().end());
             output->done.store(true, std::memory_order_release);
             control.ready.store(true, std::memory_order_release);
         }
@@ -646,32 +656,10 @@ CompilationPool& Workers() {
     return pool;
 }
 
-size_t CodeBudget() {
-    static const size_t budget = ReadPositiveSetting("FIBERCPU_LLVM_JIT_CODE_BUDGET", kDefaultJitCodeBudget);
-    return budget;
-}
-
-void InstallResult(EmuState* state, BasicBlock* block, const BlockLookup& lookup, std::span<const HandlerFunc> replay) {
-    auto& cache = state->mmu.code_cache();
-    const auto& code = lookup.code;
-    const auto budget = CodeBudget();
-    const size_t remaining = budget - cache.llvm_block_bytes;
-    const bool already_owned = code && cache.llvm_blocks.contains(code);
-    const size_t bytes = code ? code->allocated_bytes : lookup.blocked_bytes;
-    if (!already_owned && bytes > remaining) {
-        if (bytes <= budget) {
-            cache.pending_flush = true;
-            cache.pending_budget_flush = true;
-        }
-        return;
-    }
-    if (!code) return;
-    if (!already_owned) {
-        cache.llvm_blocks.insert(code);
-        cache.llvm_block_bytes += bytes;
-    }
-
-    block_recipe::InstallBlockHandler(*block, replay, code->handler);
+void FinishPendingFlush() {
+    if (!flush_requested.load(std::memory_order_acquire)) return;
+    std::unique_lock lock(execution_gate);
+    if (flush_requested.load(std::memory_order_acquire)) Compiler().ResetGeneration();
 }
 
 void QueueBlock(EmuState* state, BasicBlock* block, bool exact) {
@@ -688,7 +676,7 @@ void QueueBlock(EmuState* state, BasicBlock* block, bool exact) {
         .result = result,
         .signals = async->signals,
         .sentinel = block->sentinel_slot_index,
-        .budget = CodeBudget() - state->mmu.code_cache().llvm_block_bytes,
+        .epoch = LLVMJitCacheEpoch(),
         .exit = block_recipe::FullBlockExit(*block),
         .exact = exact,
     };
@@ -717,6 +705,37 @@ void QueueBlock(EmuState* state, BasicBlock* block, bool exact) {
 
 }  // namespace
 
+ScopedLLVMJitExecution::ScopedLLVMJitExecution() {
+    const auto mode = RuntimeMode();
+    if (mode != JitMode::Exact && mode != JitMode::Generic) return;
+
+    for (;;) {
+        FinishPendingFlush();
+        lock_ = std::shared_lock(execution_gate);
+        if (!LLVMJitCacheFlushPending()) break;
+        lock_.unlock();
+    }
+}
+
+ScopedLLVMJitExecution::~ScopedLLVMJitExecution() {
+    if (lock_.owns_lock()) {
+        lock_.unlock();
+        FinishPendingFlush();
+    }
+}
+
+bool LLVMJitCacheFlushPending() { return flush_requested.load(std::memory_order_acquire); }
+
+uint64_t LLVMJitCacheEpoch() { return cache_epoch.load(std::memory_order_acquire); }
+
+void LLVMJitMmuCreated() { mmu_count.fetch_add(1, std::memory_order_relaxed); }
+
+void LLVMJitMmuDestroyed() {
+    if (mmu_count.fetch_sub(1, std::memory_order_acq_rel) != 1 || !LLVMJitLiveBlockCount()) return;
+    flush_requested.store(true, std::memory_order_release);
+    FinishPendingFlush();
+}
+
 uint16_t LLVMJitHotThreshold() {
     static const uint16_t threshold = []() -> uint16_t {
         if (RuntimeMode() == JitMode::Off) return 0;
@@ -741,9 +760,8 @@ void CompileHotLLVMBlock(EmuState* state, BasicBlock* block) {
         RecordBlock(key);
         return;
     }
-    const size_t remaining = CodeBudget() - state->mmu.code_cache().llvm_block_bytes;
-    auto result = Compiler().FindOrCompile(key, remaining);
-    InstallResult(state, block, result, plan.ReplayHandlers());
+    if (auto entry = Compiler().FindOrCompile(key, LLVMJitCacheEpoch()))
+        block_recipe::InstallBlockHandler(*block, plan.ReplayHandlers(), entry);
 }
 
 void PollLLVMBlockCompilations(EmuState* state) {
@@ -755,8 +773,8 @@ void PollLLVMBlockCompilations(EmuState* state) {
         if (block != candidate.block) return true;
         if (block->invalidation_revision != candidate.revision) {
             if (block->entry == block->FirstOp()->handler) block->chain.llvm_hot_count = 1;
-        } else if (block_recipe::CanPromoteBlock(*state, *block)) {
-            InstallResult(state, block, candidate.result->lookup, candidate.result->replay);
+        } else if (candidate.result->entry && block_recipe::CanPromoteBlock(*state, *block)) {
+            block_recipe::InstallBlockHandler(*block, candidate.result->replay, candidate.result->entry);
         }
         return true;
     });

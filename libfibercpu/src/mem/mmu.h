@@ -16,10 +16,13 @@
 #include "types.h"
 
 namespace fiberish {
-struct LLVMBlockCode;
 struct LLVMAsyncState;
 #if FIBERCPU_LLVM_JIT
 void CancelPendingLLVMBlockCompilations(LLVMAsyncState& state);
+bool LLVMJitCacheFlushPending();
+uint64_t LLVMJitCacheEpoch();
+void LLVMJitMmuCreated();
+void LLVMJitMmuDestroyed();
 #endif
 }  // namespace fiberish
 
@@ -299,10 +302,6 @@ struct CodeCacheState {
     ankerl::unordered_dense::map<BlockCacheKey, uint32_t, BlockCacheKeyHash> block_cache;
     std::vector<BlockCacheEntry> block_entries;
     std::vector<BasicBlock*> all_blocks;
-    // Blocks can remain reachable through threaded links after invalidation.
-    // Release their executable entries with the pool, at a quiescent reset.
-    ankerl::unordered_dense::set<std::shared_ptr<const LLVMBlockCode>> llvm_blocks;
-    size_t llvm_block_bytes = 0;
     BasicBlock dummy_invalid_block;
     ankerl::unordered_dense::map<uintptr_t, std::vector<PageBlockRef>> page_to_blocks;
     size_t requested_block_bytes = 0;
@@ -310,11 +309,11 @@ struct CodeCacheState {
     uint64_t flush_count = 0;
     uint64_t generation = 0;
     uint64_t reset_request_epoch = 0;
+    uint64_t llvm_cache_epoch = 0;
     bool pending_flush = false;
     bool pending_budget_flush = false;
 
     CodeCacheState() { InitializeInvalidBasicBlock(dummy_invalid_block); }
-
     void InvalidateAll() {
         for (auto& entry : block_entries) {
             if (entry.block != nullptr) {
@@ -333,6 +332,7 @@ struct CodeCacheState {
         const uint64_t next_flush_count = flush_count + flush_count_increment;
         const uint64_t next_generation = generation + generation_increment;
         const uint64_t next_reset_request_epoch = reset_request_epoch;
+        const uint64_t previous_llvm_epoch = llvm_cache_epoch;
 
         this->~CodeCacheState();
         new (this) CodeCacheState();
@@ -340,6 +340,7 @@ struct CodeCacheState {
         flush_count = next_flush_count;
         generation = next_generation;
         reset_request_epoch = next_reset_request_epoch;
+        llvm_cache_epoch = previous_llvm_epoch;
     }
 
     void SetBlockBudgetBytes(size_t bytes) { block_budget_bytes = bytes == 0 ? kDefaultBlockBudgetBytes : bytes; }
@@ -972,11 +973,18 @@ private:
         }
     }
 
-    static MmuCore* create_core(std::unique_ptr<PageDirectory> page_directory) {
+    static MmuCore* create_core(std::unique_ptr<PageDirectory> page_directory, const MmuCore* parent = nullptr) {
         auto* core = new MmuCore();
         core->page_directory = std::move(page_directory);
         core->identity = next_identity();
         core->state_flags = 0;
+#if FIBERCPU_LLVM_JIT
+        LLVMJitMmuCreated();
+        core->code_cache.llvm_cache_epoch = LLVMJitCacheEpoch();
+#endif
+        if (parent) {
+            core->code_cache.block_budget_bytes = parent->code_cache.block_budget_bytes;
+        }
         return core;
     }
 
@@ -989,6 +997,9 @@ private:
         if (!core) return;
         if (core->ref_count.fetch_sub(1, std::memory_order_acq_rel) == 1) {
             delete core;
+#if FIBERCPU_LLVM_JIT
+            LLVMJitMmuDestroyed();
+#endif
         }
     }
 
@@ -1296,7 +1307,7 @@ public:
             if (dst_chunk) cloned->l1_directory[l1] = std::move(dst_chunk);
         }
 
-        return create_core(std::move(cloned));
+        return create_core(std::move(cloned), core);
     }
 
     static MmuCore* CloneCorePreserveExternal(MmuCore* core) {
@@ -1334,7 +1345,7 @@ public:
             if (dst_chunk) cloned->l1_directory[l1] = std::move(dst_chunk);
         }
 
-        auto* cloned_core = create_core(std::move(cloned));
+        auto* cloned_core = create_core(std::move(cloned), core);
         RebuildExternalAliasesFromPageDirectory(cloned_core);
         return cloned_core;
     }
@@ -1391,7 +1402,20 @@ public:
 
     [[nodiscard]] void* try_allocate_block_bytes(size_t size, uint32_t guest_eip);
 
-    [[nodiscard]] bool code_cache_flush_pending() const { return code_cache().pending_flush; }
+    [[nodiscard]] bool code_cache_epoch_current() const {
+#if FIBERCPU_LLVM_JIT
+        return code_cache().llvm_cache_epoch == LLVMJitCacheEpoch();
+#else
+        return true;
+#endif
+    }
+
+    [[nodiscard]] bool code_cache_flush_pending() const {
+#if FIBERCPU_LLVM_JIT
+        if (LLVMJitCacheFlushPending() || !code_cache_epoch_current()) return true;
+#endif
+        return code_cache().pending_flush;
+    }
 
     void begin_execution() { core_->execution_active = true; }
     void end_execution() {
@@ -1419,14 +1443,23 @@ public:
         }
 
         bind_core(core, add_ref);
+#if FIBERCPU_LLVM_JIT
+        if (!code_cache_epoch_current()) flush_pending_code_cache_before_run();
+#endif
         return true;
     }
 
     void flush_pending_code_cache_before_run() {
         auto& cache = code_cache();
-        if (!cache.pending_flush || core_->execution_active) return;
-        const uint64_t budget_flush = cache.pending_budget_flush ? 1 : 0;
-        cache.HardResetReleaseAll(1, budget_flush);
+        if (core_->execution_active) return;
+        bool global_flush = false;
+#if FIBERCPU_LLVM_JIT
+        const auto epoch = LLVMJitCacheEpoch();
+        global_flush = cache.llvm_cache_epoch != epoch && cache.requested_block_bytes != 0;
+        cache.llvm_cache_epoch = epoch;
+#endif
+        if (!cache.pending_flush && !global_flush) return;
+        cache.HardResetReleaseAll(1, cache.pending_budget_flush || global_flush ? 1 : 0);
         on_code_cache_hard_reset();
     }
 
@@ -1796,7 +1829,7 @@ public:
         }
 
         auto* detached = RetainCore(core_);
-        bind_core(CreateEmptyCore(), false);
+        bind_core(create_core(std::make_unique<PageDirectory>(), core_), false);
         return detached;
     }
 

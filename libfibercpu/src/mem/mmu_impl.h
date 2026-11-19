@@ -29,6 +29,9 @@ inline void Mmu::on_code_cache_hard_reset() {
     seen_code_cache_generation_ = core_ ? core_->code_cache.generation : 0;
     if (auto* state = get_state()) {
         state->last_block = invalid_code_block();
+#if FIBERCPU_BLOCK_COMPILATION
+        state->llvm_hot_block = nullptr;
+#endif
     }
 }
 
@@ -36,7 +39,7 @@ inline void* Mmu::try_allocate_block_bytes(size_t size, uint32_t guest_eip) {
     sync_code_cache_generation();
 
     auto& cache = code_cache();
-    if (cache.pending_flush) return nullptr;
+    if (code_cache_flush_pending()) return nullptr;
     if (cache.ShouldFlushForAllocation(size)) {
         // A block allocation must never reclaim storage borrowed by a decoder,
         // concatenation builder, or a running native operation chain.

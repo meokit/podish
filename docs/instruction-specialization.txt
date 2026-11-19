@@ -91,22 +91,33 @@ and a block invalidation rejects results for its previous revision.
 FIBERCPU_LLVM_JIT_WORKERS selects 0–8 workers. Set it to 0 for synchronous
 promotion. Profile collection records block recipes synchronously.
 
-FIBERCPU_LLVM_JIT_CODE_BUDGET defaults to 16777216 bytes per MMU code cache.
-The allocator packs executable segments into 256 KiB slabs within a
-process-wide 128 MiB MAP_JIT virtual reservation. Dynamic instruction
-specialization can reserve a separate range in the same mapping. JITLink
-relocates each block at its final address. The linker publishes it after
-copying the bytes and invalidating the instruction cache. Data segments
-are mapped near the code with their own non-executable permissions.
-If an allocation or relocation fails, the block keeps its native entry.
+The decoded-block budget defaults to 64 MiB per MMU. The host-wide JIT
+arena defaults to 128 MiB. Native callers can set these limits on a
+fresh engine using X86_ConfigureCodeCache.
 
-Each MMU charges aligned executable bytes and mapped data bytes once per
-owned allocation.
-Invalidated blocks keep their machine code available for reuse. Budget
-pressure requests a hard reset when the MMU is quiescent. A packed slab can
-be reused after its last ORC allocation and in-flight link are released.
-The native stats field llvm_code_cache_bytes reports the current charge.
-X86_GetLLVMJitBlockCount counts online block materializations.
+The arena charges reserved executable slabs, the dynamic instruction
+specialization region and page-rounded resident LLVM data. LLVM packs
+code into 256 KiB slabs inside the shared MAP_JIT mapping and maps its data
+nearby with separate non-executable permissions. JITLink relocates each
+block at its final address. The linker publishes it after copying the
+bytes and invalidating the instruction cache.
+
+Online LLVM blocks share one process-wide cache generation. Each successful
+link transfers its ORC resources to the generation tracker. The generation
+keeps compiled recipes reusable across ordinary MMU cache resets. If a new
+block would exceed the arena budget and could fit in a fresh generation,
+running MMUs leave their block chains at a dispatch boundary. The cache
+discards that generation and releases its slab and data reservations after
+active execution and linking are quiescent. Each MMU drops its old decoded
+blocks before re-entering execution. In-flight compiles from an old generation
+cannot link or publish into the next one. Destroying the last MMU also
+releases the generation. Blocks that fail linking keep their native entry.
+The linker periodically removes unreferenced symbols from failed links.
+
+Native stats report the total shared budget charge in jit_arena_used_bytes
+and the LLVM portion in llvm_code_cache_bytes. The configured capacity is
+jit_arena_capacity_bytes. A zero capacity means the arena has yet to be
+mapped. X86_GetLLVMJitBlockCount counts online block materializations.
 
 Linked LLVM block cache
 -----------------------

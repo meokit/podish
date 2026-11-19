@@ -1,6 +1,5 @@
 #pragma once
 
-#include <limits>
 #include <memory>
 #include <vector>
 
@@ -13,7 +12,7 @@ class ExecutableArena;
 
 struct CodeBudgetExceeded : llvm::ErrorInfo<CodeBudgetExceeded> {
     static inline char ID = 0;
-    void log(llvm::raw_ostream& out) const override { out << "LLVM block code budget exceeded"; }
+    void log(llvm::raw_ostream& out) const override { out << "JIT arena budget exceeded"; }
     std::error_code convertToErrorCode() const override { return llvm::inconvertibleErrorCode(); }
 };
 
@@ -23,26 +22,23 @@ public:
     ~BlockMemoryManager() override;
 
     bool IsAvailable() const { return bool(arena_); }
-    size_t MinimumAllocationSize() const;
     void allocate(const llvm::jitlink::JITLinkDylib* dylib, llvm::jitlink::LinkGraph& graph,
                   OnAllocatedFunction on_allocated) override;
     void deallocate(std::vector<FinalizedAlloc> allocations, OnDeallocatedFunction on_deallocated) override;
 
-    // LLJIT links synchronously under the compiler mutex.
-    size_t allocated_bytes = 0;
-    size_t blocked_bytes = 0;
-    size_t budget = std::numeric_limits<size_t>::max();
+    // LLJIT links synchronously under the link mutex.
+    void BeginLink() { needs_flush_ = false; }
+    bool NeedsFlush() const { return needs_flush_; }
 
 private:
     struct Slab;
     struct PackedAllocation;
     class PendingAllocation;
 
-    bool FitsBudget(size_t bytes);
-
     const size_t page_size_;
     const std::shared_ptr<ExecutableArena> arena_;
     std::weak_ptr<Slab> current_slab_;
+    bool needs_flush_ = false;
 };
 
 }  // namespace fiberish

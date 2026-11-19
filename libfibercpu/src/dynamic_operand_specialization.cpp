@@ -84,7 +84,7 @@ class ExecutableOperands {
     static std::unique_ptr<ExecutableArena::Region> ReserveRegion() {
         if (kArenaSize == 0 || !DynamicOperandsEnabled()) return {};
         auto arena = ExecutableArena::Shared();
-        return arena ? arena->Reserve(kArenaSize) : nullptr;
+        return arena ? arena->Reserve(kArenaSize, ExecutableArena::Lifetime::Permanent) : nullptr;
     }
 
 public:
