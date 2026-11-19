@@ -11,12 +11,7 @@ namespace fiberish::llvm_block_cache {
 
 inline constexpr std::string_view profile_magic = "FIBJPR01";
 inline constexpr std::string_view cache_magic = "FIBJOC01";
-
-inline void AppendU32(std::string& key, uint32_t value) {
-    char bytes[4];
-    llvm::support::endian::write32le(bytes, value);
-    key.append(bytes, sizeof(bytes));
-}
+inline constexpr std::string_view linked_magic = "FIBJLC01";
 
 inline bool ReadU32(std::string_view& bytes, uint32_t& value) {
     if (bytes.size() < sizeof(value)) return false;

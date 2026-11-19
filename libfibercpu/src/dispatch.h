@@ -55,7 +55,7 @@ extern ATTR_PRESERVE_NONE int64_t ResolveBranchTarget(EmuState* RESTRICT state, 
                                                       uint64_t flags_cache FIBERCPU_PIN_PARAMS);
 
 FORCE_INLINE void CountLLVMBlockEntry(EmuState* state, BasicBlock* block, uint16_t count) {
-#if FIBERCPU_LLVM_JIT
+#if FIBERCPU_BLOCK_COMPILATION
     if (count > 1) {
         block->chain.llvm_hot_count = count - 1;
     } else if (count == 1 && !state->llvm_hot_block) {

@@ -15,8 +15,8 @@
 #include "specialization.h"
 #include "state.h"
 #include "superopcodes.h"
-#if FIBERCPU_LLVM_JIT
-#include "jit/llvm_block_jit.h"
+#if FIBERCPU_BLOCK_COMPILATION
+#include "jit/block_recipe.h"
 #endif
 
 namespace fiberish {
@@ -954,12 +954,12 @@ finalize:
     const bool candidate_has_jit = invalidated_candidate && invalidated_candidate->has_unfused_handlers &&
                                    invalidated_candidate->entry != invalidated_candidate->FirstOp()->handler;
     uint16_t hot_count = 0;
-#if FIBERCPU_LLVM_JIT
+#if FIBERCPU_BLOCK_COMPILATION
     if (candidate_has_jit && matches_candidate(true)) {
         invalidated_candidate->Revalidate();
         return invalidated_candidate;
     }
-    hot_count = decoded_inst_count ? LLVMJitHotThreshold() : 0;
+    hot_count = decoded_inst_count ? block_recipe::HotThreshold() : 0;
     if (hot_count && candidate_has_jit) hot_count = 1;
     std::array<HandlerFunc, MAX_INSTS> scalar_handlers;
     if (hot_count) {
@@ -999,7 +999,7 @@ finalize:
     for (uint32_t i = 0; i < slot_count; ++i) {
         dst[i] = op_storage[i].head;
     }
-#if FIBERCPU_LLVM_JIT
+#if FIBERCPU_BLOCK_COMPILATION
     if (hot_count) std::copy_n(scalar_handlers.data(), decoded_inst_count, block->UnfusedHandlers());
 #endif
 

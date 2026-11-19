@@ -1,8 +1,9 @@
 cmake_minimum_required(VERSION 3.20)
 
 option(FIBERCPU_ENABLE_LLVM_JIT "Enable the experimental LLVM basic-block JIT" OFF)
+set(FIBERCPU_LINKED_BLOCK_CACHE_FILE "" CACHE FILEPATH "Offline LLVM block cache to link into the interpreter")
 # Keep native objects aligned with the NativeAOT macOS deployment target.
-if(APPLE AND NOT FIBERCPU_ENABLE_LLVM_JIT)
+if(APPLE AND NOT FIBERCPU_ENABLE_LLVM_JIT AND NOT FIBERCPU_LINKED_BLOCK_CACHE_FILE)
     set(CMAKE_OSX_DEPLOYMENT_TARGET "12.0" CACHE STRING "Minimum macOS deployment version" FORCE)
 endif()
 
@@ -827,13 +828,78 @@ if(FIBERCPU_DYNAMIC_OPERANDS)
     target_sources(fibercpu PRIVATE src/dynamic_operand_specialization.cpp "${_bundle}")
 endif()
 
-if(FIBERCPU_ENABLE_LLVM_JIT)
+if(FIBERCPU_ENABLE_LLVM_JIT OR FIBERCPU_LINKED_BLOCK_CACHE_FILE)
     if(NOT APPLE OR CMAKE_CROSSCOMPILING OR NOT CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL "arm64" OR
        (CMAKE_OSX_ARCHITECTURES AND NOT CMAKE_OSX_ARCHITECTURES STREQUAL "arm64") OR
        NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang" OR NOT PGO_MODE STREQUAL "OFF" OR
        FIBERCPU_ENABLE_HANDLER_PROFILE OR FIBERCPU_ENABLE_SEQUENCE_PROFILE)
-        message(FATAL_ERROR "LLVM block JIT requires native macOS arm64, upstream Clang, and no PGO or handler tracing")
+        message(FATAL_ERROR "LLVM block JIT and linked block caches require native macOS arm64, upstream Clang, and no PGO or handler tracing")
     endif()
+    target_compile_definitions(fibercpu_core PRIVATE FIBERCPU_BLOCK_COMPILATION=1)
+    target_compile_definitions(fibercpu PRIVATE FIBERCPU_BLOCK_COMPILATION=1)
+    target_sources(fibercpu PRIVATE src/jit/block_recipe.cpp)
+
+    # Linked machine code embeds VM structure offsets and uses the native threaded ABI.
+    # Hash the sources which define those contracts and the relevant compiler settings
+    # without depending on LLVM or a binary built for this machine.
+    set(_linked_abi "fibercpu-linked-block-cache-v1")
+    foreach(setting CMAKE_CXX_COMPILER_VERSION CMAKE_OSX_DEPLOYMENT_TARGET
+                    CMAKE_BUILD_TYPE CMAKE_CXX_FLAGS CMAKE_CXX_FLAGS_DEBUG
+                    CMAKE_CXX_FLAGS_RELEASE CMAKE_CXX_FLAGS_MINSIZEREL CMAKE_CXX_FLAGS_RELWITHDEBINFO
+                    USE_SOFTFLOAT ENABLE_TLB_STATS FIBERCPU_ENABLE_BLOCK_PROFILE
+                    FIBERCPU_GPR_PIN_MODE _pin_registers FIBERCPU_PIN_SPECIALIZATION
+                    FIBERCPU_ENABLE_HANDLER_PROFILE FIBERCPU_ENABLE_SEQUENCE_PROFILE
+                    INSTRUCTION_CATALOG_SHA256)
+        string(APPEND _linked_abi "
+${setting}=${${setting}}")
+    endforeach()
+    file(GLOB_RECURSE _linked_abi_sources RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}"
+        CONFIGURE_DEPENDS "src/*.h")
+    list(APPEND _linked_abi_sources CMakeLists.txt src/decoder.cpp src/jit/block_recipe.cpp src/jit/llvm_block_ir.cpp
+        src/jit/llvm_block_jit.cpp ../scripts/gen_instruction_catalog.py)
+    foreach(source IN LISTS _linked_abi_sources)
+        set(path "${CMAKE_CURRENT_SOURCE_DIR}/${source}")
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${path}")
+        file(SHA256 "${path}" source_hash)
+        string(APPEND _linked_abi "
+${source}=${source_hash}")
+    endforeach()
+    string(SHA256 _linked_abi_sha256 "${_linked_abi}")
+    file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/linked_block_cache_abi.h" CONTENT
+        [=[#pragma once
+#define FIBERCPU_LINKED_BLOCK_CACHE_ABI "@_linked_abi_sha256@"
+]=] @ONLY)
+endif()
+
+if(FIBERCPU_LINKED_BLOCK_CACHE_FILE)
+    get_filename_component(_linked_cache "${FIBERCPU_LINKED_BLOCK_CACHE_FILE}" ABSOLUTE)
+    set(_linked_script "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/extract_linked_block_cache.py")
+    set(_linked_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/linked_cache")
+    set(_linked_table "${_linked_dir}/linked_block_cache.inc")
+    set(_linked_args "${_linked_script}" --input "${_linked_cache}" --abi "${_linked_abi_sha256}")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_linked_cache}" "${_linked_script}")
+    execute_process(COMMAND "${Python3_EXECUTABLE}" ${_linked_args}
+        OUTPUT_VARIABLE _linked_count OUTPUT_STRIP_TRAILING_WHITESPACE
+        COMMAND_ERROR_IS_FATAL ANY)
+    math(EXPR _linked_last "${_linked_count} - 1")
+    set(_linked_objects "")
+    foreach(index RANGE 0 ${_linked_last})
+        list(APPEND _linked_objects "${_linked_dir}/block_${index}.o")
+    endforeach()
+    add_custom_command(OUTPUT "${_linked_table}" ${_linked_objects}
+        COMMAND "${Python3_EXECUTABLE}" ${_linked_args} --output "${_linked_dir}"
+        DEPENDS "${_linked_cache}" "${_linked_script}"
+                "${CMAKE_CURRENT_BINARY_DIR}/generated/linked_block_cache_abi.h"
+        VERBATIM)
+    set_source_files_properties(${_linked_objects} PROPERTIES EXTERNAL_OBJECT TRUE)
+    target_compile_definitions(fibercpu_core PRIVATE FIBERCPU_LINKED_BLOCK_CACHE=1)
+    target_compile_definitions(fibercpu PRIVATE FIBERCPU_LINKED_BLOCK_CACHE=1)
+    target_include_directories(fibercpu PRIVATE "${_linked_dir}")
+    target_sources(fibercpu PRIVATE src/jit/linked_block_cache.cpp "${_linked_table}" ${_linked_objects})
+    message(STATUS "Linking ${_linked_count} precompiled LLVM block objects")
+endif()
+
+if(FIBERCPU_ENABLE_LLVM_JIT)
     find_package(LLVM REQUIRED CONFIG)
     string(REGEX MATCH "^[0-9]+" _clang_major "${CMAKE_CXX_COMPILER_VERSION}")
     if(LLVM_VERSION_MAJOR LESS 21 OR NOT _clang_major STREQUAL "${LLVM_VERSION_MAJOR}")
@@ -928,13 +994,16 @@ if(FIBERCPU_TEST_SPECIALIZATION_INDEX)
         endif()
     endforeach()
     add_test(NAME decode_storage COMMAND decode_storage_test)
-    if(FIBERCPU_ENABLE_LLVM_JIT)
+    if(FIBERCPU_ENABLE_LLVM_JIT OR FIBERCPU_LINKED_BLOCK_CACHE_FILE)
         add_executable(llvm_block_test ../benchmark/decode/llvm_block_test.cpp)
         target_include_directories(llvm_block_test PRIVATE src)
         target_include_directories(llvm_block_test SYSTEM PRIVATE ${simde_SOURCE_DIR})
         target_link_libraries(llvm_block_test PRIVATE fibercpu)
         add_test(NAME llvm_block_disabled COMMAND llvm_block_test)
-        set_tests_properties(llvm_block_disabled PROPERTIES ENVIRONMENT "FIBERCPU_LLVM_JIT=0")
+        set_tests_properties(llvm_block_disabled PROPERTIES
+            ENVIRONMENT "FIBERCPU_LLVM_JIT=0;FIBERCPU_LINKED_BLOCK_CACHE=0")
+    endif()
+    if(FIBERCPU_ENABLE_LLVM_JIT)
         add_test(NAME llvm_block_generic COMMAND llvm_block_test enabled)
         set_tests_properties(llvm_block_generic PROPERTIES ENVIRONMENT
             "FIBERCPU_LLVM_JIT=generic;FIBERCPU_LLVM_JIT_HOT_THRESHOLD=1;FIBERCPU_LLVM_JIT_WORKERS=0")
@@ -970,5 +1039,8 @@ if(FIBERCPU_TEST_SPECIALIZATION_INDEX)
         add_test(NAME llvm_block_cache_invalid COMMAND llvm_block_test)
         set_tests_properties(llvm_block_cache_invalid PROPERTIES FIXTURES_REQUIRED llvm_block_profile
             ENVIRONMENT "FIBERCPU_LLVM_JIT=cache;FIBERCPU_LLVM_JIT_CACHE=${_cache_test_profile}")
+        set_property(TEST llvm_block_generic llvm_block_specialized llvm_block_hot llvm_block_reuse llvm_block_budget llvm_block_async
+            llvm_block_cache_profile llvm_block_cache_build llvm_block_cache_run llvm_block_cache_hybrid
+            llvm_block_cache_invalid APPEND PROPERTY ENVIRONMENT "FIBERCPU_LINKED_BLOCK_CACHE=0")
     endif()
 endif()

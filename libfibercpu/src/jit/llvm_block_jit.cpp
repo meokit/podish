@@ -1,12 +1,14 @@
 #include "jit/llvm_block_jit.h"
+#include "jit/block_recipe.h"
+#include "jit/linked_block_cache_host.h"
 #include "jit/llvm_block_cache.h"
 #include "jit/llvm_operand_ir.h"
+#include "linked_block_cache_abi.h"
 
 #include <ankerl/unordered_dense.h>
 #include <llvm/ADT/SmallBitVector.h>
 #include <llvm/ADT/SmallPtrSet.h>
 #include <algorithm>
-#include <array>
 #include <atomic>
 #include <charconv>
 #include <cmath>
@@ -50,22 +52,8 @@
 #include <strings.h>
 
 #include "float80.h"
-#include "operand_policy.h"
 #include "ops.h"
-#include "ops/ops_alu_impl.h"
-#include "ops/ops_compare_impl.h"
 #include "ops/ops_control_impl.h"
-#include "ops/ops_data_mov_impl.h"
-#include "ops/ops_double_shift_impl.h"
-#include "ops/ops_fpu_impl.h"
-#include "ops/ops_groups_impl.h"
-#include "ops/ops_mmx_impl.h"
-#include "ops/ops_muldiv_impl.h"
-#include "ops/ops_shift_bit_impl.h"
-#include "ops/ops_sse_cvt_impl.h"
-#include "ops/ops_sse_fp_impl.h"
-#include "ops/ops_sse_int_impl.h"
-#include "ops/ops_sse_mov_impl.h"
 
 namespace fiberish {
 namespace {
@@ -73,7 +61,8 @@ namespace {
 #include "llvm_block_bitcode.inc"
 
 enum class JitMode { Off, Generic, Exact, Profile, Cache };
-constexpr size_t kMaxBlockOps = 64;
+using block_recipe::kMaxOps;
+using block_recipe::Step;
 constexpr size_t kDefaultJitCodeBudget = 16 * 1024 * 1024;
 constexpr uint16_t kDefaultHotThreshold = 64;
 std::atomic<uint64_t> live_blocks{0};
@@ -227,68 +216,13 @@ T ReadPositiveSetting(const char* name, T fallback) {
     return parsed.ec == std::errc{} && parsed.ptr == end && result != 0 ? result : fallback;
 }
 
-enum LLVMRequirement : uint8_t {
-    kRegisterOperand = 1,
-    kMemoryOperand = 2,
-    kExactOnly = 4,
-};
-
-struct LLVMOperation {
-    const char* name;
-    uint8_t requirements;
-    uint8_t extensions;
-
-    bool Matches(const DecodedOp& op, JitMode mode) const {
-        if ((requirements & kRegisterOperand) && (!op.meta.flags.has_modrm || (op.modrm >> 6) != 3)) return false;
-        if ((requirements & kMemoryOperand) && !HasMem(&op)) return false;
-        if ((requirements & kExactOnly) && mode == JitMode::Generic) return false;
-        return extensions == 0xff || (op.meta.flags.has_modrm && (extensions & (1u << ((op.modrm >> 3) & 7))));
-    }
-};
-
-const auto& Operations() {
-    static const ankerl::unordered_dense::map<HandlerFunc, LLVMOperation> operations = {
-#define FIBERCPU_LLVM_OP(Name, Exact, Requirements, Extensions) \
-    {DispatchWrapper<op::Name>, {#Name, Requirements, Extensions}},
-#include "llvm_block_operations.inc"
-#undef FIBERCPU_LLVM_OP
-    };
-    return operations;
-}
-
-const char* LogicName(const DecodedOp& op, JitMode mode) {
-    const auto& operations = Operations();
-    const auto match = operations.find(op.handler);
-    return match != operations.end() && match->second.Matches(op, mode) ? match->second.name : nullptr;
-}
-
-struct Step {
-    std::string_view name;
-    DecodedOperandShape shape;
-};
-
-std::string BlockKey(std::span<const Step> steps, bool exact, LLVMBlockExit exit) {
-    std::string key(1, static_cast<char>(exit));
-    for (const auto& step : steps) {
-        key += step.name;
-        key += '\0';
-        if (exact) {
-            llvm_block_cache::AppendU32(key, step.shape.encoding);
-            llvm_block_cache::AppendU32(key, step.shape.ea_desc);
-            llvm_block_cache::AppendU32(key, step.shape.displacement);
-            llvm_block_cache::AppendU32(key, step.shape.immediate);
-        }
-    }
-    return key;
-}
-
 bool DecodeRecipe(std::string_view key, std::vector<Step>& steps, LLVMBlockExit& exit) {
     if (key.empty() || static_cast<uint8_t>(key.front()) > static_cast<uint8_t>(LLVMBlockExit::Branch)) return false;
     exit = static_cast<LLVMBlockExit>(key.front());
     key.remove_prefix(1);
     while (!key.empty()) {
         const auto end = key.find('\0');
-        if (end == 0 || end == std::string_view::npos || steps.size() == kMaxBlockOps) return false;
+        if (end == 0 || end == std::string_view::npos || steps.size() == kMaxOps) return false;
         const auto name = key.substr(0, end);
         key.remove_prefix(end + 1);
         DecodedOperandShape shape;
@@ -344,41 +278,6 @@ struct BlockLookup {
     size_t blocked_bytes = 0;
 };
 
-struct BlockPlan {
-    std::array<Step, kMaxBlockOps> steps;
-    std::array<HandlerFunc, kMaxBlockOps> replay_handlers;
-    size_t covered = 0;
-    LLVMBlockExit exit = LLVMBlockExit::Dispatch;
-};
-
-LLVMBlockExit FullBlockExit(const BasicBlock& block) {
-    const auto handler = block.Sentinel()->handler;
-    if (std::ranges::find(g_ExitHandlersFallthrough, handler) != g_ExitHandlersFallthrough.end())
-        return LLVMBlockExit::Fallthrough;
-    if (std::ranges::find(g_ExitHandlersBranch, handler) != g_ExitHandlersBranch.end()) return LLVMBlockExit::Branch;
-    return LLVMBlockExit::Dispatch;
-}
-
-bool CanPlanOp(const DecodedOp& op) {
-    return op.len && !op.prefixes.flags.lock && (!HasMem(&op) || GetExtKind(&op) == ExtKind::Data);
-}
-
-template <typename Redecode>
-bool PlanBlock(std::span<const DecodedOp> ops, size_t sentinel, LLVMBlockExit full_exit, JitMode mode,
-               Redecode redecode, BlockPlan& plan) {
-    for (const auto& op : ops) {
-        if (!CanPlanOp(op)) break;
-        DecodedOp generic;
-        if (!redecode(op, generic)) return false;
-        const auto* name = LogicName(generic, mode);
-        if (!name) break;
-        plan.steps[plan.covered] = {name, DecodedOperandShape::Read(&generic)};
-        plan.replay_handlers[plan.covered++] = generic.handler;
-    }
-    if (plan.covered == sentinel) plan.exit = full_exit;
-    return plan.covered > 1 || (plan.covered == 1 && plan.exit != LLVMBlockExit::Dispatch);
-}
-
 std::unique_ptr<llvm::Module> ReadBlockIR(llvm::LLVMContext& context) {
     auto input = llvm::MemoryBufferRef(llvm::StringRef(reinterpret_cast<const char*>(kBitcode), sizeof(kBitcode)),
                                        "fibercpu-blocks");
@@ -432,7 +331,7 @@ class BlockCompiler {
             if (call && call->getCalledFunction() == use_step) guards.push_back(call);
             if (call && call->getCalledFunction() == exit_kind) exit_site = call;
         }
-        if (guards.size() != kMaxBlockOps || !exit_site) return {};
+        if (guards.size() != kMaxOps || !exit_site) return {};
         exit_site->replaceAllUsesWith(llvm::ConstantInt::get(exit_site->getType(), static_cast<uint8_t>(exit)));
         exit_site->eraseFromParent();
         for (auto* guard : guards) {
@@ -652,10 +551,33 @@ public:
         return result;
     }
 
-    int BuildCache(std::string_view profile, llvm::raw_ostream& output) {
+    int BuildCache(std::string_view profile, llvm::raw_ostream& output, bool linked) {
         if (!jit_) return -1;
         std::lock_guard lock(mutex_);
-        WriteFileHeader(output, llvm_block_cache::cache_magic);
+        auto* compiler = &jit_->getIRCompileLayer().getCompiler();
+        std::unique_ptr<llvm::orc::TMOwningSimpleCompiler> linked_compiler;
+        if (linked) {
+            // Linked objects need the deployment target of the interpreter,
+            // while ORC objects can use the macOS version of the running host.
+            auto target = llvm::orc::JITTargetMachineBuilder::detectHost();
+            if (!target) {
+                llvm::consumeError(target.takeError());
+                return -1;
+            }
+            target->getTargetTriple() = ir_.module->getTargetTriple();
+            target->setRelocationModel(llvm::Reloc::PIC_).setOptions(llvm::TargetOptions{});
+            auto machine = target->createTargetMachine();
+            if (!machine) {
+                llvm::consumeError(machine.takeError());
+                return -1;
+            }
+            linked_compiler = std::make_unique<llvm::orc::TMOwningSimpleCompiler>(std::move(*machine));
+            compiler = linked_compiler.get();
+            output << llvm_block_cache::linked_magic << FIBERCPU_LINKED_BLOCK_CACHE_ABI;
+            if (!llvm_block_cache::WriteRecord(output, LinkedBlockCacheHostCPU())) return -1;
+        } else {
+            WriteFileHeader(output, llvm_block_cache::cache_magic);
+        }
         int compiled = 0;
         ankerl::unordered_dense::set<std::string_view> seen;
         std::vector<Step> steps;
@@ -667,7 +589,7 @@ public:
             if (!seen.insert(key).second) continue;
             auto module = Prepare(*ir_.module, steps, true, exit, ObjectEntryName(compiled));
             if (!module) continue;
-            auto object = jit_->getIRCompileLayer().getCompiler()(*module);
+            auto object = (*compiler)(*module);
             if (!object) {
                 llvm::logAllUnhandledErrors(object.takeError(), llvm::errs(), "LLVM block cache: ");
                 continue;
@@ -735,7 +657,7 @@ struct CompilationJob {
 
     void Run() {
         if (result.expired()) return;
-        BlockPlan plan;
+        block_recipe::Plan plan;
         auto input = std::span<const uint8_t>(bytes);
         const auto redecode = [&](const DecodedOp& op, DecodedOp& generic) {
             const auto instruction = input.first(op.len);
@@ -743,18 +665,16 @@ struct CompilationJob {
             return RedecodeGenericInstruction(instruction, op, generic);
         };
         BlockLookup lookup;
-        const bool planned = PlanBlock(ops, sentinel, exit, mode, redecode, plan);
+        const bool planned = block_recipe::PlanBlock(ops, sentinel, exit, mode != JitMode::Generic, redecode, plan);
         if (result.expired()) return;
         if (planned) {
-            const auto steps = std::span(plan.steps).first(plan.covered);
-            auto key = BlockKey(steps, mode != JitMode::Generic, plan.exit);
+            auto key = block_recipe::BlockKey(plan.Steps(), mode != JitMode::Generic, plan.exit);
             const auto* cached = mode == JitMode::Generic ? nullptr : NativeObjects().Find(key);
-            lookup = Compiler().Find(steps, std::move(key), mode, plan.exit, budget, cached);
+            lookup = Compiler().Find(plan.Steps(), std::move(key), mode, plan.exit, budget, cached);
         }
         if (auto output = result.lock()) {
             output->lookup = std::move(lookup);
-            if (output->lookup.code)
-                output->replay.assign(plan.replay_handlers.data(), plan.replay_handlers.data() + plan.covered);
+            if (output->lookup.code) output->replay.assign(plan.ReplayHandlers().begin(), plan.ReplayHandlers().end());
             output->done.store(true, std::memory_order_release);
             if (auto signal = ready.lock()) signal->store(true, std::memory_order_release);
         }
@@ -828,7 +748,7 @@ CompilationPool& Workers() {
         // All three statics must outlive the pool. Compiler construction
         // itself stays lazy so the VM thread does not parse bitcode here.
         (void)Storage();
-        (void)Operations();
+        block_recipe::InitializeOperationLookup();
         (void)NativeObjects();
         return WorkerCount();
     }());
@@ -838,11 +758,6 @@ CompilationPool& Workers() {
 size_t CodeBudget() {
     static const size_t budget = ReadPositiveSetting("FIBERCPU_LLVM_JIT_CODE_BUDGET", kDefaultJitCodeBudget);
     return budget;
-}
-
-bool IsPublishedCandidate(EmuState* state, BasicBlock* block) {
-    return !state->mmu.code_cache_flush_pending() && block->is_valid() && block->has_unfused_handlers &&
-           block->entry == block->FirstOp()->handler && state->mmu.lookup_cached_block(block->start_eip()) == block;
 }
 
 void InstallResult(EmuState* state, BasicBlock* block, const BlockLookup& lookup, std::span<const HandlerFunc> replay) {
@@ -865,14 +780,7 @@ void InstallResult(EmuState* state, BasicBlock* block, const BlockLookup& lookup
         cache.llvm_block_bytes += bytes;
     }
 
-    // Replay a slow load on its original scalar slot. The uncompiled suffix
-    // keeps its independently selected SuperOpcodes and operand handlers.
-    auto* ops = block->FirstOp();
-    for (size_t i = 0; i < replay.size(); ++i) {
-        ops[i].handler = replay[i];
-        ops[i].meta.flags.operand_lowered = 0;
-    }
-    block->entry = code->handler;
+    block_recipe::InstallBlockHandler(*block, replay, code->handler);
 }
 
 void QueueBlock(EmuState* state, BasicBlock* block, JitMode mode) {
@@ -890,14 +798,14 @@ void QueueBlock(EmuState* state, BasicBlock* block, JitMode mode) {
         .ready = async->ready,
         .sentinel = block->sentinel_slot_index,
         .budget = CodeBudget() - state->mmu.code_cache().llvm_block_bytes,
-        .exit = FullBlockExit(*block),
+        .exit = block_recipe::FullBlockExit(*block),
         .mode = mode,
     };
-    const auto ops = std::span(block->FirstOp(), std::min(job.sentinel, kMaxBlockOps));
+    const auto ops = std::span(block->FirstOp(), std::min(job.sentinel, kMaxOps));
     job.ops.reserve(ops.size());
     job.bytes.reserve(ops.size() * 15);
     for (const auto& op : ops) {
-        if (!CanPlanOp(op)) break;
+        if (!block_recipe::CanPlanOp(op)) break;
         const auto offset = job.bytes.size();
         job.bytes.resize(offset + op.len);
         if (!CopyDecodedInstructionBytes(state, op, std::span(job.bytes).subspan(offset))) return;
@@ -933,22 +841,17 @@ uint16_t LLVMJitHotThreshold() {
 }
 
 void CompileHotLLVMBlock(EmuState* state, BasicBlock* block) {
-    if (!IsPublishedCandidate(state, block)) return;
+    if (!block_recipe::CanPromoteBlock(*state, *block)) return;
     const auto mode = RuntimeMode();
     if (mode == JitMode::Off) return;
     if ((mode == JitMode::Exact || mode == JitMode::Generic) && WorkerCount()) {
         QueueBlock(state, block, mode);
         return;
     }
-    const auto ops = std::span(block->FirstOp(), std::min<size_t>(block->sentinel_slot_index, kMaxBlockOps));
-    BlockPlan plan;
-    if (!PlanBlock(
-            ops, block->sentinel_slot_index, FullBlockExit(*block), mode,
-            [&](const DecodedOp& op, DecodedOp& generic) { return RedecodeGenericInstruction(state, op, generic); },
-            plan))
-        return;
-    const auto steps = std::span(plan.steps).first(plan.covered);
-    auto key = BlockKey(steps, mode != JitMode::Generic, plan.exit);
+    block_recipe::Plan plan;
+    const bool exact = mode != JitMode::Generic;
+    if (!block_recipe::PlanBlock(*state, *block, exact, plan)) return;
+    auto key = block_recipe::BlockKey(plan.Steps(), exact, plan.exit);
     if (mode == JitMode::Profile) {
         RecordBlock(key);
         return;
@@ -957,8 +860,8 @@ void CompileHotLLVMBlock(EmuState* state, BasicBlock* block) {
     if (mode == JitMode::Cache && !cached) return;
 
     const size_t remaining = CodeBudget() - state->mmu.code_cache().llvm_block_bytes;
-    auto result = Compiler().Find(steps, std::move(key), mode, plan.exit, remaining, cached);
-    InstallResult(state, block, result, std::span(plan.replay_handlers).first(plan.covered));
+    auto result = Compiler().Find(plan.Steps(), std::move(key), mode, plan.exit, remaining, cached);
+    InstallResult(state, block, result, plan.ReplayHandlers());
 }
 
 void PollLLVMBlockCompilations(EmuState* state) {
@@ -970,14 +873,14 @@ void PollLLVMBlockCompilations(EmuState* state) {
         if (block != candidate.block) return true;
         if (block->invalidation_revision != candidate.revision) {
             if (block->entry == block->FirstOp()->handler) block->chain.llvm_hot_count = 1;
-        } else if (IsPublishedCandidate(state, block)) {
+        } else if (block_recipe::CanPromoteBlock(*state, *block)) {
             InstallResult(state, block, candidate.result->lookup, candidate.result->replay);
         }
         return true;
     });
 }
 
-int BuildLLVMJitCache(const char* profile_path, const char* cache_path) {
+int BuildLLVMJitCache(const char* profile_path, const char* cache_path, bool linked) {
     if (!profile_path || !cache_path) return -1;
     auto input = llvm::MemoryBuffer::getFile(profile_path);
     if (!input) return -1;
@@ -992,7 +895,7 @@ int BuildLLVMJitCache(const char* profile_path, const char* cache_path) {
     int count;
     {
         llvm::raw_fd_ostream output(temp->FD, false);
-        count = Compiler().BuildCache(profile, output);
+        count = Compiler().BuildCache(profile, output, linked);
         output.flush();
         if (output.has_error()) {
             output.clear_error();

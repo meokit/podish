@@ -37,7 +37,7 @@ bool HasCompiledEntry(EmuState* state) {
     return FindCompiledBlock(state) != nullptr;
 }
 
-bool VerifyLongBlock(bool enabled) {
+bool VerifyLongBlock(bool enabled, bool linked) {
     // MOV EAX, 2; then twelve ADD EAX, 1 operations.
     std::array<uint8_t, 65> code{};
     code[0] = 0xb8;
@@ -49,7 +49,7 @@ bool VerifyLongBlock(bool enabled) {
     auto state = LoadCode(code.data(), code.size());
     const auto end = code_address + code.size();
     if (!X86_Run(state.get(), end, 64) || X86_RegRead(state.get(), 0) != 14 ||
-        HasCompiledEntry(state.get()) != enabled || X86_GetLLVMJitLiveBlockCount() != unsigned(enabled))
+        HasCompiledEntry(state.get()) != enabled || X86_GetLLVMJitLiveBlockCount() != unsigned(enabled && !linked))
         return false;
 
     if (auto* block = FindCompiledBlock(state.get())) {
@@ -67,16 +67,17 @@ bool VerifyLongBlock(bool enabled) {
     // A different state can still chain into the shared MMU's code cache.
     State peer{X86_Clone(state.get(), 1), X86_Destroy};
     state.reset();
-    if (X86_GetLLVMJitLiveBlockCount() != unsigned(enabled))
+    if (X86_GetLLVMJitLiveBlockCount() != unsigned(enabled && !linked))
         return false;
 
     X86_ResetAllCodeCache(peer.get());
     if (X86_GetLLVMJitLiveBlockCount() != 0)
         return false;
-    const auto compiled = X86_GetLLVMJitBlockCount();
+    const auto compilation_count = linked ? X86_GetLinkedBlockHitCount : X86_GetLLVMJitBlockCount;
+    const auto compiled = compilation_count();
     X86_SetEIP(peer.get(), code_address);
     return X86_Run(peer.get(), end, 64) && X86_RegRead(peer.get(), 0) == 14 &&
-           X86_GetLLVMJitBlockCount() == compiled + unsigned(enabled);
+           compilation_count() == compiled + unsigned(enabled);
 }
 
 struct FaultData {
@@ -499,6 +500,32 @@ bool VerifyAsyncCompilations() {
     return false;
 }
 
+bool VerifyLinkedCache(bool compile_on_miss) {
+    const auto hits = X86_GetLinkedBlockHitCount();
+    if (hits == 0 || X86_GetLLVMJitCacheLoadCount() != 0 || X86_GetLLVMJitBlockCount() != 0)
+        return false;
+    constexpr uint8_t code[] = {0xb8, 0x4a, 0x17, 0, 0}; // MOV EAX, 0x174a, absent from the profile.
+    auto state = LoadCode(code, sizeof(code));
+    const auto end = code_address + sizeof(code);
+    auto run = [&] {
+        X86_SetEIP(state.get(), code_address);
+        return X86_Run(state.get(), end, 16) && X86_RegRead(state.get(), 0) == 0x174a &&
+               X86_GetLinkedBlockHitCount() == hits;
+    };
+    if (!compile_on_miss)
+        return run() && !HasCompiledEntry(state.get()) && X86_GetLLVMJitBlockCount() == 0;
+
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    do {
+        if (!run())
+            return false;
+        if (HasCompiledEntry(state.get()))
+            return X86_GetLLVMJitBlockCount() == 1 && X86_GetLLVMJitCacheLoadCount() == 0;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    } while (std::chrono::steady_clock::now() < deadline);
+    return false;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -521,7 +548,9 @@ int main(int argc, char** argv) {
         return 1;
     }
     const bool enabled = argc == 2;
-    if (!VerifyLongBlock(enabled) || X86_GetLLVMJitLiveBlockCount() != 0) {
+    const bool linked_hybrid = argc == 2 && std::strcmp(argv[1], "linked-hybrid") == 0;
+    const bool linked = linked_hybrid || (argc == 2 && std::strcmp(argv[1], "linked") == 0);
+    if (!VerifyLongBlock(enabled, linked) || X86_GetLLVMJitLiveBlockCount() != 0) {
         std::fprintf(stderr, "LLVM block execution or cache ownership mismatch\n");
         return 1;
     }
@@ -554,6 +583,10 @@ int main(int argc, char** argv) {
     if (!VerifyStackWidths(enabled) || !VerifyStackReplay(enabled) || !VerifyCallReturn(enabled) ||
         !VerifyTsc(enabled) || X86_GetLLVMJitLiveBlockCount() != 0) {
         std::fprintf(stderr, "LLVM generic stack width, call or return mismatch\n");
+        return 1;
+    }
+    if (linked && !VerifyLinkedCache(linked_hybrid)) {
+        std::fprintf(stderr, "Linked block install or native miss fallback mismatch\n");
         return 1;
     }
     if (argc == 2) {

@@ -113,6 +113,39 @@ operand shapes. Profiles and caches are tied to the embedded bitcode, LLVM
 version and host CPU target. Use trusted cache files since they contain native
 code.
 
+Linked LLVM block cache
+-----------------------
+Use the profiling command above with an LLVM-enabled producer. Emit a bundle
+of relocatable host objects for the build-time linker:
+
+  <producer>/fibercpu_llvm_cache --linked blocks.profile blocks.linked
+
+Configure the interpreter using the same sources, compiler, target and VM
+layout settings as the producer, with the linked bundle as a build input:
+
+  cmake -S libfibercpu -B <consumer> -DFIBERCPU_ENABLE_LLVM_JIT=OFF \
+    -DFIBERCPU_LINKED_BLOCK_CACHE_FILE=/absolute/path/blocks.linked
+  cmake --build <consumer>
+
+The C++ table and its objects link into libfibercpu. This build needs Python
+and an upstream Clang toolchain on native macOS ARM64. An LLVM-disabled
+build runs without the LLVM libraries. The linked handlers use the library's
+normal executable pages and receive their relocations from the platform
+linker. Use trusted build-time bundles. CMake checks the ABI fingerprint,
+and a different host CPU falls back to native dispatch. The ORC cache
+format and the linked bundle are separate inputs.
+
+The linked cache is enabled at runtime by default when built in.
+FIBERCPU_LINKED_BLOCK_CACHE=0 disables its use independently of
+FIBERCPU_LLVM_JIT. Disable the linked cache while collecting a fresh profile
+with a build that already includes linked objects. When used by itself, it
+tries each decoded block on its first entry. With ORC enabled at runtime,
+it uses the existing ORC mode's
+entry threshold and checks linked code first at promotion. Misses follow the
+usual path for that ORC mode. X86_GetLinkedBlockHitCount counts linked block
+entry installations. Linked handlers persist for the lifetime of the
+library and use no per-MMU JIT allocation budget.
+
 Tool metadata and fusion snapshot
 ---------------------------------
 X86_GetInstructionVariantCount/GetInstructionVariant expose immutable, build-local

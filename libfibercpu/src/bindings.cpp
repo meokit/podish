@@ -19,6 +19,9 @@
 #if FIBERCPU_LLVM_JIT
 #include "jit/llvm_block_jit.h"
 #endif
+#if FIBERCPU_LINKED_BLOCK_CACHE
+#include "jit/linked_block_cache.h"
+#endif
 #if FIBERCPU_DYNAMIC_OPERANDS
 #include "dynamic_operand_specialization.h"
 #endif
@@ -264,7 +267,7 @@ static bool CanBlockConcatWithSuccessor(const BasicBlock* a, const BasicBlock* b
 static void LowerConcatenatedBlock(BasicBlock* concat, const BasicBlock* a, const BasicBlock* b,
                                    uint32_t a_instructions) {
     auto* ops = concat->FirstOp();
-#if FIBERCPU_LLVM_JIT
+#if FIBERCPU_BLOCK_COMPILATION
     if (concat->has_unfused_handlers) {
         auto* handlers = concat->UnfusedHandlers();
         std::copy_n(a->UnfusedHandlers(), a_instructions, handlers);
@@ -919,11 +922,20 @@ int X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
 
     // Reset chaining state for this run
     state->last_block = state->mmu.invalid_code_block();
-#if FIBERCPU_LLVM_JIT
+#if FIBERCPU_BLOCK_COMPILATION
     state->llvm_hot_block = nullptr;
     const auto compile_hot_block = [&] {
+#if FIBERCPU_LLVM_JIT
         PollLLVMBlockCompilations(state);
-        if (auto* block = std::exchange(state->llvm_hot_block, nullptr)) CompileHotLLVMBlock(state, block);
+#endif
+        auto* block = std::exchange(state->llvm_hot_block, nullptr);
+        if (!block) return;
+#if FIBERCPU_LINKED_BLOCK_CACHE
+        if (TryLinkedBlockCache(*state, *block)) return;
+#endif
+#if FIBERCPU_LLVM_JIT
+        CompileHotLLVMBlock(state, block);
+#endif
     };
 #endif
     state->smc_write_to_exec = false;
@@ -964,7 +976,7 @@ int X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
             state->last_block = block_ptr;
             if (block_ptr->inst_count() == 0) return;
 
-#if FIBERCPU_LLVM_JIT
+#if FIBERCPU_BLOCK_COMPILATION
             CountLLVMBlockEntry(state, block_ptr, block_ptr->chain.llvm_hot_count);
             compile_hot_block();
 #endif
@@ -1053,7 +1065,7 @@ int X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
         }
 
         execute_block(block_ptr);
-#if FIBERCPU_LLVM_JIT
+#if FIBERCPU_BLOCK_COMPILATION
         compile_hot_block();
 #endif
         if (state->status != EmuStatus::Running) break;
@@ -1499,6 +1511,24 @@ uint64_t X86_GetLLVMJitCacheLoadCount() {
     return LLVMJitCacheLoadCount();
 #else
     return 0;
+#endif
+}
+
+uint64_t X86_GetLinkedBlockHitCount() {
+#if FIBERCPU_LINKED_BLOCK_CACHE
+    return LinkedBlockHitCount();
+#else
+    return 0;
+#endif
+}
+
+int X86_BuildLinkedLLVMBlockCache(const char* profile_path, const char* cache_path) {
+#if FIBERCPU_LLVM_JIT
+    return BuildLLVMJitCache(profile_path, cache_path, true);
+#else
+    (void)profile_path;
+    (void)cache_path;
+    return -1;
 #endif
 }
 
