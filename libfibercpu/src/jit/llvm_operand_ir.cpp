@@ -6,10 +6,12 @@
 #include <llvm/ADT/SmallPtrSet.h>
 #include <llvm/ExecutionEngine/Orc/JITTargetMachineBuilder.h>
 #include <llvm/IR/Constants.h>
+#include <llvm/IR/PassManager.h>
 #include <llvm/IR/InstIterator.h>
 #include <llvm/IR/Verifier.h>
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Support/TargetSelect.h>
+#include <llvm/Transforms/IPO/GlobalDCE.h>
 #include <llvm/Transforms/Utils/Cloning.h>
 #include <llvm/Transforms/Utils/Local.h>
 
@@ -34,7 +36,7 @@ bool InlineLLVMKernel(llvm::CallInst& call, llvm::Function& kernel, const Decode
     return llvm::InlineFunction(call, info).isSuccess();
 }
 
-void OptimizeLLVMModule(llvm::Module& module) {
+void OptimizeLLVMModule(llvm::Module& module, bool prune_dead_globals) {
     llvm::LoopAnalysisManager loops;
     llvm::FunctionAnalysisManager functions;
     llvm::CGSCCAnalysisManager call_graph;
@@ -45,7 +47,11 @@ void OptimizeLLVMModule(llvm::Module& module) {
     passes.registerFunctionAnalyses(functions);
     passes.registerLoopAnalyses(loops);
     passes.crossRegisterProxies(loops, functions, call_graph, modules);
-    auto pipeline = passes.buildPerModuleDefaultPipeline(llvm::OptimizationLevel::O2);
+    llvm::ModulePassManager pipeline;
+    // The copied kernels have already been inlined into the entry. Prune
+    // unreachable definitions before spending optimization time on them.
+    if (prune_dead_globals) pipeline.addPass(llvm::GlobalDCEPass());
+    pipeline.addPass(passes.buildPerModuleDefaultPipeline(llvm::OptimizationLevel::O2));
     pipeline.run(module, modules);
 }
 
@@ -96,7 +102,7 @@ bool LLVMOperandTemplates::IsTemplateGlobal(const llvm::GlobalValue* value) cons
 }
 
 std::unique_ptr<llvm::Module> PrepareLLVMBlock(const LLVMOperandTemplates& templates, block_recipe::BlockKeyView key,
-                                               llvm::StringRef entry_name) {
+                                               llvm::StringRef entry_name, bool prune_dead_globals) {
     if (!templates.IsValid()) return {};
     const bool exact = key.IsExact();
     llvm::SmallPtrSet<const llvm::GlobalValue*, 32> kernels;
@@ -155,7 +161,7 @@ std::unique_ptr<llvm::Module> PrepareLLVMBlock(const LLVMOperandTemplates& templ
     for (auto& function : *module) {
         if (&function != entry && !function.isDeclaration()) function.setLinkage(llvm::GlobalValue::InternalLinkage);
     }
-    OptimizeLLVMModule(*module);
+    OptimizeLLVMModule(*module, prune_dead_globals);
     if (llvm::verifyModule(*module)) return {};
     for (auto& inst : llvm::instructions(*entry)) {
         const auto* call = llvm::dyn_cast<llvm::CallBase>(&inst);

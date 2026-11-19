@@ -382,7 +382,7 @@ public:
         // under the same lock that serializes the linker and arena reset.
         thread_local BlockIR worker_ir;
         std::unique_ptr<llvm::MemoryBuffer> object;
-        if (auto module = PrepareLLVMBlock(worker_ir.templates, key, name)) {
+        if (auto module = PrepareLLVMBlock(worker_ir.templates, key, name, /*prune_dead_globals=*/true)) {
             auto result = jit_->getIRCompileLayer().getCompiler()(*module);
             if (result)
                 object = std::move(*result);

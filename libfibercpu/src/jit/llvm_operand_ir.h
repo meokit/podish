@@ -37,6 +37,6 @@ private:
 };
 
 std::unique_ptr<llvm::Module> PrepareLLVMBlock(const LLVMOperandTemplates& templates, block_recipe::BlockKeyView key,
-                                               llvm::StringRef entry_name);
+                                               llvm::StringRef entry_name, bool prune_dead_globals = false);
 
 }  // namespace fiberish
