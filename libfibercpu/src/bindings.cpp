@@ -16,6 +16,9 @@
 #include <utility>
 #include "decoder.h"
 #include "dispatch.h"
+#if FIBERCPU_BLOCK_COMPILATION
+#include "jit/block_recipe.h"
+#endif
 #if FIBERCPU_DYNAMIC_OPERANDS || FIBERCPU_LLVM_JIT
 #include "jit/executable_arena.h"
 #endif
@@ -270,7 +273,7 @@ static bool CanBlockConcatWithSuccessor(const BasicBlock* a, const BasicBlock* b
     return true;
 }
 
-static void LowerConcatenatedBlock(BasicBlock* concat, const BasicBlock* a, const BasicBlock* b,
+static void LowerConcatenatedBlock(const EmuState& state, BasicBlock* concat, const BasicBlock* a, const BasicBlock* b,
                                    uint32_t a_instructions) {
     auto* ops = concat->FirstOp();
 #if FIBERCPU_BLOCK_COMPILATION
@@ -282,9 +285,12 @@ static void LowerConcatenatedBlock(BasicBlock* concat, const BasicBlock* a, cons
             ops[i].handler = handlers[i];
             ops[i].meta.flags.operand_lowered = 0;
         }
-        concat->chain.llvm_hot_count = a->chain.llvm_hot_count;
+        concat->chain.weighted_profile = a->chain.weighted_profile;
+        concat->chain.llvm_hot_count = concat->chain.weighted_profile ? block_recipe::HotThreshold(state)
+                                                                     : a->chain.llvm_hot_count;
     }
 #else
+    (void)state;
     (void)a;
     (void)b;
     (void)a_instructions;
@@ -337,7 +343,7 @@ static BasicBlock* BuildDirectJmpBlockConcat(EmuState* state, const BasicBlock* 
     DecodedOp* dst = concat->FirstOp();
     std::copy_n(staged_ops.data(), concat_slot_count, dst);
 
-    LowerConcatenatedBlock(concat, a, b, a->inst_count() - 1);
+    LowerConcatenatedBlock(*state, concat, a, b, a->inst_count() - 1);
     return concat;
 }
 
@@ -385,7 +391,7 @@ static BasicBlock* BuildJccFallthroughBlockConcat(EmuState* state, const BasicBl
     DecodedOp* dst = concat->FirstOp();
     std::copy_n(staged_ops.data(), concat_slot_count, dst);
 
-    LowerConcatenatedBlock(concat, a, b, a->inst_count());
+    LowerConcatenatedBlock(*state, concat, a, b, a->inst_count());
     return concat;
 }
 
@@ -952,7 +958,7 @@ int X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
         auto* block = std::exchange(state->llvm_hot_block, nullptr);
         if (!block) return;
 #if FIBERCPU_LINKED_BLOCK_CACHE
-        if (TryLinkedBlockCache(*state, *block)) return;
+        if (!block->chain.weighted_profile && TryLinkedBlockCache(*state, *block)) return;
 #endif
 #if FIBERCPU_LLVM_JIT
         CompileHotLLVMBlock(state, block);
@@ -998,7 +1004,7 @@ int X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
             if (block_ptr->inst_count() == 0) return;
 
 #if FIBERCPU_BLOCK_COMPILATION
-            CountLLVMBlockEntry(state, block_ptr, block_ptr->chain.llvm_hot_count);
+            CountLLVMBlockEntry(state, block_ptr, block_ptr->chain);
             compile_hot_block();
 #endif
             DecodedOp* head = block_ptr->FirstOp();
@@ -1588,7 +1594,22 @@ uint64_t X86_GetLinkedBlockHitCount() {
 
 int X86_FinishRun(const X86_RunContext* run, char* error, size_t error_size) {
     if (error && error_size) error[0] = '\0';
-    return run ? 1 : 0;
+    if (!run) return 0;
+#if FIBERCPU_LLVM_JIT
+    if (run->options->profile) {
+        std::string diagnostic;
+        if (g_native_execution_active) {
+            diagnostic = "finish the run outside its CPU execution callbacks";
+        } else if (WriteWeightedLLVMProfile(*run->options->profile, run->profile_path.c_str(), diagnostic)) {
+            return 1;
+        }
+        if (error && error_size)
+            std::snprintf(error, error_size, "WeightedProfilePath '%s': %s", run->profile_path.c_str(),
+                          diagnostic.c_str());
+        return 0;
+    }
+#endif
+    return 1;
 }
 
 int X86_BuildLinkedLLVMBlockCache(const char* profile_path, const char* cache_path) {

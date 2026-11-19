@@ -313,7 +313,8 @@ struct BasicBlockChainPrefix {
     uint64_t start_eip : 32;
     uint64_t inst_count : 8;
     uint64_t valid : 1;
-    uint64_t reserved : 7;
+    uint64_t weighted_profile : 1;
+    uint64_t reserved : 6;
     uint64_t llvm_hot_count : 16;
 };
 

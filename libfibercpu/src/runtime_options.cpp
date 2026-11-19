@@ -10,6 +10,7 @@
 #include <utility>
 
 #if FIBERCPU_LLVM_JIT
+#include <filesystem>
 #include "jit/llvm_block_jit.h"
 #endif
 #if FIBERCPU_DYNAMIC_OPERANDS || FIBERCPU_LLVM_JIT
@@ -74,10 +75,10 @@ X86_RunContext* X86_CreateRun(const char* args, size_t size, char* error, size_t
 
     // Keep only the final value of each key before validating values. This is
     // also how a start-time value overrides an option saved by run.
-    enum Key { BlockSize, ArenaSize, Mode, Threshold, Workers, Pipeline, Count };
+    enum Key { BlockSize, ArenaSize, Mode, Threshold, Workers, Pipeline, ProfilePath, Count };
     constexpr std::string_view names[] = {
         "BlockCacheSize", "JitArenaSize", "JitMode", "JitHotThreshold",
-        "JitWorkers", "LlvmPipeline",
+        "JitWorkers", "LlvmPipeline", "WeightedProfilePath",
     };
     static_assert(std::size(names) == Count);
     std::optional<std::string_view> values[Count];
@@ -106,7 +107,8 @@ X86_RunContext* X86_CreateRun(const char* args, size_t size, char* error, size_t
         if (mode == "off") options->jit_mode = JitMode::Off;
         else if (mode == "generic") options->jit_mode = JitMode::Generic;
         else if (mode == "exact") options->jit_mode = JitMode::Exact;
-        else return fail("JitMode requires off, generic or exact");
+        else if (mode == "profile") options->jit_mode = JitMode::Profile;
+        else return fail("JitMode requires off, generic, exact or profile");
     }
     if (values[Threshold]) {
         uint16_t threshold = 0;
@@ -124,11 +126,26 @@ X86_RunContext* X86_CreateRun(const char* args, size_t size, char* error, size_t
         if (values[Pipeline]->empty()) return fail("LlvmPipeline requires an optimization level or pass pipeline");
         shared.pipeline = values[Pipeline];
     }
+    if (values[ProfilePath] && values[ProfilePath]->empty()) values[ProfilePath].reset();
+    if (values[ProfilePath]) {
+        if (options->jit_mode && options->jit_mode != JitMode::Profile)
+            return fail("WeightedProfilePath requires JitMode=profile");
+        options->jit_mode = JitMode::Profile;
+    }
+    if (options->jit_mode == JitMode::Profile && !values[ProfilePath])
+        return fail("JitMode=profile requires WeightedProfilePath");
+
     const bool llvm_requested = (options->jit_mode && options->jit_mode != JitMode::Off) ||
                                 options->hot_threshold || shared.workers || shared.pipeline;
 #if FIBERCPU_LLVM_JIT
     if (llvm_requested && !LLVMBlockJitSupported())
         return fail("LLVM CPU options require LLVM block JIT support on this host");
+    if (values[ProfilePath]) {
+        std::error_code ec;
+        run->profile_path = std::filesystem::absolute(std::filesystem::path(*values[ProfilePath]), ec).string();
+        if (ec) return fail("WeightedProfilePath: " + ec.message());
+        options->profile = CreateLLVMWeightedProfile();
+    }
     if (shared.workers || shared.pipeline || shared.arena_bytes) {
         std::string diagnostic;
         if (!ConfigureLLVMBlockJit(shared, diagnostic)) return fail(diagnostic);

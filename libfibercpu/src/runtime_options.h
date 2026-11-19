@@ -9,12 +9,14 @@
 
 namespace fiberish {
 
-enum class JitMode { Off, Generic, Exact, Profile };
+enum class JitMode { Off, Generic, Exact, LegacyProfile, Profile };
+struct WeightedProfile;
 
 struct CpuRunOptions {
     size_t block_cache_bytes = 0;
     std::optional<JitMode> jit_mode;
     std::optional<uint16_t> hot_threshold;
+    std::shared_ptr<WeightedProfile> profile;
 };
 
 struct SharedJitOptions {
@@ -27,4 +29,5 @@ struct SharedJitOptions {
 
 struct X86_RunContext {
     std::shared_ptr<const fiberish::CpuRunOptions> options;
+    std::string profile_path;
 };

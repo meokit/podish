@@ -110,7 +110,7 @@ host page. Sizes accept bytes or binary suffixes such as k, m and g.
 --block-cache-size and --jit-arena-size are legacy CLI shorthands. A saved
 spec with both old JIT limits migrates to the smaller nonzero size.
 
-JitMode selects off, exact or generic for the run. JitHotThreshold
+JitMode selects off, exact, generic or profile for the run. JitHotThreshold
 sets its block admission count (1 through 65535). These options override
 the equivalent Host environment settings. JitWorkers accepts 0 through 8.
 LlvmPipeline accepts an LLVM IR optimization level (O0, O1, O2, O3, Os, Oz)
@@ -151,24 +151,34 @@ mapped. X86_GetLLVMJitBlockCount counts online block materializations.
 
 Linked LLVM block cache
 -----------------------
-Use an LLVM-enabled producer to collect exact block recipes at the configured
-hot threshold. The workload uses native dispatch during collection.
+Use an LLVM-enabled producer to collect exact block recipes with an
+execution weight. The workload uses native dispatch during collection.
 
-  FIBERCPU_LINKED_BLOCK_CACHE=0 FIBERCPU_LLVM_JIT=profile \
-    FIBERCPU_LLVM_JIT_PROFILE=blocks.profile <command>
+  podish run -XX:JitMode=profile -XX:JitHotThreshold=64 \
+    -XX:WeightedProfilePath=/tmp/blocks.profile IMAGE COMMAND
 
-A block key contains the exit and the ordered catalog-assigned operation IDs.
+An explicit profile path selects profile mode when JitMode is omitted.
+A relative path is resolved from the host working directory at launch.
+Use WeightedProfilePath= to clear an inherited path when changing modes.
+Each eligible recipe admitted at the hot threshold records its total
+block entries, including earlier entries before admission. Counts for
+the same recipe are merged across guest MMUs and cache resets in the
+same run. Podish finalizes the run after the scheduler returns and native
+code writes the profile atomically.
+
+A block key contains the exit and ordered catalog-assigned operation IDs.
 Exact keys include the decoded operand shape for each operation. LLVM
-templates are indexed by the same IDs. The version 2 profile and linked
-bundle formats encode fields in little-endian order and validate the
-operation ID table fingerprint. Regenerate older profiles and linked bundles
-with the new producer. Profiles also validate the embedded bitcode, LLVM
-version and host CPU target. Use the same producer to emit relocatable host
-objects for the build-time linker.
+templates are indexed by the same IDs. Weighted profiles store each key's
+64-bit entry count in little-endian order before its encoded record.
+The legacy unweighted format, produced using FIBERCPU_LLVM_JIT=profile
+and FIBERCPU_LLVM_JIT_PROFILE, also works with the offline tool. Profiles
+validate embedded bitcode, LLVM version and host CPU target. Regenerate
+profiles and linked bundles when changing the producer.
 
-  <producer>/fibercpu_llvm_cache --linked blocks.profile blocks.linked \
+  <producer>/fibercpu_llvm_cache --linked /tmp/blocks.profile blocks.linked \
     --top 512 --llvm-opt-level O2
 
+The offline tool sorts weighted recipes by descending entry count.
 --top limits the number of emitted objects. --llvm-opt-level and
 --llvm-pass-pipeline are mutually exclusive.
 

@@ -996,6 +996,9 @@ finalize:
     block->set_terminal_kind(terminal_kind);
     block->entry = scalar_ops->handler;
     block->chain.llvm_hot_count = hot_count;
+#if FIBERCPU_LLVM_JIT
+    block->chain.weighted_profile = hot_count && LLVMWeightedProfileEnabled(*state);
+#endif
     block->has_unfused_handlers = hot_count != 0;
 
     DecodedOp* dst = block->FirstOp();

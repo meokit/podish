@@ -52,6 +52,14 @@
 
 namespace fiberish {
 
+using RecipeWeights = ankerl::unordered_dense::map<std::string, uint64_t>;
+
+struct WeightedProfile {
+    std::mutex mutex;
+    ankerl::unordered_dense::map<const BasicBlock*, std::string> blocks;
+    RecipeWeights retired;
+};
+
 namespace {
 
 #include "llvm_block_bitcode.inc"
@@ -104,6 +112,18 @@ const RuntimeOptions& Options() {
 const CpuRunOptions* RunOptions(const EmuState& state) {
     const auto* core = state.mmu.core_handle();
     return core ? core->code_cache.run_options.get() : nullptr;
+}
+
+void AddWeight(uint64_t& total, uint64_t count) {
+    total += std::min(count, std::numeric_limits<uint64_t>::max() - total);
+}
+
+void TrackWeightedBlock(EmuState& state, BasicBlock& block, BlockKeyView key) {
+    auto& profile = *RunOptions(state)->profile;
+    const auto encoded = llvm_block_cache::EncodeKey(key);
+    std::lock_guard lock(profile.mutex);
+    profile.blocks.try_emplace(&block, encoded.data(), encoded.size());
+    state.mmu.code_cache().has_weighted_profile = true;
 }
 
 bool AcceptsJobs(uint64_t epoch) {
@@ -169,15 +189,16 @@ const auto& ProfileFingerprint() {
     return digest;
 }
 
-void WriteProfileHeader(llvm::raw_ostream& out) {
-    const auto magic = llvm_block_cache::profile_magic;
+void WriteProfileHeader(llvm::raw_ostream& out, bool weighted = false) {
+    const auto magic = weighted ? llvm_block_cache::weighted_profile_magic : llvm_block_cache::profile_magic;
     out.write(magic.data(), magic.size());
     const auto& fingerprint = ProfileFingerprint();
     out.write(reinterpret_cast<const char*>(fingerprint.data()), fingerprint.size());
 }
 
-bool ReadProfileHeader(std::string_view& bytes) {
-    const auto magic = llvm_block_cache::profile_magic;
+bool ReadProfileHeader(std::string_view& bytes, bool& weighted) {
+    weighted = bytes.starts_with(llvm_block_cache::weighted_profile_magic);
+    const auto magic = weighted ? llvm_block_cache::weighted_profile_magic : llvm_block_cache::profile_magic;
     if (!bytes.starts_with(magic)) return false;
     bytes.remove_prefix(magic.size());
     const auto& fingerprint = ProfileFingerprint();
@@ -185,6 +206,40 @@ bool ReadProfileHeader(std::string_view& bytes) {
         return false;
     bytes.remove_prefix(fingerprint.size());
     return true;
+}
+
+struct ProfileRecipe {
+    std::string_view key;
+    uint64_t weight;
+};
+
+bool ReadProfileRecipes(std::string_view bytes, bool weighted, std::vector<ProfileRecipe>& recipes) {
+    ankerl::unordered_dense::map<std::string_view, size_t> indexes;
+    block_recipe::Plan plan;
+    while (!bytes.empty()) {
+        uint64_t weight = 0;
+        if (weighted) {
+            if (bytes.size() < sizeof(weight)) return false;
+            weight = llvm::support::endian::read64le(bytes.data());
+            bytes.remove_prefix(sizeof(weight));
+            if (!weight) return false;
+        }
+        std::string_view key;
+        bool exact;
+        if (!llvm_block_cache::ReadRecord(bytes, key) || !llvm_block_cache::DecodeKey(key, plan, exact) || !exact)
+            return false;
+        auto [it, added] = indexes.try_emplace(key, recipes.size());
+        if (added)
+            recipes.push_back({key, weight});
+        else
+            AddWeight(recipes[it->second].weight, weight);
+    }
+    if (weighted) {
+        std::ranges::sort(recipes, [](const auto& a, const auto& b) {
+            return a.weight != b.weight ? a.weight > b.weight : a.key < b.key;
+        });
+    }
+    return !recipes.empty();
 }
 
 void RecordBlock(BlockKeyView key) {
@@ -220,7 +275,7 @@ JitMode RuntimeMode(const EmuState& state) {
         if (!value || !pthread_jit_write_protect_supported_np()) return JitMode::Off;
         if (std::strcmp(value, "1") == 0) return JitMode::Exact;
         if (std::strcmp(value, "generic") == 0) return JitMode::Generic;
-        if (std::strcmp(value, "profile") == 0 && std::getenv("FIBERCPU_LLVM_JIT_PROFILE")) return JitMode::Profile;
+        if (std::strcmp(value, "profile") == 0 && std::getenv("FIBERCPU_LLVM_JIT_PROFILE")) return JitMode::LegacyProfile;
         return JitMode::Off;
     }();
     return mode;
@@ -462,7 +517,7 @@ public:
         compilation_done_.notify_all();
     }
 
-    static int BuildLinkedCache(std::string_view profile, llvm::raw_ostream& output,
+    static int BuildLinkedCache(std::span<const ProfileRecipe> recipes, llvm::raw_ostream& output,
                                 uint32_t limit, llvm::StringRef pipeline) {
         if (!InitializeLLVMTarget()) return -1;
         BlockIR ir;
@@ -476,18 +531,12 @@ public:
         output << llvm_block_cache::linked_magic << FIBERCPU_LINKED_BLOCK_CACHE_ABI << block_recipe::kOpIdFingerprint;
         if (!llvm_block_cache::WriteRecord(output, LinkedBlockCacheHostCPU())) return -1;
         int compiled = 0;
-        BlockKeySet seen;
         block_recipe::Plan plan;
-        while (!profile.empty()) {
-            std::string_view record;
+        for (const auto& recipe : recipes) {
+            const auto record = recipe.key;
             bool exact;
-            if (!llvm_block_cache::ReadRecord(profile, record) || !llvm_block_cache::DecodeKey(record, plan, exact) ||
-                !exact)
-                return -1;
-            const auto key = plan.Key(exact);
-            if (seen.contains(key)) continue;
-            seen.emplace(key);
-            auto module = PrepareLLVMBlock(ir.templates, key, ObjectEntryName(compiled),
+            if (!llvm_block_cache::DecodeKey(record, plan, exact) || !exact) return -1;
+            auto module = PrepareLLVMBlock(ir.templates, plan.Key(true), ObjectEntryName(compiled),
                                            /*prune_dead_globals=*/false, pipeline);
             if (!module) continue;
             auto object = compiler(*module);
@@ -742,7 +791,7 @@ void QueueBlock(EmuState* state, BasicBlock* block, bool exact) {
 
 ScopedLLVMJitExecution::ScopedLLVMJitExecution(const EmuState& state) {
     const auto mode = RuntimeMode(state);
-    if (mode != JitMode::Exact && mode != JitMode::Generic) return;
+    if (mode != JitMode::Exact && mode != JitMode::Generic && mode != JitMode::Profile) return;
 
     for (;;) {
         FinishPendingFlush();
@@ -810,6 +859,80 @@ bool ConfigureLLVMBlockJit(const SharedJitOptions& settings, std::string& error)
     return true;
 }
 
+bool LLVMWeightedProfileEnabled(const EmuState& state) {
+    const auto* options = RunOptions(state);
+    return options && options->profile;
+}
+
+std::shared_ptr<WeightedProfile> CreateLLVMWeightedProfile() { return std::make_shared<WeightedProfile>(); }
+
+void RetireLLVMWeightedProfile(const mem::CodeCacheState& cache) {
+    auto& profile = *cache.run_options->profile;
+    std::lock_guard lock(profile.mutex);
+    for (const auto* block : cache.all_blocks) {
+        auto it = profile.blocks.find(block);
+        if (it == profile.blocks.end()) continue;
+        AddWeight(profile.retired[it->second], block->exec_count);
+        profile.blocks.erase(it);
+    }
+}
+
+bool WriteWeightedLLVMProfile(WeightedProfile& profile, const char* path, std::string& error) {
+    RecipeWeights weights;
+    {
+        // Block counters and the decoded storage are borrowed only after all
+        // active native runs have reached a safe point.
+        std::unique_lock execution_lock(execution_gate);
+        std::lock_guard profile_lock(profile.mutex);
+        weights = profile.retired;
+        for (const auto& [block, key] : profile.blocks) AddWeight(weights[key], block->exec_count);
+    }
+    std::vector<ProfileRecipe> recipes;
+    recipes.reserve(weights.size());
+    for (const auto& [key, weight] : weights) {
+        if (weight) recipes.push_back({key, weight});
+    }
+    std::ranges::sort(recipes, [](const auto& a, const auto& b) {
+        return a.weight != b.weight ? a.weight > b.weight : a.key < b.key;
+    });
+    auto temp = llvm::sys::fs::TempFile::create(llvm::Twine(path) + ".%%%%%%");
+    if (!temp) {
+        error = llvm::toString(temp.takeError());
+        return false;
+    }
+    bool ok = true;
+    {
+        llvm::raw_fd_ostream output(temp->FD, false);
+        WriteProfileHeader(output, true);
+        for (const auto& recipe : recipes) {
+            char count[8];
+            llvm::support::endian::write64le(count, recipe.weight);
+            output.write(count, sizeof(count));
+            if (!llvm_block_cache::WriteRecord(output, recipe.key)) {
+                error = "could not write a block recipe";
+                ok = false;
+                break;
+            }
+        }
+        output.flush();
+        if (output.has_error()) {
+            error = output.error().message();
+            output.clear_error();
+            ok = false;
+        }
+    }
+    if (!ok) {
+        llvm::consumeError(temp->discard());
+        return false;
+    }
+    if (auto failure = temp->keep(path)) {
+        error = llvm::toString(std::move(failure));
+        llvm::consumeError(temp->discard());
+        return false;
+    }
+    return true;
+}
+
 uint16_t LLVMJitHotThreshold(const EmuState& state) {
     if (RuntimeMode(state) == JitMode::Off) return 0;
     if (const auto* options = RunOptions(state); options && options->hot_threshold) return *options->hot_threshold;
@@ -830,6 +953,10 @@ void CompileHotLLVMBlock(EmuState* state, BasicBlock* block) {
     if (!block_recipe::PlanBlock(*state, *block, exact, plan)) return;
     const auto key = plan.Key(exact);
     if (mode == JitMode::Profile) {
+        TrackWeightedBlock(*state, *block, key);
+        return;
+    }
+    if (mode == JitMode::LegacyProfile) {
         RecordBlock(key);
         return;
     }
@@ -859,7 +986,9 @@ int BuildLinkedLLVMBlockCache(const char* profile_path, const char* cache_path, 
     auto input = llvm::MemoryBuffer::getFile(profile_path);
     if (!input) return -1;
     std::string_view profile = (*input)->getBuffer();
-    if (!ReadProfileHeader(profile) || profile.empty()) return -1;
+    bool weighted;
+    std::vector<ProfileRecipe> recipes;
+    if (!ReadProfileHeader(profile, weighted) || !ReadProfileRecipes(profile, weighted, recipes)) return -1;
     auto pipeline = ParseLLVMBlockPipeline(opt_level ? opt_level : "", pass_pipeline ? pass_pipeline : "");
     if (!pipeline) {
         llvm::logAllUnhandledErrors(pipeline.takeError(), llvm::errs(), "LLVM block cache: ");
@@ -874,7 +1003,7 @@ int BuildLinkedLLVMBlockCache(const char* profile_path, const char* cache_path, 
     int count;
     {
         llvm::raw_fd_ostream output(temp->FD, false);
-        count = BlockCompiler::BuildLinkedCache(profile, output, limit, *pipeline);
+        count = BlockCompiler::BuildLinkedCache(recipes, output, limit, *pipeline);
         output.flush();
         if (output.has_error()) {
             output.clear_error();

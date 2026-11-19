@@ -10,9 +10,9 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
-#include <initializer_list>
+#include <fstream>
+#include <iterator>
 #include <limits>
-#include <string>
 #include <memory>
 #include <thread>
 #include <vector>
@@ -781,7 +781,7 @@ bool VerifyPackedBudget() {
            std::strstr(stats, arena_field.c_str());
 }
 
-bool VerifyCpuRunOptions() {
+bool VerifyCpuRunOptions(const char* path) {
     using Run = std::unique_ptr<X86_RunContext, decltype(&X86_DestroyRun)>;
     char error[512];
     const auto configure = [&](std::initializer_list<std::string> entries) {
@@ -798,6 +798,12 @@ bool VerifyCpuRunOptions() {
     const auto online = configure({"JitMode=exact", "JitHotThreshold=2", "LlvmPipeline=O1", "JitWorkers=0"});
     if (!online || configure({"JitWorkers=2"}) || !std::strstr(error, "JitWorkers"))
         return false;
+    const std::string output = std::string("WeightedProfilePath=") + path;
+    const auto profile = configure({"JitMode=profile", output, "JitHotThreshold=3", "JitHotThreshold=2",
+                                    "BlockCacheSize=1m"});
+    const auto second_profile = configure({"JitMode=profile", "JitHotThreshold=1", output + ".second"});
+    if (!profile || !second_profile) return false;
+
     uint8_t code[] = {0xb8, 1, 0, 0, 0, 0x05, 1, 0, 0, 0};
     const auto run = [&](EmuState* state, unsigned count, unsigned eax) {
         for (unsigned i = 0; i < count; ++i) {
@@ -810,7 +816,42 @@ bool VerifyCpuRunOptions() {
     if (!run(jit.get(), 1, 2) || HasCompiledEntry(jit.get()) || !run(jit.get(), 1, 2) || !HasCompiledEntry(jit.get()))
         return false;
 
-    return true;
+    auto first = LoadCode(code, sizeof(code), profile.get());
+    if (!run(first.get(), 3, 2) || HasCompiledEntry(first.get())) return false;
+    X86_ResetAllCodeCache(first.get());
+    if (!run(first.get(), 2, 2)) return false;
+
+    // A fork inherits the collector and admission threshold, while a separate
+    // CPU run can record the same recipe without adding to this run's weight.
+    State forked{X86_Clone(first.get(), 0), X86_Destroy};
+    if (!run(forked.get(), 2, 2)) return false;
+    forked.reset();
+    auto other_run = LoadCode(code, sizeof(code), second_profile.get());
+    if (!run(other_run.get(), 9, 2) || !X86_FinishRun(second_profile.get(), error, sizeof(error))) return false;
+    code[1] = 2;
+    auto live = LoadCode(code, sizeof(code), profile.get());
+    if (!run(live.get(), 2, 3) || !X86_FinishRun(profile.get(), error, sizeof(error))) return false;
+
+    const auto check_weights = [](const std::string& file, std::initializer_list<uint64_t> expected) {
+        std::ifstream stream(file, std::ios::binary);
+        const std::string bytes((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
+        if (bytes.size() < 40 || !bytes.starts_with("FIBJPR03")) return false;
+        size_t offset = 40;  // Eight-byte magic, then the 32-byte fingerprint.
+        const auto read_le = [&](unsigned count) {
+            uint64_t value = 0;
+            for (unsigned i = 0; i < count; ++i)
+                value |= uint64_t(static_cast<unsigned char>(bytes[offset++])) << (i * 8);
+            return value;
+        };
+        for (uint64_t weight : expected) {
+            if (bytes.size() - offset < 12 || read_le(8) != weight) return false;
+            const size_t length = read_le(4);
+            if (!length || length > bytes.size() - offset) return false;
+            offset += length;
+        }
+        return offset == bytes.size();
+    };
+    return check_weights(path, {7, 2}) && check_weights(std::string(path) + ".second", {9});
 }
 #endif
 
@@ -891,10 +932,10 @@ int main(int argc, char** argv) {
         return 1;
     }
 #if FIBERCPU_LLVM_JIT
-    if (argc == 2 && std::strcmp(argv[1], "options") == 0) {
-        if (VerifyCpuRunOptions())
+    if (argc == 3 && std::strcmp(argv[1], "options") == 0) {
+        if (VerifyCpuRunOptions(argv[2]))
             return 0;
-        std::fprintf(stderr, "CPU run option configuration or admission threshold mismatch\n");
+        std::fprintf(stderr, "CPU run option configuration, weighted counts or isolation mismatch\n");
         return 1;
     }
     if (argc == 2 && std::strcmp(argv[1], "budget") == 0) {

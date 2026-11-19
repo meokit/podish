@@ -16,6 +16,7 @@
 #include "types.h"
 
 namespace fiberish {
+namespace mem { struct CodeCacheState; }
 struct LLVMAsyncState;
 struct CpuRunOptions;
 #if FIBERCPU_LLVM_JIT
@@ -24,6 +25,7 @@ bool LLVMJitCacheFlushPending();
 uint64_t LLVMJitCacheEpoch();
 void LLVMJitMmuCreated();
 void LLVMJitMmuDestroyed();
+void RetireLLVMWeightedProfile(const mem::CodeCacheState& cache);
 #endif
 }  // namespace fiberish
 
@@ -313,9 +315,16 @@ struct CodeCacheState {
     uint64_t llvm_cache_epoch = 0;
     bool pending_flush = false;
     bool pending_budget_flush = false;
+    bool has_weighted_profile = false;
     std::shared_ptr<const CpuRunOptions> run_options;
 
     CodeCacheState() { InitializeInvalidBasicBlock(dummy_invalid_block); }
+    ~CodeCacheState() {
+#if FIBERCPU_LLVM_JIT
+        if (has_weighted_profile) RetireLLVMWeightedProfile(*this);
+#endif
+    }
+
     void InvalidateAll() {
         for (auto& entry : block_entries) {
             if (entry.block != nullptr) {

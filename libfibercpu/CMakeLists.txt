@@ -1035,9 +1035,15 @@ if(FIBERCPU_TEST_SPECIALIZATION_INDEX)
         add_test(NAME llvm_block_async COMMAND llvm_block_test async)
         set_tests_properties(llvm_block_async PROPERTIES ENVIRONMENT
             "FIBERCPU_LLVM_JIT=1;FIBERCPU_LLVM_JIT_HOT_THRESHOLD=1;FIBERCPU_LLVM_JIT_WORKERS=2")
-        add_test(NAME llvm_cpu_run_options COMMAND llvm_block_test options)
-        set_tests_properties(llvm_cpu_run_options PROPERTIES
+        set(_weighted_test_profile "${CMAKE_CURRENT_BINARY_DIR}/llvm-weighted-block-test.profile")
+        add_test(NAME llvm_cpu_run_options COMMAND llvm_block_test options "${_weighted_test_profile}")
+        set_tests_properties(llvm_cpu_run_options PROPERTIES FIXTURES_SETUP llvm_weighted_profile
             ENVIRONMENT "FIBERCPU_LLVM_JIT=0;FIBERCPU_LINKED_BLOCK_CACHE=0")
+        add_test(NAME llvm_block_weighted_bundle COMMAND fibercpu_llvm_cache --linked
+            "${_weighted_test_profile}" "${CMAKE_CURRENT_BINARY_DIR}/llvm-weighted-block-test.linked"
+            --top 1 --llvm-pass-pipeline "default<O1>")
+        set_tests_properties(llvm_block_weighted_bundle PROPERTIES FIXTURES_REQUIRED llvm_weighted_profile
+            PASS_REGULAR_EXPRESSION "Compiled 1 LLVM block objects")
         set(_linked_test_profile "${CMAKE_CURRENT_BINARY_DIR}/llvm-block-test.profile")
         set(_linked_test_bundle "${CMAKE_CURRENT_BINARY_DIR}/llvm-block-test.linked")
         add_test(NAME llvm_block_profile COMMAND llvm_block_test)

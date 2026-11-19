@@ -54,8 +54,12 @@ extern ATTR_PRESERVE_NONE int64_t ResolveBranchTarget(EmuState* RESTRICT state, 
                                                       mem::MicroTlbAbiWord utlb_addend, uint32_t branch,
                                                       uint64_t flags_cache FIBERCPU_PIN_PARAMS);
 
-FORCE_INLINE void CountLLVMBlockEntry(EmuState* state, BasicBlock* block, uint16_t count) {
+FORCE_INLINE void CountLLVMBlockEntry(EmuState* state, BasicBlock* block, BasicBlockChainPrefix chain) {
 #if FIBERCPU_BLOCK_COMPILATION
+#if FIBERCPU_LLVM_JIT && !defined(FIBERCPU_ENABLE_BLOCK_PROFILE) && !defined(FIBERCPU_ENABLE_HANDLER_PROFILE)
+    if (chain.weighted_profile) ++block->exec_count;
+#endif
+    const auto count = chain.llvm_hot_count;
     if (count > 1) {
         block->chain.llvm_hot_count = count - 1;
     } else if (count == 1 && !state->llvm_hot_block) {
@@ -65,7 +69,7 @@ FORCE_INLINE void CountLLVMBlockEntry(EmuState* state, BasicBlock* block, uint16
 #else
     (void)state;
     (void)block;
-    (void)count;
+    (void)chain;
 #endif
 }
 
@@ -101,7 +105,7 @@ FORCE_INLINE ATTR_PRESERVE_NONE int64_t ResolveBranchTargetInline(EmuState* REST
         state->last_block = next_block;
         instr_limit -= header_ptr->inst_count();
         DecodedOp* next_head = next_block->FirstOp();
-        CountLLVMBlockEntry(state, next_block, header_ptr->chain.llvm_hot_count);
+        CountLLVMBlockEntry(state, next_block, header_ptr->chain);
 #if defined(FIBERCPU_ENABLE_BLOCK_PROFILE) || defined(FIBERCPU_ENABLE_HANDLER_PROFILE)
         next_block->exec_count++;
 #endif
