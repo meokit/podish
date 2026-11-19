@@ -8,6 +8,18 @@ public static class ContainerMemoryLimits
 
     public static bool TryParseMemoryQuotaBytes(string raw, out long bytes, out string error)
     {
+        if (!TryParseMemorySizeBytes(raw, out bytes, out error))
+            return false;
+        if (bytes >= MinimumMemoryQuotaBytes)
+            return true;
+
+        bytes = 0;
+        error = $"memory limit must be at least {FormatBytes(MinimumMemoryQuotaBytes)}";
+        return false;
+    }
+
+    public static bool TryParseMemorySizeBytes(string raw, out long bytes, out string error)
+    {
         bytes = 0;
         error = string.Empty;
 
@@ -58,13 +70,6 @@ public static class ContainerMemoryLimits
         catch (OverflowException)
         {
             error = "memory limit is too large";
-            return false;
-        }
-
-        if (bytes < MinimumMemoryQuotaBytes)
-        {
-            bytes = 0;
-            error = $"memory limit must be at least {FormatBytes(MinimumMemoryQuotaBytes)}";
             return false;
         }
 
