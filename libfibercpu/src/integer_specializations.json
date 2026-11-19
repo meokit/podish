@@ -446,7 +446,7 @@
     {"name": "OpGroup3_Eb_Generic", "live": {"kernel": "OpGroup3_Internal", "arguments": ["true", "GroupOpSpec::Dynamic", "OpsizeSpec::Dynamic", "AddrModeSpec::Dynamic", "FlagsSpec::Live"]}, "dead": {"kernel": "OpGroup3_Internal", "arguments": ["true", "GroupOpSpec::Dynamic", "OpsizeSpec::Dynamic", "AddrModeSpec::Dynamic", "FlagsSpec::Dead"]}},
     {"name": "OpGroup3_Ev_Generic", "live": {"kernel": "OpGroup3_Internal", "arguments": ["false", "GroupOpSpec::Dynamic", "OpsizeSpec::Dynamic", "AddrModeSpec::Dynamic", "FlagsSpec::Live"]}, "dead": {"kernel": "OpGroup3_Internal", "arguments": ["false", "GroupOpSpec::Dynamic", "OpsizeSpec::Dynamic", "AddrModeSpec::Dynamic", "FlagsSpec::Dead"]}},
     {"name": "OpGroup4_Eb_Generic", "live": {"kernel": "OpGroup4_Eb_Internal", "arguments": ["true"]}, "dead": {"kernel": "OpGroup4_Eb_Internal", "arguments": ["false"]}, "extensions": [0, 1]},
-    {"name": "OpGroup5_Ev_Generic", "requires": ["register", "exact_only"], "extensions": [0, 1]},
+    {"name": "OpGroup5_Ev_Generic", "requires": ["exact_only"], "extensions": [0, 1, 2, 4, 6]},
     "OpCwde",
     "OpCdq",
     "OpPrefetch",

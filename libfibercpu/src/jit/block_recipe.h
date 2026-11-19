@@ -12,6 +12,29 @@ namespace fiberish::block_recipe {
 
 inline constexpr size_t kMaxOps = 64;
 
+enum LLVMRequirement : uint8_t {
+    kRegisterOperand = 1,
+    kMemoryOperand = 2,
+    kExactOnly = 4,
+};
+
+struct Operation {
+    const char* name;
+    uint8_t requirements;
+    uint8_t extensions;
+
+    bool Matches(const DecodedOp& op, bool exact) const {
+        if ((requirements & kRegisterOperand) && (!op.meta.flags.has_modrm || (op.modrm >> 6) != 3)) return false;
+        if ((requirements & kMemoryOperand) && !HasMem(&op)) return false;
+        if ((requirements & kExactOnly) && !exact) return false;
+        return extensions == 0xff || (op.meta.flags.has_modrm && (extensions & (1u << ((op.modrm >> 3) & 7))));
+    }
+};
+
+inline bool CanPlanOp(const DecodedOp& op) {
+    return op.len && !op.prefixes.flags.lock && (!HasMem(&op) || GetExtKind(&op) == ExtKind::Data);
+}
+
 struct Step {
     std::string_view name;
     DecodedOperandShape shape;
@@ -32,7 +55,6 @@ void InitializeOperationLookup();
 const char* LogicName(const DecodedOp& op, bool exact);
 std::string BlockKey(std::span<const Step> steps, bool exact, LLVMBlockExit exit);
 bool CanPromoteBlock(EmuState& state, BasicBlock& block);
-bool CanPlanOp(const DecodedOp& op);
 LLVMBlockExit FullBlockExit(const BasicBlock& block);
 
 template <typename Redecode>

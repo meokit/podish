@@ -769,63 +769,8 @@ if(FIBERCPU_ENABLE_LTO)
     endif()
 endif()
 
-if(FIBERCPU_DYNAMIC_OPERANDS)
-    set(_dynamic_src "${CMAKE_CURRENT_SOURCE_DIR}/src")
-    set(_dynamic_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/dynamic_operands")
-    file(MAKE_DIRECTORY "${_dynamic_dir}")
-    set(_dynamic_script "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/gen_dynamic_operand_specializations.py")
-    set(_dynamic_data "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/operand_specialization_data.py")
-    set(_dynamic_arm64 "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/operand_stencil_arm64.py")
-    set(_probe_shards 16)
-    math(EXPR _last_probe "${_probe_shards} - 1")
-    set(_probe_sources "")
-    foreach(shard RANGE 0 ${_last_probe})
-        list(APPEND _probe_sources "${_dynamic_dir}/probe_${shard}.cpp")
-    endforeach()
-    file(GENERATE OUTPUT "${_dynamic_dir}/inputs.txt" CONTENT
-        "${FIBERCPU_DYNAMIC_OPERAND_PLAN_FILE};${FIBERCPU_HAVE_GENERATED_SUPEROPCODES};${FIBERCPU_GENERATED_SUPEROPCODES_FILE}\n")
-    set(_dynamic_fusions "")
-    if(FIBERCPU_HAVE_GENERATED_SUPEROPCODES)
-        set(_dynamic_fusions "${FIBERCPU_GENERATED_SUPEROPCODES_FILE}")
-        set(_dynamic_fusion_args --fusions "${_dynamic_fusions}")
-    endif()
-    set(_probe_manifest "${_dynamic_dir}/probes.json")
-    add_custom_command(OUTPUT ${_probe_sources} "${_probe_manifest}"
-        COMMAND "${Python3_EXECUTABLE}" "${_dynamic_script}" probes
-            --src "${_dynamic_src}" --plan "${FIBERCPU_DYNAMIC_OPERAND_PLAN_FILE}"
-            --shards "${_probe_shards}" --output "${_dynamic_dir}" ${_dynamic_fusion_args}
-        DEPENDS "${_dynamic_dir}/inputs.txt" "${FIBERCPU_DYNAMIC_OPERAND_PLAN_FILE}" "${_dynamic_script}"
-            "${_dynamic_data}" "${_dynamic_arm64}" ${_dynamic_fusions}
-            ${_catalog_inputs} "${_catalog_generator}"
-        VERBATIM)
-    add_library(fibercpu_operand_probes OBJECT ${_probe_sources})
-    add_dependencies(fibercpu_operand_probes fibercpu_instruction_catalog)
-    set_target_properties(fibercpu_operand_probes PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF
-        POSITION_INDEPENDENT_CODE ON)
-    target_compile_definitions(fibercpu_operand_probes PRIVATE $<TARGET_PROPERTY:fibercpu_core,COMPILE_DEFINITIONS>)
-    target_compile_options(fibercpu_operand_probes PRIVATE $<TARGET_PROPERTY:fibercpu_core,COMPILE_OPTIONS>
-        -O3 -fno-lto -fno-stack-protector)
-    target_include_directories(fibercpu_operand_probes PRIVATE $<TARGET_PROPERTY:fibercpu_core,INCLUDE_DIRECTORIES>)
-    target_link_libraries(fibercpu_operand_probes PRIVATE unordered_dense::unordered_dense)
-
-    set(_bundle_dir "${_dynamic_dir}")
-    if(CMAKE_CONFIGURATION_TYPES)
-        string(APPEND _bundle_dir "/$<CONFIG>")
-    endif()
-    set(_bundle "${_bundle_dir}/dynamic_operand_bundle.inc")
-    set(_report "${_bundle_dir}/report.json")
-    add_custom_command(OUTPUT "${_bundle}" "${_report}"
-        COMMAND "${CMAKE_COMMAND}" -E make_directory "${_bundle_dir}"
-        COMMAND "${Python3_EXECUTABLE}" "${_dynamic_script}" bundle --src "${_dynamic_src}"
-            --manifest "${_probe_manifest}" --output "${_bundle}" --report "${_report}"
-            $<TARGET_OBJECTS:fibercpu_operand_probes>
-        DEPENDS fibercpu_operand_probes $<TARGET_OBJECTS:fibercpu_operand_probes> "${_probe_manifest}"
-            "${_dynamic_script}" "${_dynamic_data}" "${_dynamic_arm64}"
-        COMMAND_EXPAND_LISTS VERBATIM)
-    target_compile_definitions(fibercpu_core PRIVATE FIBERCPU_DYNAMIC_OPERANDS=1)
-    target_compile_definitions(fibercpu PRIVATE FIBERCPU_DYNAMIC_OPERANDS=1)
-    target_include_directories(fibercpu PRIVATE "${_bundle_dir}")
-    target_sources(fibercpu PRIVATE src/dynamic_operand_specialization.cpp "${_bundle}")
+if(FIBERCPU_DYNAMIC_OPERANDS OR FIBERCPU_ENABLE_LLVM_JIT)
+    target_sources(fibercpu PRIVATE src/jit/executable_arena.cpp)
 endif()
 
 if(FIBERCPU_ENABLE_LLVM_JIT OR FIBERCPU_LINKED_BLOCK_CACHE_FILE)
@@ -856,7 +801,7 @@ ${setting}=${${setting}}")
     file(GLOB_RECURSE _linked_abi_sources RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}"
         CONFIGURE_DEPENDS "src/*.h")
     list(APPEND _linked_abi_sources CMakeLists.txt src/decoder.cpp src/jit/block_recipe.cpp src/jit/llvm_block_ir.cpp
-        src/jit/llvm_block_jit.cpp ../scripts/gen_instruction_catalog.py)
+        src/jit/llvm_block_jit.cpp src/jit/llvm_operand_ir.cpp ../scripts/gen_instruction_catalog.py)
     foreach(source IN LISTS _linked_abi_sources)
         set(path "${CMAKE_CURRENT_SOURCE_DIR}/${source}")
         set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${path}")
@@ -899,11 +844,17 @@ if(FIBERCPU_LINKED_BLOCK_CACHE_FILE)
     message(STATUS "Linking ${_linked_count} precompiled LLVM block objects")
 endif()
 
-if(FIBERCPU_ENABLE_LLVM_JIT)
+if(FIBERCPU_DYNAMIC_OPERANDS OR FIBERCPU_ENABLE_LLVM_JIT)
     find_package(LLVM REQUIRED CONFIG)
     string(REGEX MATCH "^[0-9]+" _clang_major "${CMAKE_CXX_COMPILER_VERSION}")
-    if(LLVM_VERSION_MAJOR LESS 21 OR NOT _clang_major STREQUAL "${LLVM_VERSION_MAJOR}")
-        message(FATAL_ERROR "LLVM bitcode producer and ORC loader require matching major versions (LLVM 21 or newer)")
+    if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "Clang" OR LLVM_VERSION_MAJOR LESS 21 OR
+       NOT _clang_major STREQUAL "${LLVM_VERSION_MAJOR}")
+        message(FATAL_ERROR "LLVM templates require upstream Clang and LLVM with matching major versions (21 or newer)")
+    endif()
+    if(TARGET LLVM)
+        set(_llvm_components LLVM)
+    else()
+        llvm_map_components_to_libnames(_llvm_components native orcjit passes)
     endif()
 
     add_library(fibercpu_block_ir OBJECT src/jit/llvm_block_ir.cpp)
@@ -914,10 +865,65 @@ if(FIBERCPU_ENABLE_LLVM_JIT)
         -O1 -fno-lto -fno-stack-protector -emit-llvm)
     target_include_directories(fibercpu_block_ir PRIVATE $<TARGET_PROPERTY:fibercpu_core,INCLUDE_DIRECTORIES>)
     target_link_libraries(fibercpu_block_ir PRIVATE unordered_dense::unordered_dense)
+
+    add_library(fibercpu_llvm_codegen OBJECT src/jit/llvm_operand_ir.cpp)
+    set_target_properties(fibercpu_llvm_codegen PROPERTIES POSITION_INDEPENDENT_CODE ON)
+    add_dependencies(fibercpu_llvm_codegen fibercpu_instruction_catalog)
+    target_compile_definitions(fibercpu_llvm_codegen PRIVATE $<TARGET_PROPERTY:fibercpu_core,COMPILE_DEFINITIONS>)
+    target_include_directories(fibercpu_llvm_codegen PRIVATE src $<TARGET_PROPERTY:fibercpu_core,INCLUDE_DIRECTORIES>)
+    target_include_directories(fibercpu_llvm_codegen SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
+    target_link_libraries(fibercpu_llvm_codegen PRIVATE unordered_dense::unordered_dense)
+
     set(_llvm_dir "${CMAKE_CURRENT_BINARY_DIR}/generated")
     if(CMAKE_CONFIGURATION_TYPES)
         string(APPEND _llvm_dir "/$<CONFIG>")
     endif()
+endif()
+
+if(FIBERCPU_DYNAMIC_OPERANDS)
+    add_executable(fibercpu_operand_stencils src/jit/llvm_operand_stencil_main.cpp)
+    target_compile_definitions(fibercpu_operand_stencils PRIVATE $<TARGET_PROPERTY:fibercpu_core,COMPILE_DEFINITIONS>)
+    target_include_directories(fibercpu_operand_stencils PRIVATE src $<TARGET_PROPERTY:fibercpu_core,INCLUDE_DIRECTORIES>)
+    target_include_directories(fibercpu_operand_stencils SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
+    target_link_libraries(fibercpu_operand_stencils PRIVATE fibercpu_llvm_codegen unordered_dense::unordered_dense ${_llvm_components})
+
+    set(_dynamic_script "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/gen_dynamic_operand_specializations.py")
+    set(_dynamic_data "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/operand_specialization_data.py")
+    set(_dynamic_arm64 "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/operand_stencil_arm64.py")
+    set(_bundle_dir "${_llvm_dir}/dynamic_operands")
+    set(_requests "${_bundle_dir}/requests.txt")
+    set(_manifest "${_bundle_dir}/manifest.json")
+    set(_objects "${_bundle_dir}/objects.bin")
+    set(_bundle "${_bundle_dir}/dynamic_operand_bundle.inc")
+    set(_report "${_bundle_dir}/report.json")
+    set(_dynamic_fusion_args "")
+    if(_catalog_fusion_input)
+        set(_dynamic_fusion_args --fusions "${_catalog_fusion_input}")
+    endif()
+    add_custom_command(OUTPUT "${_requests}" "${_manifest}"
+        COMMAND "${CMAKE_COMMAND}" -E make_directory "${_bundle_dir}"
+        COMMAND "${Python3_EXECUTABLE}" "${_dynamic_script}" plan
+            --src "${CMAKE_CURRENT_SOURCE_DIR}/src" --plan "${FIBERCPU_DYNAMIC_OPERAND_PLAN_FILE}"
+            --requests "${_requests}" --manifest "${_manifest}" ${_dynamic_fusion_args}
+        DEPENDS "${FIBERCPU_DYNAMIC_OPERAND_PLAN_FILE}" "${_dynamic_script}" "${_dynamic_data}"
+            "${_dynamic_arm64}" ${_catalog_fusion_input} ${_catalog_inputs} "${_catalog_generator}"
+        VERBATIM)
+    add_custom_command(OUTPUT "${_objects}"
+        COMMAND fibercpu_operand_stencils $<TARGET_OBJECTS:fibercpu_block_ir> "${_requests}" "${_objects}"
+        DEPENDS fibercpu_operand_stencils fibercpu_block_ir $<TARGET_OBJECTS:fibercpu_block_ir> "${_requests}"
+        VERBATIM)
+    add_custom_command(OUTPUT "${_bundle}" "${_report}"
+        COMMAND "${Python3_EXECUTABLE}" "${_dynamic_script}" bundle --src "${CMAKE_CURRENT_SOURCE_DIR}/src"
+            --manifest "${_manifest}" --output "${_bundle}" --report "${_report}" "${_objects}"
+        DEPENDS "${_objects}" "${_manifest}" "${_dynamic_script}" "${_dynamic_data}" "${_dynamic_arm64}"
+        VERBATIM)
+    target_compile_definitions(fibercpu_core PRIVATE FIBERCPU_DYNAMIC_OPERANDS=1)
+    target_compile_definitions(fibercpu PRIVATE FIBERCPU_DYNAMIC_OPERANDS=1)
+    target_include_directories(fibercpu PRIVATE "${_bundle_dir}")
+    target_sources(fibercpu PRIVATE src/dynamic_operand_specialization.cpp "${_bundle}")
+endif()
+
+if(FIBERCPU_ENABLE_LLVM_JIT)
     set(_llvm_bitcode "${_llvm_dir}/llvm_block_bitcode.inc")
     set(_embed_script "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/embed_llvm_bitcode.py")
     add_custom_command(OUTPUT "${_llvm_bitcode}"
@@ -929,16 +935,11 @@ if(FIBERCPU_ENABLE_LLVM_JIT)
     target_compile_definitions(fibercpu PRIVATE FIBERCPU_LLVM_JIT=1)
     target_include_directories(fibercpu PRIVATE "${_llvm_dir}")
     target_include_directories(fibercpu SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
-    target_sources(fibercpu PRIVATE src/jit/llvm_block_jit.cpp "${_llvm_bitcode}")
+    target_sources(fibercpu PRIVATE src/jit/llvm_block_jit.cpp src/jit/llvm_block_memory.cpp "${_llvm_bitcode}")
+    target_link_libraries(fibercpu PRIVATE fibercpu_llvm_codegen ${_llvm_components})
     add_executable(fibercpu_llvm_cache src/jit/llvm_cache_main.cpp)
     target_include_directories(fibercpu_llvm_cache PRIVATE src)
     target_link_libraries(fibercpu_llvm_cache PRIVATE fibercpu)
-    if(TARGET LLVM)
-        target_link_libraries(fibercpu PRIVATE LLVM)
-    else()
-        llvm_map_components_to_libnames(_llvm_components native orcjit passes)
-        target_link_libraries(fibercpu PRIVATE ${_llvm_components})
-    endif()
 endif()
 
 # macOS codesign support
@@ -1018,7 +1019,10 @@ if(FIBERCPU_TEST_SPECIALIZATION_INDEX)
             "FIBERCPU_LLVM_JIT=1;FIBERCPU_LLVM_JIT_HOT_THRESHOLD=1;FIBERCPU_LLVM_JIT_WORKERS=0")
         add_test(NAME llvm_block_budget COMMAND llvm_block_test budget)
         set_tests_properties(llvm_block_budget PROPERTIES ENVIRONMENT
-            "FIBERCPU_LLVM_JIT=1;FIBERCPU_LLVM_JIT_HOT_THRESHOLD=1;FIBERCPU_LLVM_JIT_WORKERS=0;FIBERCPU_LLVM_JIT_CODE_BUDGET=16384")
+            "FIBERCPU_LLVM_JIT=1;FIBERCPU_LLVM_JIT_HOT_THRESHOLD=1;FIBERCPU_LLVM_JIT_WORKERS=0;FIBERCPU_LLVM_JIT_CODE_BUDGET=1024")
+        add_test(NAME llvm_block_packed COMMAND llvm_block_test packed)
+        set_tests_properties(llvm_block_packed PROPERTIES ENVIRONMENT
+            "FIBERCPU_LLVM_JIT=1;FIBERCPU_LLVM_JIT_HOT_THRESHOLD=1;FIBERCPU_LLVM_JIT_WORKERS=0")
         add_test(NAME llvm_block_async COMMAND llvm_block_test async)
         set_tests_properties(llvm_block_async PROPERTIES ENVIRONMENT
             "FIBERCPU_LLVM_JIT=1;FIBERCPU_LLVM_JIT_HOT_THRESHOLD=1;FIBERCPU_LLVM_JIT_WORKERS=2")
@@ -1029,7 +1033,8 @@ if(FIBERCPU_TEST_SPECIALIZATION_INDEX)
             ENVIRONMENT "FIBERCPU_LLVM_JIT=profile;FIBERCPU_LLVM_JIT_PROFILE=${_linked_test_profile};FIBERCPU_LLVM_JIT_HOT_THRESHOLD=1")
         add_test(NAME llvm_block_linked_bundle COMMAND fibercpu_llvm_cache --linked "${_linked_test_profile}" "${_linked_test_bundle}")
         set_tests_properties(llvm_block_linked_bundle PROPERTIES FIXTURES_REQUIRED llvm_block_profile)
-        set_property(TEST llvm_block_generic llvm_block_specialized llvm_block_hot llvm_block_reuse llvm_block_budget llvm_block_async
+        set_property(TEST llvm_block_generic llvm_block_specialized llvm_block_hot llvm_block_reuse llvm_block_budget
+            llvm_block_packed llvm_block_async
             llvm_block_profile APPEND PROPERTY ENVIRONMENT "FIBERCPU_LINKED_BLOCK_CACHE=0")
     endif()
 endif()

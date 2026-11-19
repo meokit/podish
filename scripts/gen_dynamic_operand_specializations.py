@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
-"""Compile-probe input and verified runtime templates for decoded operand plans."""
+"""Package LLVM-generated machine code for decoded operand plans."""
 
 import argparse
 import json
 import re
+import struct
 from collections import Counter, defaultdict
 from pathlib import Path
 
-from gen_instruction_catalog import is_semantic_variant, read_catalog, variant_criteria, variant_dispatch_base
-from operand_specialization_data import Operand, generated_fusions, instruction_targets, specialize_profile_fusion
-from operand_stencil_arm64 import HELPERS, MachO, immediate_mask
+from gen_instruction_catalog import is_semantic_variant, read_catalog, variant_criteria
+from operand_specialization_data import FUSION_CALL, Operand, generated_fusions, instruction_targets
+from operand_stencil_arm64 import HELPERS, PAGE_RELOCATIONS, MachO, immediate_mask
 
 WRAPPER = re.compile(r"DispatchWrapper<op::(\w+)>")
 
@@ -32,21 +33,48 @@ def shape_key(item):
     return original, shapes
 
 
-def emit_probes(args):
-    targets = instruction_targets(read_catalog(args.src / "instruction_catalog.json"))
-    fusions = generated_fusions(args.fusions.read_text()) if args.fusions else {}
-    preamble = ['#include "ops.h"', '#include "superopcodes.h"']
-    preamble.extend(f'#include "ops/{header.name}"' for header in sorted((args.src / "ops").glob("*_impl.h")))
-    preamble.append("namespace fiberish {")
+def llvm_operation(catalog, targets, name, shape):
+    # Native decoding gives unprefixed MOV four internal dispatch indexes.
+    opcode_aliases = {512: 0x89, 513: 0x89, 514: 0x8b, 515: 0x8b}
+    operations = set()
+    for opcode in targets.get(name, ()):
+        opcode = opcode_aliases.get(opcode, opcode)
+        if opcode >= 512:
+            continue
+        generic = catalog.get("generic_fallbacks", {}).get(str(opcode), catalog["fallbacks"].get(str(opcode)))
+        # A mandatory prefix selects the generic operation's ISA semantics.
+        # These are the prefix bits of DecodedOp::prefixes, not operand size.
+        prefixes = {"P66": 64, "F2": 4, "F3": 2}
+        matches = []
+        for variant in catalog["variants"]:
+            if (not is_semantic_variant(variant) or
+                    catalog["families"][variant["family"]]["opcode"] != opcode):
+                continue
+            spec = variant["spec"]
+            if set(spec) != {"mandatory"} or len(spec["mandatory"]) != 1:
+                raise ValueError("unsupported semantic variant selector: " + variant["logic"])
+            mandatory = spec["mandatory"][0]
+            bit = prefixes[mandatory.removesuffix("Only")] if mandatory != "None" else 0
+            mask = 70 if mandatory.endswith("Only") or mandatory == "None" else bit
+            if shape.prefixes & mask == bit:
+                matches.append((-bin(mask).count("1"), variant["priority"], variant["logic"]))
+        operations.add(min(matches, key=lambda match: match[:2])[2] if matches else generic)
+    if len(operations) == 1:
+        operation, = operations
+        if operation in catalog["llvm_block_operations"]:
+            return operation
+    return None
 
-    records = [[] for _ in range(args.shards)]
-    probes = [[] for _ in records]
-    bodies = [[] for _ in records]
-    missing = Counter()
-    missing_weight = Counter()
+
+def emit_plan(args):
+    catalog = read_catalog(args.src / "instruction_catalog.json")
+    targets = instruction_targets(catalog)
+    fusions = generated_fusions(args.fusions.read_text()) if args.fusions else {}
+    records, requests = [], []
+    missing, missing_weight = Counter(), Counter()
     seen = set()
     plan = read_plan(args.plan)
-    for i, item in enumerate(plan):
+    for item in plan:
         original, shapes = shape_key(item)
         if type(item["dispatch_count"]) is not int or item["dispatch_count"] < 0:
             raise ValueError("invalid dispatch count: " + original)
@@ -55,37 +83,40 @@ def emit_probes(args):
         seen.add((original, shapes))
         if item["kind"] == "wrapper":
             match = WRAPPER.fullmatch(original)
-            if not match or match[1] not in targets:
-                reason = "wrapper_absent"
-            else:
-                target = f"DispatchWrapper<op::{match[1]}, OperandSpec::Profile<{shapes[0].cpp()}>>"
-                reason = None
-        elif original not in fusions:
-            reason = "fusion_absent"
+            names = (match[1],) if match else ()
         else:
-            target = f"FiberOperandProbe_{i}"
-            reason = None
-        if reason:
-            missing[reason] += 1
-            missing_weight[reason] += item["dispatch_count"]
+            names = tuple(match[1] for match in FUSION_CALL.finditer(fusions.get(original, "")))
+        operations = tuple(llvm_operation(catalog, targets, name, shape) for name, shape in zip(names, shapes))
+        if len(names) != len(shapes) or not all(operations):
+            missing["llvm_operation_absent"] += 1
+            missing_weight["llvm_operation_absent"] += item["dispatch_count"]
             continue
-        shard = i % args.shards
-        if item["kind"] == "fused":
-            bodies[shard].append(specialize_profile_fusion(fusions[original], original, target, shapes))
-        records[shard].append(item)
-        probes[shard].append(f"    {target},")
-    for i, pointers in enumerate(probes):
-        content = preamble + bodies[i]
-        if pointers:
-            content += ['[[gnu::used, gnu::section("__DATA,__fiber_probes")]]',
-                        'static const HandlerFunc probes[] = {', *pointers, '};']
-        args.output.joinpath(f"probe_{i}.cpp").write_text("\n".join([*content, "}"]) + "\n")
-    args.output.joinpath("probes.json").write_text(json.dumps({
+        records.append({**item, "llvm_operations": operations})
+        fields = ((name, shape.encoding, shape.ea_desc, shape.disp, shape.imm)
+                  for name, shape in zip(operations, shapes))
+        requests.append(" ".join(str(value) for step in fields for value in step) + "\n")
+    args.requests.write_text("".join(requests))
+    args.manifest.write_text(json.dumps({
         "records": records,
         "missing": missing,
         "missing_dispatch_weight": missing_weight,
         "dispatch_weight": sum(row["dispatch_count"] for row in plan),
     }))
+
+
+def read_objects(path, count):
+    with path.open("rb") as stream:
+        for _ in range(count):
+            header = stream.read(4)
+            if len(header) != 4:
+                raise ValueError(f"{path}: missing LLVM object")
+            size, = struct.unpack("<I", header)
+            data = stream.read(size)
+            if not size or len(data) != size:
+                raise ValueError(f"{path}: truncated LLVM object")
+            yield data
+        if stream.read(1):
+            raise ValueError(f"{path}: unexpected trailing LLVM object")
 
 
 def emit_array(text, name, typename, values, columns=1, format_value=str):
@@ -113,19 +144,21 @@ def shape_order(key):
 def build_bundle(args):
     manifest = json.loads(args.manifest.read_text())
     records = manifest["records"]
-    if len(records) != len(args.objects):
-        raise ValueError("probe object count differs from manifest")
     groups = defaultdict(list)
     excluded = Counter(manifest["missing"])
     excluded_weight = Counter(manifest["missing_dispatch_weight"])
-    for rows, path in zip(records, args.objects):
-        for item, (words, helpers, data, constants, reason) in zip(rows, MachO(path).probe_handlers(len(rows)), strict=True):
-            if reason:
-                excluded[reason] += 1
-                excluded_weight[reason] += item["dispatch_count"]
-                continue
-            fixed = tuple(word & ~immediate_mask(word) for word in words)
-            groups[item["original"], fixed, helpers, data, constants].append((item, words))
+    for index, obj in enumerate(read_objects(args.objects, len(records))):
+        item = records[index]
+        if obj == b"-":
+            reason = "llvm_shape_unsupported"
+        else:
+            entry, words, helpers, data, constants, reason = MachO(args.objects, obj).handler("_FiberOperandStencil")
+        if reason:
+            excluded[reason] += 1
+            excluded_weight[reason] += item["dispatch_count"]
+            continue
+        fixed = tuple(word & ~immediate_mask(word) for word in words)
+        groups[item["original"], entry, fixed, helpers, data, constants].append((item, words))
 
     # Keep an unmodified exemplar for each shape. Store only the fields that
     # vary within that shape, and compare every reconstructed body with Clang's.
@@ -136,7 +169,7 @@ def build_bundle(args):
     raw_words = accepted_weight = immediate_variants = 0
     variants_per_handler = Counter()
     templates_per_handler = Counter()
-    for (original, _, helpers, data, constants), variants in groups.items():
+    for (original, entry, _, helpers, data, constants), variants in groups.items():
         exemplar = variants[0][1]
         fields = []
         for i, word in enumerate(exemplar):
@@ -150,13 +183,14 @@ def build_bundle(args):
                 fields.append((i, mask))
 
         template = len(templates)
-        templates.append((len(code), len(exemplar), len(patches), len(fields), len(helper_slots), len(helpers),
+        templates.append((len(code), len(exemplar), entry, len(patches), len(fields), len(helper_slots), len(helpers),
                           len(data_slots), len(data), len(constant_pool), len(constants)))
         templates_per_handler[original] += 1
         code.extend(exemplar)
         patches.extend(fields)
         helper_slots.extend((slot, helper_ids.setdefault(helper, len(helper_ids))) for slot, helper in helpers)
-        data_slots.extend(data)
+        data_slots.extend((slot, kind, offset, scale, helper_ids.setdefault(helper, len(helper_ids)) if helper else None)
+                          for slot, kind, offset, scale, helper in data)
         constant_pool.extend(constants)
         recipe_ids = {}
         for item, words in variants:
@@ -182,7 +216,7 @@ def build_bundle(args):
     # share a recipe and executable address even if several profile keys match.
     arena_size = 0
     for template, _ in recipes:
-        _, words, _, _, _, helpers, _, _, _, constants = templates[template]
+        _, words, _, _, _, _, helpers, _, _, _, constants = templates[template]
         arena_size += ((words * 4 + 15) & ~15) + helpers * 16 + ((constants + 15) & ~15)
 
     code_header = [f'#include "ops/{header.name}"' for header in sorted((args.src / "ops").glob("*_impl.h"))]
@@ -207,8 +241,9 @@ def build_bundle(args):
     code_header.append("const uintptr_t kHelperTargets[] = {")
     code_header.extend(f"    {target}," for target in target_addresses)
     code_header.append("};")
-    emit_array(code_header, "kDataRelocs", "DataPatch", data_slots, 4,
-               lambda row: f"{{{row[0]}, {row[2]}, DataRelocation::{('Page' if row[1] == 3 else 'PageOffset')}, {row[3]}}}")
+    emit_array(code_header, "kDataRelocs", "DataPatch", data_slots, 4, lambda row:
+               f"{{{row[0]}, {row[2]}, {'UINT32_MAX' if row[4] is None else row[4]}, "
+               f"DataRelocation::{'Page' if row[1] in PAGE_RELOCATIONS else 'PageOffset'}, {row[3]}}}")
     emit_array(code_header, "kConstantPool", "uint8_t", constant_pool, 16, hex)
     emit_array(code_header, "kTemplates", "CodeTemplate", templates, 1, aggregate)
     emit_array(code_header, "kRecipes", "CodeRecipe", recipes, 4, aggregate)
@@ -217,9 +252,11 @@ def build_bundle(args):
     # Only canonical identities need a runtime index. The keys of each handler
     # are pre-sorted on disk for binary search with no per-key initialization.
     keys_by_handler = defaultdict(list)
+    sources_by_handler = defaultdict(set)
     for item, recipe in entries:
         original, shapes = shape_key(item)
         keys_by_handler[original].append((shapes, recipe))
+        sources_by_handler[original].update(item["llvm_operations"])
     entry_lines = []
     family_lines = []
     tails = []
@@ -231,7 +268,7 @@ def build_bundle(args):
             tails.extend(shapes[1:])
     emit_array(code_header, "kEntries", "DynamicOperandEntry", entry_lines)
     catalog = read_catalog(args.src / "instruction_catalog.json")
-    base_handlers = set(catalog["fallbacks"].values())
+    base_handlers = set(catalog["fallbacks"].values()) | set(catalog.get("generic_fallbacks", {}).values())
     variants = defaultdict(list)
     for row in catalog["variants"]:
         variants[row["logic"]].append(row)
@@ -252,8 +289,11 @@ def build_bundle(args):
         for row in variants[name]:
             if is_semantic_variant(row):
                 dynamic_only.append(f"{{{original}, {first}, {count}, 1, {variant_criteria(row)}}}")
-            elif base := variant_dispatch_base(catalog, row):
-                dynamic_only.append(f"{{DispatchWrapper<op::{base}>, {first}, {count}, 1, {variant_criteria(row)}}}")
+            else:
+                sources = sources_by_handler[original]
+                if len(sources) == 1:
+                    base, = sources
+                    dynamic_only.append(f"{{DispatchWrapper<op::{base}>, {first}, {count}, 1, {variant_criteria(row)}}}")
     emit_array(code_header, "kFamilies", "OperandFamily", list(dict.fromkeys(dynamic_only)))
     code_header.append("constexpr size_t kFamilyCount = " + str(len(set(dynamic_only))) + ";")
     code_header.append("#endif")
@@ -291,21 +331,21 @@ def build_bundle(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     subcommands = parser.add_subparsers(dest="mode", required=True)
-    probes = subcommands.add_parser("probes")
-    probes.add_argument("--src", type=Path, required=True)
-    probes.add_argument("--plan", type=Path, required=True)
-    probes.add_argument("--fusions", type=Path)
-    probes.add_argument("--shards", type=int, required=True, choices=range(1, 65))
-    probes.add_argument("--output", type=Path, required=True)
+    plan = subcommands.add_parser("plan")
+    plan.add_argument("--src", type=Path, required=True)
+    plan.add_argument("--plan", type=Path, required=True)
+    plan.add_argument("--fusions", type=Path)
+    plan.add_argument("--requests", type=Path, required=True)
+    plan.add_argument("--manifest", type=Path, required=True)
     bundle = subcommands.add_parser("bundle")
     bundle.add_argument("--src", type=Path, required=True)
     bundle.add_argument("--manifest", type=Path, required=True)
     bundle.add_argument("--output", type=Path, required=True)
     bundle.add_argument("--report", type=Path, required=True)
-    bundle.add_argument("objects", nargs="+", type=Path)
+    bundle.add_argument("objects", type=Path)
     args = parser.parse_args()
-    if args.mode == "probes":
-        emit_probes(args)
+    if args.mode == "plan":
+        emit_plan(args)
     else:
         build_bundle(args)
 

@@ -105,29 +105,38 @@ and fusion catalog. The collector's default exports every recognized shape:
   python3 scripts/collect_operand_specializations.py /tmp/coremark-stats \
     /tmp/gzip-stats /tmp/sha256-stats --output /tmp/dynamic-operands.json
   cmake -S libfibercpu -B build/dynamic-operands -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_CXX_COMPILER=/path/to/llvm/bin/clang++ \
+    -DLLVM_DIR=/path/to/llvm/lib/cmake/llvm \
     -DFIBERCPU_DYNAMIC_OPERAND_PLAN_FILE=/tmp/dynamic-operands.json
   cmake --build build/dynamic-operands --parallel
 
-For the managed CLI build, pass -p:DynamicOperandPlanFile=/tmp/dynamic-operands.json.
-The backend targets native macOS arm64 with Clang and uses the build's handler
-ABI, including the configured register pins. The dynamic plan is independent
-of the static operand budget. FIBERCPU_STATIC_SPECIALIZATION=OFF disables
-native operand clones, ISA optimizations and precompiled fusion. The generic
-decoder still distinguishes ISA meanings selected by mandatory prefixes and
-handles both stack widths. Use this option with the dynamic plan to generate
-instruction specializations at runtime. Set FIBERCPU_DYNAMIC_SPECIALIZATION=0
-in the host process environment to turn off materialization for that run. Build-time probes cover scalar handlers and
-fused handlers present in the selected generated fusion source.
+For the managed CLI build, pass -p:DynamicOperandPlanFile=/tmp/dynamic-operands.json
+with NativeClangDir and LlvmConfigDir set for the matching toolchain.
+The backend targets native macOS arm64 and uses the build's handler ABI,
+including register pins. Both dynamic operand templates and the online block
+JIT use the same catalog operation rules and Clang bitcode. The build tool
+binds each recorded operand shape, inlines the selected operations into a
+threaded handler, then has LLVM optimize and emit an ARM64 object. The
+interpreter can materialize the resulting machine-code templates with online
+JIT off and without LLVM libraries at runtime. The compiler and build tool
+require matching upstream Clang and LLVM major versions (21 or newer).
 
-The generator groups machine code by handler identity and fixed instruction
-bits. A template holds one compiler body and the positions and masks of any
-varying immediate fields. Every recipe must reconstruct the compiler's handler
-bytes before the build packages it. Supported slow-path calls are rebound via
-local veneers, including scalar MMU and floating-point helpers. Mach-O
-PAGE21/PAGEOFF12 relocations can target an aligned read-only pool packed with
-the template. Unsupported relocations and position-dependent code fall back
-to the ordinary lowering path. The build writes coverage, exclusion reasons and
-code sizes to generated/dynamic_operands/report.json.
+The dynamic plan is independent of the static operand budget.
+FIBERCPU_STATIC_SPECIALIZATION=OFF disables ISA optimizations, native operand
+clones and precompiled fusions. Scalar plans can still produce dynamic
+handlers. A fusion recipe uses the LLVM kernels for its constituent
+instructions and is selected when the corresponding fusion is enabled.
+FIBERCPU_DYNAMIC_SPECIALIZATION=0 disables runtime materialization.
+
+The packer groups LLVM machine code by handler identity and fixed
+instruction bits. A template stores one text image and the positions and
+masks of varying immediate fields. The packer verifies that patching each
+recipe reconstructs the text bytes. It keeps outlined functions with the
+entry point and resolves branches within the image. External branches
+use local veneers. Constant and GOT references are relocated into a pool
+beside the code. Unsupported relocations or operand forms keep the ordinary
+lowering path. Coverage, exclusion reasons and code sizes are written to
+generated/dynamic_operands/report.json.
 
 At block decode, a full operand-key match materializes a recipe on first use
 in an executable arena and reuses the resulting handler on subsequent decodes.

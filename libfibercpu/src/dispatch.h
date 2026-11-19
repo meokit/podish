@@ -129,9 +129,7 @@ FORCE_INLINE ATTR_PRESERVE_NONE int64_t OpExitBlockImpl(EmuState* RESTRICT state
                                                         uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
     FIBERCPU_PIN_ASSUME;
     RecordBlockHandlersUntil(state, op);
-    if constexpr (UseBranch) {
-        if (branch == std::numeric_limits<uint32_t>::max()) __builtin_unreachable();
-    }
+    // Group 5's indirect target can use the full guest address range.
     const uint32_t target_eip = UseBranch ? branch : op->next_eip;
     ATTR_MUSTTAIL return ResolveBranchTargetInline<ExtKind::Link>(state, op, instr_limit, utlb_tags, utlb_addend,
                                                                   target_eip, flags_cache FIBERCPU_PIN_RELOAD);

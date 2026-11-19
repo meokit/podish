@@ -863,6 +863,9 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
                 if (reg == 0 || reg == 1) {  // INC, DEC
                     writes = DFE_ALL_FLAGS & ~DFE_CF_MASK;
                 }
+                // Group 5 may fault before updating flags or access the stack
+                // even when its explicit operand is a register (CALL, PUSH).
+                if (flat_idx == 0xff && (HasMem(&op) || (reg > 1 && reg != 4))) reads = DFE_ALL_FLAGS;
                 break;
             }
             case DFE_TYPE_REGISTER_FLAGS:

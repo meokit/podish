@@ -120,53 +120,7 @@ template <typename T, bool UpdateFlags, GroupOpSpec FixedSubOp>
 FORCE_INLINE LogicFlow OpGroup5_Ev_Control_Internal(LogicFuncParams) {
     static_assert(FixedSubOp == GroupOpSpec::Ext2 || FixedSubOp == GroupOpSpec::Ext4 ||
                   FixedSubOp == GroupOpSpec::Ext6);
-
-    T val;
-    if constexpr (sizeof(T) == 2) {
-        auto res = ReadModRM<uint16_t, OpOnTLBMiss::Blocking>(state, gpr, op, utlb);
-        if (!res) return LogicFlow::ExitOnCurrentEIP;
-        val = *res;
-    } else {
-        auto res = ReadModRM<uint32_t, OpOnTLBMiss::Blocking>(state, gpr, op, utlb);
-        if (!res) return LogicFlow::ExitOnCurrentEIP;
-        val = *res;
-    }
-
-    if constexpr (FixedSubOp == GroupOpSpec::Ext2) {  // CALL Ev (Near Indirect)
-        if constexpr (sizeof(T) == 2) {
-            uint32_t esp = gpr.GetReg(state, ESP) - 2;
-            if (!WriteMem<uint16_t, OpOnTLBMiss::Blocking>(state, gpr, esp, static_cast<uint16_t>(op->next_eip), utlb,
-                                                           op))
-                return LogicFlow::ExitOnCurrentEIP;
-            gpr.SetReg(state, ESP, esp);
-            *branch = val & 0xFFFF;
-        } else {
-            uint32_t esp = gpr.GetReg(state, ESP) - 4;
-            if (!WriteMem<uint32_t, OpOnTLBMiss::Blocking>(state, gpr, esp, op->next_eip, utlb, op))
-                return LogicFlow::ExitOnCurrentEIP;
-            gpr.SetReg(state, ESP, esp);
-            *branch = val;
-        }
-    } else if constexpr (FixedSubOp == GroupOpSpec::Ext4) {  // JMP Ev (Near Indirect)
-        if constexpr (sizeof(T) == 2)
-            *branch = val & 0xFFFF;
-        else
-            *branch = val;
-    } else {  // PUSH Ev
-        if constexpr (sizeof(T) == 2) {
-            uint32_t esp = gpr.GetReg(state, ESP) - 2;
-            if (!WriteMem<uint16_t, OpOnTLBMiss::Blocking>(state, gpr, esp, static_cast<uint16_t>(val), utlb, op))
-                return LogicFlow::ExitOnCurrentEIP;
-            gpr.SetReg(state, ESP, esp);
-        } else {
-            uint32_t esp = gpr.GetReg(state, ESP) - 4;
-            if (!WriteMem<uint32_t, OpOnTLBMiss::Blocking>(state, gpr, esp, val, utlb, op))
-                return LogicFlow::ExitOnCurrentEIP;
-            gpr.SetReg(state, ESP, esp);
-        }
-    }
-
-    return LogicFlow::Continue;
+    return OpGroup5_Ev_T_Internal<T, UpdateFlags, FixedSubOp>(LogicPassParams);
 }
 
 template <typename T, AddrModeSpec Form = AddrModeSpec::Dynamic, FlagsSpec Flags = FlagsSpec::Dynamic>

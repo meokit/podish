@@ -2,12 +2,11 @@
 #include "jit/block_recipe.h"
 #include "jit/linked_block_cache_host.h"
 #include "jit/llvm_block_cache.h"
+#include "jit/llvm_block_memory.h"
 #include "jit/llvm_operand_ir.h"
 #include "linked_block_cache_abi.h"
 
 #include <ankerl/unordered_dense.h>
-#include <llvm/ADT/SmallBitVector.h>
-#include <llvm/ADT/SmallPtrSet.h>
 #include <algorithm>
 #include <atomic>
 #include <charconv>
@@ -29,24 +28,16 @@
 
 #include <llvm/Bitcode/BitcodeReader.h>
 #include <llvm/Config/llvm-config.h>
-#include <llvm/ExecutionEngine/JITLink/JITLinkMemoryManager.h>
 #include <llvm/ExecutionEngine/Orc/CompileUtils.h>
 #include <llvm/ExecutionEngine/Orc/IRCompileLayer.h>
 #include <llvm/ExecutionEngine/Orc/LLJIT.h>
 #include <llvm/ExecutionEngine/Orc/SelfExecutorProcessControl.h>
-#include <llvm/IR/Constants.h>
-#include <llvm/IR/InstIterator.h>
-#include <llvm/IR/Instructions.h>
-#include <llvm/IR/Verifier.h>
 #include <llvm/Support/Error.h>
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/Process.h>
 #include <llvm/Support/SHA256.h>
-#include <llvm/Support/TargetSelect.h>
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/TargetParser/Host.h>
-#include <llvm/Transforms/Utils/Cloning.h>
-#include <llvm/Transforms/Utils/Local.h>
 
 #include <pthread.h>
 #include <strings.h>
@@ -72,14 +63,14 @@ std::atomic<uint64_t> materializations{0};
 
 struct LLVMBlockCode {
     HandlerFunc handler;
-    size_t mapped_bytes;
+    size_t allocated_bytes;
     // The ORC session must outlive the resource and any cache that holds it.
     std::shared_ptr<llvm::orc::LLJIT> engine;
     llvm::orc::ResourceTrackerSP tracker;
 
     LLVMBlockCode(HandlerFunc fn, size_t bytes, std::shared_ptr<llvm::orc::LLJIT> jit,
                   llvm::orc::ResourceTrackerSP resource)
-        : handler(fn), mapped_bytes(bytes), engine(std::move(jit)), tracker(std::move(resource)) {
+        : handler(fn), allocated_bytes(bytes), engine(std::move(jit)), tracker(std::move(resource)) {
         live_blocks.fetch_add(1, std::memory_order_relaxed);
     }
     ~LLVMBlockCode() {
@@ -194,43 +185,6 @@ bool DecodeRecipe(std::string_view key, std::vector<Step>& steps, LLVMBlockExit&
 
 std::string ObjectEntryName(uint64_t index) { return "FiberCachedBlock_" + std::to_string(index); }
 
-struct CodeBudgetExceeded : llvm::ErrorInfo<CodeBudgetExceeded> {
-    static inline char ID = 0;
-    void log(llvm::raw_ostream& out) const override { out << "LLVM block code budget exceeded"; }
-    std::error_code convertToErrorCode() const override { return llvm::inconvertibleErrorCode(); }
-};
-
-class BlockMemoryManager final : public llvm::jitlink::InProcessMemoryManager {
-    const size_t page_size_;
-
-public:
-    // LLJIT links synchronously, with BlockCompiler's mutex held.
-    size_t mapped_bytes = 0;
-    size_t blocked_bytes = 0;
-    size_t budget = std::numeric_limits<size_t>::max();
-
-    explicit BlockMemoryManager(size_t page_size) : InProcessMemoryManager(page_size), page_size_(page_size) {}
-
-    size_t PageSize() const { return page_size_; }
-
-    void allocate(const llvm::jitlink::JITLinkDylib* dylib, llvm::jitlink::LinkGraph& graph,
-                  OnAllocatedFunction on_allocated) override {
-        llvm::jitlink::BasicLayout layout(graph);
-        auto sizes = layout.getContiguousPageBasedLayoutSizes(page_size_);
-        if (!sizes) {
-            on_allocated(sizes.takeError());
-            return;
-        }
-        if (sizes->StandardSegs > budget - mapped_bytes) {
-            blocked_bytes = mapped_bytes + sizes->StandardSegs;
-            on_allocated(llvm::make_error<CodeBudgetExceeded>());
-            return;
-        }
-        mapped_bytes += sizes->StandardSegs;
-        InProcessMemoryManager::allocate(dylib, graph, std::move(on_allocated));
-    }
-};
-
 struct BlockLookup {
     std::shared_ptr<const LLVMBlockCode> code;
     size_t blocked_bytes = 0;
@@ -250,11 +204,6 @@ struct BlockIR {
     std::unique_ptr<llvm::Module> module = ReadBlockIR(context);
 };
 
-bool InitializeLLVMTarget() {
-    static const bool initialized = !llvm::InitializeNativeTarget() && !llvm::InitializeNativeTargetAsmPrinter();
-    return initialized;
-}
-
 class BlockCompiler {
     std::shared_ptr<llvm::orc::LLJIT> jit_;
     BlockMemoryManager* memory_ = nullptr;
@@ -264,77 +213,6 @@ class BlockCompiler {
     ankerl::unordered_dense::set<std::string> compiling_;
     uint64_t next_symbol_ = 0;
 
-    static std::unique_ptr<llvm::Module> Prepare(const llvm::Module& templates, std::span<const Step> steps, bool exact,
-                                                 LLVMBlockExit exit, llvm::StringRef entry_name) {
-        const std::string prefix = exact ? "FiberLLVMTemplate_" : "FiberLLVMGeneric_";
-        const auto template_name = [&](const Step& step) { return prefix + std::string(step.name); };
-        llvm::SmallPtrSet<const llvm::GlobalValue*, 32> kernels;
-        for (const auto& step : steps) {
-            const auto* kernel = templates.getFunction(template_name(step));
-            if (!kernel) return {};
-            kernels.insert(kernel);
-        }
-        llvm::ValueToValueMapTy values;
-        auto module = llvm::CloneModule(templates, values, [&](const llvm::GlobalValue* def) {
-            const auto name = def->getName();
-            return (!name.starts_with("FiberLLVMTemplate_") && !name.starts_with("FiberLLVMGeneric_")) ||
-                   kernels.contains(def);
-        });
-        auto* entry = module->getFunction("FiberLLVMEntry");
-        const auto* placeholder = module->getFunction("FiberLLVMPlaceholder");
-        const auto* use_step = module->getFunction("FiberLLVMUseStep");
-        const auto* exit_kind = module->getFunction("FiberLLVMExit");
-        if (!entry || !placeholder || !use_step || !exit_kind) return {};
-
-        std::vector<llvm::CallInst*> guards;
-        llvm::CallInst* exit_site = nullptr;
-        for (auto& inst : llvm::instructions(*entry)) {
-            auto* call = llvm::dyn_cast<llvm::CallInst>(&inst);
-            if (call && call->getCalledFunction() == use_step) guards.push_back(call);
-            if (call && call->getCalledFunction() == exit_kind) exit_site = call;
-        }
-        if (guards.size() != kMaxOps || !exit_site) return {};
-        exit_site->replaceAllUsesWith(llvm::ConstantInt::get(exit_site->getType(), static_cast<uint8_t>(exit)));
-        exit_site->eraseFromParent();
-        for (auto* guard : guards) {
-            const auto* index = llvm::dyn_cast<llvm::ConstantInt>(guard->getArgOperand(0));
-            if (!index) return {};
-            guard->replaceAllUsesWith(llvm::ConstantInt::get(guard->getType(), index->getZExtValue() < steps.size()));
-            guard->eraseFromParent();
-        }
-        llvm::removeUnreachableBlocks(*entry);
-
-        std::vector<llvm::CallInst*> sites;
-        for (auto& inst : llvm::instructions(*entry)) {
-            auto* call = llvm::dyn_cast<llvm::CallInst>(&inst);
-            if (call && call->getCalledFunction() == placeholder) sites.push_back(call);
-        }
-        if (sites.size() != steps.size()) return {};
-        llvm::SmallBitVector slots(steps.size());
-        for (auto* call : sites) {
-            const auto* index = llvm::dyn_cast<llvm::ConstantInt>(call->getArgOperand(0));
-            if (!index || index->getZExtValue() >= steps.size() || slots.test(index->getZExtValue())) return {};
-            slots.set(index->getZExtValue());
-            const auto& step = steps[index->getZExtValue()];
-            auto* target = module->getFunction(template_name(step));
-            if (!target || !InlineLLVMKernel(*call, *target, exact ? &step.shape : nullptr)) return {};
-        }
-
-        entry->setName(entry_name);
-        for (auto& function : *module) {
-            if (&function != entry && !function.isDeclaration())
-                function.setLinkage(llvm::GlobalValue::InternalLinkage);
-        }
-        OptimizeLLVMModule(*module);
-        if (llvm::verifyModule(*module)) return {};
-        for (auto& inst : llvm::instructions(*entry)) {
-            const auto* call = llvm::dyn_cast<llvm::CallBase>(&inst);
-            const auto* fn = call ? call->getCalledFunction() : nullptr;
-            if (fn && fn->getName().starts_with("FiberLLVM")) return {};
-        }
-        return module;
-    }
-
     BlockLookup Materialize(llvm::StringRef name, size_t budget, std::unique_ptr<llvm::MemoryBuffer> object) {
         auto tracker = jit_->getMainJITDylib().createResourceTracker();
         auto error = jit_->addObjectFile(tracker, std::move(object));
@@ -343,7 +221,7 @@ class BlockCompiler {
             llvm::consumeError(tracker->remove());
             return {};
         }
-        memory_->mapped_bytes = 0;
+        memory_->allocated_bytes = 0;
         memory_->blocked_bytes = 0;
         memory_->budget = budget;
         auto code = jit_->lookup(name);
@@ -353,7 +231,7 @@ class BlockCompiler {
             llvm::consumeError(tracker->remove());
             return {nullptr, memory_->blocked_bytes};
         }
-        return {std::make_shared<LLVMBlockCode>(code->toPtr<HandlerFunc>(), memory_->mapped_bytes, jit_,
+        return {std::make_shared<LLVMBlockCode>(code->toPtr<HandlerFunc>(), memory_->allocated_bytes, jit_,
                                                 std::move(tracker))};
     }
 
@@ -368,6 +246,7 @@ public:
             return;
         }
         auto memory = std::make_unique<BlockMemoryManager>(*page_size);
+        if (!memory->IsAvailable()) return;
         auto* memory_ptr = memory.get();
         auto executor = llvm::orc::SelfExecutorProcessControl::Create(nullptr, nullptr, std::move(memory));
         if (!executor) {
@@ -476,7 +355,7 @@ public:
             if (auto code = found->second.lock()) return {std::move(code)};
             compiled_.erase(found);
         }
-        if (budget < memory_->PageSize()) return {nullptr, memory_->PageSize()};
+        if (budget < memory_->MinimumAllocationSize()) return {nullptr, memory_->MinimumAllocationSize()};
         if (compiled_.size() > live_blocks.load(std::memory_order_relaxed) + 128)
             std::erase_if(compiled_, [](const auto& entry) { return entry.second.expired(); });
         const auto name = "FiberJitBlock_" + std::to_string(next_symbol_++);
@@ -487,7 +366,7 @@ public:
         thread_local BlockIR worker_ir;
         std::unique_ptr<llvm::MemoryBuffer> object;
         if (worker_ir.module) {
-            if (auto module = Prepare(*worker_ir.module, steps, exact, exit, name)) {
+            if (auto module = PrepareLLVMBlock(*worker_ir.module, steps, exact, exit, name)) {
                 auto compiled = jit_->getIRCompileLayer().getCompiler()(*module);
                 if (compiled)
                     object = std::move(*compiled);
@@ -511,15 +390,7 @@ public:
         if (!InitializeLLVMTarget()) return -1;
         BlockIR ir;
         if (!ir.module) return -1;
-        // Use the interpreter's deployment target for the linked objects.
-        auto target = llvm::orc::JITTargetMachineBuilder::detectHost();
-        if (!target) {
-            llvm::consumeError(target.takeError());
-            return -1;
-        }
-        target->getTargetTriple() = ir.module->getTargetTriple();
-        target->setRelocationModel(llvm::Reloc::PIC_).setOptions(llvm::TargetOptions{});
-        auto machine = target->createTargetMachine();
+        auto machine = CreateLLVMObjectTarget(*ir.module);
         if (!machine) {
             llvm::consumeError(machine.takeError());
             return -1;
@@ -536,7 +407,7 @@ public:
             steps.clear();
             if (!llvm_block_cache::ReadRecord(profile, key) || !DecodeRecipe(key, steps, exit)) return -1;
             if (!seen.insert(key).second) continue;
-            auto module = Prepare(*ir.module, steps, true, exit, ObjectEntryName(compiled));
+            auto module = PrepareLLVMBlock(*ir.module, steps, true, exit, ObjectEntryName(compiled));
             if (!module) continue;
             auto object = compiler(*module);
             if (!object) {
@@ -763,7 +634,7 @@ void InstallResult(EmuState* state, BasicBlock* block, const BlockLookup& lookup
     const auto budget = CodeBudget();
     const size_t remaining = budget - cache.llvm_block_bytes;
     const bool already_owned = code && cache.llvm_blocks.contains(code);
-    const size_t bytes = code ? code->mapped_bytes : lookup.blocked_bytes;
+    const size_t bytes = code ? code->allocated_bytes : lookup.blocked_bytes;
     if (!already_owned && bytes > remaining) {
         if (bytes <= budget) {
             cache.pending_flush = true;

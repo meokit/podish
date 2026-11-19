@@ -58,6 +58,17 @@ RegisterSpecializedHandler can publish a rule after initialization. A runtime
 rule affects future decodes, and the caller owns the lifetime of its code.
 The catalog exposes build-time metadata independently of runtime registration.
 
+Dynamic operand templates
+-------------------------
+FIBERCPU_DYNAMIC_OPERAND_PLAN_FILE selects profiled operand shapes to generate
+from the same LLVM kernels and operand rules used by the block JIT. At build
+time LLVM specializes, inlines and compiles each handler to an ARM64 object.
+The packer extracts machine-code templates, immediate patches and relocation
+metadata. The interpreter only needs those artifacts when online JIT is off.
+The build requires native macOS arm64 and matching upstream Clang and LLVM
+major versions (21 or newer). Set FIBERCPU_DYNAMIC_SPECIALIZATION=0 to disable
+runtime materialization.
+
 LLVM block JIT
 --------------
 FIBERCPU_ENABLE_LLVM_JIT enables the ORC block compiler on macOS arm64.
@@ -81,10 +92,20 @@ FIBERCPU_LLVM_JIT_WORKERS selects 0–8 workers. Set it to 0 for synchronous
 promotion. Profile collection records block recipes synchronously.
 
 FIBERCPU_LLVM_JIT_CODE_BUDGET defaults to 16777216 bytes per MMU code cache.
-The budget charges each owned ORC allocation once by its mapped segment size.
+The allocator packs executable segments into 256 KiB slabs within a
+process-wide 128 MiB MAP_JIT virtual reservation. Dynamic instruction
+specialization can reserve a separate range in the same mapping. JITLink
+relocates each block at its final address. The linker publishes it after
+copying the bytes and invalidating the instruction cache. Data segments
+are mapped near the code with their own non-executable permissions.
+If an allocation or relocation fails, the block keeps its native entry.
+
+Each MMU charges aligned executable bytes and mapped data bytes once per
+owned allocation.
 Invalidated blocks keep their machine code available for reuse. Budget
-pressure requests a hard reset when the MMU is quiescent. The native stats
-field llvm_code_cache_bytes reports the currently charged bytes.
+pressure requests a hard reset when the MMU is quiescent. A packed slab can
+be reused after its last ORC allocation and in-flight link are released.
+The native stats field llvm_code_cache_bytes reports the current charge.
 X86_GetLLVMJitBlockCount counts online block materializations.
 
 Linked LLVM block cache

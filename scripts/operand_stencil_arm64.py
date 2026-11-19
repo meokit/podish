@@ -2,7 +2,6 @@
 
 import struct
 import re
-from bisect import bisect_left
 from dataclasses import dataclass
 
 
@@ -14,21 +13,18 @@ HELPERS = (
     "ResolveBranchTargetSlowControlFlow",
     "ResolveBranchTarget",
 )
-HELPER_SYMBOLS = {f"__ZN8fiberish{len(name)}{name}E": i for i, name in enumerate(HELPERS)}
-# The rest are normal-ABI functions explicitly retained by the native build.
-MMU_SLOW = re.compile(r"__ZN8fiberish3mem3Mmu(?:9read_slow|10write_slow)I[htjy]EE\w+")
+HELPER_SYMBOLS = {f"__ZN8fiberish{len(name)}{name}E": name for name in HELPERS}
+BRANCH26, PAGE21, PAGEOFF12, GOT_LOAD_PAGE21, GOT_LOAD_PAGEOFF12 = range(2, 7)
+PAGE_RELOCATIONS = {PAGE21, GOT_LOAD_PAGE21}
 
-
-def branch_target(symbol):
-    if not symbol or not symbol[1] & 1:
+def external_target(symbol):
+    if not symbol or symbol[1] & 0x0f != 1:  # N_EXT | N_UNDF
         return None
     name = symbol[0]
-    for prefix, index in HELPER_SYMBOLS.items():
+    for prefix, helper in HELPER_SYMBOLS.items():
         if name.startswith(prefix):
-            return HELPERS[index]
-    if (MMU_SLOW.fullmatch(name) or re.fullmatch(r"_f80_\w+", name) or name == "_LogMsgState"):
-        return name
-    return None
+            return helper
+    return name if re.fullmatch(r"_[A-Za-z_][A-Za-z0-9_.$]*", name) else None
 
 
 def page_offset_scale(word):
@@ -104,9 +100,9 @@ class Section:
 
 
 class MachO:
-    def __init__(self, path):
+    def __init__(self, path, data):
         self.path = path
-        self.data = path.read_bytes()
+        self.data = data
         magic, cpu, subtype, file_type, commands = struct.unpack_from("<5I", self.data)
         if (magic, cpu, subtype & 0xffffff, file_type) != (0xfeedfacf, 0x0100000c, 0, 1):
             raise ValueError(f"{path}: expected a thin Mach-O arm64 object")
@@ -162,77 +158,66 @@ class MachO:
             symbol = self.symbols[info & 0xffffff] if external else None
             yield offset, info >> 28, (info >> 24) & 1, (info >> 25) & 3, symbol
 
-    def probe_handlers(self, count):
-        if count == 0:
-            return []
+    def handler(self, name):
         text_id, code = self.section("__text")
-        _, pointers = self.section("__fiber_probes")
-        if not code or not pointers or pointers.size != 8 * count:
-            raise ValueError(f"{self.path}: incomplete probe object")
-        probe_addresses = {}
-        for offset, kind, pc_relative, size, symbol in self.relocations(pointers):
-            if (kind, pc_relative, size) != (0, 0, 3) or not symbol or symbol[2] != text_id or offset % 8:
-                raise ValueError(f"{self.path}: unexpected probe pointer relocation")
-            if struct.unpack_from("<Q", self.data, pointers.offset + offset)[0] != 0:
-                raise ValueError(f"{self.path}: unexpected probe pointer addend")
-            probe_addresses[offset // 8] = symbol[3]
-        if len(probe_addresses) != count:
-            raise ValueError(f"{self.path}: missing probe pointers")
+        if not code:
+            raise ValueError(f"{self.path}: missing LLVM code section")
+        address = next((address for symbol, kind, section, address in self.symbols
+                        if symbol == name and section == text_id and kind & 0x0e == 0x0e), None)
+        if address is None:
+            raise ValueError(f"{self.path}: missing LLVM handler {name}")
 
-        # Clang labels function starts in __text. Mach-O also includes local
-        # assembler bookkeeping labels which do not delimit functions.
-        starts = set(probe_addresses.values())
-        starts.update(address for name, kind, section, address in self.symbols
-                      if section == text_id and kind & 0x0e == 0x0e and name.startswith("_"))
-        starts = sorted(starts | {code.address + code.size})
-        ends = dict(zip(starts, starts[1:]))
-        relocations = sorted(self.relocations(code), key=lambda relocation: relocation[0])
-        offsets = [relocation[0] for relocation in relocations]
-        result = []
-        for i in range(count):
-            address = probe_addresses[i]
-            start = address - code.address
-            end = ends[address] - code.address
-            if not 0 <= start < end <= code.size or start % 4 or end % 4:
-                raise ValueError(f"{self.path}: invalid probe function range")
-            words = struct.unpack_from(f"<{(end - start) // 4}I", self.data, code.offset + start)
-            # Padding between __text symbols is not part of the handler.
-            while words and words[-1] == 0xd503201f:
-                words = words[:-1]
-            helper_calls = {}
-            data_relocs = {}
-            constants = bytearray()
-            section_offsets = {}
-            reason = None
-            for offset, kind, pc_relative, size, symbol in relocations[
-                bisect_left(offsets, start):bisect_left(offsets, end)
-            ]:
-                slot = (offset - start) // 4
-                if offset % 4 == 0 and slot < len(words) and size == 2:
-                    word = words[slot]
-                    helper = branch_target(symbol)
-                    if kind == 2 and pc_relative and helper and word & 0x7fffffff == 0x14000000:
+        entry = address - code.address
+        if not 0 <= entry < code.size or entry % 4 or code.size % 4 or code.alignment > 4:
+            raise ValueError(f"{self.path}: invalid LLVM code layout")
+        # LLVM can outline part of the handler into local functions. Keep them
+        # in the same text image so local branch deltas are position independent.
+        words = list(struct.unpack_from(f"<{code.size // 4}I", self.data, code.offset))
+        helper_calls = {}
+        data_relocs = {}
+        constants = bytearray()
+        section_offsets = {}
+        helper_offsets = {}
+        reason = None
+        for offset, kind, pc_relative, size, symbol in sorted(self.relocations(code)):
+            slot = offset // 4
+            if offset % 4 == 0 and slot < len(words) and size == 2:
+                word = words[slot]
+                helper = external_target(symbol)
+                if kind == BRANCH26 and pc_relative and word & 0x7fffffff == 0x14000000:
+                    if helper:
                         helper_calls[slot] = helper
                         continue
-                    location = self.constant_location(symbol)
-                    scale = page_offset_scale(word) if kind == 4 else None
-                    is_page = kind == 3 and pc_relative and word & 0xffffffe0 == 0x90000000
-                    is_offset = kind == 4 and not pc_relative and scale is not None and not word & 0x003ffc00
-                    if location and (is_page or is_offset):
-                        section, relative = location
-                        if section not in section_offsets:
-                            padding = -len(constants) % (1 << section.alignment)
-                            constants.extend(bytes(padding))
-                            section_offsets[section] = len(constants)
-                            constants.extend(self.data[section.offset:section.offset + section.size])
-                        if not is_offset or not (relative + section_offsets[section]) % (1 << scale):
-                            data_relocs[slot] = (kind, section_offsets[section] + relative, scale or 0)
+                    if symbol and symbol[2] == text_id:
+                        target = symbol[3] - code.address
+                        delta = target // 4 - slot
+                        if target % 4 == 0 and 0 <= target < code.size and -(1 << 25) <= delta < 1 << 25:
+                            words[slot] |= delta & 0x03ffffff
                             continue
-                reason = "unsupported_relocation"
-                break
-            if not words:
-                reason = "empty_handler"
-            reason = reason or audit(words, helper_calls | data_relocs)
-            data = tuple((slot, *reloc) for slot, reloc in data_relocs.items())
-            result.append((words, tuple(helper_calls.items()), data, bytes(constants), reason))
-        return result
+                if helper and ((kind == GOT_LOAD_PAGE21 and pc_relative and word & 0xffffffe0 == 0x90000000) or
+                               (kind == GOT_LOAD_PAGEOFF12 and not pc_relative and word & 0xfffffc00 == 0xf9400000)):
+                    if helper not in helper_offsets:
+                        constants.extend(bytes(-len(constants) % 8))
+                        helper_offsets[helper] = len(constants)
+                        constants.extend(bytes(8))
+                    data_relocs[slot] = (kind, helper_offsets[helper], 3 if kind == GOT_LOAD_PAGEOFF12 else 0, helper)
+                    continue
+                location = self.constant_location(symbol)
+                scale = page_offset_scale(word) if kind == PAGEOFF12 else None
+                is_page = kind == PAGE21 and pc_relative and word & 0xffffffe0 == 0x90000000
+                is_offset = kind == PAGEOFF12 and not pc_relative and scale is not None and not word & 0x003ffc00
+                if location and (is_page or is_offset):
+                    section, relative = location
+                    if section not in section_offsets:
+                        padding = -len(constants) % (1 << section.alignment)
+                        constants.extend(bytes(padding))
+                        section_offsets[section] = len(constants)
+                        constants.extend(self.data[section.offset:section.offset + section.size])
+                    if not is_offset or not (relative + section_offsets[section]) % (1 << scale):
+                        data_relocs[slot] = (kind, section_offsets[section] + relative, scale or 0, None)
+                        continue
+            reason = "unsupported_relocation"
+            break
+        reason = reason or audit(words, helper_calls | data_relocs)
+        data = tuple((slot, *reloc) for slot, reloc in data_relocs.items())
+        return entry, tuple(words), tuple(helper_calls.items()), data, bytes(constants), reason

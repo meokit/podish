@@ -26,27 +26,8 @@
 namespace fiberish::block_recipe {
 namespace {
 
-enum LLVMRequirement : uint8_t {
-    kRegisterOperand = 1,
-    kMemoryOperand = 2,
-    kExactOnly = 4,
-};
-
-struct LLVMOperation {
-    const char* name;
-    uint8_t requirements;
-    uint8_t extensions;
-
-    bool Matches(const DecodedOp& op, bool exact) const {
-        if ((requirements & kRegisterOperand) && (!op.meta.flags.has_modrm || (op.modrm >> 6) != 3)) return false;
-        if ((requirements & kMemoryOperand) && !HasMem(&op)) return false;
-        if ((requirements & kExactOnly) && !exact) return false;
-        return extensions == 0xff || (op.meta.flags.has_modrm && (extensions & (1u << ((op.modrm >> 3) & 7))));
-    }
-};
-
 const auto& Operations() {
-    static const ankerl::unordered_dense::map<HandlerFunc, LLVMOperation> operations = {
+    static const ankerl::unordered_dense::map<HandlerFunc, Operation> operations = {
 #define FIBERCPU_LLVM_OP(Name, Exact, Requirements, Extensions) \
     {DispatchWrapper<op::Name>, {#Name, Requirements, Extensions}},
 #include "llvm_block_operations.inc"
@@ -97,10 +78,6 @@ std::string BlockKey(std::span<const Step> steps, bool exact, LLVMBlockExit exit
 bool CanPromoteBlock(EmuState& state, BasicBlock& block) {
     return !state.mmu.code_cache_flush_pending() && block.is_valid() && block.has_unfused_handlers &&
            block.entry == block.FirstOp()->handler && state.mmu.lookup_cached_block(block.start_eip()) == &block;
-}
-
-bool CanPlanOp(const DecodedOp& op) {
-    return op.len && !op.prefixes.flags.lock && (!HasMem(&op) || GetExtKind(&op) == ExtKind::Data);
 }
 
 LLVMBlockExit FullBlockExit(const BasicBlock& block) {

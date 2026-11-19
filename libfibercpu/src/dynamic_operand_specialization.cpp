@@ -1,9 +1,6 @@
 #include "dynamic_operand_specialization.h"
 
 #include <ankerl/unordered_dense.h>
-#include <libkern/OSCacheControl.h>
-#include <pthread.h>
-#include <sys/mman.h>
 #include <algorithm>
 #include <atomic>
 #include <cstdlib>
@@ -14,6 +11,7 @@
 #include <vector>
 
 #include "dispatch.h"
+#include "jit/executable_arena.h"
 
 namespace fiberish {
 namespace {
@@ -41,11 +39,12 @@ enum class DataRelocation : uint8_t { Page, PageOffset };
 struct DataPatch {
     uint32_t word;
     uint32_t offset;
+    uint32_t helper;
     DataRelocation kind;
     uint8_t scale;
 };
 struct CodeTemplate {
-    uint32_t code, words;
+    uint32_t code, words, entry;
     uint32_t patches, patch_count;
     uint32_t helpers, helper_count;
     uint32_t relocations, relocation_count;
@@ -79,24 +78,20 @@ class ExecutableOperands {
     std::mutex mutex_;
     std::array<std::atomic<HandlerFunc>, kRecipeCount> handlers_{};
     ankerl::unordered_dense::map<HandlerFunc, Published> canonical_;
-    uint8_t* const arena_;
+    const std::unique_ptr<ExecutableArena::Region> region_;
     size_t used_ = 0;
 
-    static uint8_t* MapArena() {
-        if (kArenaSize == 0 || !DynamicOperandsEnabled() || !pthread_jit_write_protect_supported_np()) return nullptr;
-        void* mem =
-            mmap(nullptr, kArenaSize, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANON | MAP_JIT, -1, 0);
-        return mem == MAP_FAILED ? nullptr : static_cast<uint8_t*>(mem);
+    static std::unique_ptr<ExecutableArena::Region> ReserveRegion() {
+        if (kArenaSize == 0 || !DynamicOperandsEnabled()) return {};
+        auto arena = ExecutableArena::Shared();
+        return arena ? arena->Reserve(kArenaSize) : nullptr;
     }
 
 public:
-    ExecutableOperands() : arena_(MapArena()) {}
-    ~ExecutableOperands() {
-        if (arena_) munmap(arena_, kArenaSize);
-    }
+    ExecutableOperands() : region_(ReserveRegion()) {}
 
     HandlerFunc Find(uint32_t recipe_id, HandlerFunc original) {
-        if (!arena_) return nullptr;
+        if (!region_) return nullptr;
         auto& published = handlers_[recipe_id];
         if (auto handler = published.load(std::memory_order_acquire)) return handler;
 
@@ -110,45 +105,48 @@ public:
         const size_t constants_offset = veneer_offset + 16 * stencil.helper_count;
         const size_t allocation = constants_offset + ((stencil.constant_bytes + 15) & ~size_t{15});
         if (allocation > kArenaSize - used_) return nullptr;
-        auto* dst = arena_ + used_;
-        const auto handler = reinterpret_cast<HandlerFunc>(dst);
+        auto* dst = region_->Data() + used_;
+        const auto handler = reinterpret_cast<HandlerFunc>(dst + stencil.entry);
         canonical_.emplace(handler, Published{original, recipe_id});
 
-        pthread_jit_write_protect_np(0);
-        std::memcpy(dst, kCode + stencil.code, code_size);
-        auto* words = reinterpret_cast<uint32_t*>(dst);
-        for (uint32_t i = 0; i < stencil.patch_count; ++i) {
-            const auto& patch = kPatches[stencil.patches + i];
-            words[patch.word] = (words[patch.word] & ~patch.mask) | kPayload[recipe.payload + i];
-        }
-        for (uint32_t i = 0; i < stencil.helper_count; ++i) {
-            const auto& fixup = kHelpers[stencil.helpers + i];
-            const size_t veneer_word = veneer_offset / sizeof(uint32_t) + 4 * i;
-            // Branch to a nearby ABI veneer, which loads and transfers to the
-            // helper without changing the link register or handler arguments.
-            words[fixup.word] |= static_cast<uint32_t>(veneer_word - fixup.word);
-            words[veneer_word] = 0x58000050;      // ldr x16, #8
-            words[veneer_word + 1] = 0xd61f0200;  // br x16
-            const auto target = kHelperTargets[fixup.target];
-            std::memcpy(words + veneer_word + 2, &target, sizeof(target));
-        }
-        if (stencil.constant_bytes) {
-            auto* constants = dst + constants_offset;
-            std::memcpy(constants, kConstantPool + stencil.constants, stencil.constant_bytes);
-            for (uint32_t i = 0; i < stencil.relocation_count; ++i) {
-                const auto& fixup = kDataRelocs[stencil.relocations + i];
-                const auto target = reinterpret_cast<uintptr_t>(constants + fixup.offset);
-                if (fixup.kind == DataRelocation::Page) {  // ADRP uses architectural 4 KiB pages.
-                    const auto address = reinterpret_cast<uintptr_t>(words + fixup.word);
-                    const auto pages = static_cast<uint32_t>((target >> 12) - (address >> 12));
-                    words[fixup.word] |= ((pages & 3) << 29) | (((pages >> 2) & 0x7ffff) << 5);
-                } else {
-                    words[fixup.word] |= static_cast<uint32_t>(((target & 4095) >> fixup.scale) << 10);
+        {
+            ScopedJitWrite write;
+            std::memcpy(dst, kCode + stencil.code, code_size);
+            auto* words = reinterpret_cast<uint32_t*>(dst);
+            for (uint32_t i = 0; i < stencil.patch_count; ++i) {
+                const auto& patch = kPatches[stencil.patches + i];
+                words[patch.word] = (words[patch.word] & ~patch.mask) | kPayload[recipe.payload + i];
+            }
+            for (uint32_t i = 0; i < stencil.helper_count; ++i) {
+                const auto& fixup = kHelpers[stencil.helpers + i];
+                const size_t veneer_word = veneer_offset / sizeof(uint32_t) + 4 * i;
+                // Branch to a nearby ABI veneer, which loads and transfers to the
+                // helper without changing the link register or handler arguments.
+                words[fixup.word] |= static_cast<uint32_t>(veneer_word - fixup.word);
+                words[veneer_word] = 0x58000050;      // ldr x16, #8
+                words[veneer_word + 1] = 0xd61f0200;  // br x16
+                const auto target = kHelperTargets[fixup.target];
+                std::memcpy(words + veneer_word + 2, &target, sizeof(target));
+            }
+            if (stencil.constant_bytes) {
+                auto* constants = dst + constants_offset;
+                std::memcpy(constants, kConstantPool + stencil.constants, stencil.constant_bytes);
+                for (uint32_t i = 0; i < stencil.relocation_count; ++i) {
+                    const auto& fixup = kDataRelocs[stencil.relocations + i];
+                    auto* slot = constants + fixup.offset;
+                    if (fixup.helper != UINT32_MAX) std::memcpy(slot, &kHelperTargets[fixup.helper], sizeof(uintptr_t));
+                    const auto target = reinterpret_cast<uintptr_t>(slot);
+                    if (fixup.kind == DataRelocation::Page) {  // ADRP uses architectural 4 KiB pages.
+                        const auto address = reinterpret_cast<uintptr_t>(words + fixup.word);
+                        const auto pages = static_cast<uint32_t>((target >> 12) - (address >> 12));
+                        words[fixup.word] |= ((pages & 3) << 29) | (((pages >> 2) & 0x7ffff) << 5);
+                    } else {
+                        words[fixup.word] |= static_cast<uint32_t>(((target & 4095) >> fixup.scale) << 10);
+                    }
                 }
             }
         }
-        pthread_jit_write_protect_np(1);
-        sys_icache_invalidate(dst, allocation);
+        FlushJitInstructions(dst, allocation);
         used_ += allocation;
         published.store(handler, std::memory_order_release);
         return handler;
@@ -156,7 +154,8 @@ public:
 
     Published Lookup(HandlerFunc handler) {
         const auto address = reinterpret_cast<uintptr_t>(handler);
-        if (!arena_ || address - reinterpret_cast<uintptr_t>(arena_) >= kArenaSize) return {handler, UINT32_MAX};
+        if (!region_ || address - reinterpret_cast<uintptr_t>(region_->Data()) >= kArenaSize)
+            return {handler, UINT32_MAX};
         std::lock_guard lock(mutex_);
         const auto found = canonical_.find(handler);
         return found == canonical_.end() ? Published{handler, UINT32_MAX} : found->second;

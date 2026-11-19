@@ -436,75 +436,30 @@ FORCE_INLINE LogicFlow Helper_Group5(EmuState* state, GprCache& gpr, DecodedOp* 
     const uint8_t subop = GroupOperation<FixedSubOp>(op);
 
     switch (subop) {
-        case 0:  // INC Ev
-        {
-            uint32_t old_cf = GetFlags32(flags_cache) & CF_MASK;
-            T res = AluAdd<T, UpdateFlags>(state, flags_cache, val, 1);
-            if constexpr (UpdateFlags) SetFlags32(flags_cache, (GetFlags32(flags_cache) & ~CF_MASK) | old_cf);
-
-            if constexpr (sizeof(T) == 2) {
-                if (!WriteModRM<uint16_t, OpOnTLBMiss::Blocking>(state, gpr, op, res, utlb))
-                    return LogicFlow::ExitOnCurrentEIP;
-            } else {
-                if (!WriteModRM<uint32_t, OpOnTLBMiss::Blocking>(state, gpr, op, res, utlb))
-                    return LogicFlow::ExitOnCurrentEIP;
-            }
-            break;
-        }
-        case 1:  // DEC Ev
-        {
-            uint32_t old_cf = GetFlags32(flags_cache) & CF_MASK;
-            T res = AluSub<T, UpdateFlags>(state, flags_cache, val, 1);
-            if constexpr (UpdateFlags) SetFlags32(flags_cache, (GetFlags32(flags_cache) & ~CF_MASK) | old_cf);
-
-            if constexpr (sizeof(T) == 2) {
-                if (!WriteModRM<uint16_t, OpOnTLBMiss::Blocking>(state, gpr, op, res, utlb))
-                    return LogicFlow::ExitOnCurrentEIP;
-            } else {
-                if (!WriteModRM<uint32_t, OpOnTLBMiss::Blocking>(state, gpr, op, res, utlb))
-                    return LogicFlow::ExitOnCurrentEIP;
+        case 0:    // INC Ev
+        case 1: {  // DEC Ev
+            uint64_t updated_flags = flags_cache;
+            const T result = subop == 0 ? AluAdd<T, UpdateFlags>(state, updated_flags, val, 1)
+                                        : AluSub<T, UpdateFlags>(state, updated_flags, val, 1);
+            // A faulting destination write must leave the old flags visible.
+            if (!WriteModRM<T, OpOnTLBMiss::Blocking>(state, gpr, op, result, utlb)) return LogicFlow::ExitOnCurrentEIP;
+            if constexpr (UpdateFlags) {
+                const uint32_t carry = GetFlags32(flags_cache) & CF_MASK;
+                SetFlags32(updated_flags, (GetFlags32(updated_flags) & ~CF_MASK) | carry);
+                flags_cache = updated_flags;
             }
             break;
         }
         case 2:  // CALL Ev (Near Indirect)
-        case 4:  // JMP Ev (Near Indirect)
-        case 6:  // PUSH Ev
-        {
-            // subop 2, 4, 6 do not update flags by themselves
-            if (subop == 2) {  // Call
-                if constexpr (sizeof(T) == 2) {
-                    uint32_t esp = gpr.GetReg(state, ESP) - 2;
-                    if (!WriteMem<uint16_t, OpOnTLBMiss::Blocking>(state, gpr, esp, (uint16_t)op->next_eip, utlb, op))
-                        return LogicFlow::ExitOnCurrentEIP;
-                    gpr.SetReg(state, ESP, esp);
-                    *branch = val & 0xFFFF;
-                } else {
-                    uint32_t esp = gpr.GetReg(state, ESP) - 4;
-                    if (!WriteMem<uint32_t, OpOnTLBMiss::Blocking>(state, gpr, esp, op->next_eip, utlb, op))
-                        return LogicFlow::ExitOnCurrentEIP;
-                    gpr.SetReg(state, ESP, esp);
-                    *branch = val;
-                }
-            } else if (subop == 4) {  // Jmp
-                if constexpr (sizeof(T) == 2)
-                    *branch = val & 0xFFFF;
-                else
-                    *branch = val;
-            } else if (subop == 6) {  // Push
-                if constexpr (sizeof(T) == 2) {
-                    uint32_t esp = gpr.GetReg(state, ESP) - 2;
-                    if (!WriteMem<uint16_t, OpOnTLBMiss::Blocking>(state, gpr, esp, (uint16_t)val, utlb, op))
-                        return LogicFlow::ExitOnCurrentEIP;
-                    gpr.SetReg(state, ESP, esp);
-                } else {
-                    uint32_t esp = gpr.GetReg(state, ESP) - 4;
-                    if (!WriteMem<uint32_t, OpOnTLBMiss::Blocking>(state, gpr, esp, val, utlb, op))
-                        return LogicFlow::ExitOnCurrentEIP;
-                    gpr.SetReg(state, ESP, esp);
-                }
-            }
+            if (!Push<T>(state, gpr, static_cast<T>(op->next_eip), utlb, op)) return LogicFlow::ExitOnCurrentEIP;
+            *branch = val;
             break;
-        }
+        case 4:  // JMP Ev (Near Indirect)
+            *branch = val;
+            break;
+        case 6:  // PUSH Ev
+            if (!Push<T>(state, gpr, val, utlb, op)) return LogicFlow::ExitOnCurrentEIP;
+            break;
         default:
             state->fault_vector = 6;
             if (!gpr.WithCanonical(state, [&] { return state->hooks.on_invalid_opcode(state); })) {
