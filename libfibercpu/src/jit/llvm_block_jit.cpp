@@ -9,6 +9,7 @@
 #include <ankerl/unordered_dense.h>
 #include <algorithm>
 #include <atomic>
+#include <bit>
 #include <charconv>
 #include <cmath>
 #include <condition_variable>
@@ -23,6 +24,7 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -37,6 +39,7 @@
 #include <llvm/Support/Process.h>
 #include <llvm/Support/SHA256.h>
 #include <llvm/Support/raw_ostream.h>
+#include <llvm/Support/xxhash.h>
 #include <llvm/TargetParser/Host.h>
 
 #include <pthread.h>
@@ -52,8 +55,8 @@ namespace {
 #include "llvm_block_bitcode.inc"
 
 enum class JitMode { Off, Generic, Exact, Profile };
+using block_recipe::BlockKeyView;
 using block_recipe::kMaxOps;
-using block_recipe::Step;
 constexpr size_t kDefaultJitCodeBudget = 16 * 1024 * 1024;
 constexpr uint16_t kDefaultHotThreshold = 64;
 std::atomic<uint64_t> live_blocks{0};
@@ -81,10 +84,48 @@ struct LLVMBlockCode {
 
 namespace {
 
+struct BlockKey {
+    explicit BlockKey(BlockKeyView key)
+        : exit(key.exit),
+          operations(key.operations.begin(), key.operations.end()),
+          operands(key.operands.begin(), key.operands.end()) {}
+
+    operator BlockKeyView() const { return {exit, operations, operands}; }
+
+    LLVMBlockExit exit;
+    std::vector<block_recipe::OpId> operations;
+    std::vector<DecodedOperandShape> operands;
+};
+
+struct BlockKeyHash {
+    using is_transparent = void;
+    using is_avalanching = void;
+
+    size_t operator()(BlockKeyView key) const {
+        // IDs and operand shapes have no padding. Hashing their native byte
+        // spans is local to this process; disk records are encoded separately.
+        static_assert(std::has_unique_object_representations_v<block_recipe::OpId>);
+        static_assert(std::has_unique_object_representations_v<DecodedOperandShape>);
+        const auto hash = [](auto span) {
+            return llvm::xxh3_64bits({reinterpret_cast<const uint8_t*>(span.data()), span.size_bytes()});
+        };
+        return std::rotl(hash(key.operations), static_cast<int>(key.exit)) ^
+               (key.IsExact() ? std::rotl(hash(key.operands), 23) : 0);
+    }
+};
+
+struct BlockKeyEqual {
+    using is_transparent = void;
+    bool operator()(BlockKeyView lhs, BlockKeyView rhs) const { return lhs == rhs; }
+};
+
+using BlockKeySet = ankerl::unordered_dense::set<BlockKey, BlockKeyHash, BlockKeyEqual>;
+
 const auto& ProfileFingerprint() {
     static const auto digest = [] {
         llvm::SHA256 hash;
         hash.update(llvm::ArrayRef<uint8_t>(kBitcode, sizeof(kBitcode)));
+        hash.update(block_recipe::kOpIdFingerprint);
         hash.update(LLVM_VERSION_STRING);
         hash.update(llvm::sys::getProcessTriple());
         hash.update(llvm::sys::getHostCPUName());
@@ -119,7 +160,7 @@ bool ReadProfileHeader(std::string_view& bytes) {
     return true;
 }
 
-void RecordBlock(const std::string& key) {
+void RecordBlock(BlockKeyView key) {
     static auto output = []() -> std::unique_ptr<llvm::raw_fd_ostream> {
         const auto* path = std::getenv("FIBERCPU_LLVM_JIT_PROFILE");
         if (!path || !*path) return {};
@@ -131,10 +172,12 @@ void RecordBlock(const std::string& key) {
     }();
     if (!output) return;
     static std::mutex mutex;
-    static ankerl::unordered_dense::set<std::string> seen;
+    static BlockKeySet seen;
     std::lock_guard lock(mutex);
-    if (seen.insert(key).second) {
-        llvm_block_cache::WriteRecord(*output, key);
+    if (!seen.contains(key)) {
+        seen.emplace(key);
+        const auto bytes = llvm_block_cache::EncodeKey(key);
+        llvm_block_cache::WriteRecord(*output, {bytes.data(), bytes.size()});
         output->flush();
         if (output->has_error()) {
             llvm::errs() << "Failed writing LLVM block profile: " << output->error().message() << '\n';
@@ -165,24 +208,6 @@ T ReadPositiveSetting(const char* name, T fallback) {
     return parsed.ec == std::errc{} && parsed.ptr == end && result != 0 ? result : fallback;
 }
 
-bool DecodeRecipe(std::string_view key, std::vector<Step>& steps, LLVMBlockExit& exit) {
-    if (key.empty() || static_cast<uint8_t>(key.front()) > static_cast<uint8_t>(LLVMBlockExit::Branch)) return false;
-    exit = static_cast<LLVMBlockExit>(key.front());
-    key.remove_prefix(1);
-    while (!key.empty()) {
-        const auto end = key.find('\0');
-        if (end == 0 || end == std::string_view::npos || steps.size() == kMaxOps) return false;
-        const auto name = key.substr(0, end);
-        key.remove_prefix(end + 1);
-        DecodedOperandShape shape;
-        if (!llvm_block_cache::ReadU32(key, shape.encoding) || !llvm_block_cache::ReadU32(key, shape.ea_desc) ||
-            !llvm_block_cache::ReadU32(key, shape.displacement) || !llvm_block_cache::ReadU32(key, shape.immediate))
-            return false;
-        steps.push_back({name, shape});
-    }
-    return !steps.empty();
-}
-
 std::string ObjectEntryName(uint64_t index) { return "FiberCachedBlock_" + std::to_string(index); }
 
 struct BlockLookup {
@@ -202,6 +227,7 @@ std::unique_ptr<llvm::Module> ReadBlockIR(llvm::LLVMContext& context) {
 struct BlockIR {
     llvm::LLVMContext context;
     std::unique_ptr<llvm::Module> module = ReadBlockIR(context);
+    LLVMOperandTemplates templates{module.get()};
 };
 
 class BlockCompiler {
@@ -209,8 +235,8 @@ class BlockCompiler {
     BlockMemoryManager* memory_ = nullptr;
     std::mutex mutex_;
     std::condition_variable compilation_done_;
-    ankerl::unordered_dense::map<std::string, std::weak_ptr<const LLVMBlockCode>> compiled_;
-    ankerl::unordered_dense::set<std::string> compiling_;
+    ankerl::unordered_dense::map<BlockKey, std::weak_ptr<const LLVMBlockCode>, BlockKeyHash, BlockKeyEqual> compiled_;
+    BlockKeySet compiling_;
     uint64_t next_symbol_ = 0;
 
     BlockLookup Materialize(llvm::StringRef name, size_t budget, std::unique_ptr<llvm::MemoryBuffer> object) {
@@ -345,8 +371,7 @@ public:
         memory_ = memory_ptr;
     }
 
-    BlockLookup FindOrCompile(std::span<const Step> steps, std::string key, bool exact, LLVMBlockExit exit,
-                              size_t budget) {
+    BlockLookup FindOrCompile(BlockKeyView key, size_t budget) {
         if (!jit_) return {};
         std::unique_lock lock(mutex_);
         compilation_done_.wait(lock, [&] { return !compiling_.contains(key); });
@@ -359,28 +384,26 @@ public:
         if (compiled_.size() > live_blocks.load(std::memory_order_relaxed) + 128)
             std::erase_if(compiled_, [](const auto& entry) { return entry.second.expired(); });
         const auto name = "FiberJitBlock_" + std::to_string(next_symbol_++);
-        compiling_.insert(key);
+        compiling_.emplace(key);
         lock.unlock();
         // Each caller owns its IR and target machine while optimizing and
         // emitting the object. Only ORC linking and budget tracking serialize.
         thread_local BlockIR worker_ir;
         std::unique_ptr<llvm::MemoryBuffer> object;
-        if (worker_ir.module) {
-            if (auto module = PrepareLLVMBlock(*worker_ir.module, steps, exact, exit, name)) {
-                auto compiled = jit_->getIRCompileLayer().getCompiler()(*module);
-                if (compiled)
-                    object = std::move(*compiled);
-                else
-                    llvm::consumeError(compiled.takeError());
-            }
+        if (auto module = PrepareLLVMBlock(worker_ir.templates, key, name)) {
+            auto compiled = jit_->getIRCompileLayer().getCompiler()(*module);
+            if (compiled)
+                object = std::move(*compiled);
+            else
+                llvm::consumeError(compiled.takeError());
         }
         lock.lock();
-        compiling_.erase(key);
+        auto owned_key = compiling_.extract(key);
         compilation_done_.notify_all();
         if (!object) return {};
         auto result = Materialize(name, budget, std::move(object));
         if (result.code) {
-            compiled_.emplace(std::move(key), result.code);
+            compiled_.emplace(std::move(*owned_key), result.code);
             materializations.fetch_add(1, std::memory_order_relaxed);
         }
         return result;
@@ -389,32 +412,35 @@ public:
     static int BuildLinkedCache(std::string_view profile, llvm::raw_ostream& output) {
         if (!InitializeLLVMTarget()) return -1;
         BlockIR ir;
-        if (!ir.module) return -1;
+        if (!ir.templates.IsValid()) return -1;
         auto machine = CreateLLVMObjectTarget(*ir.module);
         if (!machine) {
             llvm::consumeError(machine.takeError());
             return -1;
         }
         llvm::orc::TMOwningSimpleCompiler compiler(std::move(*machine));
-        output << llvm_block_cache::linked_magic << FIBERCPU_LINKED_BLOCK_CACHE_ABI;
+        output << llvm_block_cache::linked_magic << FIBERCPU_LINKED_BLOCK_CACHE_ABI << block_recipe::kOpIdFingerprint;
         if (!llvm_block_cache::WriteRecord(output, LinkedBlockCacheHostCPU())) return -1;
         int compiled = 0;
-        ankerl::unordered_dense::set<std::string_view> seen;
-        std::vector<Step> steps;
+        BlockKeySet seen;
+        block_recipe::Plan plan;
         while (!profile.empty()) {
-            std::string_view key;
-            LLVMBlockExit exit;
-            steps.clear();
-            if (!llvm_block_cache::ReadRecord(profile, key) || !DecodeRecipe(key, steps, exit)) return -1;
-            if (!seen.insert(key).second) continue;
-            auto module = PrepareLLVMBlock(*ir.module, steps, true, exit, ObjectEntryName(compiled));
+            std::string_view record;
+            bool exact;
+            if (!llvm_block_cache::ReadRecord(profile, record) || !llvm_block_cache::DecodeKey(record, plan, exact) ||
+                !exact)
+                return -1;
+            const auto key = plan.Key(exact);
+            if (seen.contains(key)) continue;
+            seen.emplace(key);
+            auto module = PrepareLLVMBlock(ir.templates, key, ObjectEntryName(compiled));
             if (!module) continue;
             auto object = compiler(*module);
             if (!object) {
                 llvm::logAllUnhandledErrors(object.takeError(), llvm::errs(), "LLVM block cache: ");
                 continue;
             }
-            if (!llvm_block_cache::WriteRecord(output, key) ||
+            if (!llvm_block_cache::WriteRecord(output, record) ||
                 !llvm_block_cache::WriteRecord(output, (*object)->getBuffer()))
                 return -1;
             ++compiled;
@@ -529,10 +555,7 @@ struct CompilationJob {
         BlockLookup lookup;
         const bool planned = block_recipe::PlanBlock(ops, sentinel, exit, exact, redecode, plan);
         if (result.expired()) return;
-        if (planned) {
-            auto key = block_recipe::BlockKey(plan.Steps(), exact, plan.exit);
-            lookup = Compiler().FindOrCompile(plan.Steps(), std::move(key), exact, plan.exit, budget);
-        }
+        if (planned) lookup = Compiler().FindOrCompile(plan.Key(exact), budget);
         if (auto output = result.lock()) {
             output->lookup = std::move(lookup);
             if (output->lookup.code) output->replay.assign(plan.ReplayHandlers().begin(), plan.ReplayHandlers().end());
@@ -713,13 +736,13 @@ void CompileHotLLVMBlock(EmuState* state, BasicBlock* block) {
     }
     block_recipe::Plan plan;
     if (!block_recipe::PlanBlock(*state, *block, exact, plan)) return;
-    auto key = block_recipe::BlockKey(plan.Steps(), exact, plan.exit);
+    const auto key = plan.Key(exact);
     if (mode == JitMode::Profile) {
         RecordBlock(key);
         return;
     }
     const size_t remaining = CodeBudget() - state->mmu.code_cache().llvm_block_bytes;
-    auto result = Compiler().FindOrCompile(plan.Steps(), std::move(key), exact, plan.exit, remaining);
+    auto result = Compiler().FindOrCompile(key, remaining);
     InstallResult(state, block, result, plan.ReplayHandlers());
 }
 

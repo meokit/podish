@@ -1,4 +1,5 @@
 #include "jit/llvm_block_jit.h"
+#include "llvm_op_ids.h"
 #include "ops/ops_alu_impl.h"
 #include "ops/ops_compare_impl.h"
 #include "ops/ops_control_impl.h"
@@ -28,7 +29,7 @@ FORCE_INLINE LogicFlow RunLLVMFlagPolicy(uint8_t metadata, LogicFuncParams) {
     return Live(LogicPassParams);
 }
 
-#define FIBERCPU_LLVM_OP(Name, Exact, Requirements, Extensions)                                             \
+#define FIBERCPU_LLVM_OP(Id, Name, Exact, Requirements, Extensions)                                         \
     extern "C" LogicFlow FiberLLVMGeneric_##Name(unsigned, uint32_t, uint32_t, uint32_t, LogicFuncParams) { \
         return op::Name(LogicPassParams);                                                                   \
     }                                                                                                       \
@@ -47,6 +48,22 @@ FORCE_INLINE LogicFlow RunLLVMFlagPolicy(uint8_t metadata, LogicFuncParams) {
     }
 #include "llvm_block_operations.inc"
 #undef FIBERCPU_LLVM_OP
+
+// Dense function slots in catalog ID order, with the generic template first.
+struct LLVMOperationTable {
+    char fingerprint[block_recipe::kOpIdFingerprint.size() + 1];
+    decltype(&FiberLLVMPlaceholder) kernels[block_recipe::kOpIdCount * 2];
+};
+
+extern "C" const LLVMOperationTable FiberLLVMOperationTable = {
+    FIBERCPU_LLVM_OP_ID_FINGERPRINT,
+    {
+
+#define FIBERCPU_LLVM_OP(Id, Name, Exact, Requirements, Extensions) &FiberLLVMGeneric_##Name, &FiberLLVMTemplate_##Name,
+#include "llvm_block_operations.inc"
+#undef FIBERCPU_LLVM_OP
+    },
+};
 
 #define FIBERCPU_LLVM_STEP(I)                                                                                      \
     do {                                                                                                           \

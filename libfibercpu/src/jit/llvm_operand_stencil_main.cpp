@@ -1,9 +1,7 @@
 #include "jit/llvm_block_cache.h"
 #include "jit/llvm_operand_ir.h"
 
-#include <algorithm>
 #include <array>
-#include <charconv>
 
 #include <llvm/Bitcode/BitcodeReader.h>
 #include <llvm/ExecutionEngine/Orc/CompileUtils.h>
@@ -15,32 +13,34 @@ namespace fiberish {
 namespace {
 
 constexpr block_recipe::Operation kOperations[] = {
-#define FIBERCPU_LLVM_OP(Name, Exact, Requirements, Extensions) {#Name, Requirements, Extensions},
+#define FIBERCPU_LLVM_OP(Id, Name, Exact, Requirements, Extensions) {block_recipe::OpId{Id}, Requirements, Extensions},
 #include "llvm_block_operations.inc"
 #undef FIBERCPU_LLVM_OP
 };
 
-bool ReadStep(llvm::StringRef& line, block_recipe::Step& step) {
-    const auto [name, operands] = line.split(' ');
-    step.name = name;
+static_assert(std::size(kOperations) == block_recipe::kOpIdCount);
+
+bool ReadStep(llvm::StringRef& line, block_recipe::OpId& id, DecodedOperandShape& shape) {
+    const auto [token, operands] = line.split(' ');
+    uint16_t raw_id;
+    if (token.getAsInteger(10, raw_id) || raw_id >= std::size(kOperations)) return false;
+    id = block_recipe::OpId{raw_id};
     line = operands;
-    for (auto* field : {&step.shape.encoding, &step.shape.ea_desc, &step.shape.displacement, &step.shape.immediate}) {
-        const auto [token, next] = line.split(' ');
-        if (token.getAsInteger(10, *field)) return false;
+    for (auto* field : {&shape.encoding, &shape.ea_desc, &shape.displacement, &shape.immediate}) {
+        const auto [operand, next] = line.split(' ');
+        if (operand.getAsInteger(10, *field)) return false;
         line = next;
     }
-    return !name.empty();
+    return true;
 }
 
-bool SupportsShape(const block_recipe::Step& step) {
-    const auto operation = std::ranges::lower_bound(kOperations, step.name, {}, &block_recipe::Operation::name);
-    if (operation == std::end(kOperations) || step.name != operation->name) return false;
+bool SupportsShape(block_recipe::OpId id, const DecodedOperandShape& shape) {
     DecodedOp op{};
-    op.modrm = uint8_t(step.shape.encoding);
-    op.prefixes.all = uint8_t(step.shape.encoding >> 8);
-    op.meta.all = uint8_t(step.shape.encoding >> 16);
-    op.len = uint8_t(step.shape.encoding >> 24);
-    return block_recipe::CanPlanOp(op) && operation->Matches(op, true);
+    op.modrm = uint8_t(shape.encoding);
+    op.prefixes.all = uint8_t(shape.encoding >> 8);
+    op.meta.all = uint8_t(shape.encoding >> 16);
+    op.len = uint8_t(shape.encoding >> 24);
+    return block_recipe::CanPlanOp(op) && kOperations[static_cast<size_t>(id)].Matches(op, true);
 }
 
 llvm::Error Run(const char* bitcode, const char* requests, const char* output) {
@@ -48,10 +48,12 @@ llvm::Error Run(const char* bitcode, const char* requests, const char* output) {
     auto input = llvm::MemoryBuffer::getFile(bitcode);
     if (!input) return llvm::errorCodeToError(input.getError());
     llvm::LLVMContext context;
-    auto templates = llvm::parseBitcodeFile((*input)->getMemBufferRef(), context);
-    if (!templates) return templates.takeError();
+    auto module = llvm::parseBitcodeFile((*input)->getMemBufferRef(), context);
+    if (!module) return module.takeError();
+    LLVMOperandTemplates templates(module->get());
+    if (!templates.IsValid()) return llvm::createStringError("invalid LLVM operand template table");
 
-    auto machine = CreateLLVMObjectTarget(**templates);
+    auto machine = CreateLLVMObjectTarget(**module);
     if (!machine) return machine.takeError();
     llvm::orc::TMOwningSimpleCompiler compiler(std::move(*machine));
 
@@ -60,26 +62,33 @@ llvm::Error Run(const char* bitcode, const char* requests, const char* output) {
     std::error_code error;
     llvm::raw_fd_ostream out(output, error);
     if (error) return llvm::errorCodeToError(error);
-    auto rows = (*plan)->getBuffer();
+    auto [fingerprint, rows] = (*plan)->getBuffer().split('\n');
+    if (fingerprint != llvm::StringRef(block_recipe::kOpIdFingerprint))
+        return llvm::createStringError("LLVM operand request ID table differs from this build");
     while (!rows.empty()) {
         auto [line, rest] = rows.split('\n');
         rows = rest;
-        std::array<block_recipe::Step, 4> steps;
+        std::array<block_recipe::OpId, 4> operations;
+        std::array<DecodedOperandShape, 4> operands;
         std::size_t count = 0;
+        bool supported = true;
         while (!line.empty()) {
-            if (count == steps.size() || !ReadStep(line, steps[count++]))
+            if (count == operations.size() || !ReadStep(line, operations[count], operands[count]))
                 return llvm::createStringError("invalid LLVM operand stencil request");
+            supported &= SupportsShape(operations[count], operands[count]);
+            ++count;
         }
-        const auto block = std::span(steps).first(count);
-        if (block.empty()) return llvm::createStringError("empty LLVM operand stencil request");
-        if (!std::ranges::all_of(block, SupportsShape)) {
+        if (!count) return llvm::createStringError("empty LLVM operand stencil request");
+        if (!supported) {
             if (!llvm_block_cache::WriteRecord(out, "-")) return llvm::createStringError("cannot write rejection");
             continue;
         }
-        auto module = PrepareLLVMBlock(**templates, block, true, LLVMBlockExit::Dispatch, "FiberOperandStencil");
+        const block_recipe::BlockKeyView key{LLVMBlockExit::Dispatch, std::span(operations).first(count),
+                                             std::span(operands).first(count)};
+        auto module = PrepareLLVMBlock(templates, key, "FiberOperandStencil");
         if (!module)
-            return llvm::createStringError("cannot prepare LLVM operand stencil for %s",
-                                           std::string(block.front().name).c_str());
+            return llvm::createStringError("cannot prepare LLVM operand stencil for ID %u",
+                                           static_cast<unsigned>(operations.front()));
         auto object = compiler(*module);
         if (!object) return object.takeError();
         if (!llvm_block_cache::WriteRecord(out, (*object)->getBuffer()))

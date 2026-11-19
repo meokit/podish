@@ -28,8 +28,8 @@ namespace {
 
 const auto& Operations() {
     static const ankerl::unordered_dense::map<HandlerFunc, Operation> operations = {
-#define FIBERCPU_LLVM_OP(Name, Exact, Requirements, Extensions) \
-    {DispatchWrapper<op::Name>, {#Name, Requirements, Extensions}},
+#define FIBERCPU_LLVM_OP(Id, Name, Exact, Requirements, Extensions) \
+    {DispatchWrapper<op::Name>, {OpId{Id}, Requirements, Extensions}},
 #include "llvm_block_operations.inc"
 #undef FIBERCPU_LLVM_OP
     };
@@ -51,28 +51,10 @@ uint16_t HotThreshold() {
 
 void InitializeOperationLookup() { (void)Operations(); }
 
-const char* LogicName(const DecodedOp& op, bool exact) {
+OpId FindOperation(const DecodedOp& op, bool exact) {
     const auto& operations = Operations();
     const auto match = operations.find(op.handler);
-    return match != operations.end() && match->second.Matches(op, exact) ? match->second.name : nullptr;
-}
-
-std::string BlockKey(std::span<const Step> steps, bool exact, LLVMBlockExit exit) {
-    std::string key(1, static_cast<char>(exit));
-    const auto append_u32 = [&](uint32_t value) {
-        for (unsigned shift = 0; shift < 32; shift += 8) key.push_back(static_cast<char>(value >> shift));
-    };
-    for (const auto& step : steps) {
-        key += step.name;
-        key += '\0';
-        if (exact) {
-            append_u32(step.shape.encoding);
-            append_u32(step.shape.ea_desc);
-            append_u32(step.shape.displacement);
-            append_u32(step.shape.immediate);
-        }
-    }
-    return key;
+    return match != operations.end() && match->second.Matches(op, exact) ? match->second.id : kInvalidOpId;
 }
 
 bool CanPromoteBlock(EmuState& state, BasicBlock& block) {

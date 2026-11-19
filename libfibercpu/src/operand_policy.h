@@ -1,4 +1,6 @@
 #pragma once
+#include <compare>
+
 #include "decoder.h"
 
 namespace fiberish {
@@ -35,7 +37,7 @@ struct DecodedOperandShape {
 
     static constexpr uint8_t metadata_mask = 0xdf;  // Exclude operand_lowered.
 
-    bool operator==(const DecodedOperandShape&) const = default;
+    auto operator<=>(const DecodedOperandShape&) const = default;
 
     static FORCE_INLINE DecodedOperandShape Read(const DecodedOp* op) {
         const bool data_memory = HasMem(op) && GetExtKind(op) == ExtKind::Data;

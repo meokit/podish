@@ -65,21 +65,49 @@ llvm::Expected<std::unique_ptr<llvm::TargetMachine>> CreateLLVMObjectTarget(cons
     return target->createTargetMachine();
 }
 
-std::unique_ptr<llvm::Module> PrepareLLVMBlock(const llvm::Module& templates, std::span<const block_recipe::Step> steps,
-                                               bool exact, LLVMBlockExit exit, llvm::StringRef entry_name) {
-    const std::string prefix = exact ? "FiberLLVMTemplate_" : "FiberLLVMGeneric_";
-    const auto template_name = [&](const block_recipe::Step& step) { return prefix + std::string(step.name); };
+LLVMOperandTemplates::LLVMOperandTemplates(const llvm::Module* module) : module_(module) {
+    if (!module_) return;
+    const auto* table = module_->getNamedGlobal("FiberLLVMOperationTable");
+    if (!table || !table->hasInitializer()) return;
+    const auto* contents = llvm::dyn_cast<llvm::ConstantStruct>(table->getInitializer());
+    if (!contents || contents->getNumOperands() != 2) return;
+    const auto* fingerprint = llvm::dyn_cast<llvm::ConstantDataArray>(contents->getOperand(0));
+    if (!fingerprint || !fingerprint->isCString() ||
+        fingerprint->getAsCString() != llvm::StringRef(block_recipe::kOpIdFingerprint))
+        return;
+    const auto* array = llvm::dyn_cast<llvm::ConstantArray>(contents->getOperand(1));
+    if (!array || array->getNumOperands() != functions_.size()) return;
+    for (size_t i = 0; i < functions_.size(); ++i) {
+        const auto* fn = llvm::dyn_cast<llvm::Function>(array->getOperand(i)->stripPointerCasts());
+        if (!fn || fn->isDeclaration()) return;
+        functions_[i] = fn;
+        kernels_.insert(fn);
+    }
+    table_ = table;
+}
+
+const llvm::Function* LLVMOperandTemplates::Get(block_recipe::OpId id, bool exact) const {
+    const auto index = static_cast<size_t>(id);
+    return index < block_recipe::kOpIdCount ? functions_[2 * index + exact] : nullptr;
+}
+
+bool LLVMOperandTemplates::IsTemplateGlobal(const llvm::GlobalValue* value) const {
+    return value == table_ || kernels_.contains(value);
+}
+
+std::unique_ptr<llvm::Module> PrepareLLVMBlock(const LLVMOperandTemplates& templates, block_recipe::BlockKeyView key,
+                                               llvm::StringRef entry_name) {
+    if (!templates.IsValid()) return {};
+    const bool exact = key.IsExact();
     llvm::SmallPtrSet<const llvm::GlobalValue*, 32> kernels;
-    for (const auto& step : steps) {
-        const auto* kernel = templates.getFunction(template_name(step));
+    for (auto id : key.operations) {
+        const auto* kernel = templates.Get(id, exact);
         if (!kernel) return {};
         kernels.insert(kernel);
     }
     llvm::ValueToValueMapTy values;
-    auto module = llvm::CloneModule(templates, values, [&](const llvm::GlobalValue* def) {
-        const auto name = def->getName();
-        return (!name.starts_with("FiberLLVMTemplate_") && !name.starts_with("FiberLLVMGeneric_")) ||
-               kernels.contains(def);
+    auto module = llvm::CloneModule(templates.Module(), values, [&](const llvm::GlobalValue* def) {
+        return kernels.contains(def) || !templates.IsTemplateGlobal(def);
     });
     auto* entry = module->getFunction("FiberLLVMEntry");
     const auto* placeholder = module->getFunction("FiberLLVMPlaceholder");
@@ -95,12 +123,13 @@ std::unique_ptr<llvm::Module> PrepareLLVMBlock(const llvm::Module& templates, st
         if (call && call->getCalledFunction() == exit_kind) exit_site = call;
     }
     if (guards.size() != block_recipe::kMaxOps || !exit_site) return {};
-    exit_site->replaceAllUsesWith(llvm::ConstantInt::get(exit_site->getType(), static_cast<uint8_t>(exit)));
+    exit_site->replaceAllUsesWith(llvm::ConstantInt::get(exit_site->getType(), static_cast<uint8_t>(key.exit)));
     exit_site->eraseFromParent();
     for (auto* guard : guards) {
         const auto* index = llvm::dyn_cast<llvm::ConstantInt>(guard->getArgOperand(0));
         if (!index) return {};
-        guard->replaceAllUsesWith(llvm::ConstantInt::get(guard->getType(), index->getZExtValue() < steps.size()));
+        guard->replaceAllUsesWith(
+            llvm::ConstantInt::get(guard->getType(), index->getZExtValue() < key.operations.size()));
         guard->eraseFromParent();
     }
     llvm::removeUnreachableBlocks(*entry);
@@ -110,15 +139,16 @@ std::unique_ptr<llvm::Module> PrepareLLVMBlock(const llvm::Module& templates, st
         auto* call = llvm::dyn_cast<llvm::CallInst>(&inst);
         if (call && call->getCalledFunction() == placeholder) sites.push_back(call);
     }
-    if (sites.size() != steps.size()) return {};
-    llvm::SmallBitVector slots(steps.size());
+    if (sites.size() != key.operations.size()) return {};
+    llvm::SmallBitVector slots(key.operations.size());
     for (auto* call : sites) {
         const auto* index = llvm::dyn_cast<llvm::ConstantInt>(call->getArgOperand(0));
-        if (!index || index->getZExtValue() >= steps.size() || slots.test(index->getZExtValue())) return {};
+        if (!index || index->getZExtValue() >= key.operations.size() || slots.test(index->getZExtValue())) return {};
         slots.set(index->getZExtValue());
-        const auto& step = steps[index->getZExtValue()];
-        auto* target = module->getFunction(template_name(step));
-        if (!target || !InlineLLVMKernel(*call, *target, exact ? &step.shape : nullptr)) return {};
+        const auto slot = index->getZExtValue();
+        const auto* source = templates.Get(key.operations[slot], exact);
+        auto* target = llvm::dyn_cast_or_null<llvm::Function>(values.lookup(source));
+        if (!target || !InlineLLVMKernel(*call, *target, exact ? &key.operands[slot] : nullptr)) return {};
     }
 
     entry->setName(entry_name);

@@ -563,6 +563,8 @@ bool VerifyUncompiledSuffix() {
 }
 
 bool VerifyCodeReuse() {
+    const auto* mode = std::getenv("FIBERCPU_LLVM_JIT");
+    const bool exact = !mode || std::strcmp(mode, "generic") != 0;
     uint8_t code[] = {0xb8, 2, 0, 0, 0, 0x05, 1, 0, 0, 0};
     auto state = LoadCode(code, sizeof(code));
     const auto end = code_address + sizeof(code);
@@ -570,8 +572,9 @@ bool VerifyCodeReuse() {
         X86_SetEIP(state.get(), code_address);
         return X86_Run(state.get(), end, 64) && X86_RegRead(state.get(), 0) == expected;
     };
-    const auto write = [&](uint8_t opcode) {
+    const auto write = [&](uint8_t opcode, uint8_t immediate = 1) {
         code[5] = opcode;
+        code[6] = immediate;
         X86_MemWrite(state.get(), code_address, code, sizeof(code));
         X86_ResetCodeCacheByRange(state.get(), code_address, sizeof(code));
     };
@@ -585,16 +588,24 @@ bool VerifyCodeReuse() {
     write(0x05);
     if (!run(3) || FindCompiledBlock(state.get()) != first || X86_GetLLVMJitBlockCount() != 1)
         return false;
+    // The same operation with a different immediate reuses the generic
+    // entry and gets a different exact entry.
+    write(0x05, 4);
+    if (!run(6))
+        return false;
+    const auto* changed = FindCompiledBlock(state.get());
+    if (!changed || (changed->entry != original) != exact || X86_GetLLVMJitBlockCount() != 1 + unsigned(exact))
+        return false;
     write(0x2d);
     if (!run(1))
         return false;
-    if (!HasCompiledEntry(state.get()) || X86_GetLLVMJitLiveBlockCount() != 2)
+    if (!HasCompiledEntry(state.get()) || X86_GetLLVMJitLiveBlockCount() != 2 + unsigned(exact))
         return false;
     write(0x05);
     if (!run(3))
         return false;
     const auto* restored = FindCompiledBlock(state.get());
-    return restored && restored->entry == original && X86_GetLLVMJitBlockCount() == 2;
+    return restored && restored->entry == original && X86_GetLLVMJitBlockCount() == 2 + unsigned(exact);
 }
 
 bool VerifyPackedArena() {

@@ -372,6 +372,7 @@ set(_catalog_products "${CMAKE_CURRENT_BINARY_DIR}/generated/instruction_familie
                       "${CMAKE_CURRENT_BINARY_DIR}/generated/instruction_kernel_bindings.inc"
                       "${CMAKE_CURRENT_BINARY_DIR}/generated/llvm_block_operations.inc"
                       "${CMAKE_CURRENT_BINARY_DIR}/generated/llvm_block_entries.inc"
+                      "${CMAKE_CURRENT_BINARY_DIR}/generated/llvm_op_ids.h"
                       "${CMAKE_CURRENT_BINARY_DIR}/generated/handwritten_fusions.inc")
 add_custom_command(OUTPUT ${_catalog_products}
     COMMAND "${Python3_EXECUTABLE}" "${_catalog_generator}" --catalog "${_instruction_catalog}"
@@ -821,8 +822,9 @@ if(FIBERCPU_LINKED_BLOCK_CACHE_FILE)
     set(_linked_script "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/extract_linked_block_cache.py")
     set(_linked_dir "${CMAKE_CURRENT_BINARY_DIR}/generated/linked_cache")
     set(_linked_table "${_linked_dir}/linked_block_cache.inc")
-    set(_linked_args "${_linked_script}" --input "${_linked_cache}" --abi "${_linked_abi_sha256}")
-    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_linked_cache}" "${_linked_script}")
+    set(_linked_args "${_linked_script}" --input "${_linked_cache}" --abi "${_linked_abi_sha256}"
+        --catalog "${_instruction_catalog}")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_linked_cache}" "${_linked_script}" ${_catalog_inputs})
     execute_process(COMMAND "${Python3_EXECUTABLE}" ${_linked_args}
         OUTPUT_VARIABLE _linked_count OUTPUT_STRIP_TRAILING_WHITESPACE
         COMMAND_ERROR_IS_FATAL ANY)
@@ -1017,6 +1019,9 @@ if(FIBERCPU_TEST_SPECIALIZATION_INDEX)
         add_test(NAME llvm_block_reuse COMMAND llvm_block_test reuse)
         set_tests_properties(llvm_block_reuse PROPERTIES ENVIRONMENT
             "FIBERCPU_LLVM_JIT=1;FIBERCPU_LLVM_JIT_HOT_THRESHOLD=1;FIBERCPU_LLVM_JIT_WORKERS=0")
+        add_test(NAME llvm_block_reuse_generic COMMAND llvm_block_test reuse)
+        set_tests_properties(llvm_block_reuse_generic PROPERTIES ENVIRONMENT
+            "FIBERCPU_LLVM_JIT=generic;FIBERCPU_LLVM_JIT_HOT_THRESHOLD=1;FIBERCPU_LLVM_JIT_WORKERS=0")
         add_test(NAME llvm_block_budget COMMAND llvm_block_test budget)
         set_tests_properties(llvm_block_budget PROPERTIES ENVIRONMENT
             "FIBERCPU_LLVM_JIT=1;FIBERCPU_LLVM_JIT_HOT_THRESHOLD=1;FIBERCPU_LLVM_JIT_WORKERS=0;FIBERCPU_LLVM_JIT_CODE_BUDGET=1024")
@@ -1033,7 +1038,7 @@ if(FIBERCPU_TEST_SPECIALIZATION_INDEX)
             ENVIRONMENT "FIBERCPU_LLVM_JIT=profile;FIBERCPU_LLVM_JIT_PROFILE=${_linked_test_profile};FIBERCPU_LLVM_JIT_HOT_THRESHOLD=1")
         add_test(NAME llvm_block_linked_bundle COMMAND fibercpu_llvm_cache --linked "${_linked_test_profile}" "${_linked_test_bundle}")
         set_tests_properties(llvm_block_linked_bundle PROPERTIES FIXTURES_REQUIRED llvm_block_profile)
-        set_property(TEST llvm_block_generic llvm_block_specialized llvm_block_hot llvm_block_reuse llvm_block_budget
+        set_property(TEST llvm_block_generic llvm_block_specialized llvm_block_hot llvm_block_reuse llvm_block_reuse_generic llvm_block_budget
             llvm_block_packed llvm_block_async
             llvm_block_profile APPEND PROPERTY ENVIRONMENT "FIBERCPU_LINKED_BLOCK_CACHE=0")
     endif()

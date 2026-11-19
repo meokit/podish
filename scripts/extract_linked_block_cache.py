@@ -6,7 +6,10 @@ import struct
 from pathlib import Path
 
 
-MAGIC = b"FIBJLC01"
+from gen_instruction_catalog import CATALOG, llvm_operation_fingerprint, llvm_operation_names, read_catalog
+
+
+MAGIC = b"FIBJLC02"
 MACHO_ARM64_OBJECT = (0xFEEDFACF, 0x0100000C, 0, 1)
 
 
@@ -20,23 +23,41 @@ def read_record(data, pos):
     return data[start:start + size], start + size
 
 
-def read_bundle(path, abi):
+def read_key(record, operation_count):
+    if len(record) < 3:
+        raise ValueError("truncated linked cache key")
+    exit_kind, exact, count = record[:3]
+    if exit_kind > 2 or exact != 1 or not 1 <= count <= 64 or len(record) != 3 + 18 * count:
+        raise ValueError("invalid linked cache key header")
+    steps = tuple(struct.iter_unpack("<H4I", record[3:]))
+    operations = tuple(step[0] for step in steps)
+    if any(op >= operation_count for op in operations):
+        raise ValueError("linked cache refers to an unknown operation ID")
+    operands = tuple(step[1:] for step in steps)
+    return exit_kind, exact, operations, operands
+
+
+def read_bundle(path, abi, op_names):
     data = path.read_bytes()
     if not data.startswith(MAGIC):
-        raise ValueError("expected a linked cache emitted by fibercpu_llvm_cache --linked")
+        raise ValueError("expected a version 2 linked cache; regenerate it with fibercpu_llvm_cache --linked")
     start = len(MAGIC)
     end = start + len(abi)
     if data[start:end] != abi.encode("ascii"):
         raise ValueError("linked cache ABI differs from this build; retrain with the same sources and settings")
-    cpu, pos = read_record(data, end)
+    fingerprint = llvm_operation_fingerprint(op_names).encode("ascii")
+    if data[end:end + len(fingerprint)] != fingerprint:
+        raise ValueError("linked cache LLVM operation IDs differ from this build")
+    cpu, pos = read_record(data, end + len(fingerprint))
     if any(value < 0x20 or value > 0x7e for value in cpu) or len(cpu) >= 128:
         raise ValueError("invalid linked cache host CPU")
     entries = {}
     while pos < len(data):
-        key, pos = read_record(data, pos)
+        record, pos = read_record(data, pos)
         obj, pos = read_record(data, pos)
-        if key in entries or key[0] > 2:
-            raise ValueError("duplicate or invalid linked cache key")
+        key = read_key(record, len(op_names))
+        if key in entries:
+            raise ValueError("duplicate linked cache key")
         if len(obj) < 32 or struct.unpack_from("<4I", obj) != MACHO_ARM64_OBJECT:
             raise ValueError("expected a native macOS ARM64 relocatable object")
         entries[key] = obj
@@ -55,17 +76,24 @@ def write_build_inputs(output, cpu, entries):
              f"constexpr std::string_view linked_cache_cpu = {literal(cpu)};"]
     for index in range(len(entries)):
         table.append(f'extern "C" std::remove_pointer_t<HandlerFunc> FiberCachedBlock_{index};')
-    table.append("constexpr std::pair<std::string_view, HandlerFunc> linked_cache_entries[] = {")
     indexed_keys = []
     for index, (key, obj) in enumerate(entries.items()):
         (output / f"block_{index}.o").write_bytes(obj)
         indexed_keys.append((key, index))
-    for key, index in sorted(indexed_keys):
-        table.append("    {std::string_view{")
-        for start in range(0, len(key), 24):
-            table.append(f"        {literal(key[start:start + 24])}")
-        table[-1] += f", {len(key)}}}, FiberCachedBlock_{index}}},"
-    table.extend(["};", ""])
+    operations = ["constexpr block_recipe::OpId linked_cache_operations[] = {"]
+    operands = ["constexpr DecodedOperandShape linked_cache_operands[] = {"]
+    rows = ["constexpr LinkedBlockEntry linked_cache_entries[] = {"]
+    offset = 0
+    for (exit_kind, _, ops, shapes), index in sorted(indexed_keys):
+        operations.append("    " + ", ".join(f"block_recipe::OpId{{{op}}}" for op in ops) + ",")
+        for shape in shapes:
+            operands.append("    {" + ", ".join(f"0x{field:08x}u" for field in shape) + "},")
+        count = len(ops)
+        rows.append(f"    {{{{LLVMBlockExit{{{exit_kind}}}, {{linked_cache_operations + {offset}, {count}}}, "
+                    f"{{linked_cache_operands + {offset}, {count}}}}}, FiberCachedBlock_{index}}},")
+        offset += count
+    for block in (operations, operands, rows):
+        table.extend([*block, "};", ""])
     (output / "linked_block_cache.inc").write_text("\n".join(table), encoding="ascii")
 
 
@@ -73,10 +101,11 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", required=True, type=Path)
     parser.add_argument("--abi", required=True)
+    parser.add_argument("--catalog", type=Path, default=CATALOG)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
     try:
-        cpu, entries = read_bundle(args.input, args.abi)
+        cpu, entries = read_bundle(args.input, args.abi, llvm_operation_names(read_catalog(args.catalog)))
         if args.output is not None:
             write_build_inputs(args.output, cpu, entries)
         else:

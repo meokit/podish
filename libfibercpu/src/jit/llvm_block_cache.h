@@ -1,16 +1,18 @@
 #pragma once
 
 #include <cstdint>
-#include <string>
 #include <string_view>
 
+#include <llvm/ADT/SmallVector.h>
 #include <llvm/Support/Endian.h>
 #include <llvm/Support/raw_ostream.h>
 
+#include "jit/block_recipe.h"
+
 namespace fiberish::llvm_block_cache {
 
-inline constexpr std::string_view profile_magic = "FIBJPR01";
-inline constexpr std::string_view linked_magic = "FIBJLC01";
+inline constexpr std::string_view profile_magic = "FIBJPR02";
+inline constexpr std::string_view linked_magic = "FIBJLC02";
 
 inline bool ReadU32(std::string_view& bytes, uint32_t& value) {
     if (bytes.size() < sizeof(value)) return false;
@@ -33,6 +35,56 @@ inline bool WriteRecord(llvm::raw_ostream& out, std::string_view record) {
     llvm::support::endian::write32le(size, static_cast<uint32_t>(record.size()));
     out.write(size, sizeof(size));
     out.write(record.data(), record.size());
+    return true;
+}
+
+// Version 2 key records encode the exit, exact bit and step count, followed
+// by the little-endian operation ID and (in exact mode) four operand fields.
+inline auto EncodeKey(block_recipe::BlockKeyView key) {
+    llvm::SmallVector<char, 3 + 18 * block_recipe::kMaxOps> bytes;
+    bytes.push_back(static_cast<char>(key.exit));
+    bytes.push_back(key.IsExact());
+    bytes.push_back(static_cast<char>(key.operations.size()));
+    const auto append = [&](auto value) {
+        for (unsigned shift = 0; shift < sizeof(value) * 8; shift += 8)
+            bytes.push_back(static_cast<char>(value >> shift));
+    };
+    for (size_t i = 0; i < key.operations.size(); ++i) {
+        append(static_cast<uint16_t>(key.operations[i]));
+        if (key.IsExact()) {
+            const auto& shape = key.operands[i];
+            append(shape.encoding);
+            append(shape.ea_desc);
+            append(shape.displacement);
+            append(shape.immediate);
+        }
+    }
+    return bytes;
+}
+
+inline bool DecodeKey(std::string_view bytes, block_recipe::Plan& plan, bool& exact) {
+    if (bytes.size() < 3 || static_cast<uint8_t>(bytes[0]) > static_cast<uint8_t>(LLVMBlockExit::Branch) ||
+        static_cast<uint8_t>(bytes[1]) > 1)
+        return false;
+    exact = bytes[1] != 0;
+    const size_t count = static_cast<uint8_t>(bytes[2]);
+    plan.exit = static_cast<LLVMBlockExit>(bytes[0]);
+    bytes.remove_prefix(3);
+    if (!count || count > block_recipe::kMaxOps || bytes.size() != count * (exact ? 18 : 2)) return false;
+
+    for (size_t i = 0; i < count; ++i) {
+        const uint16_t id = llvm::support::endian::read16le(bytes.data());
+        if (id >= block_recipe::kOpIdCount) return false;
+        plan.operations[i] = block_recipe::OpId{id};
+        bytes.remove_prefix(2);
+        if (exact) {
+            auto& shape = plan.operands[i];
+            if (!ReadU32(bytes, shape.encoding) || !ReadU32(bytes, shape.ea_desc) ||
+                !ReadU32(bytes, shape.displacement) || !ReadU32(bytes, shape.immediate))
+                return false;
+        }
+    }
+    plan.covered = count;
     return true;
 }
 

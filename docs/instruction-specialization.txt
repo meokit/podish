@@ -116,10 +116,14 @@ hot threshold. The workload uses native dispatch during collection.
   FIBERCPU_LINKED_BLOCK_CACHE=0 FIBERCPU_LLVM_JIT=profile \
     FIBERCPU_LLVM_JIT_PROFILE=blocks.profile <command>
 
-The recipe key includes the exit, generic opcode sequence and exact decoded
-operand shapes. Profiles are tied to the embedded bitcode, LLVM version and
-host CPU target. Use the same producer to emit relocatable host objects for the
-build-time linker.
+A block key contains the exit and the ordered catalog-assigned operation IDs.
+Exact keys include the decoded operand shape for each operation. LLVM
+templates are indexed by the same IDs. The version 2 profile and linked
+bundle formats encode fields in little-endian order and validate the
+operation ID table fingerprint. Regenerate older profiles and linked bundles
+with the new producer. Profiles also validate the embedded bitcode, LLVM
+version and host CPU target. Use the same producer to emit relocatable host
+objects for the build-time linker.
 
   <producer>/fibercpu_llvm_cache --linked blocks.profile blocks.linked
 

@@ -8,7 +8,9 @@ import struct
 from collections import Counter, defaultdict
 from pathlib import Path
 
-from gen_instruction_catalog import is_semantic_variant, read_catalog, variant_criteria
+from gen_instruction_catalog import (
+    is_semantic_variant, llvm_operation_fingerprint, llvm_operation_names, read_catalog, variant_criteria,
+)
 from operand_specialization_data import FUSION_CALL, Operand, generated_fusions, instruction_targets
 from operand_stencil_arm64 import HELPERS, PAGE_RELOCATIONS, MachO, immediate_mask
 
@@ -69,8 +71,10 @@ def llvm_operation(catalog, targets, name, shape):
 def emit_plan(args):
     catalog = read_catalog(args.src / "instruction_catalog.json")
     targets = instruction_targets(catalog)
+    op_names = llvm_operation_names(catalog)
+    op_ids = {name: i for i, name in enumerate(op_names)}
     fusions = generated_fusions(args.fusions.read_text()) if args.fusions else {}
-    records, requests = [], []
+    records, requests = [], [llvm_operation_fingerprint(op_names) + "\n"]
     missing, missing_weight = Counter(), Counter()
     seen = set()
     plan = read_plan(args.plan)
@@ -92,7 +96,7 @@ def emit_plan(args):
             missing_weight["llvm_operation_absent"] += item["dispatch_count"]
             continue
         records.append({**item, "llvm_operations": operations})
-        fields = ((name, shape.encoding, shape.ea_desc, shape.disp, shape.imm)
+        fields = ((op_ids[name], shape.encoding, shape.ea_desc, shape.disp, shape.imm)
                   for name, shape in zip(operations, shapes))
         requests.append(" ".join(str(value) for step in fields for value in step) + "\n")
     args.requests.write_text("".join(requests))
