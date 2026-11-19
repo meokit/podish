@@ -37,6 +37,11 @@ static_assert(Valid<Byte>(Spec{}.dst8(Gpr::Eax, ByteLane::High)));
 static_assert(Criteria<Byte>(Spec{}.dst8(Gpr::Eax, ByteLane::High)).rm_val == 4);
 static_assert(!Valid<Add>(Spec{}.dst8(Gpr::Eax, ByteLane::High)));
 
+using TrailingCount = family::Tzcnt_GvEv;
+constexpr auto tzcnt = Criteria<TrailingCount>(Spec{}.width(Width::W16).regForm().repeat(Repeat::Present));
+static_assert(tzcnt.prefix_mask == (prefix::OPSIZE | prefix::REP) && tzcnt.prefix_val == tzcnt.prefix_mask);
+static_assert(Criteria<family::Bsf_GvEv>(Spec{}.width(Width::W16).repeat(Repeat::Absent)).prefix_val == prefix::OPSIZE);
+
 using Sse = family::Encoding_16F;
 using VectorGroup = Encoding<0x171, Layout::RmOnly, 2, WidthRule::MandatoryPrefix>;
 static_assert(!Valid<VectorGroup>(Spec{}.dst(Gpr::Eax)));

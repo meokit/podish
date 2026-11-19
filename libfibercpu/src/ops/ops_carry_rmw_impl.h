@@ -35,10 +35,10 @@ __attribute__((noinline, cold)) LogicFlow CarryRmwSlow(EmuState* state, DecodedO
     return LogicFlow::Continue;
 }
 
-template <CarryRmwKind Kind, typename T, bool UpdateFlags = true, bool RegisterOnly = false>
+template <CarryRmwKind Kind, typename T, bool UpdateFlags = true, AddrModeSpec Form = AddrModeSpec::Dynamic>
 FORCE_INLINE LogicFlow ExecuteCarryRmw(EmuState* state, GprCache& gpr, DecodedOp* op, T dest, T src,
                                        mem::MicroTLB* utlb, uint64_t& flags_cache) {
-    if (RegisterOnly || (op->modrm >> 6) == 3) {
+    if (OperandIsReg<Form>(op)) {
         const T result = CalculateCarryRmw<Kind, T, UpdateFlags>(state, flags_cache, dest, src);
         WriteRegGeneric<T>(state, gpr, op->modrm & 7, result);
         return LogicFlow::Continue;

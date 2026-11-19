@@ -834,6 +834,15 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
                 }
                 break;
             }
+            case DFE_TYPE_BIT_REGISTER:
+                // Leave flags materialized at a possible memory fault.
+                if (HasMem(&op) || (flat_idx == 0x1ba && ((op.modrm >> 3) & 7) < 4)) {
+                    reads = DFE_ALL_FLAGS;
+                } else {
+                    writes = info.write_mask;
+                    if (flat_idx == 0x1bc && op.prefixes.flags.rep) writes |= CF_MASK;
+                }
+                break;
             default:
                 reads = DFE_ALL_FLAGS;
                 break;

@@ -1036,15 +1036,15 @@ FORCE_INLINE LogicFlow OpCarryRmw_ModReg_Internal(LogicFuncParams) {
     const uint8_t rm = op->modrm & 7;
     const uint8_t reg = (op->modrm >> 3) & 7;
     if constexpr (IsByte) {
-        return ExecuteCarryRmw<Kind, uint8_t, UpdateFlags, true>(state, gpr, op, gpr.GetReg8(state, rm),
-                                                                 gpr.GetReg8(state, reg), utlb, flags_cache);
+        return ExecuteCarryRmw<Kind, uint8_t, UpdateFlags, AddrModeSpec::ModReg>(
+            state, gpr, op, gpr.GetReg8(state, rm), gpr.GetReg8(state, reg), utlb, flags_cache);
     } else if (op->prefixes.flags.opsize) {
-        return ExecuteCarryRmw<Kind, uint16_t, UpdateFlags, true>(
+        return ExecuteCarryRmw<Kind, uint16_t, UpdateFlags, AddrModeSpec::ModReg>(
             state, gpr, op, static_cast<uint16_t>(gpr.GetReg(state, rm)), static_cast<uint16_t>(gpr.GetReg(state, reg)),
             utlb, flags_cache);
     } else {
-        return ExecuteCarryRmw<Kind, uint32_t, UpdateFlags, true>(state, gpr, op, gpr.GetReg(state, rm),
-                                                                  gpr.GetReg(state, reg), utlb, flags_cache);
+        return ExecuteCarryRmw<Kind, uint32_t, UpdateFlags, AddrModeSpec::ModReg>(
+            state, gpr, op, gpr.GetReg(state, rm), gpr.GetReg(state, reg), utlb, flags_cache);
     }
 }
 

@@ -42,6 +42,7 @@
 #include "ops/ops_control_impl.h"
 #include "ops/ops_data_mov_impl.h"
 #include "ops/ops_groups_impl.h"
+#include "ops/ops_shift_bit_impl.h"
 
 namespace fiberish {
 namespace {

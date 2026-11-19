@@ -16,6 +16,7 @@ template <typename T, bool UpdateFlags = true, GroupOpSpec FixedSubOp = GroupOpS
 FORCE_INLINE LogicFlow Helper_Group1(EmuState* state, GprCache& gpr, DecodedOp* op, uint64_t& flags_cache, T dest,
                                      T src, mem::MicroTLB* utlb) {
     const uint8_t subop = GroupOperation<FixedSubOp>(op);
+    constexpr auto form = S == RmOperandSpec::ModReg ? AddrModeSpec::ModReg : AddrModeSpec::Dynamic;
 
     T res = 0;
 
@@ -27,11 +28,11 @@ FORCE_INLINE LogicFlow Helper_Group1(EmuState* state, GprCache& gpr, DecodedOp* 
             res = AluOr<T, UpdateFlags>(state, flags_cache, dest, src);
             break;
         case 2:
-            return ExecuteCarryRmw<CarryRmwKind::Adc, T, UpdateFlags, S == RmOperandSpec::ModReg>(
-                state, gpr, op, dest, src, utlb, flags_cache);
+            return ExecuteCarryRmw<CarryRmwKind::Adc, T, UpdateFlags, form>(state, gpr, op, dest, src, utlb,
+                                                                            flags_cache);
         case 3:
-            return ExecuteCarryRmw<CarryRmwKind::Sbb, T, UpdateFlags, S == RmOperandSpec::ModReg>(
-                state, gpr, op, dest, src, utlb, flags_cache);
+            return ExecuteCarryRmw<CarryRmwKind::Sbb, T, UpdateFlags, form>(state, gpr, op, dest, src, utlb,
+                                                                            flags_cache);
         case 4:
             res = AluAnd<T, UpdateFlags>(state, flags_cache, dest, src);
             break;

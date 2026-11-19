@@ -13,6 +13,7 @@ SPEC_FIELDS = {
     "width": ("Width",),
     "addressWidth": ("AddressWidth",),
     "flags": ("Flags",),
+    "repeat": ("Repeat",),
     "regForm": (),
     "memoryForm": (),
     "dst": ("Gpr",),
@@ -55,6 +56,7 @@ def read_catalog(path=CATALOG):
     catalog = json.loads(path.read_text())
     if catalog["version"] != 1:
         raise ValueError("unsupported instruction catalog version")
+    expand_shift_bit(catalog)
     return catalog
 
 
@@ -64,6 +66,127 @@ def variant_criteria(row):
 
 def is_semantic_variant(row):
     return "mandatory" in row["spec"] and not row.get("optimization_only", False)
+
+
+def llvm_flag_policy(kernel, *parameters):
+    live, dead = (f"{kernel}<{', '.join((*parameters, f'FlagsSpec::{flags}'))}>" for flags in ("Live", "Dead"))
+    return f"RunLLVMFlagPolicy<{live}, {dead}>(metadata, LogicPassParams)"
+
+
+def expand_shift_bit(catalog):
+    config = catalog.get("shift_bit")
+    if not config:
+        return
+    bindings = []
+    exact = {}
+    families = catalog["families"]
+    variants = catalog["variants"]
+    dynamic_shape = ["OpsizeSpec::Dynamic", "AddrModeSpec::Dynamic"]
+
+    def fallback(opcode):
+        return catalog["fallbacks"][str(opcode)]
+
+    def family(name, opcode, layout, extension, width):
+        if name in families:
+            raise ValueError(f"duplicate shift/bit family {name}")
+        families[name] = {"opcode": opcode, "layout": layout, "extension": extension, "width_rule": width}
+
+    def variant(name, encoding, fields):
+        row = {"logic": name, "family": encoding, "spec": fields, "priority": 0}
+        variants.append(row)
+        return row
+
+    def bind(name, kernel, arguments):
+        bindings.append({"name": name, "kernel": kernel, "arguments": arguments})
+
+    def typed_variant(row, kernel, parameters):
+        fields = row["spec"]
+        (width,) = fields.get("width", [None])
+        size = {None: "Dynamic", "W16": "Opsize16", "W32": "Opsize32"}[width]
+        form = "ModReg" if "regForm" in fields else "Memory" if "memoryForm" in fields else "Dynamic"
+        (flags,) = fields.get("flags", ["Live"])
+        arguments = [*parameters, f"OpsizeSpec::{size}", f"AddrModeSpec::{form}", f"FlagsSpec::{flags}"]
+        bind(row["logic"], kernel, arguments)
+
+    def shaped_variants(encoding, stem, width_rule, forms, dead_register, dead_memory=False, repeat=None):
+        for width in ([None] if width_rule == "Fixed8" else ["W16", "W32"]):
+            for form in forms:
+                dead = dead_register if form == "Reg" else dead_memory
+                for flags in (["Live", "Dead"] if dead else ["Live"]):
+                    fields = {"regForm" if form == "Reg" else "memoryForm": []}
+                    if width:
+                        fields["width"] = [width]
+                    if flags == "Dead":
+                        fields["flags"] = ["Dead"]
+                    if repeat:
+                        fields["repeat"] = [repeat]
+                    suffix = (f"_{width[1:]}" if width else "") + f"_{form}_{flags}"
+                    yield variant(f"{stem}{suffix}", encoding, fields)
+
+    for opcode, width, count_source in config["group2_forms"]:
+        root = fallback(opcode)
+        shift_width = "Byte" if width == "Fixed8" else "Scalar"
+        base = [f"ShiftWidth::{shift_width}", f"ShiftCountSource::{count_source}"]
+        bind(root, "OpGroup2_Internal", base)
+        exact[root] = llvm_flag_policy("OpGroup2_Internal", *base, "GroupOpSpec::Dynamic", *dynamic_shape)
+        for extension, mnemonic in enumerate(config["group2_extensions"]):
+            encoding = f"{root[2:]}_{mnemonic}"
+            family(encoding, opcode, "RmOnly", extension, width)
+            parameters = [*base, f"GroupOpSpec::Ext{extension}"]
+            old_rows = [row for row in variants if row["family"] == encoding]
+            # Keep the registered SHL/SHR/SAR shapes used by existing fusions.
+            # The old immediate register rotates leave their memory forms open.
+            forms = (["Reg", "Mem"] if not old_rows else
+                     ["Mem"] if all("regForm" in row["spec"] for row in old_rows) else [])
+            for row in [*old_rows, *shaped_variants(encoding, f"Op{encoding}", width, forms,
+                                                  count_source != "Cl", count_source != "Cl")]:
+                typed_variant(row, "OpGroup2_Internal", parameters)
+
+    for opcode, mnemonic, extension in config["register_bit_ops"]:
+        root = fallback(opcode)
+        encoding = f"{mnemonic}_EvGv"
+        operation = f"GroupOpSpec::Ext{extension}"
+        family(encoding, opcode, "RmReg", -1, "ScalarEv")
+        bind(root, "OpBitRegister_Internal", [operation])
+        exact[root] = llvm_flag_policy("OpBitRegister_Internal", operation, *dynamic_shape)
+        for row in shaped_variants(encoding, root, "ScalarEv", ["Reg", "Mem"], True):
+            typed_variant(row, "OpBitRegister_Internal", [operation])
+
+    opcode = config["group8_opcode"]
+    root = fallback(opcode)
+    bind(root, "OpGroup8_Internal", ["GroupOpSpec::Dynamic"])
+    exact[root] = llvm_flag_policy("OpGroup8_Internal", "GroupOpSpec::Dynamic", *dynamic_shape)
+    for extension, mnemonic in enumerate(config["group8_extensions"], 4):
+        encoding = f"Group8_EvIb_{mnemonic}"
+        family(encoding, opcode, "RmOnly", extension, "ScalarEv")
+        for row in shaped_variants(encoding, f"Op{encoding}", "ScalarEv", ["Reg", "Mem"], True):
+            typed_variant(row, "OpGroup8_Internal", [f"GroupOpSpec::Ext{extension}"])
+
+    for opcode, mnemonic, operation, repeat in config["scan_ops"]:
+        root = fallback(opcode)
+        encoding = f"{mnemonic}_GvEv"
+        family(encoding, opcode, "RegRm", -1, "ScalarEv")
+        generic = "Reverse" if operation == "Reverse" else "Dynamic"
+        if root not in exact:
+            bind(root, "OpBitScan_Internal", [f"BitScanOperation::{generic}"])
+            exact[root] = llvm_flag_policy("OpBitScan_Internal", f"BitScanOperation::{generic}", *dynamic_shape)
+        for row in shaped_variants(encoding, f"Op{encoding}", "ScalarEv", ["Reg", "Mem"], True, repeat=repeat):
+            typed_variant(row, "OpBitScan_Internal", [f"BitScanOperation::{operation}"])
+
+    for index, register in enumerate(config["bswap_registers"]):
+        opcode = config["bswap_first_opcode"] + index
+        root = fallback(opcode)
+        encoding = f"Bswap_{register}"
+        family(encoding, opcode, "OpcodeReg", -1, "Fixed32")
+        if root not in exact:
+            bind(root, "OpBswap_Internal", ["RmOperandSpec::Dynamic"])
+            exact[root] = f"op::{root}(LogicPassParams)"
+        row = variant(f"Op{encoding}", encoding, {"flags": ["Any"]})
+        bind(row["logic"], "OpBswap_Internal", [f"RmOperandSpec::Reg{register}"])
+
+    catalog["bindings"]["FIBERCPU_BIND_SHIFT_BIT"] = bindings
+    catalog["llvm_block_operations"].extend(exact)
+    catalog["shift_bit_llvm_exact"] = exact
 
 
 def group1_bindings(catalog, forms):
@@ -193,10 +316,12 @@ def generate(catalog, output):
         raise ValueError("LLVM templates require architectural fallback handlers: " +
                          ", ".join(sorted(llvm_ops - generic_handlers)))
     llvm_operations = []
+    shift_exact = catalog.get("shift_bit_llvm_exact", {})
     for name in sorted(llvm_ops):
-        exact = (f"RunGroup1LLVM<{group1_forms[name]}>(metadata, LogicPassParams)" if name in group1_forms
-                 else f"op::{identifier(name)}(LogicPassParams)")
-        llvm_operations.append(f"FIBERCPU_LLVM_OP({identifier(name)}, {exact})")
+        exact = shift_exact.get(name, f"op::{identifier(name)}(LogicPassParams)")
+        if name in group1_forms:
+            exact = llvm_flag_policy("OpGroup1_Internal", group1_forms[name])
+        llvm_operations.append(f"FIBERCPU_LLVM_OP({identifier(name)}, ({exact}))")
     llvm_entries = [f"FIBERCPU_LLVM_STEP({i});" for i in range(64)]
 
     handwritten = []

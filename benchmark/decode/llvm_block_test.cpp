@@ -185,6 +185,65 @@ bool VerifyGroup1Memory(bool enabled) {
     return stored == 6 && HasCompiledEntry(state.get()) == enabled;
 }
 
+bool VerifyShiftBitRegisters(bool enabled) {
+    constexpr uint8_t code[] = {
+        0xc0, 0xc0, 8,        // ROL AL, 8 (sets CF from the low bit)
+        0xd0, 0xd4,           // RCL AH, 1 (sets CF)
+        0xd2, 0xd8,           // RCR AL, CL (consumes CF)
+        0x66, 0xd1, 0xf0,     // SAL AX, 1 (/6)
+        0xc1, 0xe8, 1,        // SHR EAX, 1
+        0x0f, 0xba, 0xe8, 31, // BTS EAX, 31
+        0x0f, 0xa3, 0xc8,     // BT EAX, ECX
+        0x0f, 0xbb, 0xc8,     // BTC EAX, ECX
+        0x0f, 0xbd, 0xd0,     // BSR EDX, EAX
+        0x0f, 0xbc, 0xd8,     // BSF EBX, EAX
+        0x0f, 0xc8,           // BSWAP EAX
+    };
+    auto state = LoadCode(code, sizeof(code));
+    X86_RegWrite(state.get(), 0, 0x12348002);
+    X86_RegWrite(state.get(), 1, 1);
+    X86_RegWrite(state.get(), 3, 0xff);
+    X86_SetEFLAGS(state.get(), X86_GetEFLAGS(state.get()) | 1); // ROL AL, 8 must clear the incoming CF.
+    const auto end = code_address + sizeof(code);
+    if (!X86_Run(state.get(), end, 32) || X86_GetEIP(state.get()) != end || X86_RegRead(state.get(), 0) != 0x83001a89 ||
+        X86_RegRead(state.get(), 2) != 31 || X86_RegRead(state.get(), 3) != 0 ||
+        (X86_GetEFLAGS(state.get()) & 0x41) != 0)
+        return false;
+    const auto* block = FindCompiledBlock(state.get());
+    return enabled ? block && block->inst_count() == 11 : block == nullptr;
+}
+
+bool VerifyTzcntPrefix(bool enabled) {
+    // MOV EAX, 0; 16-bit TZCNT DX, AX. The F3 and 66 selectors compose.
+    constexpr uint8_t code[] = {0xb8, 0, 0, 0, 0, 0x66, 0xf3, 0x0f, 0xbc, 0xd0};
+    auto state = LoadCode(code, sizeof(code));
+    const auto end = code_address + sizeof(code);
+    return X86_Run(state.get(), end, 16) && X86_GetEIP(state.get()) == end && X86_RegRead(state.get(), 2) == 16 &&
+           (X86_GetEFLAGS(state.get()) & 0x41) == 1 && HasCompiledEntry(state.get()) == enabled;
+}
+
+bool VerifyShiftBitMemory(bool enabled) {
+    constexpr uint8_t code[] = {
+        0xc1, 0x21, 32,         // SHL dword [ECX], 32 reads before checking the count.
+        0x0f, 0xab, 0x11,       // BTS [ECX], EDX (index -1 addresses the previous byte).
+        0x0f, 0xba, 0x29, 0xff, // BTS dword [ECX], 255 (wraps to bit 31).
+    };
+    FaultData fault{false};
+    auto state = LoadCode(code, sizeof(code));
+    X86_MemMap(state.get(), data_address - 4096, 4096, 3);
+    X86_RegWrite(state.get(), 1, data_address);
+    X86_RegWrite(state.get(), 2, 0xffffffff);
+    X86_SetFaultCallback(state.get(), MapOnFault, &fault);
+    const auto end = code_address + sizeof(code);
+    if (!X86_Run(state.get(), end, 32) || X86_GetEIP(state.get()) != end || fault.count != 1)
+        return false;
+    uint32_t word = 0;
+    uint8_t previous = 0;
+    X86_MemRead(state.get(), data_address, reinterpret_cast<uint8_t*>(&word), sizeof(word));
+    X86_MemRead(state.get(), data_address - 1, &previous, sizeof(previous));
+    return word == 0x80000007 && previous == 0x80 && HasCompiledEntry(state.get()) == enabled;
+}
+
 bool VerifyHotLoop() {
     // SUB EAX, 1; JNE to SUB. With threshold four, the second run
     // becomes hot on a threaded backedge.
@@ -313,6 +372,11 @@ int main(int argc, char** argv) {
     }
     if (!VerifyGroup1Registers(enabled) || !VerifyGroup1Memory(enabled) || X86_GetLLVMJitLiveBlockCount() != 0) {
         std::fprintf(stderr, "Group1 flags, operands or memory restart mismatch\n");
+        return 1;
+    }
+    if (!VerifyShiftBitRegisters(enabled) || !VerifyTzcntPrefix(enabled) || !VerifyShiftBitMemory(enabled) ||
+        X86_GetLLVMJitLiveBlockCount() != 0) {
+        std::fprintf(stderr, "Shift/bit flags, operands or memory restart mismatch\n");
         return 1;
     }
 }

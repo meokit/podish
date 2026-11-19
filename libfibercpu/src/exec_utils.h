@@ -1,5 +1,6 @@
 #pragma once
 
+#include <bit>
 #include <type_traits>
 #include "common.h"
 #include "decoder.h"
@@ -868,15 +869,12 @@ FORCE_INLINE T AluSar(EmuState* state, uint64_t& flags_cache, T dest, uint8_t co
 
 template <typename T, bool UpdateFlags = true>
 FORCE_INLINE T AluRol(EmuState* state, uint64_t& flags_cache, T dest, uint8_t count) {
-    uint32_t width = sizeof(T) * 8;
+    constexpr unsigned width = sizeof(T) * 8;
     uint8_t masked_count = count & 0x1F;
     if (masked_count == 0) return dest;
-    count = masked_count % width;
 
-    // A full byte/word turn preserves the value but still updates CF. Avoid
-    // shifting by the width, and avoid signed integer promotions for r/m16.
-    uint64_t bits = static_cast<std::make_unsigned_t<T>>(dest);
-    T res = count == 0 ? dest : static_cast<T>((bits << count) | (bits >> (width - count)));
+    // A full byte/word turn preserves the value but still updates CF.
+    T res = std::rotl(dest, masked_count);
 
     if constexpr (UpdateFlags) {
         // SF/ZF/PF/AF are untouched, including any deferred parity state.
@@ -894,13 +892,11 @@ FORCE_INLINE T AluRol(EmuState* state, uint64_t& flags_cache, T dest, uint8_t co
 
 template <typename T, bool UpdateFlags = true>
 FORCE_INLINE T AluRor(EmuState* state, uint64_t& flags_cache, T dest, uint8_t count) {
-    uint32_t width = sizeof(T) * 8;
+    constexpr unsigned width = sizeof(T) * 8;
     uint8_t masked_count = count & 0x1F;
     if (masked_count == 0) return dest;
-    count = masked_count % width;
 
-    uint64_t bits = static_cast<std::make_unsigned_t<T>>(dest);
-    T res = count == 0 ? dest : static_cast<T>((bits >> count) | (bits << (width - count)));
+    T res = std::rotr(dest, masked_count);
 
     if constexpr (UpdateFlags) {
         // CF: MSB of result

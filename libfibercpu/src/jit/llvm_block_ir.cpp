@@ -4,6 +4,7 @@
 #include "ops/ops_control_impl.h"
 #include "ops/ops_data_mov_impl.h"
 #include "ops/ops_groups_impl.h"
+#include "ops/ops_shift_bit_impl.h"
 #include "superopcodes.h"
 
 namespace fiberish {
@@ -13,10 +14,10 @@ extern "C" LLVMBlockExit FiberLLVMExit();
 extern "C" LogicFlow FiberLLVMPlaceholder(unsigned index, uint32_t encoding, uint32_t ea_desc, uint32_t displacement,
                                           LogicFuncParams);
 
-template <Group1Immediate Immediate>
-FORCE_INLINE LogicFlow RunGroup1LLVM(uint8_t metadata, LogicFuncParams) {
-    if (metadata & Meta::no_flags_mask) return OpGroup1_Internal<Immediate, FlagsSpec::Dead>(LogicPassParams);
-    return OpGroup1_Internal<Immediate, FlagsSpec::Live>(LogicPassParams);
+template <LogicFunc Live, LogicFunc Dead>
+FORCE_INLINE LogicFlow RunLLVMFlagPolicy(uint8_t metadata, LogicFuncParams) {
+    if (metadata & Meta::no_flags_mask) return Dead(LogicPassParams);
+    return Live(LogicPassParams);
 }
 
 #define FIBERCPU_LLVM_OP(Name, Exact)                                                                       \

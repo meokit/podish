@@ -1,4 +1,4 @@
-import os
+from pathlib import Path
 
 # Flag Masks
 CF_MASK = 1 << 0
@@ -15,6 +15,7 @@ DFE_TYPE_GROUP1 = 1  # 80-83 (ADD, OR, ADC, SBB, AND, SUB, XOR, CMP)
 DFE_TYPE_GROUP2 = 2  # C0/C1/D0-D3 (Shift/Rot) -> Writes All
 DFE_TYPE_GROUP3 = 3  # F6/F7 (TEST/NOT/NEG/MUL...)
 DFE_TYPE_GROUP4 = 4  # FE/FF (INC/DEC)
+DFE_TYPE_BIT_REGISTER = 5  # Bit operations with a register operand
 DFE_TYPE_UNKNOWN = 255
 
 class OpInfo:
@@ -134,13 +135,19 @@ set_range(256 + 0x40, 256 + 0x4F, OpInfo(DFE_TYPE_SIMPLE, ALL_FLAGS, 0))
 # IMUL (0x0F AF) - Write All
 set_op(256 + 0xAF, OpInfo(DFE_TYPE_SIMPLE, 0, ALL_FLAGS))
 
+# BT/BTS/BTR/BTC write CF. BSF/BSR write ZF; the decoder adds CF for F3 TZCNT.
+for opcode in (0xA3, 0xAB, 0xB3, 0xBA, 0xBB):
+    set_op(256 + opcode, OpInfo(DFE_TYPE_BIT_REGISTER, 0, CF_MASK))
+set_range(256 + 0xBC, 256 + 0xBD, OpInfo(DFE_TYPE_BIT_REGISTER, 0, ZF_MASK))
+set_range(256 + 0xC8, 256 + 0xCF, OpInfo(DFE_TYPE_SIMPLE, 0, 0))
+
 # Generate Header
-header_path = os.path.join("libfibercpu", "dfe_lut.h")
+header_path = Path(__file__).resolve().parents[1] / "libfibercpu/src/dfe_lut.h"
 with open(header_path, "w") as f:
     f.write("#pragma once\n")
     f.write("#include <cstdint>\n\n")
     
-    f.write("namespace x86emu {\n\n")
+    f.write("namespace fiberish {\n\n")
     
     f.write("// DFE Types\n")
     f.write(f"constexpr uint8_t DFE_TYPE_SIMPLE = {DFE_TYPE_SIMPLE};\n")
@@ -148,6 +155,7 @@ with open(header_path, "w") as f:
     f.write(f"constexpr uint8_t DFE_TYPE_GROUP2 = {DFE_TYPE_GROUP2};\n")
     f.write(f"constexpr uint8_t DFE_TYPE_GROUP3 = {DFE_TYPE_GROUP3};\n")
     f.write(f"constexpr uint8_t DFE_TYPE_GROUP4 = {DFE_TYPE_GROUP4};\n")
+    f.write(f"constexpr uint8_t DFE_TYPE_BIT_REGISTER = {DFE_TYPE_BIT_REGISTER};\n")
     f.write(f"constexpr uint8_t DFE_TYPE_UNKNOWN = {DFE_TYPE_UNKNOWN};\n\n")
     
     f.write("// Flag Masks (for convenience)\n")
@@ -163,9 +171,9 @@ with open(header_path, "w") as f:
     f.write("constexpr DfeOpInfo kOpFlagTable[512] = {\n")
     
     for idx, info in enumerate(table):
-        f.write(f"    {{ {info.type}, 0x{info.read:X}, 0x{info.write:X} }}, // 0x{idx:X}\n")
+        f.write(f"    {{{info.type}, 0x{info.read:X}, 0x{info.write:X}}},  // 0x{idx:X}\n")
         
     f.write("};\n\n")
-    f.write("} // namespace x86emu\n")
+    f.write("}  // namespace fiberish\n")
 
 print(f"Generated {header_path}")

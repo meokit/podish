@@ -2,7 +2,7 @@
 // Shifts & Bit Operations
 // Auto-generated from ops.cpp refactoring
 
-#include <simde/x86/sse.h>
+#include <bit>
 
 #include "../dispatch.h"
 #include "../exec_utils.h"
@@ -12,561 +12,198 @@
 
 namespace fiberish {
 
-// Returns LogicFlow to propagate Restart/Retry
-template <GroupOpSpec FixedSubOp = GroupOpSpec::Dynamic>
-FORCE_INLINE LogicFlow Helper_Group2_Internal(EmuState* state, GprCache& gpr, DecodedOp* op, uint32_t dest,
-                                              uint8_t count, bool is_byte, mem::MicroTLB* utlb, uint64_t& flags_cache) {
-    const uint8_t subop = GroupOperation<FixedSubOp>(op);
-    uint32_t res = dest;
+enum class ShiftWidth { Byte, Scalar };
+enum class ShiftCountSource { Immediate, One, Cl };
 
-    // IA-32 masks every Group 2 count before any modulo-width reduction,
-    // including the width+1 carry ring used by RCL/RCR.
-    count &= 0x1F;
-    if (count == 0) return LogicFlow::Continue;  // Nothing
+template <typename T, ShiftCountSource CountSource, GroupOpSpec SubOp, FlagsSpec Flags, AddrModeSpec Form>
+FORCE_INLINE LogicFlow OpGroup2_T_Internal(LogicFuncParams) {
+    const auto dest = ReadModRM<T, OpOnTLBMiss::Restart, 1, Form>(state, gpr, op, utlb);
+    if (!dest) return LogicFlow::RestartMemoryOp;
 
-    // Perform Op
-    bool is_opsize = op->prefixes.flags.opsize;
+    uint8_t count = 1;
+    if constexpr (CountSource == ShiftCountSource::Immediate)
+        count = imm & 31;
+    else if constexpr (CountSource == ShiftCountSource::Cl)
+        count = gpr.GetReg(state, ECX) & 31;
+    // Preserve the operand read and any fault even for masked count zero.
+    if (count == 0) return LogicFlow::Continue;
 
-    switch (subop) {
-        case 0:  // ROL
-            if (is_byte)
-                res = AluRol<uint8_t>(state, flags_cache, (uint8_t)dest, count);
-            else if (is_opsize)
-                res = AluRol<uint16_t>(state, flags_cache, (uint16_t)dest, count);
-            else
-                res = AluRol<uint32_t>(state, flags_cache, dest, count);
+    constexpr bool update_flags = Flags != FlagsSpec::Dead;
+    T result;
+    switch (GroupOperation<SubOp>(op)) {
+        case 0:
+            result = AluRol<T, update_flags>(state, flags_cache, *dest, count);
             break;
-        case 1:  // ROR
-            if (is_byte)
-                res = AluRor<uint8_t>(state, flags_cache, (uint8_t)dest, count);
-            else if (is_opsize)
-                res = AluRor<uint16_t>(state, flags_cache, (uint16_t)dest, count);
-            else
-                res = AluRor<uint32_t>(state, flags_cache, dest, count);
+        case 1:
+            result = AluRor<T, update_flags>(state, flags_cache, *dest, count);
             break;
-        case 2:  // RCL
-            if (is_byte)
-                return ExecuteCarryRmw<CarryRmwKind::Rcl, uint8_t>(state, gpr, op, static_cast<uint8_t>(dest), count,
-                                                                   utlb, flags_cache);
-            else if (is_opsize)
-                return ExecuteCarryRmw<CarryRmwKind::Rcl, uint16_t>(state, gpr, op, static_cast<uint16_t>(dest), count,
-                                                                    utlb, flags_cache);
-            else
-                return ExecuteCarryRmw<CarryRmwKind::Rcl, uint32_t>(state, gpr, op, dest, count, utlb, flags_cache);
-        case 3:  // RCR
-            if (is_byte)
-                return ExecuteCarryRmw<CarryRmwKind::Rcr, uint8_t>(state, gpr, op, static_cast<uint8_t>(dest), count,
-                                                                   utlb, flags_cache);
-            else if (is_opsize)
-                return ExecuteCarryRmw<CarryRmwKind::Rcr, uint16_t>(state, gpr, op, static_cast<uint16_t>(dest), count,
-                                                                    utlb, flags_cache);
-            else
-                return ExecuteCarryRmw<CarryRmwKind::Rcr, uint32_t>(state, gpr, op, dest, count, utlb, flags_cache);
-        case 4:  // SHL/SAL
+        case 2:
+            return ExecuteCarryRmw<CarryRmwKind::Rcl, T, update_flags, Form>(state, gpr, op, *dest, count, utlb,
+                                                                             flags_cache);
+        case 3:
+            return ExecuteCarryRmw<CarryRmwKind::Rcr, T, update_flags, Form>(state, gpr, op, *dest, count, utlb,
+                                                                             flags_cache);
+        case 4:
         case 6:  // SAL alias
-            if (is_byte)
-                res = AluShl<uint8_t>(state, flags_cache, (uint8_t)dest, count);
-            else if (is_opsize)
-                res = AluShl<uint16_t>(state, flags_cache, (uint16_t)dest, count);
-            else
-                res = AluShl<uint32_t>(state, flags_cache, dest, count);
+            result = AluShl<T, update_flags>(state, flags_cache, *dest, count);
             break;
-        case 5:  // SHR
-            if (is_byte)
-                res = AluShr<uint8_t>(state, flags_cache, (uint8_t)dest, count);
-            else if (is_opsize)
-                res = AluShr<uint16_t>(state, flags_cache, (uint16_t)dest, count);
-            else
-                res = AluShr<uint32_t>(state, flags_cache, dest, count);
+        case 5:
+            result = AluShr<T, update_flags>(state, flags_cache, *dest, count);
             break;
-        case 7:  // SAR
-            if (is_byte)
-                res = AluSar<uint8_t>(state, flags_cache, (uint8_t)dest, count);
-            else if (is_opsize)
-                res = AluSar<uint16_t>(state, flags_cache, (uint16_t)dest, count);
-            else
-                res = AluSar<uint32_t>(state, flags_cache, dest, count);
+        case 7:
+            result = AluSar<T, update_flags>(state, flags_cache, *dest, count);
             break;
         default:
-            state->fault_vector = 6;
-            if (!gpr.WithCanonical(state, [&] { return state->hooks.on_invalid_opcode(state); })) {
-                state->status = EmuStatus::Fault;
-            }
-            return LogicFlow::ExitOnCurrentEIP;
+            __builtin_unreachable();  // The three-bit group extension is exhaustive.
     }
 
-    // Write Back
-    // Use RetryMemoryOp on failure
-    if (is_byte) {
-        uint8_t mod = (op->modrm >> 6) & 3;
-        uint8_t rm = op->modrm & 7;
-        if (mod == 3) {
-            uint32_t val = gpr.GetReg(state, rm & 3);
-            if (rm < 4) {
-                val = (val & 0xFFFFFF00) | (res & 0xFF);
-            } else {
-                val = (val & 0xFFFF00FF) | ((res & 0xFF) << 8);
-            }
-            gpr.SetReg(state, rm & 3, val);
-            return LogicFlow::Continue;
-        } else {
-            uint32_t addr = ComputeLinearAddress(state, gpr, op);
-            if (!WriteMem<uint8_t, OpOnTLBMiss::Retry>(state, gpr, addr, (uint8_t)res, utlb, op))
-                return LogicFlow::RetryMemoryOp;
-            return LogicFlow::Continue;
-        }
+    if (!WriteModRM<T, OpOnTLBMiss::Retry, 1, Form>(state, gpr, op, result, utlb)) return LogicFlow::RetryMemoryOp;
+    return LogicFlow::Continue;
+}
+
+template <ShiftWidth Width, ShiftCountSource CountSource, GroupOpSpec SubOp = GroupOpSpec::Dynamic,
+          OpsizeSpec Size = OpsizeSpec::Dynamic, AddrModeSpec Form = AddrModeSpec::Dynamic,
+          FlagsSpec Flags = FlagsSpec::Dynamic>
+FORCE_INLINE LogicFlow OpGroup2_Internal(LogicFuncParams) {
+    if constexpr (Width == ShiftWidth::Byte) {
+        return OpGroup2_T_Internal<uint8_t, CountSource, SubOp, Flags, Form>(LogicPassParams);
     } else {
-        if (op->prefixes.flags.opsize) {
-            if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, gpr, op, (uint16_t)res, utlb))
+        if (OperandIs16<Size>(op))
+            return OpGroup2_T_Internal<uint16_t, CountSource, SubOp, Flags, Form>(LogicPassParams);
+        return OpGroup2_T_Internal<uint32_t, CountSource, SubOp, Flags, Form>(LogicPassParams);
+    }
+}
+
+template <typename T>
+FORCE_INLINE T ModifyBit(T value, unsigned offset, uint8_t subop) {
+    const T mask = static_cast<T>(uint32_t{1} << offset);
+    switch (subop) {
+        case 5:
+            return static_cast<T>(value | mask);
+        case 6:
+            return static_cast<T>(value & ~mask);
+        case 7:
+            return static_cast<T>(value ^ mask);
+        default:
+            return value;
+    }
+}
+
+// A register bit index can address other bytes of the memory bit string.
+template <GroupOpSpec Operation, OpsizeSpec Size = OpsizeSpec::Dynamic, AddrModeSpec Form = AddrModeSpec::Dynamic,
+          FlagsSpec Flags = FlagsSpec::Dynamic>
+FORCE_INLINE LogicFlow OpBitRegister_Internal(LogicFuncParams) {
+    const uint32_t index = gpr.GetReg(state, (op->modrm >> 3) & 7);
+    constexpr auto subop = static_cast<uint8_t>(Operation);
+    if (OperandIsReg<Form>(op)) {
+        const auto rm = op->modrm & 7;
+        const uint32_t value = gpr.GetReg(state, rm);
+        const unsigned offset = index & (OperandIs16<Size>(op) ? 15 : 31);
+        if constexpr (Flags != FlagsSpec::Dead) AssignCF(flags_cache, (value >> offset) & 1);
+        if constexpr (Operation != GroupOpSpec::Ext4) gpr.SetReg(state, rm, ModifyBit(value, offset, subop));
+    } else {
+        const uint32_t address = ComputeLinearAddress(state, gpr, op) + (static_cast<int32_t>(index) >> 3);
+        const unsigned offset = index & 7;
+        const auto value = ReadMem<uint8_t, OpOnTLBMiss::Restart>(state, gpr, address, utlb, op);
+        if (!value) return LogicFlow::RestartMemoryOp;
+        if constexpr (Flags != FlagsSpec::Dead) AssignCF(flags_cache, (*value >> offset) & 1);
+        if constexpr (Operation != GroupOpSpec::Ext4) {
+            if (!WriteMem<uint8_t, OpOnTLBMiss::Retry>(state, gpr, address, ModifyBit(*value, offset, subop), utlb, op))
                 return LogicFlow::RetryMemoryOp;
-        } else {
-            if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, gpr, op, res, utlb)) return LogicFlow::RetryMemoryOp;
         }
     }
     return LogicFlow::Continue;
 }
 
-template <bool IsByte, GroupOpSpec FixedSubOp = GroupOpSpec::Dynamic, RmOperandSpec S = RmOperandSpec::Dynamic>
-FORCE_INLINE LogicFlow OpGroup2_EvIb_Internal(LogicFuncParams) {
-    // C0: r/m8, imm8
-    // C1: r/m32, imm8
-    uint32_t dest;
-    if constexpr (S == RmOperandSpec::ModReg) {
-        // Optimization: Skip ReadModRM call for Reg
-        uint8_t rm = op->modrm & 7;
-        if constexpr (IsByte) {
-            if (rm < 4)
-                dest = (gpr.GetReg(state, rm & 3)) & 0xFF;
-            else
-                dest = ((gpr.GetReg(state, rm & 3)) >> 8) & 0xFF;
-        } else {
-            if (op->prefixes.flags.opsize) {
-                dest = gpr.GetReg(state, rm) & 0xFFFF;
-            } else {
-                dest = gpr.GetReg(state, rm);
-            }
-        }
+// An immediate bit index wraps within the addressed word or dword.
+template <typename T, GroupOpSpec Operation, AddrModeSpec Form, FlagsSpec Flags>
+FORCE_INLINE LogicFlow OpGroup8_T_Internal(LogicFuncParams) {
+    const auto subop = GroupOperation<Operation>(op);
+    const auto rm = op->modrm & 7;
+    const unsigned offset = imm & (sizeof(T) * 8 - 1);
+    const bool memory = !OperandIsReg<Form>(op);
+    uint32_t address = 0;
+    T value;
+    if (memory) {
+        address = ComputeLinearAddress(state, gpr, op);
+        const auto read = ReadMem<T, OpOnTLBMiss::Restart>(state, gpr, address, utlb, op);
+        if (!read) return LogicFlow::RestartMemoryOp;
+        value = *read;
     } else {
-        if constexpr (IsByte) {
-            auto res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
-            if (!res) return LogicFlow::RestartMemoryOp;
-            dest = *res;
-        } else {
-            if (op->prefixes.flags.opsize) {
-                auto res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
-                if (!res) return LogicFlow::RestartMemoryOp;
-                dest = *res;
-            } else {
-                auto res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
-                if (!res) return LogicFlow::RestartMemoryOp;
-                dest = *res;
-            }
-        }
+        value = ReadRegGeneric<T>(state, gpr, rm);
     }
 
-    uint8_t count = (uint8_t)imm;
-    return Helper_Group2_Internal<FixedSubOp>(state, gpr, op, dest, count, IsByte, utlb, flags_cache);
+    if constexpr (Flags != FlagsSpec::Dead) AssignCF(flags_cache, (value >> offset) & 1);
+    if (subop >= 5) {
+        const T result = ModifyBit(value, offset, subop);
+        if (memory) {
+            if (!WriteMem<T, OpOnTLBMiss::Retry>(state, gpr, address, result, utlb, op))
+                return LogicFlow::RetryMemoryOp;
+        } else {
+            WriteRegGeneric<T>(state, gpr, rm, result);
+        }
+    }
+    return LogicFlow::Continue;
 }
 
-template <bool IsByte, GroupOpSpec FixedSubOp = GroupOpSpec::Dynamic, RmOperandSpec S = RmOperandSpec::Dynamic>
-FORCE_INLINE LogicFlow OpGroup2_Ev1_Internal(LogicFuncParams) {
-    // D0: Shift r/m8, 1
-    // D1: Shift r/m16/32, 1
-    uint32_t dest;
-    uint8_t mod = (op->modrm >> 6) & 3;
-    if (mod == 3) {
-        if constexpr (IsByte)
-            dest = gpr.GetReg8(state, op->modrm & 7);
-        else
-            dest = gpr.GetReg(state, op->modrm & 7);
-    } else {
-        if constexpr (IsByte) {
-            auto res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
-            if (!res) return LogicFlow::RestartMemoryOp;
-            dest = *res;
-        } else {
-            if (op->prefixes.flags.opsize) {
-                auto res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
-                if (!res) return LogicFlow::RestartMemoryOp;
-                dest = *res;
-            } else {
-                auto res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
-                if (!res) return LogicFlow::RestartMemoryOp;
-                dest = *res;
-            }
-        }
-    }
-    return Helper_Group2_Internal<FixedSubOp>(state, gpr, op, dest, 1, IsByte, utlb, flags_cache);
+template <GroupOpSpec Operation = GroupOpSpec::Dynamic, OpsizeSpec Size = OpsizeSpec::Dynamic,
+          AddrModeSpec Form = AddrModeSpec::Dynamic, FlagsSpec Flags = FlagsSpec::Dynamic>
+FORCE_INLINE LogicFlow OpGroup8_Internal(LogicFuncParams) {
+    if (OperandIs16<Size>(op)) return OpGroup8_T_Internal<uint16_t, Operation, Form, Flags>(LogicPassParams);
+    return OpGroup8_T_Internal<uint32_t, Operation, Form, Flags>(LogicPassParams);
 }
 
-template <bool IsByte, GroupOpSpec FixedSubOp = GroupOpSpec::Dynamic, RmOperandSpec S = RmOperandSpec::Dynamic>
-FORCE_INLINE LogicFlow OpGroup2_EvCl_Internal(LogicFuncParams) {
-    // D2: r/m8, CL
-    // D3: r/m32, CL
-    uint32_t dest;
-    if constexpr (S == RmOperandSpec::ModReg) {
-        uint8_t rm = op->modrm & 7;
-        if constexpr (IsByte) {
-            if (rm < 4)
-                dest = (gpr.GetReg(state, rm & 3)) & 0xFF;
-            else
-                dest = ((gpr.GetReg(state, rm & 3)) >> 8) & 0xFF;
-        } else {
-            if (op->prefixes.flags.opsize) {
-                dest = gpr.GetReg(state, rm) & 0xFFFF;
-            } else {
-                dest = gpr.GetReg(state, rm);
+enum class BitScanOperation { Dynamic, Forward, Reverse, TrailingCount };
+
+template <typename T, BitScanOperation Operation, AddrModeSpec Form, FlagsSpec Flags>
+FORCE_INLINE LogicFlow OpBitScan_T_Internal(LogicFuncParams) {
+    const auto source = ReadModRM<T, OpOnTLBMiss::Restart, 1, Form>(state, gpr, op, utlb);
+    if (!source) return LogicFlow::RestartMemoryOp;
+    const auto reg = (op->modrm >> 3) & 7;
+    constexpr bool update_flags = Flags != FlagsSpec::Dead;
+
+    if constexpr (Operation == BitScanOperation::Dynamic || Operation == BitScanOperation::TrailingCount) {
+        if (Operation == BitScanOperation::TrailingCount || op->prefixes.flags.rep) {
+            const auto count = std::countr_zero(*source);
+            if constexpr (update_flags) {
+                AssignCF(flags_cache, *source == 0);
+                AssignZF(flags_cache, count == 0);
             }
-        }
-    } else {
-        if constexpr (IsByte) {
-            auto res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
-            if (!res) return LogicFlow::RestartMemoryOp;
-            dest = *res;
-        } else {
-            if (op->prefixes.flags.opsize) {
-                auto res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
-                if (!res) return LogicFlow::RestartMemoryOp;
-                dest = *res;
-            } else {
-                auto res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
-                if (!res) return LogicFlow::RestartMemoryOp;
-                dest = *res;
-            }
+            gpr.SetReg(state, reg, count);
+            return LogicFlow::Continue;
         }
     }
 
-    uint8_t count = gpr.GetReg(state, ECX) & 0xFF;
-    return Helper_Group2_Internal<FixedSubOp>(state, gpr, op, dest, count, IsByte, utlb, flags_cache);
+    if constexpr (update_flags) AssignZF(flags_cache, *source == 0);
+    if (*source != 0) {
+        const auto index =
+            Operation == BitScanOperation::Reverse ? std::bit_width(*source) - 1 : std::countr_zero(*source);
+        gpr.SetReg(state, reg, index);
+    }
+    return LogicFlow::Continue;
+}
+
+template <BitScanOperation Operation, OpsizeSpec Size = OpsizeSpec::Dynamic, AddrModeSpec Form = AddrModeSpec::Dynamic,
+          FlagsSpec Flags = FlagsSpec::Dynamic>
+FORCE_INLINE LogicFlow OpBitScan_Internal(LogicFuncParams) {
+    if (OperandIs16<Size>(op)) return OpBitScan_T_Internal<uint16_t, Operation, Form, Flags>(LogicPassParams);
+    return OpBitScan_T_Internal<uint32_t, Operation, Form, Flags>(LogicPassParams);
+}
+
+template <RmOperandSpec Reg = RmOperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpBswap_Internal(LogicFuncParams) {
+    const auto reg = Reg == RmOperandSpec::Dynamic
+                         ? op->modrm & 7
+                         : static_cast<uint8_t>(Reg) - static_cast<uint8_t>(RmOperandSpec::Reg0);
+    gpr.SetReg(state, reg, __builtin_bswap32(gpr.GetReg(state, reg)));
+    return LogicFlow::Continue;
 }
 
 namespace op {
 
-// Register-only immediate rotations: decoder-selected width and flag liveness.
-// The 5-bit masked count (not its modulo-width value) controls CF/OF updates.
-template <typename T, bool Right, bool UpdateFlags>
-FORCE_INLINE LogicFlow OpRotateRegImmediate(LogicFuncParams) {
-    const uint8_t rm = op->modrm & 7;
-    const uint32_t original = gpr.GetReg(state, rm);
-    const T value = static_cast<T>(original);
-    const uint8_t count = imm & 31;
-    const T result = Right ? std::rotr(value, count) : std::rotl(value, count);
-    if constexpr (UpdateFlags) {
-        if (count != 0) {
-            constexpr unsigned width = sizeof(T) * 8;
-            const bool cf = Right ? (result >> (width - 1)) & 1 : result & 1;
-            AssignCF(flags_cache, cf);
-            if (count == 1) {
-                const bool msb = (result >> (width - 1)) & 1;
-                const bool other = Right ? (result >> (width - 2)) & 1 : cf;
-                AssignOF(flags_cache, msb != other);
-            }
-        }
-    }
-    if constexpr (sizeof(T) == 2)
-        gpr.SetReg(state, rm, (original & 0xFFFF0000u) | result);
-    else
-        gpr.SetReg(state, rm, result);
-    return LogicFlow::Continue;
-}
-
-#define FIBERCPU_BIND_OPS_SHIFT_BIT_IMPL_0
+#define FIBERCPU_BIND_SHIFT_BIT
 #include "instruction_kernel_bindings.inc"
-#undef FIBERCPU_BIND_OPS_SHIFT_BIT_IMPL_0
-
-FORCE_INLINE LogicFlow OpBt_Reg(LogicFuncParams) {
-    // 0F A3: BT r/m16/32, r16/32
-    uint32_t bit_idx = gpr.GetReg(state, (op->modrm >> 3) & 7);
-    uint8_t mod = (op->modrm >> 6) & 3;
-    uint32_t bit_val = 0;
-
-    if (mod == 3) {
-        uint32_t base = gpr.GetReg(state, op->modrm & 7);
-        uint32_t mask_val = op->prefixes.flags.opsize ? 15 : 31;
-        bit_val = (base >> (bit_idx & mask_val)) & 1;
-    } else {
-        uint32_t addr = ComputeLinearAddress(state, gpr, op);
-        addr += (int32_t)bit_idx >> 3;   // Bit index can offset the memory address
-        uint8_t byte_idx = bit_idx & 7;  // Get bit within the byte
-        // Restart on read fail
-        auto val_res = ReadMem<uint8_t, OpOnTLBMiss::Restart>(state, gpr, addr, utlb, op);
-        if (!val_res) return LogicFlow::RestartMemoryOp;
-        bit_val = (*val_res >> byte_idx) & 1;
-    }
-
-    if (bit_val)
-        SetFlagBits(flags_cache, CF_MASK);
-    else
-        ClearFlagBits(flags_cache, CF_MASK);
-    return LogicFlow::Continue;
-}
-
-FORCE_INLINE LogicFlow OpGroup8_EvIb(LogicFuncParams) {
-    // 0F BA /4: BT  r/m16/32, imm8
-    // 0F BA /5: BTS r/m16/32, imm8
-    // 0F BA /6: BTR r/m16/32, imm8
-    // 0F BA /7: BTC r/m16/32, imm8
-
-    uint8_t subop = (op->modrm >> 3) & 7;
-    // Safety check: Decoder should route handling here only for Group8 (BA)
-
-    bool opsize = op->prefixes.flags.opsize;
-    uint8_t offset = imm & (opsize ? 15 : 31);
-
-    bool is_mem = ((op->modrm >> 6) & 3) != 3;
-    uint32_t base = 0;
-    uint32_t addr = 0;
-
-    if (is_mem) {
-        addr = ComputeLinearAddress(state, gpr, op);
-        // Restart on read fail
-        if (opsize) {
-            auto read_res = ReadMem<uint16_t, OpOnTLBMiss::Restart>(state, gpr, addr, utlb, op);
-            if (!read_res) return LogicFlow::RestartMemoryOp;
-            base = *read_res;
-        } else {
-            auto read_res = ReadMem<uint32_t, OpOnTLBMiss::Restart>(state, gpr, addr, utlb, op);
-            if (!read_res) return LogicFlow::RestartMemoryOp;
-            base = *read_res;
-        }
-    } else {
-        if (opsize) {
-            base = gpr.GetReg(state, op->modrm & 7) & 0xFFFF;
-        } else {
-            base = gpr.GetReg(state, op->modrm & 7);
-        }
-    }
-
-    uint8_t bit_val = (base >> offset) & 1;
-
-    // Update CF
-    if (bit_val)
-        SetFlagBits(flags_cache, CF_MASK);
-    else
-        ClearFlagBits(flags_cache, CF_MASK);
-
-    // Write Back if needed
-    if (subop >= 5 && subop <= 7) {
-        uint32_t res = base;
-        uint32_t mask = (1 << offset);
-
-        if (subop == 5)
-            res |= mask;  // BTS
-        else if (subop == 6)
-            res &= ~mask;  // BTR
-        else if (subop == 7)
-            res ^= mask;  // BTC
-
-        if (is_mem) {
-            // Retry on write fail
-            if (opsize) {
-                if (!WriteMem<uint16_t, OpOnTLBMiss::Retry>(state, gpr, addr, (uint16_t)res, utlb, op))
-                    return LogicFlow::RetryMemoryOp;
-            } else {
-                if (!WriteMem<uint32_t, OpOnTLBMiss::Retry>(state, gpr, addr, res, utlb, op))
-                    return LogicFlow::RetryMemoryOp;
-            }
-        } else {
-            if (opsize)
-                gpr.SetReg(state, op->modrm & 7, (gpr.GetReg(state, op->modrm & 7) & 0xFFFF0000) | (uint16_t)res);
-            else
-                gpr.SetReg(state, op->modrm & 7, res);
-        }
-    }
-    // Subop 4 (BT) falls through here (no writeback), which is correct.
-    return LogicFlow::Continue;
-}
-
-FORCE_INLINE LogicFlow OpBtr_Reg(LogicFuncParams) {
-    // 0F B3: BTR r/m16/32, r16/32
-    uint32_t bit_idx = gpr.GetReg(state, (op->modrm >> 3) & 7);
-    uint8_t mod = (op->modrm >> 6) & 3;
-    if (mod == 3) {
-        uint8_t rm = op->modrm & 7;
-        uint32_t base = gpr.GetReg(state, rm);
-        uint32_t mask_val = op->prefixes.flags.opsize ? 15 : 31;
-        uint32_t bit_to_test = bit_idx & mask_val;
-
-        if ((base >> bit_to_test) & 1)
-            SetFlagBits(flags_cache, CF_MASK);
-        else
-            ClearFlagBits(flags_cache, CF_MASK);
-        gpr.SetReg(state, rm, base & ~(1 << bit_to_test));
-    } else {
-        uint32_t addr = ComputeLinearAddress(state, gpr, op);
-        addr += (int32_t)bit_idx >> 3;
-        uint8_t byte_idx = bit_idx & 7;
-        // Restart on read fail
-        auto byte_res = ReadMem<uint8_t, OpOnTLBMiss::Restart>(state, gpr, addr, utlb, op);
-        if (!byte_res) return LogicFlow::RestartMemoryOp;
-        uint8_t byte = *byte_res;
-
-        if ((byte >> byte_idx) & 1)
-            SetFlagBits(flags_cache, CF_MASK);
-        else
-            ClearFlagBits(flags_cache, CF_MASK);
-
-        // Retry on write fail
-        if (!WriteMem<uint8_t, OpOnTLBMiss::Retry>(state, gpr, addr, byte & ~(1 << byte_idx), utlb, op))
-            return LogicFlow::RetryMemoryOp;
-    }
-    return LogicFlow::Continue;
-}
-
-FORCE_INLINE LogicFlow OpBts_Reg(LogicFuncParams) {
-    // 0F AB: BTS r/m16/32, r16/32
-    uint32_t bit_idx = gpr.GetReg(state, (op->modrm >> 3) & 7);
-    uint8_t mod = (op->modrm >> 6) & 3;
-    if (mod == 3) {
-        uint8_t rm = op->modrm & 7;
-        uint32_t base = gpr.GetReg(state, rm);
-        uint32_t mask_val = op->prefixes.flags.opsize ? 15 : 31;
-        uint32_t bit_to_test = bit_idx & mask_val;
-
-        if ((base >> bit_to_test) & 1)
-            SetFlagBits(flags_cache, CF_MASK);
-        else
-            ClearFlagBits(flags_cache, CF_MASK);
-        gpr.SetReg(state, rm, base | (1 << bit_to_test));
-    } else {
-        uint32_t addr = ComputeLinearAddress(state, gpr, op);
-        addr += (int32_t)bit_idx >> 3;
-        uint8_t byte_idx = bit_idx & 7;
-        // Restart on read fail
-        auto byte_res = ReadMem<uint8_t, OpOnTLBMiss::Restart>(state, gpr, addr, utlb, op);
-        if (!byte_res) return LogicFlow::RestartMemoryOp;
-        uint8_t byte = *byte_res;
-
-        if ((byte >> byte_idx) & 1)
-            SetFlagBits(flags_cache, CF_MASK);
-        else
-            ClearFlagBits(flags_cache, CF_MASK);
-
-        // Retry on write fail
-        if (!WriteMem<uint8_t, OpOnTLBMiss::Retry>(state, gpr, addr, byte | (1 << byte_idx), utlb, op))
-            return LogicFlow::RetryMemoryOp;
-    }
-    return LogicFlow::Continue;
-}
-
-FORCE_INLINE LogicFlow OpBtc_Reg(LogicFuncParams) {
-    // 0F BB: BTC r/m16/32, r16/32
-    uint32_t bit_idx = gpr.GetReg(state, (op->modrm >> 3) & 7);
-    uint8_t mod = (op->modrm >> 6) & 3;
-    if (mod == 3) {
-        uint8_t rm = op->modrm & 7;
-        uint32_t base = gpr.GetReg(state, rm);
-        uint32_t mask_val = op->prefixes.flags.opsize ? 15 : 31;
-        uint32_t bit_to_test = bit_idx & mask_val;
-
-        if ((base >> bit_to_test) & 1)
-            SetFlagBits(flags_cache, CF_MASK);
-        else
-            ClearFlagBits(flags_cache, CF_MASK);
-        gpr.SetReg(state, rm, base ^ (1 << bit_to_test));
-    } else {
-        uint32_t addr = ComputeLinearAddress(state, gpr, op);
-        addr += (int32_t)bit_idx >> 3;
-        uint8_t byte_idx = bit_idx & 7;
-        // Restart on read fail
-        auto byte_res = ReadMem<uint8_t, OpOnTLBMiss::Restart>(state, gpr, addr, utlb, op);
-        if (!byte_res) return LogicFlow::RestartMemoryOp;
-        uint8_t byte = *byte_res;
-
-        if ((byte >> byte_idx) & 1)
-            SetFlagBits(flags_cache, CF_MASK);
-        else
-            ClearFlagBits(flags_cache, CF_MASK);
-
-        // Retry on write fail
-        if (!WriteMem<uint8_t, OpOnTLBMiss::Retry>(state, gpr, addr, byte ^ (1 << byte_idx), utlb, op))
-            return LogicFlow::RetryMemoryOp;
-    }
-    return LogicFlow::Continue;
-}
-
-FORCE_INLINE LogicFlow OpBsr_GvEv(LogicFuncParams) {
-    // 0F BD: BSR r16/32, r/m16/32
-    // Read only, Restart logic
-    uint32_t val;
-    if (op->prefixes.flags.opsize) {
-        auto val_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
-        if (!val_res) return LogicFlow::RestartMemoryOp;
-        val = *val_res;
-    } else {
-        auto val_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
-        if (!val_res) return LogicFlow::RestartMemoryOp;
-        val = *val_res;
-    }
-
-    uint8_t reg = (op->modrm >> 3) & 7;
-    if (val == 0) {
-        SetFlagBits(flags_cache, ZF_MASK);
-    } else {
-        ClearFlagBits(flags_cache, ZF_MASK);
-        int count = 31;
-        while (((val >> count) & 1) == 0) count--;
-        gpr.SetReg(state, reg, count);
-    }
-    return LogicFlow::Continue;
-}
-
-FORCE_INLINE LogicFlow OpBsf_Tzcnt_GvEv(LogicFuncParams) {
-    // 0F BC: BSF r32, r/m32
-    // F3 0F BC: TZCNT r32, r/m32
-
-    uint32_t src;
-    if (op->prefixes.flags.opsize) {
-        auto src_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
-        if (!src_res) return LogicFlow::RestartMemoryOp;
-        src = *src_res;
-    } else {
-        auto src_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
-        if (!src_res) return LogicFlow::RestartMemoryOp;
-        src = *src_res;
-    }
-
-    uint8_t reg = (op->modrm >> 3) & 7;
-
-    if (op->prefixes.flags.rep) {
-        // TZCNT (F3 Prefix)
-        if (src == 0) {
-            SetCF(flags_cache);
-            ClearZF(flags_cache);
-            gpr.SetReg(state, reg, op->prefixes.flags.opsize ? 16 : 32);  // Operand Size
-        } else {
-            ClearCF(flags_cache);
-            ClearZF(flags_cache);
-            // __builtin_ctz is undefined for 0, but we checked src==0
-            int count = __builtin_ctz(src);
-            gpr.SetReg(state, reg, count);
-            if (count == 0) SetZF(flags_cache);
-        }
-    } else {
-        // BSF (No F3 Prefix)
-        if (src == 0) {
-            SetZF(flags_cache);
-            // Dest undefined.
-        } else {
-            ClearZF(flags_cache);
-            int count = __builtin_ctz(src);
-            gpr.SetReg(state, reg, count);
-            // Flags: ZF cleared (done above).
-            // CF, OF, SF, AF, PF undefined.
-        }
-    }
-    return LogicFlow::Continue;
-}
-
-FORCE_INLINE LogicFlow OpBswap_Reg(LogicFuncParams) {
-    // 0F C8+rd: BSWAP r32
-    // DecodeInstruction puts rd in op->modrm for non-ModRM ops
-    uint8_t reg = op->modrm & 7;
-    uint32_t val = gpr.GetReg(state, reg);
-    uint32_t res = __builtin_bswap32(val);
-    gpr.SetReg(state, reg, res);
-    return LogicFlow::Continue;
-}
+#undef FIBERCPU_BIND_SHIFT_BIT
 
 }  // namespace op
 

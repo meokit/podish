@@ -9,6 +9,7 @@ enum class AddressWidth : uint8_t { Dynamic, A16, A32 };
 enum class WidthRule : uint8_t { Fixed8, Fixed32, ScalarEv, MandatoryPrefix };
 enum class ByteLane : uint8_t { Low, High };
 enum class Flags : uint8_t { Live, Dead, Any };
+enum class Repeat : uint8_t { Dynamic, Absent, Present };
 enum class Form : uint8_t { Dynamic, Register, Memory };
 enum class Gpr : int8_t { Dynamic = -1, Eax, Ecx, Edx, Ebx, Esp, Ebp, Esi, Edi };
 enum class Base : int8_t { Dynamic = -2, Absent = -1, Eax, Ecx, Edx, Ebx, Esp, Ebp, Esi, Edi };
@@ -23,6 +24,7 @@ struct Spec {
     Width operand_width = Width::Dynamic;
     AddressWidth address_width = AddressWidth::Dynamic;
     Flags flag_mode = Flags::Live;
+    Repeat repeat_prefix = Repeat::Dynamic;
     Form rm_form = Form::Dynamic;
     Gpr destination = Gpr::Dynamic;
     Gpr source = Gpr::Dynamic;
@@ -47,6 +49,11 @@ struct Spec {
     constexpr Spec flags(Flags v) const {
         auto s = *this;
         s.flag_mode = v;
+        return s;
+    }
+    constexpr Spec repeat(Repeat v) const {
+        auto s = *this;
+        s.repeat_prefix = v;
         return s;
     }
     constexpr Spec regForm() const {
@@ -129,6 +136,7 @@ constexpr bool Valid(Spec s) {
     if (static_cast<int>(s.operand_width) > static_cast<int>(Width::W32) ||
         static_cast<int>(s.address_width) > static_cast<int>(AddressWidth::A32) ||
         static_cast<int>(s.flag_mode) > static_cast<int>(Flags::Any) ||
+        static_cast<int>(s.repeat_prefix) > static_cast<int>(Repeat::Present) ||
         static_cast<int>(s.rm_form) > static_cast<int>(Form::Memory) || static_cast<int>(s.address_segment) < -1 ||
         static_cast<int>(s.address_segment) > 6 ||
         static_cast<int>(s.mandatory_prefix) > static_cast<int>(MandatoryPrefix::F3Only))
@@ -141,6 +149,7 @@ constexpr bool Valid(Spec s) {
     }
     if (s.mandatory_prefix != MandatoryPrefix::Dynamic && Family::width_rule != WidthRule::MandatoryPrefix)
         return false;
+    if (s.mandatory_prefix != MandatoryPrefix::Dynamic && s.repeat_prefix != Repeat::Dynamic) return false;
     if (Family::layout == Layout::None &&
         (s.source != Gpr::Dynamic || s.destination != Gpr::Dynamic || s.rm_form != Form::Dynamic))
         return false;
@@ -229,6 +238,10 @@ constexpr SpecCriteria Criteria(Spec s) {
                                                                     : prefix::REP;
         c.prefix_val = c.prefix_mask;
         if (s.mandatory_prefix == MandatoryPrefix::F3Only) c.prefix_mask |= prefix::OPSIZE | prefix::REPNE;
+    }
+    if (s.repeat_prefix != Repeat::Dynamic) {
+        c.prefix_mask |= prefix::REP;
+        if (s.repeat_prefix == Repeat::Present) c.prefix_val |= prefix::REP;
     }
     if (s.address_width != AddressWidth::Dynamic) {
         c.prefix_mask |= prefix::ADDRSIZE;
