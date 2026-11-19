@@ -149,6 +149,42 @@ bool VerifyGenericConcat(bool enabled) {
     return true;
 }
 
+bool VerifyGroup1Registers(bool enabled) {
+    constexpr uint8_t code[] = {
+        0x80, 0xc4, 1,                      // ADD AH, 1
+        0x82, 0xf4, 0x7f,                   // XOR AH, 0x7f (0x82 alias)
+        0x81, 0xf8, 0xff, 0x80, 0x34, 0x12, // CMP EAX, 0x123480ff (CF = 0)
+        0x83, 0xd0, 0xff,                   // ADC EAX, -1 (CF = 1)
+        0x83, 0xd8, 0xff,                   // SBB EAX, -1 (input CF is live, output flags are dead)
+        0x89, 0xc2,                         // MOV EDX, EAX
+        0x66, 0x83, 0xe8, 0xff,             // SUB AX, -1
+        0x81, 0xf8, 0xff, 0x80, 0x34, 0x12, // CMP EAX, 0x123480ff
+    };
+    auto state = LoadCode(code, sizeof(code));
+    X86_RegWrite(state.get(), 0, 0x1234feff);
+    const auto end = code_address + sizeof(code);
+    if (!X86_Run(state.get(), end, 32) || X86_GetEIP(state.get()) != end || X86_RegRead(state.get(), 0) != 0x123480ff ||
+        X86_RegRead(state.get(), 2) != 0x123480fe)
+        return false;
+    const auto* block = FindCompiledBlock(state.get());
+    return enabled ? block && block->inst_count() == 8 : block == nullptr;
+}
+
+bool VerifyGroup1Memory(bool enabled) {
+    // ADD dword [ECX], -1; CMP EAX, 0. The unmapped read restarts the ADD.
+    constexpr uint8_t code[] = {0x83, 0x01, 0xff, 0x81, 0xf8, 0, 0, 0, 0};
+    FaultData fault{false};
+    auto state = LoadCode(code, sizeof(code));
+    X86_RegWrite(state.get(), 1, data_address);
+    X86_SetFaultCallback(state.get(), MapOnFault, &fault);
+    const auto end = code_address + sizeof(code);
+    if (!X86_Run(state.get(), end, 16) || X86_GetEIP(state.get()) != end || fault.count != 1)
+        return false;
+    uint32_t stored = 0;
+    X86_MemRead(state.get(), data_address, reinterpret_cast<uint8_t*>(&stored), sizeof(stored));
+    return stored == 6 && HasCompiledEntry(state.get()) == enabled;
+}
+
 bool VerifyHotLoop() {
     // SUB EAX, 1; JNE to SUB. With threshold four, the second run
     // becomes hot on a threaded backedge.
@@ -273,6 +309,10 @@ int main(int argc, char** argv) {
     }
     if (!VerifyGenericConcat(enabled) || X86_GetLLVMJitLiveBlockCount() != 0) {
         std::fprintf(stderr, "LLVM generic re-decode or concatenated block mismatch\n");
+        return 1;
+    }
+    if (!VerifyGroup1Registers(enabled) || !VerifyGroup1Memory(enabled) || X86_GetLLVMJitLiveBlockCount() != 0) {
+        std::fprintf(stderr, "Group1 flags, operands or memory restart mismatch\n");
         return 1;
     }
 }

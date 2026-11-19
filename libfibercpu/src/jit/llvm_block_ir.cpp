@@ -13,7 +13,13 @@ extern "C" LLVMBlockExit FiberLLVMExit();
 extern "C" LogicFlow FiberLLVMPlaceholder(unsigned index, uint32_t encoding, uint32_t ea_desc, uint32_t displacement,
                                           LogicFuncParams);
 
-#define FIBERCPU_LLVM_OP(Name)                                                                              \
+template <Group1Immediate Immediate>
+FORCE_INLINE LogicFlow RunGroup1LLVM(uint8_t metadata, LogicFuncParams) {
+    if (metadata & Meta::no_flags_mask) return OpGroup1_Internal<Immediate, FlagsSpec::Dead>(LogicPassParams);
+    return OpGroup1_Internal<Immediate, FlagsSpec::Live>(LogicPassParams);
+}
+
+#define FIBERCPU_LLVM_OP(Name, Exact)                                                                       \
     extern "C" LogicFlow FiberLLVMGeneric_##Name(unsigned, uint32_t, uint32_t, uint32_t, LogicFuncParams) { \
         return op::Name(LogicPassParams);                                                                   \
     }                                                                                                       \
@@ -28,7 +34,7 @@ extern "C" LogicFlow FiberLLVMPlaceholder(unsigned index, uint32_t encoding, uin
             __builtin_assume(op->ext.data.ea_desc == ea_desc);                                              \
             __builtin_assume(op->ext.data.disp == displacement);                                            \
         }                                                                                                   \
-        return op::Name(LogicPassParams);                                                                   \
+        return Exact;                                                                                       \
     }
 #include "llvm_block_operations.inc"
 #undef FIBERCPU_LLVM_OP

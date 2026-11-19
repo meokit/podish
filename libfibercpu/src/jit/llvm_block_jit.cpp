@@ -99,7 +99,7 @@ T ReadPositiveSetting(const char* name, T fallback) {
 
 const char* LogicName(HandlerFunc handler) {
     static const ankerl::unordered_dense::map<HandlerFunc, const char*> names = {
-#define FIBERCPU_LLVM_OP(Name) {DispatchWrapper<op::Name>, #Name},
+#define FIBERCPU_LLVM_OP(Name, Exact) {DispatchWrapper<op::Name>, #Name},
 #include "llvm_block_operations.inc"
 #undef FIBERCPU_LLVM_OP
     };

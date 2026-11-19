@@ -112,6 +112,8 @@ union Prefixes {
 };
 
 union Meta {
+    static constexpr uint8_t no_flags_mask = 1 << 4;
+
     uint8_t all;
     struct {
         uint8_t has_modrm : 1;

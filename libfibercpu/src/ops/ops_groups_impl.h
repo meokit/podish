@@ -16,59 +16,38 @@ namespace fiberish {
 // Group 1: 0x80 (Eb,Ib), 0x81 (Ev,Iz), 0x82 (Eb,Ib - alias), 0x83 (Ev,Ib)
 // =========================================================================================
 
-template <bool UpdateFlags, GroupOpSpec FixedSubOp = GroupOpSpec::Dynamic, RmOperandSpec S = RmOperandSpec::Dynamic>
-FORCE_INLINE LogicFlow OpGroup1_EbIb_Internal(LogicFuncParams) {
-    // 80: Arith r/m8, imm8
-    uint8_t dest;
-    if constexpr (S == RmOperandSpec::ModReg) {
-        dest = gpr.GetReg8(state, op->modrm & 7);
-    } else if constexpr (S == RmOperandSpec::Reg0 || S == RmOperandSpec::Reg1 || S == RmOperandSpec::Reg2 ||
-                         S == RmOperandSpec::Reg3) {
-        constexpr uint8_t RegIndex = static_cast<uint8_t>(S) - static_cast<uint8_t>(RmOperandSpec::Reg0);
-        dest = static_cast<uint8_t>(gpr.GetReg(state, RegIndex));
+enum class Group1Immediate { Byte, OperandWidth, SignExtendedByte };
+
+template <typename T, Group1Immediate Immediate, FlagsSpec Flags, GroupOpSpec SubOp, RmOperandSpec Rm>
+FORCE_INLINE LogicFlow OpGroup1_T_Internal(LogicFuncParams) {
+    T dest;
+    if constexpr (Rm == RmOperandSpec::ModReg) {
+        dest = ReadRegGeneric<T>(state, gpr, op->modrm & 7);
+    } else if constexpr (Rm >= RmOperandSpec::Reg0 && Rm <= RmOperandSpec::Reg7) {
+        constexpr uint8_t index = static_cast<uint8_t>(Rm) - static_cast<uint8_t>(RmOperandSpec::Reg0);
+        dest = ReadRegGeneric<T>(state, gpr, index);
     } else {
-        auto dest_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
-        if (!dest_res) return LogicFlow::RestartMemoryOp;
-        dest = *dest_res;
+        const auto res = ReadModRM<T, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
+        if (!res) return LogicFlow::RestartMemoryOp;
+        dest = *res;
     }
 
-    uint8_t src = (uint8_t)imm;
-    return Helper_Group1<uint8_t, UpdateFlags, FixedSubOp, S>(state, gpr, op, flags_cache, dest, src, utlb);
+    auto src = static_cast<T>(imm);
+    if constexpr (Immediate == Group1Immediate::SignExtendedByte) src = static_cast<T>(static_cast<int8_t>(imm));
+
+    return Helper_Group1<T, Flags != FlagsSpec::Dead, SubOp, Rm>(state, gpr, op, flags_cache, dest, src, utlb);
 }
 
-// Fixed Size Templates for Ev operations
-template <typename T, bool UpdateFlags, GroupOpSpec FixedSubOp = GroupOpSpec::Dynamic, bool IsImm8 = false,
-          RmOperandSpec S = RmOperandSpec::Dynamic>
-FORCE_INLINE LogicFlow OpGroup1_Ev_T_Internal(LogicFuncParams) {
-    // 81: Arith r/m, imm32 (IsImm8=false)
-    // 83: Arith r/m, imm8 (IsImm8=true)
-    T dest;
-    if constexpr (S == RmOperandSpec::ModReg) {
-        if constexpr (sizeof(T) == 2)
-            dest = static_cast<T>(gpr.GetReg(state, op->modrm & 7));
-        else
-            dest = static_cast<T>(gpr.GetReg(state, op->modrm & 7));
-    } else if constexpr (S >= RmOperandSpec::Reg0 && S <= RmOperandSpec::Reg7) {
-        constexpr uint8_t FixedReg = static_cast<uint8_t>(S) - static_cast<uint8_t>(RmOperandSpec::Reg0);
-        dest = static_cast<T>(gpr.GetReg(state, FixedReg));
-    } else if constexpr (sizeof(T) == 2) {
-        auto res = ReadModRM<uint16_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
-        if (!res) return LogicFlow::RestartMemoryOp;
-        dest = *res;
+template <Group1Immediate Immediate, FlagsSpec Flags = FlagsSpec::Dynamic, GroupOpSpec SubOp = GroupOpSpec::Dynamic,
+          OpsizeSpec Size = OpsizeSpec::Dynamic, RmOperandSpec Rm = RmOperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpGroup1_Internal(LogicFuncParams) {
+    if constexpr (Immediate == Group1Immediate::Byte) {
+        static_assert(Size == OpsizeSpec::Dynamic);
+        return OpGroup1_T_Internal<uint8_t, Immediate, Flags, SubOp, Rm>(LogicPassParams);
     } else {
-        auto res = ReadModRM<uint32_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
-        if (!res) return LogicFlow::RestartMemoryOp;
-        dest = *res;
+        if (OperandIs16<Size>(op)) return OpGroup1_T_Internal<uint16_t, Immediate, Flags, SubOp, Rm>(LogicPassParams);
+        return OpGroup1_T_Internal<uint32_t, Immediate, Flags, SubOp, Rm>(LogicPassParams);
     }
-
-    T src;
-    if constexpr (IsImm8) {             // 0x83
-        src = (T)(int16_t)(int8_t)imm;  // Sign extend byte to T
-    } else {                            // 0x81
-        src = (T)imm;
-    }
-
-    return Helper_Group1<T, UpdateFlags, FixedSubOp, S>(state, gpr, op, flags_cache, dest, src, utlb);
 }
 
 // =========================================================================================
@@ -255,21 +234,6 @@ FORCE_INLINE LogicFlow OpXadd_T_Internal(LogicFuncParams) {
 
 namespace op {
 
-// Wrappers for Dispatch (Generic fallback)
-FORCE_INLINE LogicFlow OpGroup1_EvIz_Generic(LogicFuncParams) {
-    if (op->prefixes.flags.opsize)
-        return OpGroup1_Ev_T_Internal<uint16_t, true, GroupOpSpec::Dynamic, false>(LogicPassParams);
-    else
-        return OpGroup1_Ev_T_Internal<uint32_t, true, GroupOpSpec::Dynamic, false>(LogicPassParams);
-}
-
-FORCE_INLINE LogicFlow OpGroup1_EvIb_Generic(LogicFuncParams) {
-    if (op->prefixes.flags.opsize)
-        return OpGroup1_Ev_T_Internal<uint16_t, true, GroupOpSpec::Dynamic, true>(LogicPassParams);
-    else
-        return OpGroup1_Ev_T_Internal<uint32_t, true, GroupOpSpec::Dynamic, true>(LogicPassParams);
-}
-
 FORCE_INLINE LogicFlow OpGroup3_Ev_Generic(LogicFuncParams) {
     if (op->prefixes.flags.opsize)
         return OpGroup3_Ev_T_Internal<uint16_t, true>(LogicPassParams);
@@ -285,30 +249,10 @@ FORCE_INLINE LogicFlow OpGroup5_Ev_Generic(LogicFuncParams) {
 }
 
 #define FIBERCPU_BIND_OPS_GROUPS_IMPL_0
+#define FIBERCPU_BIND_GROUP1
 #include "instruction_kernel_bindings.inc"
+#undef FIBERCPU_BIND_GROUP1
 #undef FIBERCPU_BIND_OPS_GROUPS_IMPL_0
-
-// Implements wrappers: e.g. OpGroup1_EbIb_0_Flags, OpGroup1_EbIb_0_NoFlags
-
-#define FIBERCPU_BIND_OPS_GROUPS_IMPL_MACRO_0
-#include "instruction_kernel_bindings.inc"
-#undef FIBERCPU_BIND_OPS_GROUPS_IMPL_MACRO_0
-
-#define FIBERCPU_BIND_OPS_GROUPS_IMPL_1
-#include "instruction_kernel_bindings.inc"
-#undef FIBERCPU_BIND_OPS_GROUPS_IMPL_1
-
-#define FIBERCPU_BIND_OPS_GROUPS_IMPL_MACRO_1
-#include "instruction_kernel_bindings.inc"
-#undef FIBERCPU_BIND_OPS_GROUPS_IMPL_MACRO_1
-
-// Implements wrappers: e.g. OpGroup1_EvIz_T_Add_32_Flags
-// Param `func` is OpGroup1_EvIz_T_Internal or OpGroup1_EvIb_T_Internal (templated)
-
-// Group 1 Iz (0x81) - IsImm8=false
-#define FIBERCPU_BIND_OPS_GROUPS_IMPL_MACRO_2
-#include "instruction_kernel_bindings.inc"
-#undef FIBERCPU_BIND_OPS_GROUPS_IMPL_MACRO_2
 
 // For Group 3 and 5, which use distinct templates without IsImm8
 
