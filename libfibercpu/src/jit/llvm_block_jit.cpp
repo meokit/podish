@@ -636,12 +636,54 @@ struct PendingBlock {
     uint16_t revision;
 };
 
+class AsyncSignals {
+    std::mutex mutex_;
+    std::condition_variable idle_;
+    size_t active_ = 0;
+    bool closing_ = false;
+
+public:
+    std::atomic<bool> ready{false};
+
+    bool Begin() {
+        std::lock_guard lock(mutex_);
+        if (closing_) return false;
+        ++active_;
+        return true;
+    }
+
+    void End() {
+        std::lock_guard lock(mutex_);
+        if (--active_ == 0) idle_.notify_one();
+    }
+
+    void Close() {
+        std::unique_lock lock(mutex_);
+        closing_ = true;
+        idle_.wait(lock, [&] { return active_ == 0; });
+    }
+};
+
 }  // namespace
 
 struct LLVMAsyncState {
-    std::shared_ptr<std::atomic<bool>> ready = std::make_shared<std::atomic<bool>>(false);
+    std::shared_ptr<AsyncSignals> signals = std::make_shared<AsyncSignals>();
     std::vector<PendingBlock> pending;
+
+    ~LLVMAsyncState() {
+        // Prevent publication and skip queued work. A final MMU release must
+        // also finish in-flight LLVM calls before returning to a host that
+        // can immediately unload the native library or exit.
+        pending.clear();
+        signals->Close();
+    }
 };
+
+void CancelPendingLLVMBlockCompilations(LLVMAsyncState& state) {
+    // Queued jobs hold weak result pointers. The same MMU's shutdown token
+    // stays live so an eventual destroy can drain old and new in-flight jobs.
+    state.pending.clear();
+}
 
 namespace {
 
@@ -649,13 +691,13 @@ struct CompilationJob {
     std::vector<DecodedOp> ops;
     std::vector<uint8_t> bytes;
     std::weak_ptr<AsyncResult> result;
-    std::weak_ptr<std::atomic<bool>> ready;
+    std::weak_ptr<AsyncSignals> signals;
     size_t sentinel;
     size_t budget;
     LLVMBlockExit exit;
     JitMode mode;
 
-    void Run() {
+    void Compile(AsyncSignals& control) {
         if (result.expired()) return;
         block_recipe::Plan plan;
         auto input = std::span<const uint8_t>(bytes);
@@ -676,8 +718,15 @@ struct CompilationJob {
             output->lookup = std::move(lookup);
             if (output->lookup.code) output->replay.assign(plan.ReplayHandlers().begin(), plan.ReplayHandlers().end());
             output->done.store(true, std::memory_order_release);
-            if (auto signal = ready.lock()) signal->store(true, std::memory_order_release);
+            control.ready.store(true, std::memory_order_release);
         }
+    }
+
+    void Run() {
+        auto control = signals.lock();
+        if (!control || !control->Begin()) return;
+        Compile(*control);
+        control->End();
     }
 };
 
@@ -719,7 +768,8 @@ public:
 
     bool Submit(CompilationJob job) {
         {
-            std::lock_guard lock(mutex_);
+            std::unique_lock lock(mutex_, std::try_to_lock);
+            if (!lock.owns_lock()) return false;
             if (jobs_.size() == kMaxQueued) {
                 std::erase_if(jobs_, [](const CompilationJob& queued) { return queued.result.expired(); });
                 if (jobs_.size() == kMaxQueued) return false;
@@ -795,7 +845,7 @@ void QueueBlock(EmuState* state, BasicBlock* block, JitMode mode) {
         .ops = {},
         .bytes = {},
         .result = result,
-        .ready = async->ready,
+        .signals = async->signals,
         .sentinel = block->sentinel_slot_index,
         .budget = CodeBudget() - state->mmu.code_cache().llvm_block_bytes,
         .exit = block_recipe::FullBlockExit(*block),
@@ -866,7 +916,7 @@ void CompileHotLLVMBlock(EmuState* state, BasicBlock* block) {
 
 void PollLLVMBlockCompilations(EmuState* state) {
     const auto& async = state->mmu.core_handle()->llvm_async;
-    if (!async || !async->ready->exchange(false, std::memory_order_acquire)) return;
+    if (!async || !async->signals->ready.exchange(false, std::memory_order_acquire)) return;
     std::erase_if(async->pending, [&](const PendingBlock& candidate) {
         if (!candidate.result->done.load(std::memory_order_acquire)) return false;
         auto* block = state->mmu.lookup_cached_block(candidate.eip);

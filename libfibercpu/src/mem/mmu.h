@@ -18,6 +18,9 @@
 namespace fiberish {
 struct LLVMBlockCode;
 struct LLVMAsyncState;
+#if FIBERCPU_LLVM_JIT
+void CancelPendingLLVMBlockCompilations(LLVMAsyncState& state);
+#endif
 }  // namespace fiberish
 
 namespace fiberish::mem {
