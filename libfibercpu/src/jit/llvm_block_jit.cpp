@@ -164,9 +164,20 @@ public:
     }
 };
 
+struct NativeObjectStorage {
+    std::once_flag initialized;
+    std::unique_ptr<const PrecompiledObjects> cache;
+};
+
+NativeObjectStorage& NativeStorage() {
+    static NativeObjectStorage storage;
+    return storage;
+}
+
 const PrecompiledObjects& NativeObjects() {
-    static const PrecompiledObjects cache;
-    return cache;
+    auto& storage = NativeStorage();
+    std::call_once(storage.initialized, [&] { storage.cache = std::make_unique<const PrecompiledObjects>(); });
+    return *storage.cache;
 }
 
 void RecordBlock(const std::string& key) {
@@ -799,7 +810,7 @@ CompilationPool& Workers() {
         // itself stays lazy so the VM thread does not parse bitcode here.
         (void)Storage();
         block_recipe::InitializeOperationLookup();
-        (void)NativeObjects();
+        (void)NativeStorage();
         return WorkerCount();
     }());
     return pool;
