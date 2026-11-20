@@ -36,15 +36,16 @@ __attribute__((noinline, cold)) LogicFlow CarryRmwSlow(EmuState* state, DecodedO
 }
 
 template <CarryRmwKind Kind, typename T, bool UpdateFlags = true, AddrModeSpec Form = AddrModeSpec::Dynamic>
-FORCE_INLINE LogicFlow ExecuteCarryRmw(EmuState* state, GprCache& gpr, DecodedOp* op, T dest, T src,
-                                       mem::MicroTLB* utlb, uint64_t& flags_cache) {
-    if (OperandIsReg<Form>(op)) {
+FORCE_INLINE LogicFlow ExecuteCarryRmw(EmuState* state, GprCache& gpr, DecodedOp* op,
+                                       const ModRMRmwOperand<Form>& operand, T dest, T src, mem::MicroTLB* utlb,
+                                       uint64_t& flags_cache) {
+    if (operand.IsRegister()) {
         const T result = CalculateCarryRmw<Kind, T, UpdateFlags>(state, flags_cache, dest, src);
-        WriteRegGeneric<T>(state, gpr, op->modrm & 7, result);
+        WriteRegGeneric<T>(state, gpr, operand.Reg(), result);
         return LogicFlow::Continue;
     }
 
-    const uint32_t addr = ComputeLinearAddress(state, gpr, op);
+    const uint32_t addr = operand.Address();
     // Move, don't duplicate, the existing write-TLB check. Once this succeeds,
     // pure ALU work and a direct store cannot trigger a guest fault or callback.
     auto target = state->mmu.try_write_target_tlb<T>(addr, utlb);
@@ -59,6 +60,14 @@ FORCE_INLINE LogicFlow ExecuteCarryRmw(EmuState* state, GprCache& gpr, DecodedOp
     const T result = CalculateCarryRmw<Kind, T, UpdateFlags>(state, flags_cache, dest, src);
     std::memcpy(*target, &result, sizeof(T));
     return LogicFlow::Continue;
+}
+
+// Callers that already read the operand can resolve it for writeback here.
+template <CarryRmwKind Kind, typename T, bool UpdateFlags = true, AddrModeSpec Form = AddrModeSpec::Dynamic>
+FORCE_INLINE LogicFlow ExecuteCarryRmw(EmuState* state, GprCache& gpr, DecodedOp* op, T dest, T src,
+                                       mem::MicroTLB* utlb, uint64_t& flags_cache) {
+    const ModRMRmwOperand<Form> operand(state, gpr, op);
+    return ExecuteCarryRmw<Kind, T, UpdateFlags>(state, gpr, op, operand, dest, src, utlb, flags_cache);
 }
 
 }  // namespace fiberish

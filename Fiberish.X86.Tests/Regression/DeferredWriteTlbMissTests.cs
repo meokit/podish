@@ -10,6 +10,8 @@ public sealed class DeferredWriteTlbMissTests
     [Theory]
     [InlineData("mov")]
     [InlineData("add")]
+    [InlineData("not")]
+    [InlineData("neg")]
     [InlineData("inc")]
     [InlineData("push")]
     [InlineData("cross-page")]
@@ -37,6 +39,8 @@ public sealed class DeferredWriteTlbMissTests
         byte[] code = form switch
         {
             "add" => [0x8B, 0x1F, 0x01, 0x07, 0x8B, 0x4F, 4, 0x8B, 0x2F],
+            "not" => [0x8B, 0x1F, 0xF7, 0x17, 0x8B, 0x4F, 4, 0x8B, 0x2F],
+            "neg" => [0x8B, 0x1F, 0xF7, 0x1F, 0x8B, 0x4F, 4, 0x8B, 0x2F],
             "inc" => [0x8B, 0x1F, 0xFF, 0x07, 0x8B, 0x4F, 4, 0x8B, 0x2F],
             "push" => [0x8B, 0x1F, 0x50, 0x8B, 0x4F, 4, 0x8B, 0x2F],
             "cross-page" or "rejected" => [0x8B, 0x1F, 0x89, 0x07, 0x8B, 0x0F],
@@ -69,6 +73,8 @@ public sealed class DeferredWriteTlbMissTests
                 uint expected = form switch
                 {
                     "add" => oldValue + value,
+                    "not" => ~oldValue,
+                    "neg" => unchecked(0u - oldValue),
                     "inc" => oldValue + 1,
                     _ => value
                 };
@@ -82,6 +88,7 @@ public sealed class DeferredWriteTlbMissTests
                 }
             }
             if (form == "add") Assert.Equal(0x94u, cpu.Eflags & 0x8D5u); // SF, AF, PF
+            else if (form == "neg") Assert.Equal(0x91u, cpu.Eflags & 0x8D5u); // SF, AF, CF
             else if (form != "inc") Assert.Equal(0xAD7u & 0x8D5u, cpu.Eflags & 0x8D5u);
         }
         finally

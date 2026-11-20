@@ -11,12 +11,11 @@
 namespace fiberish {
 
 // Template Helper for Group 1 (ALU operations with immediate)
-template <typename T, bool UpdateFlags = true, GroupOpSpec FixedSubOp = GroupOpSpec::Dynamic,
-          RmOperandSpec S = RmOperandSpec::Dynamic>
-FORCE_INLINE LogicFlow Helper_Group1(EmuState* state, GprCache& gpr, DecodedOp* op, uint64_t& flags_cache, T dest,
-                                     T src, mem::MicroTLB* utlb) {
+template <typename T, bool UpdateFlags, GroupOpSpec FixedSubOp, AddrModeSpec Form>
+FORCE_INLINE LogicFlow Helper_Group1(EmuState* state, GprCache& gpr, DecodedOp* op,
+                                     const ModRMRmwOperand<Form>& operand, uint64_t& flags_cache, T dest, T src,
+                                     mem::MicroTLB* utlb) {
     const uint8_t subop = GroupOperation<FixedSubOp>(op);
-    constexpr auto form = S == RmOperandSpec::ModReg ? AddrModeSpec::ModReg : AddrModeSpec::Dynamic;
 
     T res = 0;
 
@@ -28,11 +27,11 @@ FORCE_INLINE LogicFlow Helper_Group1(EmuState* state, GprCache& gpr, DecodedOp* 
             res = AluOr<T, UpdateFlags>(state, flags_cache, dest, src);
             break;
         case 2:
-            return ExecuteCarryRmw<CarryRmwKind::Adc, T, UpdateFlags, form>(state, gpr, op, dest, src, utlb,
-                                                                            flags_cache);
+            return ExecuteCarryRmw<CarryRmwKind::Adc, T, UpdateFlags>(state, gpr, op, operand, dest, src, utlb,
+                                                                      flags_cache);
         case 3:
-            return ExecuteCarryRmw<CarryRmwKind::Sbb, T, UpdateFlags, form>(state, gpr, op, dest, src, utlb,
-                                                                            flags_cache);
+            return ExecuteCarryRmw<CarryRmwKind::Sbb, T, UpdateFlags>(state, gpr, op, operand, dest, src, utlb,
+                                                                      flags_cache);
         case 4:
             res = AluAnd<T, UpdateFlags>(state, flags_cache, dest, src);
             break;
@@ -53,36 +52,14 @@ FORCE_INLINE LogicFlow Helper_Group1(EmuState* state, GprCache& gpr, DecodedOp* 
             return LogicFlow::ExitOnCurrentEIP;
     }
 
-    if constexpr (S == RmOperandSpec::ModReg) {
-        uint8_t rm = op->modrm & 7;
-        if constexpr (sizeof(T) == 1) {
-            uint32_t curr = gpr.GetReg(state, rm & 3);
-            if (rm < 4)
-                curr = (curr & 0xFFFFFF00) | (static_cast<uint8_t>(res) & 0xFF);
-            else
-                curr = (curr & 0xFFFF00FF) | ((static_cast<uint8_t>(res) & 0xFF) << 8);
-            gpr.SetReg(state, rm & 3, curr);
-        } else if constexpr (sizeof(T) == 2) {
-            gpr.SetReg(state, rm, (gpr.GetReg(state, rm) & 0xFFFF0000) | (static_cast<uint16_t>(res) & 0xFFFF));
-        } else {
-            gpr.SetReg(state, rm, static_cast<uint32_t>(res));
-        }
-    } else if constexpr (sizeof(T) == 1) {
-        if (!WriteModRM<uint8_t, OpOnTLBMiss::Retry>(state, gpr, op, (uint8_t)res, utlb))
-            return LogicFlow::RetryMemoryOp;
-    } else if constexpr (sizeof(T) == 2) {
-        if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, gpr, op, (uint16_t)res, utlb))
-            return LogicFlow::RetryMemoryOp;
-    } else {
-        if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, gpr, op, (uint32_t)res, utlb))
-            return LogicFlow::RetryMemoryOp;
-    }
+    if (!operand.template Write<OpOnTLBMiss::Retry>(state, gpr, op, res, utlb)) return LogicFlow::RetryMemoryOp;
     return LogicFlow::Continue;
 }
 
 // Template Helper for Group 3 (MUL, DIV, TEST, NOT, NEG)
-template <typename T, bool UpdateFlags = true, GroupOpSpec FixedSubOp = GroupOpSpec::Dynamic>
-FORCE_INLINE LogicFlow Helper_Group3(EmuState* state, GprCache& gpr, DecodedOp* op, uint64_t& flags_cache, T val,
+template <typename T, bool UpdateFlags, GroupOpSpec FixedSubOp, AddrModeSpec Form>
+FORCE_INLINE LogicFlow Helper_Group3(EmuState* state, GprCache& gpr, DecodedOp* op,
+                                     const ModRMRmwOperand<Form>& operand, uint64_t& flags_cache, T val,
                                      mem::MicroTLB* utlb, uint32_t imm) {
     const uint8_t subop = GroupOperation<FixedSubOp>(op);
 
@@ -94,16 +71,8 @@ FORCE_INLINE LogicFlow Helper_Group3(EmuState* state, GprCache& gpr, DecodedOp* 
             break;
         }
         case 2:  // NOT
-            if constexpr (sizeof(T) == 1) {
-                if (!WriteModRM<uint8_t, OpOnTLBMiss::Retry>(state, gpr, op, ~val, utlb))
-                    return LogicFlow::RetryMemoryOp;
-            } else if constexpr (sizeof(T) == 2) {
-                if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, gpr, op, ~val, utlb))
-                    return LogicFlow::RetryMemoryOp;
-            } else {
-                if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, gpr, op, ~val, utlb))
-                    return LogicFlow::RetryMemoryOp;
-            }
+            if (!operand.template Write<OpOnTLBMiss::Retry>(state, gpr, op, static_cast<T>(~val), utlb))
+                return LogicFlow::RetryMemoryOp;
             return LogicFlow::Continue;
         case 3:  // NEG
         {
@@ -115,16 +84,7 @@ FORCE_INLINE LogicFlow Helper_Group3(EmuState* state, GprCache& gpr, DecodedOp* 
                     ClearFlagBits(flags_cache, CF_MASK);
             }
 
-            if constexpr (sizeof(T) == 1) {
-                if (!WriteModRM<uint8_t, OpOnTLBMiss::Retry>(state, gpr, op, (uint8_t)res, utlb))
-                    return LogicFlow::RetryMemoryOp;
-            } else if constexpr (sizeof(T) == 2) {
-                if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry>(state, gpr, op, (uint16_t)res, utlb))
-                    return LogicFlow::RetryMemoryOp;
-            } else {
-                if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, gpr, op, (uint32_t)res, utlb))
-                    return LogicFlow::RetryMemoryOp;
-            }
+            if (!operand.template Write<OpOnTLBMiss::Retry>(state, gpr, op, res, utlb)) return LogicFlow::RetryMemoryOp;
             return LogicFlow::Continue;
         }
         case 4:  // MUL (Unsigned)
@@ -419,47 +379,6 @@ FORCE_INLINE LogicFlow Helper_Group4(EmuState* state, GprCache& gpr, DecodedOp* 
             }
             break;
         }
-        default:
-            state->fault_vector = 6;
-            if (!gpr.WithCanonical(state, [&] { return state->hooks.on_invalid_opcode(state); })) {
-                state->status = EmuStatus::Fault;
-            }
-            return LogicFlow::ExitOnCurrentEIP;
-    }
-    return LogicFlow::Continue;
-}
-
-// Template Helper for Group 5 (INC, DEC, CALL, JMP, PUSH)
-template <typename T, bool UpdateFlags = true, GroupOpSpec FixedSubOp = GroupOpSpec::Dynamic>
-FORCE_INLINE LogicFlow Helper_Group5(EmuState* state, GprCache& gpr, DecodedOp* op, uint64_t& flags_cache, T val,
-                                     mem::MicroTLB* utlb, uint32_t* branch) {
-    const uint8_t subop = GroupOperation<FixedSubOp>(op);
-
-    switch (subop) {
-        case 0:    // INC Ev
-        case 1: {  // DEC Ev
-            uint64_t updated_flags = flags_cache;
-            const T result = subop == 0 ? AluAdd<T, UpdateFlags>(state, updated_flags, val, 1)
-                                        : AluSub<T, UpdateFlags>(state, updated_flags, val, 1);
-            // A faulting destination write must leave the old flags visible.
-            if (!WriteModRM<T, OpOnTLBMiss::Blocking>(state, gpr, op, result, utlb)) return LogicFlow::ExitOnCurrentEIP;
-            if constexpr (UpdateFlags) {
-                const uint32_t carry = GetFlags32(flags_cache) & CF_MASK;
-                SetFlags32(updated_flags, (GetFlags32(updated_flags) & ~CF_MASK) | carry);
-                flags_cache = updated_flags;
-            }
-            break;
-        }
-        case 2:  // CALL Ev (Near Indirect)
-            if (!Push<T>(state, gpr, static_cast<T>(op->next_eip), utlb, op)) return LogicFlow::ExitOnCurrentEIP;
-            *branch = val;
-            break;
-        case 4:  // JMP Ev (Near Indirect)
-            *branch = val;
-            break;
-        case 6:  // PUSH Ev
-            if (!Push<T>(state, gpr, val, utlb, op)) return LogicFlow::ExitOnCurrentEIP;
-            break;
         default:
             state->fault_vector = 6;
             if (!gpr.WithCanonical(state, [&] { return state->hooks.on_invalid_opcode(state); })) {

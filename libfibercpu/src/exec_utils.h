@@ -546,6 +546,58 @@ FORCE_INLINE MemResult<void> WriteMem(EmuState* state, GprCache& gpr, uint32_t a
     }
 }
 
+// A resolved r/m operand for one execution attempt.
+template <AddrModeSpec Form = AddrModeSpec::Dynamic>
+class ModRMRmwOperand {
+public:
+    FORCE_INLINE ModRMRmwOperand(EmuState* state, GprCache& gpr, const DecodedOp* op, uint8_t rm)
+        : register_operand_(OperandIsReg<Form>(op)),
+          rm_(rm),
+          address_(register_operand_ ? 0 : ComputeLinearAddress(state, gpr, op)) {}
+
+    FORCE_INLINE ModRMRmwOperand(EmuState* state, GprCache& gpr, const DecodedOp* op)
+        : ModRMRmwOperand(state, gpr, op, op->modrm & 7) {}
+
+    FORCE_INLINE bool IsRegister() const { return register_operand_; }
+    FORCE_INLINE uint8_t Reg() const { return rm_; }
+    FORCE_INLINE uint32_t Address() const { return address_; }
+
+    template <typename T>
+    FORCE_INLINE MemResult<T> ReadForRestart(EmuState* state, GprCache& gpr, const DecodedOp* op,
+                                             mem::MicroTLB* utlb) const {
+        if (IsRegister()) [[likely]]
+            return ReadRegGeneric<T>(state, gpr, Reg());
+        return ReadMemForRestart<T>(state, Address(), utlb, op);
+    }
+
+    template <typename T>
+    FORCE_INLINE MemResult<T> ReadForBlockingRmw(EmuState* state, GprCache& gpr, const DecodedOp* op,
+                                                 mem::MicroTLB* utlb) {
+        if (IsRegister()) [[likely]]
+            return ReadRegGeneric<T>(state, gpr, Reg());
+        if (auto value = state->mmu.read<T, true>(Address(), utlb, op)) return value;
+        auto value = gpr.WithCanonical(state, [&] { return state->mmu.read_slow<T>(Address()); });
+        // A blocking read's callback can change the write address.
+        if (value) address_ = ComputeLinearAddress(state, gpr, op);
+        return value;
+    }
+
+    template <OpOnTLBMiss Strategy, typename T>
+    FORCE_INLINE MemResult<void> Write(EmuState* state, GprCache& gpr, const DecodedOp* op, T value,
+                                       mem::MicroTLB* utlb) const {
+        if (IsRegister()) [[likely]] {
+            WriteRegGeneric<T>(state, gpr, Reg(), value);
+            return {};
+        }
+        return WriteMem<T, Strategy>(state, gpr, Address(), value, utlb, op);
+    }
+
+private:
+    bool register_operand_;
+    uint8_t rm_;
+    uint32_t address_;
+};
+
 // ------------------------------------------------------------------------------------------------
 // Stack Operations (Refactored)
 // ------------------------------------------------------------------------------------------------
