@@ -8,17 +8,19 @@ using Fiberish.Native;
 
 namespace Fiberish.VFS;
 
-/// <summary>An IA-32 evdev keyboard or relative pointer with an independent queue per open.</summary>
+/// <summary>An IA-32 evdev keyboard or absolute pointer with an independent queue per open.</summary>
 internal sealed class EvdevInode : Inode, ITaskWaitSource, IPollNotificationSource
 {
     private const int EventSize = 16, QueueLimit = 256 * EventSize;
-    private const ushort Synchronize = 0, Key = 1, Relative = 2;
+    private const ushort Synchronize = 0, Key = 1, Relative = 2, Absolute = 3;
+    internal const int AbsoluteMaximum = 32767;
     private readonly KernelScheduler _scheduler;
     private readonly byte[] _name, _keys = new byte[96], _pressed = new byte[96];
     private readonly bool _pointer;
     private readonly Dictionary<LinuxFile, Client> _clients = [];
     private LinuxFile? _grab;
     private int _buttons;
+    private (int X, int Y)? _absolutePosition;
 
     private sealed class Client(KernelScheduler scheduler)
     {
@@ -71,12 +73,20 @@ internal sealed class EvdevInode : Inode, ITaskWaitSource, IPollNotificationSour
         Publish([(Key, (ushort)code, pressed ? 1 : 0), (Synchronize, 0, 0)]);
     }
 
-    internal void PublishPointer(int dx, int dy, int buttons)
+    internal void PublishPointer((int X, int Y)? position, int buttons)
     {
-        Span<(ushort Type, ushort Code, int Value)> events = stackalloc (ushort, ushort, int)[6];
+        Span<(ushort Type, ushort Code, int Value)> events = stackalloc (ushort, ushort, int)[4];
         var count = 0;
-        if (dx != 0) events[count++] = (Relative, 0, dx);
-        if (dy != 0) events[count++] = (Relative, 1, dy);
+        if (position is { } point && point != _absolutePosition)
+        {
+            if (point.X != _absolutePosition?.X) events[count++] = (Absolute, 0, point.X);
+            if (point.Y != _absolutePosition?.Y) events[count++] = (Absolute, 1, point.Y);
+            _absolutePosition = point;
+            events[count++] = (Synchronize, 0, 0);
+            // Deliver the position before a click received at that position.
+            Publish(events[..count]);
+            count = 0;
+        }
         for (var i = 0; i < 3; i++)
         {
             var button = 1 << i;
@@ -192,6 +202,15 @@ internal sealed class EvdevInode : Inode, ITaskWaitSource, IPollNotificationSour
         if (request >> 30 != 2) return -(int)Errno.ENOTTY;
 
         var number = request & 0xff;
+        if (_pointer && number is 0x40 or 0x41) // EVIOCGABS(ABS_X/ABS_Y)
+        {
+            Span<byte> info = stackalloc byte[24];
+            info.Clear();
+            var value = number == 0x40 ? _absolutePosition?.X : _absolutePosition?.Y;
+            BinaryPrimitives.WriteInt32LittleEndian(info, value ?? 0);
+            BinaryPrimitives.WriteInt32LittleEndian(info[8..], AbsoluteMaximum);
+            return task.CPU.CopyToUser(address, info[..Math.Min(size, info.Length)]) ? 0 : -(int)Errno.EFAULT;
+        }
         ReadOnlySpan<byte> data = number switch
         {
             0x01 => [1, 0, 1, 0], // EVIOCGVERSION 1.0.1
@@ -201,9 +220,10 @@ internal sealed class EvdevInode : Inode, ITaskWaitSource, IPollNotificationSour
             0x09 => [0, 0, 0, 0], // EVIOCGPROP
             0x18 => _pressed,
             0x19 or 0x1A or 0x1B => [0, 0, 0, 0], // LED, sound, switch state
-            0x20 => _pointer ? [7, 0, 0, 0] : [3, 0, 0, 0],
+            0x20 => _pointer ? [15, 0, 0, 0] : [3, 0, 0, 0],
             0x21 => _keys,
-            0x22 when _pointer => [0x43, 1], // REL_X, REL_Y, REL_HWHEEL, REL_WHEEL
+            0x22 when _pointer => [0x40, 1], // REL_HWHEEL, REL_WHEEL
+            0x23 when _pointer => [3, 0, 0, 0], // ABS_X, ABS_Y
             >= 0x22 and <= 0x3f => [0, 0, 0, 0],
             _ => []
         };

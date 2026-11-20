@@ -1665,6 +1665,7 @@ internal class Program
         var waylandIngressBridge = enableWaylandServer ? new WaylandDisplayIngressBridge() : null;
         var framebuffer = fbdevSize is DisplaySize size ? new FramebufferDevice(size.Width, size.Height) : null;
         var enableKmsOutput = enableKmsDrm && enableGles && framebuffer == null && !enableWaylandServer;
+        var kmsInput = enableKmsOutput ? new VirtualConsoleInput() : null;
         var processController = framebuffer != null || enableKmsOutput ? new ContainerProcessController() : null;
         using var framebufferHost = framebuffer != null ? new FramebufferDisplayHost(ProgramLoggerFactory, framebuffer) : null;
         try
@@ -1676,7 +1677,7 @@ internal class Program
             {
                 kmsWindow = kmsBackend?.CreateEglOutput(new DisplayOutputOptions(
                     DrmCardInode.ModeWidth, DrmCardInode.ModeHeight, "Podish KMSDRM",
-                    DisplayVSyncMode.Disabled, Resizable: false));
+                    DisplayVSyncMode.Disabled, Resizable: false, HideSystemCursor: true));
             }
             catch (Exception ex) when (ex is InvalidOperationException or DllNotFoundException or EntryPointNotFoundException)
             {
@@ -1725,6 +1726,7 @@ internal class Program
                 EnableGles = enableGles,
                 EnableKmsDrm = enableKmsDrm,
                 KmsWindow = kmsOutput?.KmsWindow,
+                KmsInput = kmsInput,
                 ProcessController = processController,
                 MemoryQuotaBytes = memoryQuotaBytes,
                 CpuOptions = cpuOptions,
@@ -1759,19 +1761,21 @@ internal class Program
                     }
                 }
             }
-            else if (kmsOutput != null)
+            else if (kmsOutput != null && kmsInput != null)
             {
+                var forwarder = new DisplayInputForwarder(kmsInput);
                 try
                 {
                     while (!runtimeTask.IsCompleted && !kmsOutput.IsClosed)
                     {
                         kmsOutput.PumpEvents();
-                        kmsOutput.DrainInputEvents();
+                        forwarder.Drain(kmsOutput);
                         Thread.Sleep(8);
                     }
                 }
                 finally
                 {
+                    forwarder.Release();
                     if (!runtimeTask.IsCompleted)
                     {
                         processController!.TrySignalInitProcess((int)LinuxSignal.SIGKILL);

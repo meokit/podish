@@ -8,10 +8,9 @@ internal sealed class FramebufferDisplayHost(
     ILoggerFactory loggerFactory,
     FramebufferDevice framebuffer) : IDisposable
 {
-    private readonly HashSet<uint> _pressedKeys = [];
+    private readonly DisplayInputForwarder _input = new(framebuffer.Input);
     private SdlDisplayBackend? _backend;
     private IDisplayOutput? _output;
-    private int _buttons;
 
     public void Start()
     {
@@ -44,8 +43,7 @@ internal sealed class FramebufferDisplayHost(
                 if (output.IsClosed)
                     break;
 
-                foreach (DisplayInputEvent input in output.DrainInputEvents())
-                    ForwardInput(input);
+                _input.Drain(output);
 
                 if (framebuffer.TryCopyFrame(pixels, out int frameWidth, out int frameHeight))
                 {
@@ -70,54 +68,7 @@ internal sealed class FramebufferDisplayHost(
         finally
         {
             texture?.Dispose();
-            ReleaseInput();
-        }
-    }
-
-    private void ForwardInput(DisplayInputEvent input)
-    {
-        switch (input.Kind)
-        {
-            case DisplayInputEventKind.KeyboardKey:
-                if (input.Pressed)
-                    _pressedKeys.Add(input.Key);
-                else
-                    _pressedKeys.Remove(input.Key);
-                framebuffer.Input.PublishKey(input.Key, input.Pressed);
-                break;
-            case DisplayInputEventKind.PointerMotion:
-                framebuffer.Input.PublishPointer(input.DeltaX, input.DeltaY, _buttons);
-                break;
-            case DisplayInputEventKind.PointerWheel:
-                framebuffer.Input.PublishWheel(input.DeltaX, input.DeltaY);
-                break;
-            case DisplayInputEventKind.PointerButton:
-                int button = input.Button switch
-                {
-                    DisplayPointerButton.Left => 1,
-                    DisplayPointerButton.Right => 2,
-                    DisplayPointerButton.Middle => 4,
-                    _ => 0
-                };
-                _buttons = input.Pressed ? _buttons | button : _buttons & ~button;
-                framebuffer.Input.PublishPointer(0, 0, _buttons);
-                break;
-            case DisplayInputEventKind.WindowFocusLost:
-                ReleaseInput();
-                break;
-        }
-    }
-
-    private void ReleaseInput()
-    {
-        foreach (uint key in _pressedKeys)
-            framebuffer.Input.PublishKey(key, false);
-        _pressedKeys.Clear();
-
-        if (_buttons != 0)
-        {
-            _buttons = 0;
-            framebuffer.Input.PublishPointer(0, 0, 0);
+            _input.Release();
         }
     }
 }

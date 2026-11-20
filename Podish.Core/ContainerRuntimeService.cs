@@ -65,6 +65,7 @@ public sealed class ContainerRunRequest
     public bool EnableGles { get; init; }
     public bool EnableKmsDrm { get; init; }
     public KmsEglWindow? KmsWindow { get; init; }
+    public VirtualConsoleInput? KmsInput { get; init; }
     public ushort? TerminalRows { get; init; }
     public ushort? TerminalCols { get; init; }
     public Action<KernelRuntime, KernelScheduler, UTSNamespace?, int>? ConfigureVirtualDaemons { get; init; }
@@ -402,7 +403,7 @@ public sealed class ContainerRuntimeService
             if (request.EnableGles || request.EnableKmsDrm)
             {
                 startupPhase = "mount-graphics";
-                gles = ContainerGraphics.Mount(runtime.Syscalls, scheduler, request.Framebuffer,
+                gles = ContainerGraphics.Mount(runtime.Syscalls, scheduler, request.Framebuffer, request.KmsInput,
                     request.EnableGles, request.EnableKmsDrm, request.KmsWindow, _logger);
             }
 
@@ -627,6 +628,7 @@ public sealed class ContainerRuntimeService
         }
         finally
         {
+            request.KmsInput?.Detach();
             _logger.LogDebug("Container teardown starting containerId={ContainerId}", request.ContainerId);
             try
             {

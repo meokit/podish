@@ -25,4 +25,4 @@ python3 tests/desktop/run.py --rootfs lxqt-i386.tar
 
 The default run uses SDL's dummy backend and leaves `desktop.png`, `engine.log`, and `guest.log` under `artifacts/lxqt-desktop`. Add `--verify-input` to open an SDL window. Click QTerminal, type `seat-ok`, and press Enter. The guest terminal must receive that input before the screenshot is taken.
 
-The virtual KMS and fbdev combination exposes one static seat with keyboard, relative pointer, three buttons, and wheel. The test selects the embedded seatd backend with VT binding disabled. Its LXQt session uses the distribution defaults from `/usr/share` and skips the PolicyKit agent because the fixture runs without a system bus and login service.
+The virtual KMS and fbdev combination exposes one static seat with a keyboard, an absolute evdev pointer, three buttons, and a wheel. The pointer follows the host position inside the framebuffer window. The test selects the embedded seatd backend with VT binding disabled. Its LXQt session uses the distribution defaults from `/usr/share` and skips the PolicyKit agent because the fixture runs without a system bus and login service.

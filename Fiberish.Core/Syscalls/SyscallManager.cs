@@ -450,9 +450,6 @@ public partial class SyscallManager
         ((TmpfsInode)dev.Dentry.Inode!).RegisterChild(dev.Dentry, name, entry);
     }
 
-    public void RegisterFramebufferEvdev(FramebufferDevice framebuffer, KernelScheduler scheduler) =>
-        framebuffer.Input.RegisterEvdev(this, scheduler);
-
     private FileSystemType CreateDevPtsFileSystemType(ISignalBroadcaster signalBroadcaster)
     {
         return new FileSystemType

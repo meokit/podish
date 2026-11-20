@@ -11,7 +11,8 @@ internal static class ContainerGraphics
     internal const string GuestPath = "/run/podish-gles";
 
     internal static AngleDevice? Mount(SyscallManager syscalls, KernelScheduler scheduler,
-        FramebufferDevice? framebuffer, bool gles, bool kmsDrm, KmsEglWindow? kmsWindow, ILogger logger)
+        FramebufferDevice? framebuffer, VirtualConsoleInput? kmsInput, bool gles, bool kmsDrm,
+        KmsEglWindow? kmsWindow, ILogger logger)
     {
         if (gles && (OperatingSystem.IsBrowser() || OperatingSystem.IsIOS()))
             throw new ContainerConfigurationException("ANGLE GLES is only available in a desktop host process.");
@@ -53,8 +54,9 @@ internal static class ContainerGraphics
                         sb => card = new DrmCardInode(sb, scheduler, device?.HasKmsOutput == true, framebuffer,
                             device is { HasKmsOutput: true } ? device.AllocateTextureBo : null));
                     syscalls.RegisterVirtualCharacterDevice("dri/renderD128", _ => card!.CreateRenderNode());
-                    if (framebuffer != null) syscalls.RegisterFramebufferEvdev(framebuffer, scheduler);
-                    MountGraphicsSysfs(syscalls, framebuffer != null);
+                    var input = framebuffer?.Input ?? kmsInput;
+                    input?.RegisterEvdev(syscalls, scheduler);
+                    MountGraphicsSysfs(syscalls, input != null);
                 }
                 return device;
             }

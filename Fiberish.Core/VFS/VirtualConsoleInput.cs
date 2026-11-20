@@ -6,10 +6,11 @@ using Fiberish.Syscalls;
 
 namespace Fiberish.VFS;
 
-/// <summary>A single virtual terminal and PS/2 pointer attached to the framebuffer console.</summary>
+/// <summary>Host input for a virtual evdev seat and an optional framebuffer console.</summary>
 public sealed class VirtualConsoleInput
 {
-    private volatile TtyDiscipline? _terminal;
+    private volatile KernelScheduler? _scheduler;
+    private TtyDiscipline? _terminal;
     private Ps2MouseInode? _mouse;
     private EvdevInode? _evdevKeyboard, _evdevPointer;
     private int _keyboardMode = 1;
@@ -36,18 +37,21 @@ public sealed class VirtualConsoleInput
         var psaux = new Dentry(FsName.FromString("psaux"), null, sb.Root, sb);
         sb.Root.Inode.Symlink(psaux, "input/mice", 0, 0);
         _terminal = terminal;
+        _scheduler = terminal.Scheduler;
     }
 
-    internal void RegisterEvdev(SyscallManager syscalls, KernelScheduler scheduler)
+    public void RegisterEvdev(SyscallManager syscalls, KernelScheduler scheduler)
     {
         syscalls.RegisterVirtualCharacterDevice("input/event0",
             sb => _evdevKeyboard = new EvdevInode(sb, scheduler, pointer: false));
         syscalls.RegisterVirtualCharacterDevice("input/event1",
             sb => _evdevPointer = new EvdevInode(sb, scheduler, pointer: true));
+        _scheduler = scheduler;
     }
 
-    internal void Detach()
+    public void Detach()
     {
+        _scheduler = null;
         _terminal = null;
     }
 
@@ -57,34 +61,47 @@ public sealed class VirtualConsoleInput
         ((TmpfsInode)parent.Inode!).RegisterChild(parent, child.Name, child);
     }
 
-    public void PublishPointer(int dx, int dy, int buttons)
+    public void PublishPointer(int dx, int dy, int buttons,
+        (int X, int Y, int Width, int Height)? windowPosition = null)
     {
-        var tty = _terminal;
-        tty?.Scheduler.RunIngress(() =>
+        var scheduler = _scheduler;
+        scheduler?.RunIngress(() =>
         {
-            if (!ReferenceEquals(_terminal, tty)) return;
-            _mouse!.Move(dx, dy, buttons);
-            _evdevPointer?.PublishPointer(dx, dy, buttons);
+            if (!ReferenceEquals(_scheduler, scheduler)) return;
+            _mouse?.Move(dx, dy, buttons);
+            if (_evdevPointer is not { } pointer) return;
+
+            (int, int)? absolute = windowPosition is { Width: > 0, Height: > 0 } point
+                ? (ScalePointerAxis(point.X, point.Width), ScalePointerAxis(point.Y, point.Height))
+                : null;
+            pointer.PublishPointer(absolute, buttons);
         });
+    }
+
+    private static int ScalePointerAxis(int coordinate, int extent)
+    {
+        // Use the center of the host pixel so both ends of the Guest output are reachable.
+        var pixel = Math.Clamp(coordinate, 0, extent - 1);
+        return (int)((2L * pixel + 1) * EvdevInode.AbsoluteMaximum / (2L * extent));
     }
 
     public void PublishKey(uint evdevKey, bool pressed)
     {
-        var tty = _terminal;
-        tty?.Scheduler.RunIngress(() =>
+        var scheduler = _scheduler;
+        scheduler?.RunIngress(() =>
         {
-            if (!ReferenceEquals(_terminal, tty)) return;
-            Key(tty, evdevKey, pressed);
+            if (!ReferenceEquals(_scheduler, scheduler)) return;
+            if (_terminal is { } tty) Key(tty, evdevKey, pressed);
             _evdevKeyboard?.PublishKey(evdevKey, pressed);
         });
     }
 
     public void PublishWheel(int x, int y)
     {
-        var tty = _terminal;
-        tty?.Scheduler.RunIngress(() =>
+        var scheduler = _scheduler;
+        scheduler?.RunIngress(() =>
         {
-            if (ReferenceEquals(_terminal, tty)) _evdevPointer?.PublishWheel(x, y);
+            if (ReferenceEquals(_scheduler, scheduler)) _evdevPointer?.PublishWheel(x, y);
         });
     }
 

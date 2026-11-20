@@ -118,6 +118,8 @@ This path supports one managed compositor context. In that context, guest `GL_TE
 
 Wayland EGL clients can also submit single-plane XRGB8888 buffers to the guest compositor. Guest EGL obtains a virtual PRIME fd from the render node and sends it over `zwp_linux_dmabuf_v1`. ANGLE blits the client pbuffer into the managed BO and the compositor samples the same GPU storage. EGL fences order producer writes and compositor reads. `wl_buffer.release` controls reuse of the three GPU slots. Clients fall back to `wl_shm` when the server does not advertise the format or rejects the import.
 
+On the SDL KMS window, the guest seat exposes a virtual evdev keyboard and an absolute pointer with buttons and scrolling. Labwc 0.8.3 with wlroots 0.18 can use them with `WLR_BACKENDS=drm,libinput`, `WLR_RENDERER=gles2`, `WLR_DRM_NO_ATOMIC=1`, and `WLR_NO_HARDWARE_CURSORS=1`. Use the embedded libseat backend, a virtual DRM card, and a writable `XDG_RUNTIME_DIR` as in the Cage launch above. The shader bridge preserves the built-in `GL_FRAGMENT_PRECISION_HIGH` branches in the wlroots external texture shader.
+
 For the packaged game tests, use the Debian rootfs from the earlier smoke-test instructions. The launch fixtures set the GLES profile before the first SDL window and check the engine's GPU swap log.
 
 ```sh

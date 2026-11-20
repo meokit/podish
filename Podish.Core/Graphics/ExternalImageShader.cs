@@ -27,13 +27,24 @@ internal static class ExternalImageShader
                 var line = source[offset..];
                 int lineLength = line.IndexOfAny((byte)'\r', (byte)'\n');
                 if (lineLength < 0) lineLength = line.Length;
-                // Leave macro expansion, conditional compilation and continued directives to ANGLE.
+                // Leave macro expansion and continued directives to ANGLE.
                 if (line[..lineLength].Contains((byte)'\\')) return false;
                 var directive = new Scanner(line[1..lineLength]);
                 if (!directive.Next(out var command, out _)) continue;
                 if (command.SequenceEqual("version"u8) &&
                     (!directive.Next(out var version, out _) || !version.SequenceEqual("100"u8)))
                     return false;
+                if (command.SequenceEqual("ifdef"u8) && directive.Read("GL_FRAGMENT_PRECISION_HIGH"u8) &&
+                    !directive.Next(out _, out _))
+                {
+                    // The built-in precision branch cannot change which external uniforms are declared.
+                    // Preserve both branches for ANGLE to select at compile time.
+                    scanner.SkipTo(offset + 1 + directive.LastTokenEnd);
+                    if (!ReadFloatPrecision(ref scanner) || !scanner.ReadDirective("else"u8) ||
+                        !ReadFloatPrecision(ref scanner) || !scanner.ReadDirective("endif"u8))
+                        return false;
+                    continue;
+                }
                 if (command.SequenceEqual("define"u8) || command.SequenceEqual("undef"u8) ||
                     command.StartsWith("if"u8) || command.SequenceEqual("else"u8) ||
                     command.SequenceEqual("elif"u8) || command.SequenceEqual("endif"u8))
@@ -76,6 +87,12 @@ internal static class ExternalImageShader
         return true;
     }
 
+    private static bool ReadFloatPrecision(ref Scanner scanner) =>
+        scanner.Read("precision"u8) && scanner.Next(out var qualifier, out _) &&
+        (qualifier.SequenceEqual("highp"u8) || qualifier.SequenceEqual("mediump"u8) ||
+         qualifier.SequenceEqual("lowp"u8)) &&
+        scanner.Read("float"u8) && scanner.Read(";"u8);
+
     private static bool ReadUniformNames(ref Scanner scanner, HashSet<string> names)
     {
         while (scanner.Next(out var name, out _) && IsIdentifierStart(name[0]))
@@ -113,6 +130,22 @@ internal static class ExternalImageShader
         internal void SkipTo(int position) => LastTokenEnd = _position = position;
 
         internal bool Read(ReadOnlySpan<byte> expected) => Next(out var token, out _) && token.SequenceEqual(expected);
+
+        internal bool ReadDirective(ReadOnlySpan<byte> expected)
+        {
+            var previousEnd = LastTokenEnd;
+            if (!Next(out var token, out var start) || !token.SequenceEqual("#"u8) ||
+                _source[previousEnd..start].IndexOfAny((byte)'\r', (byte)'\n') < 0)
+                return false;
+
+            var directive = _source[(start + 1)..];
+            var end = directive.IndexOfAny((byte)'\r', (byte)'\n');
+            if (end >= 0) directive = directive[..end];
+            var line = new Scanner(directive);
+            if (directive.Contains((byte)'\\') || !line.Read(expected) || line.Next(out _, out _)) return false;
+            SkipTo(start + 1 + line.LastTokenEnd);
+            return true;
+        }
 
         internal bool Next(out ReadOnlySpan<byte> token, out int start)
         {

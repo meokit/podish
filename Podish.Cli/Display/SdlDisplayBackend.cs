@@ -79,6 +79,7 @@ internal sealed unsafe class SdlDisplayOutput : IDisplayOutput
     private bool _cursorIsSystem;
     private bool _disposed;
     private bool _isClosed;
+    private readonly bool _hideSystemCursor;
     private readonly bool _restoreCursorVisibility;
 
     public SdlDisplayOutput(Sdl sdl, ILogger logger, DisplayOutputOptions options, bool egl = false)
@@ -113,11 +114,9 @@ internal sealed unsafe class SdlDisplayOutput : IDisplayOutput
             _sdl.DestroyWindow(_window);
             throw;
         }
-        if (options.HideSystemCursor && _sdl.ShowCursor(-1) == 1)
-        {
-            _sdl.ShowCursor(0);
-            _restoreCursorVisibility = true;
-        }
+        _hideSystemCursor = options.HideSystemCursor;
+        _restoreCursorVisibility = _hideSystemCursor && _sdl.ShowCursor(-1) == 1;
+        UpdateCursorVisibility();
         _logger.LogInformation("Opened SDL display output {Width}x{Height} vsync={VSync}", options.Width, options.Height,
             options.VSyncMode);
     }
@@ -252,6 +251,12 @@ internal sealed unsafe class SdlDisplayOutput : IDisplayOutput
                             Volatile.Write(ref _visible, 0);
                             _isClosed = true;
                             break;
+                        case WindowEventID.Enter when _hideSystemCursor && _sdl.GetMouseFocus() == _window:
+                            int x, y;
+                            _sdl.GetMouseState(&x, &y);
+                            _pendingInputEvents.Add(new DisplayInputEvent(DisplayInputEventKind.PointerMotion,
+                                x, y, ev.Window.Timestamp));
+                            break;
                         case WindowEventID.Leave:
                             _pendingInputEvents.Add(new DisplayInputEvent(DisplayInputEventKind.PointerLeave, Timestamp: ev.Window.Timestamp));
                             break;
@@ -272,6 +277,13 @@ internal sealed unsafe class SdlDisplayOutput : IDisplayOutput
                     break;
             }
         }
+        UpdateCursorVisibility();
+    }
+
+    private void UpdateCursorVisibility()
+    {
+        if (_restoreCursorVisibility)
+            _sdl.ShowCursor(_sdl.GetMouseFocus() == _window ? 0 : 1);
     }
 
     public IReadOnlyList<DisplayInputEvent> DrainInputEvents()
