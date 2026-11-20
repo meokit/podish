@@ -130,6 +130,47 @@ bool VerifyMemoryExit(bool enabled, bool write) {
            X86_GetEIP(state.get()) == code_address + sizeof(code) && (compiled != nullptr) == enabled;
 }
 
+bool VerifyMovAddressOperands(bool enabled) {
+    constexpr uint8_t code[] = {
+        0x64, 0x67, 0x66, 0x8b, 0x40, 0x14, // MOV AX, FS:[BX+SI+0x14]
+        0x64, 0x67, 0x66, 0x89, 0x40, 0x1c, // MOV FS:[BX+SI+0x1c], AX
+        0x8b, 0x54, 0x8d, 0x20,             // MOV EDX, [EBP+ECX*4+0x20]
+    };
+    constexpr uint32_t ss_base = data_address + 4096;
+    constexpr int fs_segment = 4;
+    auto state = LoadCode(code, sizeof(code));
+    X86_MemMap(state.get(), data_address, 4096, 3);
+    X86_MemMap(state.get(), ss_base, 4096, 3);
+    X86_SegBaseWrite(state.get(), fs_segment, data_address);
+    X86_SegBaseWrite(state.get(), ss_segment, ss_base);
+    X86_RegWrite(state.get(), 1, 3);
+    X86_RegWrite(state.get(), 3, 0x7600fffd);
+    X86_RegWrite(state.get(), 5, 0x40);
+    X86_RegWrite(state.get(), 6, 0xe0000006);
+
+    const uint8_t dword[] = {0x78, 0x56, 0x34, 0x12};
+    X86_MemWrite(state.get(), ss_base + 0x6c, dword, sizeof(dword));
+    const auto end = code_address + sizeof(code);
+    for (const uint16_t word : {uint16_t{0xcdef}, uint16_t{0xabcd}}) {
+        const uint8_t input[] = {uint8_t(word), uint8_t(word >> 8)};
+        const uint8_t dest[] = {0x44, 0x33, 0x22, 0x11};
+        X86_MemWrite(state.get(), data_address + 0x17, input, sizeof(input));
+        X86_MemWrite(state.get(), data_address + 0x1f, dest, sizeof(dest));
+        X86_SetEIP(state.get(), code_address);
+        X86_RegWrite(state.get(), 0, 0x12340000);
+        X86_RegWrite(state.get(), 2, 0);
+
+        if (!X86_Run(state.get(), end, 16) || X86_GetEIP(state.get()) != end)
+            return false;
+        uint32_t stored = 0;
+        X86_MemRead(state.get(), data_address + 0x1f, reinterpret_cast<uint8_t*>(&stored), sizeof(stored));
+        if (X86_RegRead(state.get(), 0) != (0x12340000 | word) || X86_RegRead(state.get(), 2) != 0x12345678 ||
+            stored != (0x11220000 | word) || HasCompiledEntry(state.get()) != enabled)
+            return false;
+    }
+    return true;
+}
+
 bool VerifyDirectBranch(bool enabled) {
     // MOV EAX, 2; CMP EAX, 2; JE over UD2.
     constexpr uint8_t code[] = {0xb8, 2, 0, 0, 0, 0x3d, 2, 0, 0, 0, 0x74, 2, 0x0f, 0x0b};
@@ -1029,6 +1070,10 @@ int main(int argc, char** argv) {
     }
     if (!VerifyMemoryExit(enabled, false) || !VerifyMemoryExit(enabled, true) || X86_GetLLVMJitLiveBlockCount() != 0) {
         std::fprintf(stderr, "LLVM memory exit or scalar restart mismatch\n");
+        return 1;
+    }
+    if (!VerifyMovAddressOperands(enabled) || X86_GetLLVMJitLiveBlockCount() != 0) {
+        std::fprintf(stderr, "LLVM MOV address width, segment or operand width mismatch\n");
         return 1;
     }
     if (!VerifyDirectBranch(enabled) || X86_GetLLVMJitLiveBlockCount() != 0) {

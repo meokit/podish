@@ -277,9 +277,14 @@ FORCE_INLINE LogicFlow OpMovModRM(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
+template <MovDirection Direction, class Operands>
+FORCE_INLINE LogicFlow OpMovWithOperands(LogicFuncParams, const Operands& operands) {
+    if (OperandIs16<OpsizeSpec::Dynamic>(op, operands)) return OpMovModRM<uint16_t, Direction>(LogicPassParams);
+    return OpMovModRM<uint32_t, Direction>(LogicPassParams);
+}
+
 FORCE_INLINE LogicFlow OpMov_EvGv(LogicFuncParams) {
-    if (OperandIs16<OpsizeSpec::Dynamic>(op)) return OpMovModRM<uint16_t, MovDirection::ToRm>(LogicPassParams);
-    return OpMovModRM<uint32_t, MovDirection::ToRm>(LogicPassParams);
+    return OpMovWithOperands<MovDirection::ToRm>(LogicPassParams, OperandSpec::Dynamic{});
 }
 
 // Named wrappers for OpMov_EvGv_Reg (0x89 Mod=3) - Specializing Source
@@ -303,8 +308,7 @@ FORCE_INLINE LogicFlow OpMov_EvGv_Reg(LogicFuncParams) { return OpMov_EvGv_Reg_I
 FORCE_INLINE LogicFlow OpMov_EvGv_Mem(LogicFuncParams) { return OpMov_EvGv_Mem_Internal<>(LogicPassParams); }
 
 FORCE_INLINE LogicFlow OpMov_GvEv(LogicFuncParams) {
-    if (OperandIs16<OpsizeSpec::Dynamic>(op)) return OpMovModRM<uint16_t, MovDirection::FromRm>(LogicPassParams);
-    return OpMovModRM<uint32_t, MovDirection::FromRm>(LogicPassParams);
+    return OpMovWithOperands<MovDirection::FromRm>(LogicPassParams, OperandSpec::Dynamic{});
 }
 
 // Named wrappers for profiling visibility
@@ -377,9 +381,14 @@ FORCE_INLINE LogicFlow OpMov_EvIz_Mem_Internal(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpMov_EvIz(LogicFuncParams) {
-    if (OperandIs16<OpsizeSpec::Dynamic>(op)) return OpMovImmediateModRM<uint16_t>(LogicPassParams);
+template <class Operands>
+FORCE_INLINE LogicFlow OpMovImmediateRmWithOperands(LogicFuncParams, const Operands& operands) {
+    if (OperandIs16<OpsizeSpec::Dynamic>(op, operands)) return OpMovImmediateModRM<uint16_t>(LogicPassParams);
     return OpMovImmediateModRM<uint32_t>(LogicPassParams);
+}
+
+FORCE_INLINE LogicFlow OpMov_EvIz(LogicFuncParams) {
+    return OpMovImmediateRmWithOperands(LogicPassParams, OperandSpec::Dynamic{});
 }
 
 #define FIBERCPU_BIND_OPS_DATA_MOV_IMMEDIATE_ADDRESS
@@ -393,9 +402,14 @@ FORCE_INLINE LogicFlow OpMovImmediateRegister(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpMov_RegImm(LogicFuncParams) {
-    if (OperandIs16<OpsizeSpec::Dynamic>(op)) return OpMovImmediateRegister<uint16_t>(LogicPassParams);
+template <class Operands>
+FORCE_INLINE LogicFlow OpMovImmediateRegWithOperands(LogicFuncParams, const Operands& operands) {
+    if (OperandIs16<OpsizeSpec::Dynamic>(op, operands)) return OpMovImmediateRegister<uint16_t>(LogicPassParams);
     return OpMovImmediateRegister<uint32_t>(LogicPassParams);
+}
+
+FORCE_INLINE LogicFlow OpMov_RegImm(LogicFuncParams) {
+    return OpMovImmediateRegWithOperands(LogicPassParams, OperandSpec::Dynamic{});
 }
 
 FORCE_INLINE LogicFlow OpMov_RegImm8(LogicFuncParams) { return OpMovImmediateRegister<uint8_t>(LogicPassParams); }
@@ -467,9 +481,10 @@ FORCE_INLINE LogicFlow OpMovExtend(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-template <typename Source, RmOperandSpec Register, OpsizeSpec Size>
-FORCE_INLINE LogicFlow OpMovExtendWidth(LogicFuncParams) {
-    if (OperandIs16<Size>(op)) return OpMovExtend<Source, uint16_t, AddrModeSpec::Dynamic, Register>(LogicPassParams);
+template <typename Source, RmOperandSpec Register, OpsizeSpec Size, class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpMovExtendWidth(LogicFuncParams, const Operands& operands = {}) {
+    if (OperandIs16<Size>(op, operands))
+        return OpMovExtend<Source, uint16_t, AddrModeSpec::Dynamic, Register>(LogicPassParams);
     return OpMovExtend<Source, uint32_t, AddrModeSpec::Dynamic, Register>(LogicPassParams);
 }
 
@@ -537,13 +552,13 @@ FORCE_INLINE LogicFlow OpLea_Impl(LogicFuncParams) {
 #include "instruction_kernel_bindings.inc"
 #undef FIBERCPU_BIND_OPS_DATA_MOV_IMPL_3
 
-FORCE_INLINE LogicFlow OpLea(LogicFuncParams) {
-    // 8D: LEA r16/32, m
-    if (GetPrefixes(op).flags.opsize) {
-        return OpLea_16(LogicPassParams);
-    }
+template <class Operands>
+FORCE_INLINE LogicFlow OpLeaWithOperands(LogicFuncParams, const Operands& operands) {
+    if (OperandIs16<OpsizeSpec::Dynamic>(op, operands)) return OpLea_16(LogicPassParams);
     return OpLea_32(LogicPassParams);
 }
+
+FORCE_INLINE LogicFlow OpLea(LogicFuncParams) { return OpLeaWithOperands(LogicPassParams, OperandSpec::Dynamic{}); }
 
 // ------------------------------------------------------------------------------------------------
 // Stack Operations (Simple)

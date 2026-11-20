@@ -41,6 +41,12 @@ FORCE_INLINE bool OperandIs16(const DecodedOp* op) {
     return Size == OpsizeSpec::Opsize16;
 }
 
+template <OpsizeSpec Size, class Operands>
+FORCE_INLINE bool OperandIs16(const DecodedOp* op, const Operands& operands) {
+    if constexpr (Size == OpsizeSpec::Dynamic) return operands.ReadPrefixes(op).flags.opsize;
+    return Size == OpsizeSpec::Opsize16;
+}
+
 template <AddrModeSpec Form>
 FORCE_INLINE bool OperandIsReg(uint8_t modrm) {
     if constexpr (Form == AddrModeSpec::Dynamic) return (modrm & 0xc0) == 0xc0;

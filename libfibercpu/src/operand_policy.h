@@ -22,6 +22,7 @@ struct Dynamic {
     static constexpr unsigned keep_mask = 0;
     static constexpr unsigned slots = 0;
     static FORCE_INLINE uint8_t ModRM(const DecodedOp* op) { return GetModRM(op); }
+    static FORCE_INLINE Prefixes ReadPrefixes(const DecodedOp* op) { return GetPrefixes(op); }
     static FORCE_INLINE void Assume(const DecodedOp*) {}
     static FORCE_INLINE uint32_t Immediate(const DecodedOp* op) { return GetImm(op); }
 };
@@ -88,6 +89,8 @@ struct DecodedOperandShape {
 
     static constexpr uint8_t metadata_mask = 0xdf;  // Exclude operand_lowered.
 
+    static constexpr bool HasMemoryAddress(uint8_t metadata) { return (metadata & 0xc2) == 2; }
+
     constexpr unsigned SlotCount() const {
         return 1 + compact_imm::NeedsSeparateSlot((encoding >> 16) & 2, uint8_t(encoding >> 8), immediate);
     }
@@ -107,6 +110,18 @@ struct DecodedOperandShape {
 };
 
 namespace OperandSpec {
+// The exact LLVM kernel supplies these values from the block recipe. The
+// original Op still identifies the instruction when the MMU requests replay.
+struct Baked {
+    Prefixes prefixes;
+    BakedAddress address;
+
+    constexpr Baked(uint8_t prefix_byte, uint32_t ea_desc, uint32_t displacement)
+        : prefixes{prefix_byte}, address{ea_desc, displacement, (prefix_byte & prefix::ADDRSIZE) != 0} {}
+
+    constexpr Prefixes ReadPrefixes(const DecodedOp*) const { return prefixes; }
+};
+
 template <unsigned Base, bool Operand16>
 struct BaseDisplacement : SlotBound<1> {
     static constexpr BakedAddress address{memdesc::PackEA(Base * 4, kNoRegOffset, 0, 0), 0, false, false};
@@ -127,7 +142,8 @@ struct Profile {
     static constexpr uint8_t metadata = uint8_t(Shape.encoding >> 16);
     static constexpr uint8_t prefixes = uint8_t(Shape.encoding >> 8);
     static constexpr BakedAddress address{Shape.ea_desc, Shape.displacement, (prefixes & prefix::ADDRSIZE) != 0};
-    static constexpr const BakedAddress* baked_address = (metadata & 0xc2) == 2 ? &address : nullptr;
+    static constexpr const BakedAddress* baked_address =
+        DecodedOperandShape::HasMemoryAddress(metadata) ? &address : nullptr;
     static FORCE_INLINE void Assume(const DecodedOp* op) {
         const auto decoded_prefixes = GetPrefixes(op).all;
         __builtin_assume(decoded_prefixes == prefixes);

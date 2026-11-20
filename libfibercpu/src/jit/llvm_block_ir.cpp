@@ -37,18 +37,8 @@ FORCE_INLINE LogicFlow RunLLVMFlagPolicy(uint8_t metadata, LogicFuncParams) {
     extern "C" LogicFlow FiberLLVMTemplate_##Name(unsigned, uint32_t encoding, uint32_t ea_desc,            \
                                                   uint32_t displacement, LogicFuncParams) {                 \
         const auto metadata = uint8_t(encoding >> 16);                                                      \
-        const auto prefixes = GetPrefixes(op).all;                                                          \
-        const auto meta = GetMeta(op).all;                                                                  \
-        const auto length = GetOpLength(state, op);                                                         \
-        __builtin_assume(prefixes == uint8_t(encoding >> 8));                                               \
-        __builtin_assume((meta & DecodedOperandShape::metadata_mask) == metadata);                          \
-        __builtin_assume(length == uint8_t(encoding >> 24));                                                \
-        if ((metadata & 0xc2) == 2) {                                                                       \
-            const auto ea = GetAddressDescriptor(op);                                                       \
-            const auto disp = GetDisplacement(op);                                                          \
-            __builtin_assume(ea == ea_desc);                                                                \
-            __builtin_assume(disp == displacement);                                                         \
-        }                                                                                                   \
+        const OperandSpec::Baked operands{uint8_t(encoding >> 8), ea_desc, displacement};                   \
+        gpr.baked_address = DecodedOperandShape::HasMemoryAddress(metadata) ? &operands.address : nullptr;  \
         return Exact;                                                                                       \
     }
 #include "llvm_block_operations.inc"

@@ -413,7 +413,12 @@ def generate(catalog, output, fusion_source=None):
         if name in group1_forms:
             exact = llvm_flag_policy("OpGroup1_Internal", group1_forms[name])
         policy = catalog.get("llvm_policies", {}).get(name, {})
-        if "live" in policy or "dead" in policy:
+        if baked := policy.get("baked"):
+            if "live" in policy or "dead" in policy:
+                raise ValueError(f"conflicting baked operand and flag policies for {name}")
+            kernel = kernel_reference(baked["kernel"], baked.get("arguments", []))
+            exact = f"op::{kernel}(LogicPassParams, operands)"
+        elif "live" in policy or "dead" in policy:
             live, dead = (kernel_reference(policy[kind]["kernel"], policy[kind].get("arguments", []))
                           for kind in ("live", "dead"))
             exact = f"RunLLVMFlagPolicy<{live}, {dead}>(metadata, LogicPassParams)"
