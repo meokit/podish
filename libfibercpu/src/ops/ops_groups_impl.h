@@ -20,22 +20,18 @@ enum class Group1Immediate { Byte, OperandWidth, SignExtendedByte };
 
 template <typename T, Group1Immediate Immediate, FlagsSpec Flags, GroupOpSpec SubOp, RmOperandSpec Rm>
 FORCE_INLINE LogicFlow OpGroup1_T_Internal(LogicFuncParams) {
-    T dest;
-    if constexpr (Rm == RmOperandSpec::ModReg) {
-        dest = ReadRegGeneric<T>(state, gpr, op->modrm & 7);
-    } else if constexpr (Rm >= RmOperandSpec::Reg0 && Rm <= RmOperandSpec::Reg7) {
-        constexpr uint8_t index = static_cast<uint8_t>(Rm) - static_cast<uint8_t>(RmOperandSpec::Reg0);
-        dest = ReadRegGeneric<T>(state, gpr, index);
-    } else {
-        const auto res = ReadModRM<T, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
-        if (!res) return LogicFlow::RestartMemoryOp;
-        dest = *res;
-    }
+    constexpr auto form = Rm == RmOperandSpec::Dynamic ? AddrModeSpec::Dynamic : AddrModeSpec::ModReg;
+    const uint8_t rm = Rm >= RmOperandSpec::Reg0 && Rm <= RmOperandSpec::Reg7
+                           ? static_cast<uint8_t>(Rm) - static_cast<uint8_t>(RmOperandSpec::Reg0)
+                           : op->modrm & 7;
+    const ModRMRmwOperand<form> operand(state, gpr, op, rm);
+    const auto dest = operand.template ReadForRestart<T>(state, gpr, op, utlb);
+    if (!dest) return LogicFlow::RestartMemoryOp;
 
     auto src = static_cast<T>(imm);
     if constexpr (Immediate == Group1Immediate::SignExtendedByte) src = static_cast<T>(static_cast<int8_t>(imm));
 
-    return Helper_Group1<T, Flags != FlagsSpec::Dead, SubOp, Rm>(state, gpr, op, flags_cache, dest, src, utlb);
+    return Helper_Group1<T, Flags != FlagsSpec::Dead, SubOp>(state, gpr, op, operand, flags_cache, *dest, src, utlb);
 }
 
 template <Group1Immediate Immediate, FlagsSpec Flags = FlagsSpec::Dynamic, GroupOpSpec SubOp = GroupOpSpec::Dynamic,
@@ -57,9 +53,10 @@ FORCE_INLINE LogicFlow OpGroup1_Internal(LogicFuncParams) {
 template <typename T, bool UpdateFlags, GroupOpSpec SubOp = GroupOpSpec::Dynamic,
           AddrModeSpec Form = AddrModeSpec::Dynamic>
 FORCE_INLINE LogicFlow OpGroup3_Ev_T_Internal(LogicFuncParams) {
-    const auto value = ReadModRM<T, OpOnTLBMiss::Restart, 1, Form>(state, gpr, op, utlb);
+    const ModRMRmwOperand<Form> operand(state, gpr, op);
+    const auto value = operand.template ReadForRestart<T>(state, gpr, op, utlb);
     if (!value) return LogicFlow::RestartMemoryOp;
-    return Helper_Group3<T, UpdateFlags, SubOp>(state, gpr, op, flags_cache, *value, utlb, imm);
+    return Helper_Group3<T, UpdateFlags, SubOp>(state, gpr, op, operand, flags_cache, *value, utlb, imm);
 }
 
 template <bool UpdateFlags, GroupOpSpec SubOp = GroupOpSpec::Dynamic>
@@ -99,21 +96,47 @@ FORCE_INLINE LogicFlow OpGroup4_Eb_Internal(LogicFuncParams) {
 
 template <typename T, bool UpdateFlags, GroupOpSpec FixedSubOp = GroupOpSpec::Dynamic>
 FORCE_INLINE LogicFlow OpGroup5_Ev_T_Internal(LogicFuncParams) {
-    // FF
-    // RMW Instructions!
-    // Must use Blocking memory op to avoid looping
-    T val;
-    if constexpr (sizeof(T) == 2) {
-        auto res = ReadModRM<uint16_t, OpOnTLBMiss::Blocking>(state, gpr, op, utlb);
-        if (!res) return LogicFlow::ExitOnCurrentEIP;
-        val = *res;
-    } else {
-        auto res = ReadModRM<uint32_t, OpOnTLBMiss::Blocking>(state, gpr, op, utlb);
-        if (!res) return LogicFlow::ExitOnCurrentEIP;
-        val = *res;
+    const uint8_t subop = GroupOperation<FixedSubOp>(op);
+    if (subop <= 1) {
+        ModRMRmwOperand<> operand(state, gpr, op);
+        const auto value = operand.ReadForBlockingRmw<T>(state, gpr, op, utlb);
+        if (!value) return LogicFlow::ExitOnCurrentEIP;
+
+        uint64_t updated_flags = flags_cache;
+        const T result = subop == 0 ? AluAdd<T, UpdateFlags>(state, updated_flags, *value, 1)
+                                    : AluSub<T, UpdateFlags>(state, updated_flags, *value, 1);
+        // Preserve input flags if the write faults, and preserve CF on success.
+        if (!operand.Write<OpOnTLBMiss::Blocking>(state, gpr, op, result, utlb)) return LogicFlow::ExitOnCurrentEIP;
+        if constexpr (UpdateFlags) {
+            const uint32_t carry = GetFlags32(flags_cache) & CF_MASK;
+            SetFlags32(updated_flags, (GetFlags32(updated_flags) & ~CF_MASK) | carry);
+            flags_cache = updated_flags;
+        }
+        return LogicFlow::Continue;
     }
 
-    return Helper_Group5<T, UpdateFlags, FixedSubOp>(state, gpr, op, flags_cache, val, utlb, branch);
+    const auto value = ReadModRM<T, OpOnTLBMiss::Blocking>(state, gpr, op, utlb);
+    if (!value) return LogicFlow::ExitOnCurrentEIP;
+
+    switch (subop) {
+        case 2:  // CALL Ev (Near Indirect)
+            if (!Push<T>(state, gpr, static_cast<T>(op->next_eip), utlb, op)) return LogicFlow::ExitOnCurrentEIP;
+            *branch = *value;
+            break;
+        case 4:  // JMP Ev (Near Indirect)
+            *branch = *value;
+            break;
+        case 6:  // PUSH Ev
+            if (!Push<T>(state, gpr, *value, utlb, op)) return LogicFlow::ExitOnCurrentEIP;
+            break;
+        default:
+            state->fault_vector = 6;
+            if (!gpr.WithCanonical(state, [&] { return state->hooks.on_invalid_opcode(state); })) {
+                state->status = EmuStatus::Fault;
+            }
+            return LogicFlow::ExitOnCurrentEIP;
+    }
+    return LogicFlow::Continue;
 }
 
 template <typename T, bool UpdateFlags, GroupOpSpec FixedSubOp>

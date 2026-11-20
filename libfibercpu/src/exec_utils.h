@@ -430,6 +430,13 @@ enum class OpOnTLBMiss {
     Retry
 };
 
+template <typename T>
+FORCE_INLINE MemResult<T> ReadMemForRestart(EmuState* state, uint32_t addr, mem::MicroTLB* utlb, const DecodedOp* op) {
+    if (auto value = state->mmu.read<T, true>(addr, utlb, op)) [[likely]]
+        return value;
+    return state->request_read_and_check_pending<T>(addr, op->next_eip);
+}
+
 /**
  * Reads a value from a Register or Memory based on the ModRM byte.
  * Supports uint8_t, uint16_t, uint32_t, and simde__m128.
@@ -457,15 +464,8 @@ FORCE_INLINE MemResult<T> ReadModRM(EmuState* state, GprCache& gpr, DecodedOp* o
         if constexpr (Strategy == OpOnTLBMiss::Blocking) {
             return ReadGuestMem<T, false>(state, gpr, addr, utlb, op);
         } else {
-            // Restart or Retry (though Retry for Read is unusual, treating as Restart)
-            auto value = state->mmu.read<T, true>(addr, utlb, op);
-            if (!value) [[unlikely]] {
-                // For Read, we always need to check pending if we want to restart
-                // If usage suggests Retry for Read, it likely implies prefetch which we don't support explicitly yet.
-                // Assuming Restart semantics for both Restart and Retry enums for Read to be safe.
-                value = state->request_read_and_check_pending<T>(addr, op->next_eip);
-            }
-            return value;
+            // A nonblocking read restarts on a miss, including with Retry.
+            return ReadMemForRestart<T>(state, addr, utlb, op);
         }
     }
 }
@@ -520,11 +520,7 @@ inline MemResult<T> ReadMem(EmuState* state, GprCache& gpr, uint32_t addr, mem::
     if constexpr (Strategy == OpOnTLBMiss::Blocking) {
         return ReadGuestMem<T, false>(state, gpr, addr, utlb, op);
     } else {
-        auto value = state->mmu.read<T, true>(addr, utlb, op);
-        if (!value) [[unlikely]] {
-            value = state->request_read_and_check_pending<T>(addr, op->next_eip);
-        }
-        return value;
+        return ReadMemForRestart<T>(state, addr, utlb, op);
     }
 }
 
@@ -549,6 +545,58 @@ FORCE_INLINE MemResult<void> WriteMem(EmuState* state, GprCache& gpr, uint32_t a
         return result;
     }
 }
+
+// A resolved r/m operand for one execution attempt.
+template <AddrModeSpec Form = AddrModeSpec::Dynamic>
+class ModRMRmwOperand {
+public:
+    FORCE_INLINE ModRMRmwOperand(EmuState* state, GprCache& gpr, const DecodedOp* op, uint8_t rm)
+        : register_operand_(OperandIsReg<Form>(op)),
+          rm_(rm),
+          address_(register_operand_ ? 0 : ComputeLinearAddress(state, gpr, op)) {}
+
+    FORCE_INLINE ModRMRmwOperand(EmuState* state, GprCache& gpr, const DecodedOp* op)
+        : ModRMRmwOperand(state, gpr, op, op->modrm & 7) {}
+
+    FORCE_INLINE bool IsRegister() const { return register_operand_; }
+    FORCE_INLINE uint8_t Reg() const { return rm_; }
+    FORCE_INLINE uint32_t Address() const { return address_; }
+
+    template <typename T>
+    FORCE_INLINE MemResult<T> ReadForRestart(EmuState* state, GprCache& gpr, const DecodedOp* op,
+                                             mem::MicroTLB* utlb) const {
+        if (IsRegister()) [[likely]]
+            return ReadRegGeneric<T>(state, gpr, Reg());
+        return ReadMemForRestart<T>(state, Address(), utlb, op);
+    }
+
+    template <typename T>
+    FORCE_INLINE MemResult<T> ReadForBlockingRmw(EmuState* state, GprCache& gpr, const DecodedOp* op,
+                                                 mem::MicroTLB* utlb) {
+        if (IsRegister()) [[likely]]
+            return ReadRegGeneric<T>(state, gpr, Reg());
+        if (auto value = state->mmu.read<T, true>(Address(), utlb, op)) return value;
+        auto value = gpr.WithCanonical(state, [&] { return state->mmu.read_slow<T>(Address()); });
+        // A blocking read's callback can change the write address.
+        if (value) address_ = ComputeLinearAddress(state, gpr, op);
+        return value;
+    }
+
+    template <OpOnTLBMiss Strategy, typename T>
+    FORCE_INLINE MemResult<void> Write(EmuState* state, GprCache& gpr, const DecodedOp* op, T value,
+                                       mem::MicroTLB* utlb) const {
+        if (IsRegister()) [[likely]] {
+            WriteRegGeneric<T>(state, gpr, Reg(), value);
+            return {};
+        }
+        return WriteMem<T, Strategy>(state, gpr, Address(), value, utlb, op);
+    }
+
+private:
+    bool register_operand_;
+    uint8_t rm_;
+    uint32_t address_;
+};
 
 // ------------------------------------------------------------------------------------------------
 // Stack Operations (Refactored)
