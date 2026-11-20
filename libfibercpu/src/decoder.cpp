@@ -386,20 +386,6 @@ InstructionDecodeResult DecodeInstructionBounded(const uint8_t* code, size_t ava
     // false positive)
     op->meta.flags.is_control_flow = is_rep | (is_map_match & (map <= 1));
 
-    // Final Step: Calculate Relative Handler Offset
-    // Specialized 32-bit MOV (0x89, 0x8B) - No Legacy Prefixes
-    // Important: We only check legacy prefixes (lock, rep, segment, opsize, addrsize)
-    // which are in the low 8 bits of prefixes.all.
-    if (mode == DecodeHandlerMode::Native && map == 0 && (op->prefixes.all & 0xFF) == 0) {
-        if (opcode == 0x89) {
-            uint8_t mod = (op->modrm >> 6) & 3;
-            *handler_index = (mod == 3) ? OP_MOV_RR_STORE : OP_MOV_RM_STORE;
-        } else if (opcode == 0x8B) {
-            uint8_t mod = (op->modrm >> 6) & 3;
-            *handler_index = (mod == 3) ? OP_MOV_RR_LOAD : OP_MOV_MR_LOAD;
-        }
-    }
-
     HandlerFunc h = g_Handlers[*handler_index];
     if (h) {
         op->handler = h;
@@ -1097,7 +1083,10 @@ DecodedInstruction BasicBlock::ReadOp(size_t slot) const {
         return result;
     }
     result.len = GetOpLength(slot);
-    result.modrm = op.GetModRM();
+    // Runtime handlers get a bound constant. Only the decoded snapshot
+    // needs the original encoding for concatenation, re-decode and export.
+    result.modrm = uint8_t(op.payload >> DecodedOp::kModRMShift);
+    if (op.IsCachedBranch()) result.modrm &= 7;
     result.prefixes = op.GetPrefixes();
     result.meta = op.GetMeta();
     if (GetExtKind(&result) == ExtKind::ControlFlow) {

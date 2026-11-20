@@ -18,8 +18,6 @@ BoundScalarHandler BindScalarHandler(HandlerFunc handler, BoundOperandShape shap
 BoundScalarHandler BindScalarHandler(const DecodedInstruction& op);
 HandlerFunc CanonicalBoundHandler(HandlerFunc handler);
 HandlerFunc FindGenericInstructionHandler(uint16_t opcode, const DecodedInstruction* op);
-int FindGenericOpcodeIndex(HandlerFunc handler);
-HandlerFunc FindFusionFallbackHandler(HandlerFunc handler);
 uint32_t FindScalarTrainingId(HandlerFunc handler);
 uint32_t TrainingOperationIdAt(uint32_t index);
 const char* FindTrainingOperationName(uint32_t id);

@@ -6,59 +6,36 @@ namespace Podish.PerfTools.Tests;
 public sealed class TrainingTests
 {
     [Fact]
-    public void DefaultTableReproducesTheReviewedLong4x32Manifest()
+    public void StockFusionTablesReproduceTheBakedManifest()
     {
         var root = new DirectoryInfo(AppContext.BaseDirectory);
         while (root is not null && !File.Exists(Path.Combine(root.FullName, "Podish.slnx"))) root = root.Parent;
         Assert.NotNull(root);
-        var manifest = Path.Combine(root.FullName, "benchmark", "superopcode", "manifests", "gnu-long4x32-v1.json");
-        using var document = System.Text.Json.JsonDocument.Parse(File.ReadAllText(manifest));
-        var patterns = document.RootElement.GetProperty("candidates").EnumerateArray().ToArray();
-        Assert.Equal(64, patterns.Length);
-        Assert.Equal(32, patterns.Count(pattern => pattern.GetProperty("pair").GetArrayLength() == 2));
-        Assert.Equal(32, patterns.Count(pattern => pattern.GetProperty("pair").GetArrayLength() == 4));
+        var manifest = Path.Combine(root.FullName, "benchmark", "optimization", "manifests", "baked-fusions-v3.json");
+        var generated = Path.Combine(root.FullName, "libfibercpu", "src", "generated");
+        Assert.Equal(Tool.GenerateSuperopcodes(manifest, 32),
+            File.ReadAllText(Path.Combine(generated, "superopcodes.generated.cpp")));
         Assert.Equal(Tool.GenerateSuperopcodes(manifest, 64),
-            File.ReadAllText(Path.Combine(root.FullName, "libfibercpu", "src", "generated", "superopcodes.generated.cpp")));
+            File.ReadAllText(Path.Combine(generated, "superopcodes.extended.generated.cpp")));
     }
 
     [Fact]
-    public void BakingExpandsSpecializationsWithoutReplacingGenericLogic()
+    public void BakingUsesOnlyTheSelectedSequences()
     {
-        var directory = Path.Combine(Path.GetTempPath(), "specialization-baking-" + Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(directory);
+        var path = Path.GetTempFileName();
         try
         {
-            var path = Path.Combine(directory, "selected.json");
             File.WriteAllText(path, """
-                {"schemaVersion":3,"operations":{"1":"op::OpGroup2_EvIb_Shr","2":"op::OpAdd_EvGv","3":"op::OpInc_Reg"},
-                 "candidates":[{"pair":[1,2,3]}]}
+                {"schemaVersion":3,"operations":{"1":"op::OpGroup2_EvIb","2":"op::OpAdd_EvGv","3":"op::OpInc_Reg"},
+                 "candidates":[{"pair":[1,2,3]},{"pair":[1,2,3]}]}
                 """);
-            var generated = Tool.GenerateSuperopcodes(path, 1);
-            Assert.Equal(generated, Tool.GenerateSuperopcodes(path, 1));
+            var generated = Tool.GenerateSuperopcodes(path, 3);
             Assert.Contains("// selected_pattern_count=1\n", generated);
-            Assert.Contains("// specialization_expansion_count=3\n", generated);
-            Assert.Contains("// generated_pattern_count=4\n", generated);
-            Assert.Contains("SuperOpcode_3_000_OpGroup2_EvIb_Shr__OpAdd_EvGv__OpInc_Reg", generated);
-            Assert.Contains("SuperOpcode_3_003_OpGroup2_EvIb_Shr_ModReg__OpAdd_EvGv_Eax__OpInc_Reg", generated);
-            Assert.Contains("RUN_SUPEROPCODE_OP(op::OpGroup2_EvIb_Shr_ModReg,", generated);
-            Assert.Contains("RUN_SUPEROPCODE_OP(op::OpAdd_EvGv_Eax,", generated);
-            Assert.Contains("DispatchWrapper<op::OpGroup2_EvIb_Shr_ModReg>", generated);
-            Assert.Contains("DispatchWrapper<op::OpAdd_EvGv_Eax>", generated);
-
-            // A preselected specialized pattern must retain its original ID and
-            // must not be generated a second time by its generic family.
-            File.WriteAllText(path, """
-                {"schemaVersion":3,"operations":{"1":"op::OpGroup2_EvIb_Shr","2":"op::OpGroup2_EvIb_Shr_ModReg",
-                    "3":"op::OpInc_Reg","4":"op::OpAdc_EvGv"},
-                 "candidates":[{"pair":[1,3,3]},{"pair":[2,3,3]},{"pair":[4,3,3]}]}
-                """);
-            generated = Tool.GenerateSuperopcodes(path, 3);
-            Assert.Contains("// specialization_expansion_count=0\n", generated);
-            Assert.Contains("// generated_pattern_count=3\n", generated);
-            Assert.Contains("SuperOpcode_3_001_OpGroup2_EvIb_Shr_ModReg__OpInc_Reg__OpInc_Reg", generated);
-            Assert.DoesNotContain("OpAdc_EvGv_Eax", generated);
+            Assert.Contains("// generated_pattern_count=1\n", generated);
+            Assert.Contains("SuperOpcode_3_000_OpGroup2_EvIb__OpAdd_EvGv__OpInc_Reg", generated);
+            Assert.DoesNotContain("RegisterHandwrittenSuperOpcodes", generated);
         }
-        finally { Directory.Delete(directory, true); }
+        finally { File.Delete(path); }
     }
 
     [Fact]
@@ -91,7 +68,7 @@ public sealed class TrainingTests
             Assert.Equal(generated, Tool.GenerateSuperopcodes(path, 3));
             Assert.DoesNotContain('\r', generated);
             Assert.Contains("third->len == 0", generated); Assert.Contains("fourth->len == 0", generated);
-            Assert.Contains("AcceptFusionOperandShape(ops, match.fused)", generated);
+            Assert.Contains("LowerFusionOperandHandler(ops, match.handlers[0])", generated);
             Assert.Contains("constituent3", generated);
             var bucket = generated[generated.IndexOf("std::vector<GeneratedSequenceMatch>{", StringComparison.Ordinal)..];
             Assert.True(bucket.IndexOf("SuperOpcode_4_", StringComparison.Ordinal) < bucket.IndexOf("SuperOpcode_3_", StringComparison.Ordinal));

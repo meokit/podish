@@ -22,10 +22,11 @@ FORCE_INLINE MemResult<T> ReadCompareRm(EmuState* state, GprCache& gpr, DecodedO
     return ReadModRM<T, OpOnTLBMiss::Restart, 1, Form>(state, gpr, op, operand_modrm, utlb);
 }
 
-template <OpsizeSpec Size = OpsizeSpec::Dynamic, AddrModeSpec Form = AddrModeSpec::Dynamic>
-FORCE_INLINE LogicFlow OpCmp_EvGv_Internal(LogicFuncParams) {
+template <OpsizeSpec Size = OpsizeSpec::Dynamic, AddrModeSpec Form = AddrModeSpec::Dynamic,
+          class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpCmp_EvGv_Internal(LogicFuncParams, const Operands& operands = {}) {
     // 39: CMP r/m16/32, r16/32
-    const bool opsize = OperandIs16<Size>(op);
+    const bool opsize = OperandIs16<Size>(op, operands);
 
     uint8_t reg = (operand_modrm >> 3) & 7;
     if (opsize) {
@@ -58,10 +59,11 @@ FORCE_INLINE LogicFlow OpCmp_EvGv_Internal(LogicFuncParams) {
 // Specializations for OpCmp_GvEv (3B: CMP r16/32, r/m16/32)
 // ============================================================================
 
-template <OpsizeSpec Size = OpsizeSpec::Dynamic, AddrModeSpec Form = AddrModeSpec::Dynamic>
-FORCE_INLINE LogicFlow OpCmp_GvEv_Internal(LogicFuncParams) {
+template <OpsizeSpec Size = OpsizeSpec::Dynamic, AddrModeSpec Form = AddrModeSpec::Dynamic,
+          class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpCmp_GvEv_Internal(LogicFuncParams, const Operands& operands = {}) {
     // 3B: CMP r16/32, r/m16/32
-    const bool opsize = OperandIs16<Size>(op);
+    const bool opsize = OperandIs16<Size>(op, operands);
 
     uint8_t reg = (operand_modrm >> 3) & 7;
     if (opsize) {
@@ -84,10 +86,11 @@ FORCE_INLINE LogicFlow OpCmp_GvEv_Internal(LogicFuncParams) {
 // Specializations for OpTest_EvGv (85: TEST r/m16/32, r16/32)
 // ============================================================================
 
-template <OpsizeSpec Size = OpsizeSpec::Dynamic, AddrModeSpec Form = AddrModeSpec::Dynamic>
-FORCE_INLINE LogicFlow OpTest_EvGv_Internal(LogicFuncParams) {
+template <OpsizeSpec Size = OpsizeSpec::Dynamic, AddrModeSpec Form = AddrModeSpec::Dynamic,
+          class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpTest_EvGv_Internal(LogicFuncParams, const Operands& operands = {}) {
     // 85: TEST r/m16/32, r16/32
-    const bool opsize = OperandIs16<Size>(op);
+    const bool opsize = OperandIs16<Size>(op, operands);
 
     uint8_t reg = (operand_modrm >> 3) & 7;
     if (opsize) {
@@ -139,12 +142,12 @@ FORCE_INLINE LogicFlow OpCmpxchg_T(LogicFuncParams) {
 }
 
 template <bool IsByte, OpsizeSpec Size = OpsizeSpec::Dynamic, AddrModeSpec Form = AddrModeSpec::Dynamic,
-          FlagsSpec Flags = FlagsSpec::Dynamic>
-FORCE_INLINE LogicFlow OpCmpxchg_Internal(LogicFuncParams) {
+          FlagsSpec Flags = FlagsSpec::Dynamic, class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpCmpxchg_Internal(LogicFuncParams, const Operands& operands = {}) {
     if constexpr (IsByte) {
         return OpCmpxchg_T<uint8_t, Form, Flags>(LogicPassParams);
     } else {
-        if (OperandIs16<Size>(op)) return OpCmpxchg_T<uint16_t, Form, Flags>(LogicPassParams);
+        if (OperandIs16<Size>(op, operands)) return OpCmpxchg_T<uint16_t, Form, Flags>(LogicPassParams);
         return OpCmpxchg_T<uint32_t, Form, Flags>(LogicPassParams);
     }
 }
@@ -177,6 +180,10 @@ FORCE_INLINE LogicFlow OpCmp_Byte_Internal(LogicFuncParams) {
 }
 
 namespace op {
+
+using fiberish::OpCmp_EvGv_Internal;
+using fiberish::OpCmp_GvEv_Internal;
+using fiberish::OpTest_EvGv_Internal;
 
 template <uint8_t FixedReg>
 FORCE_INLINE LogicFlow OpCmp_EvGv_32_ModReg_SameReg_Internal(LogicFuncParams) {

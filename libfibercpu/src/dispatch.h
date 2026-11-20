@@ -145,7 +145,26 @@ FORCE_INLINE GprCache OperandGprCache(GprCache gpr) {
     return gpr;
 }
 
-template <LogicFunc Target, class OperandPolicy = OperandSpec::Dynamic>
+// Unbound entries are only decoder/catalog identities. Distinct addresses
+// remain observable even on linkers that fold identical function bodies.
+template <auto Tag>
+ATTR_PRESERVE_NONE int64_t DecodeHandlerKey(EmuState*, DecodedOp*, int64_t, mem::MicroTlbAbiWord, mem::MicroTlbAbiWord,
+                                            uint32_t, uint64_t FIBERCPU_PIN_PARAMS) {
+    static volatile unsigned char identity;
+    (void)identity;
+    __builtin_trap();
+}
+
+template <LogicFunc Target>
+ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState*, DecodedOp*, int64_t, mem::MicroTlbAbiWord, mem::MicroTlbAbiWord,
+                                           uint32_t, uint64_t FIBERCPU_PIN_PARAMS) {
+    static volatile unsigned char identity;
+    (void)identity;
+    __builtin_trap();
+}
+
+template <LogicFunc Target, OperandSpec::Executable OperandPolicy>
+[[gnu::visibility("hidden")]]
 ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
                                            mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
                                            uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
@@ -168,7 +187,7 @@ ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState* RESTRICT state, DecodedOp* 
             // Direct Relative Dispatch
             // Note: We don't check for 0 here for speed, assuming well-formed blocks
             // (sentinel always valid)
-            if (auto* next_op = op + (OperandPolicy::slots ? OperandPolicy::slots : 1)) {
+            if (auto* next_op = OperandSpec::Advance<OperandPolicy>(op)) {
 #ifdef FIBERCPU_ENABLE_SEQUENCE_PROFILE
                 auto* logical_next = OperandSpec::Advance<OperandPolicy>(op);
                 if (logical_next != state->last_block->Sentinel()) {
@@ -183,12 +202,6 @@ ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState* RESTRICT state, DecodedOp* 
                     state->sequence_expected_op = logical_next;
                 }
 #endif
-                ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch,
-                                                      flags_cache FIBERCPU_PIN_FORWARD(OperandPolicy));
-            }
-            __builtin_unreachable();
-        case LogicFlow::ContinueSkipOne:
-            if (auto* next_op = NextOp(OperandSpec::Advance<OperandPolicy>(op))) {
                 ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch,
                                                       flags_cache FIBERCPU_PIN_FORWARD(OperandPolicy));
             }

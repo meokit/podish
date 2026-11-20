@@ -40,7 +40,8 @@ int32_t X86_GetHandlerId(void* handler) {
             return dynamic_id + static_cast<int32_t>(fiberish::generated::handler_reflection::HandlerCount());
     }
 #endif
-    return id;
+    if (id >= 0) return id;
+    return fiberish::generated::handler_reflection::IdForHandler(fiberish::CanonicalBoundHandler(fn));
 }
 
 void* X86_GetHandlerById(int32_t handler_id) {

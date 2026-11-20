@@ -59,6 +59,12 @@ FORCE_INLINE bool AddressIs16(const DecodedOp* op) {
     return Size == AddrsizeSpec::Addr16;
 }
 
+template <AddrsizeSpec Size, class Operands>
+FORCE_INLINE bool AddressIs16(const DecodedOp* op, const Operands& operands) {
+    if constexpr (Size == AddrsizeSpec::Dynamic) return operands.ReadPrefixes(op).flags.addrsize;
+    return Size == AddrsizeSpec::Addr16;
+}
+
 template <GroupOpSpec Operation>
 FORCE_INLINE uint8_t GroupOperation(uint8_t modrm) {
     if constexpr (Operation == GroupOpSpec::Dynamic) return (modrm >> 3) & 7;

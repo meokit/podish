@@ -83,10 +83,9 @@ def collect(profiles, fusion_source, limit):
                     skipped[op_id] += executions
                     cursor += 1
                     continue
-                if handler.kind != "handwritten":
-                    key = (op_id, operands)
-                    dispatches[key] += executions
-                    observed[key] += executions
+                key = (op_id, operands)
+                dispatches[key] += executions
+                observed[key] += executions
                 if width > 1:
                     for name, shape in zip(handler.operations, operands):
                         observed[scalar_ids[name], (shape,)] += executions

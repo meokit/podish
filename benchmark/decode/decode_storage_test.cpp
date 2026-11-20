@@ -195,8 +195,7 @@ int main() {
     auto result = FetchAndDecodeInstruction(state, address + 4095, buffer, &decoded, &handler, &raw);
     ok = ok && result == InstructionDecodeResult::Success && raw == 0x40 && decoded.head.GetLength() == 1;
 
-    // An instruction split across pages uses the buffered retry path, including
-    // the original opcode before specialized MOV handler remapping.
+    // An instruction split across pages preserves the canonical opcode.
     auto* next = state->mmu.allocate_page(address + 4096, static_cast<uint8_t>(mem::Property::RX));
     if (!next) {
         X86_Destroy(state);
@@ -207,11 +206,11 @@ int main() {
     next[1] = std::byte{0xc0};
     result = FetchAndDecodeInstruction(state, address + 4095, buffer, &decoded, &handler, &raw);
     ok = ok && result == InstructionDecodeResult::Success && raw == 0x8b && decoded.head.GetLength() == 3;
-    // Unprefixed MOV uses a specialized handler index; raw opcode is unchanged.
+    // MOV keeps the canonical handler index until the slot is bound.
     page[0] = std::byte{0x8b};
     page[1] = std::byte{0xc0};
     result = FetchAndDecodeInstruction(state, address, buffer, &decoded, &handler, &raw);
-    ok = ok && result == InstructionDecodeResult::Success && raw == 0x8b && handler != raw;
+    ok = ok && result == InstructionDecodeResult::Success && raw == 0x8b && handler == raw;
     // Check every immediate width and every truncated prefix of each encoding.
     auto check_immediate = [&](std::span<const uint8_t> code, size_t imm_size) {
         for (size_t length = 0; length < code.size(); ++length) {

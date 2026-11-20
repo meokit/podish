@@ -36,9 +36,9 @@ FORCE_INLINE LogicFlow OpImul_T(LogicFuncParams) {
 }
 
 template <ImulSource Source, OpsizeSpec Size = OpsizeSpec::Dynamic, AddrModeSpec Form = AddrModeSpec::Dynamic,
-          FlagsSpec Flags = FlagsSpec::Dynamic>
-FORCE_INLINE LogicFlow OpImul_Internal(LogicFuncParams) {
-    if (OperandIs16<Size>(op)) return OpImul_T<uint16_t, Source, Form, Flags>(LogicPassParams);
+          FlagsSpec Flags = FlagsSpec::Dynamic, class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpImul_Internal(LogicFuncParams, const Operands& operands = {}) {
+    if (OperandIs16<Size>(op, operands)) return OpImul_T<uint16_t, Source, Form, Flags>(LogicPassParams);
     return OpImul_T<uint32_t, Source, Form, Flags>(LogicPassParams);
 }
 

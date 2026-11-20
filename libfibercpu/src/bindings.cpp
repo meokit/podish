@@ -1167,7 +1167,7 @@ uint32_t X86_GetBuildFeatures(void) {
 #endif
     features |=
         (FIBERCPU_OPERAND_MODE << 4) | ((FIBERCPU_GPR_PIN_MODE & 3) << 8) | ((FIBERCPU_GPR_PIN_MODE >> 2) << 11);
-#if FIBERCPU_OPERAND_FUSIONS_ONLY
+#if FIBERCPU_LOWER_OPERANDS
     features |= 1u << 10;
 #endif
 #if FIBERCPU_STATIC_SPECIALIZATION

@@ -47,14 +47,6 @@ FORCE_INLINE LogicFlow OpCmovWidth(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-template <uint8_t Condition, RmOperandSpec Rm = RmOperandSpec::Dynamic, AddrModeSpec Form = AddrModeSpec::Dynamic,
-          OpsizeSpec Size = OpsizeSpec::Dynamic>
-FORCE_INLINE LogicFlow OpCmov_Internal(LogicFuncParams) {
-    constexpr auto operand_form = Rm == RmOperandSpec::ModReg ? AddrModeSpec::ModReg : Form;
-    if (OperandIs16<Size>(op)) return OpCmovWidth<uint16_t, Condition, operand_form>(LogicPassParams);
-    return OpCmovWidth<uint32_t, Condition, operand_form>(LogicPassParams);
-}
-
 // Helper for interrupts (Traps/Interrupts - EIP points to next instruction)
 inline void RaiseInterrupt(EmuState* state, GprCache& gpr, uint8_t vector, DecodedOp* op) {
     // Sync EIP
@@ -76,14 +68,22 @@ inline void RaiseInterrupt(EmuState* state, GprCache& gpr, uint8_t vector, Decod
 
 namespace op {
 
+template <uint8_t Condition, RmOperandSpec Rm = RmOperandSpec::Dynamic, AddrModeSpec Form = AddrModeSpec::Dynamic,
+          OpsizeSpec Size = OpsizeSpec::Dynamic, class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpCmov_Internal(LogicFuncParams, const Operands& operands = {}) {
+    constexpr auto operand_form = Rm == RmOperandSpec::ModReg ? AddrModeSpec::ModReg : Form;
+    if (OperandIs16<Size>(op, operands)) return OpCmovWidth<uint16_t, Condition, operand_form>(LogicPassParams);
+    return OpCmovWidth<uint32_t, Condition, operand_form>(LogicPassParams);
+}
+
 #define FIBERCPU_BIND_OPS_CONTROL_IMPL_0
 #include "instruction_kernel_bindings.inc"
 #undef FIBERCPU_BIND_OPS_CONTROL_IMPL_0
 
-template <AddrsizeSpec Size = AddrsizeSpec::Dynamic>
-FORCE_INLINE LogicFlow OpJecxz_Internal(LogicFuncParams) {
+template <AddrsizeSpec Size = AddrsizeSpec::Dynamic, class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpJecxz_Internal(LogicFuncParams, const Operands& operands = {}) {
     const uint32_t count = gpr.GetReg(state, ECX);
-    const bool zero = AddressIs16<Size>(op) ? static_cast<uint16_t>(count) == 0 : count == 0;
+    const bool zero = AddressIs16<Size>(op, operands) ? static_cast<uint16_t>(count) == 0 : count == 0;
     if (!zero) return LogicFlow::Continue;
     *branch = GetControlTargetEip(op);
     return LogicFlow::ExitToBranch;
@@ -91,10 +91,11 @@ FORCE_INLINE LogicFlow OpJecxz_Internal(LogicFuncParams) {
 
 FORCE_INLINE LogicFlow OpJecxz(LogicFuncParams) { return OpJecxz_Internal<>(LogicPassParams); }
 
-template <bool CheckZF, bool ExpectedZF, AddrsizeSpec Size = AddrsizeSpec::Dynamic>
-FORCE_INLINE LogicFlow OpLoop_Internal(LogicFuncParams) {
+template <bool CheckZF, bool ExpectedZF, AddrsizeSpec Size = AddrsizeSpec::Dynamic,
+          class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpLoop_Internal(LogicFuncParams, const Operands& operands = {}) {
     uint32_t count;
-    if (AddressIs16<Size>(op)) {
+    if (AddressIs16<Size>(op, operands)) {
         count = gpr.GetReg(state, ECX) & 0xFFFF;
         count = (count - 1) & 0xFFFF;
         uint32_t current = gpr.GetReg(state, ECX);
@@ -134,9 +135,14 @@ FORCE_INLINE LogicFlow OpCallRelative(LogicFuncParams) {
     return LogicFlow::ExitToBranch;
 }
 
-FORCE_INLINE LogicFlow OpCall_Rel(LogicFuncParams) {
-    if (OperandIs16<OpsizeSpec::Dynamic>(op)) return OpCallRelative<uint16_t>(LogicPassParams);
+template <class Operands>
+FORCE_INLINE LogicFlow OpCallRelWithOperands(LogicFuncParams, const Operands& operands) {
+    if (OperandIs16<OpsizeSpec::Dynamic>(op, operands)) return OpCallRelative<uint16_t>(LogicPassParams);
     return OpCallRelative<uint32_t>(LogicPassParams);
+}
+
+FORCE_INLINE LogicFlow OpCall_Rel(LogicFuncParams) {
+    return OpCallRelWithOperands(LogicPassParams, OperandSpec::Dynamic{});
 }
 
 enum class RetStackAdjustment { None, Immediate };
@@ -151,21 +157,24 @@ FORCE_INLINE LogicFlow OpReturnNear(LogicFuncParams) {
     return LogicFlow::ExitToBranch;
 }
 
+template <RetStackAdjustment Adjustment, class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpReturnNearWithOperands(LogicFuncParams, const Operands& operands = {}) {
+    if (OperandIs16<OpsizeSpec::Dynamic>(op, operands)) return OpReturnNear<uint16_t, Adjustment>(LogicPassParams);
+    return OpReturnNear<uint32_t, Adjustment>(LogicPassParams);
+}
+
 FORCE_INLINE LogicFlow OpRet(LogicFuncParams) {
-    if (OperandIs16<OpsizeSpec::Dynamic>(op)) return OpReturnNear<uint16_t, RetStackAdjustment::None>(LogicPassParams);
-    return OpReturnNear<uint32_t, RetStackAdjustment::None>(LogicPassParams);
+    return OpReturnNearWithOperands<RetStackAdjustment::None>(LogicPassParams);
 }
 
 FORCE_INLINE LogicFlow OpRet_Imm16(LogicFuncParams) {
-    if (OperandIs16<OpsizeSpec::Dynamic>(op))
-        return OpReturnNear<uint16_t, RetStackAdjustment::Immediate>(LogicPassParams);
-    return OpReturnNear<uint32_t, RetStackAdjustment::Immediate>(LogicPassParams);
+    return OpReturnNearWithOperands<RetStackAdjustment::Immediate>(LogicPassParams);
 }
 
-template <OpsizeSpec SizeSpec>
-FORCE_INLINE LogicFlow OpPushf_Internal(LogicFuncParams) {
+template <OpsizeSpec SizeSpec = OpsizeSpec::Dynamic, class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpPushf_Internal(LogicFuncParams, const Operands& operands = {}) {
     CommitFlagsCache(state, flags_cache);
-    if (OperandIs16<SizeSpec>(op)) {
+    if (OperandIs16<SizeSpec>(op, operands)) {
         if (!Push<uint16_t, true>(state, gpr, (uint16_t)GetArchitecturalEflags(state), utlb, op))
             return LogicFlow::RestartMemoryOp;
     } else {
@@ -175,9 +184,9 @@ FORCE_INLINE LogicFlow OpPushf_Internal(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-template <OpsizeSpec SizeSpec>
-FORCE_INLINE LogicFlow OpPopf_Internal(LogicFuncParams) {
-    if (OperandIs16<SizeSpec>(op)) {
+template <OpsizeSpec SizeSpec = OpsizeSpec::Dynamic, class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpPopf_Internal(LogicFuncParams, const Operands& operands = {}) {
+    if (OperandIs16<SizeSpec>(op, operands)) {
         auto val_res = Pop<uint16_t, true>(state, gpr, utlb, op);
         if (!val_res) return LogicFlow::RestartMemoryOp;
         uint16_t val = *val_res;
@@ -207,13 +216,9 @@ FORCE_INLINE LogicFlow OpPopf_Internal(LogicFuncParams) {
 #include "instruction_kernel_bindings.inc"
 #undef FIBERCPU_BIND_OPS_CONTROL_IMPL_2
 
-FORCE_INLINE LogicFlow OpPushf(LogicFuncParams) {
-    return GetPrefixes(op).flags.opsize ? OpPushf16(LogicPassParams) : OpPushf32(LogicPassParams);
-}
+FORCE_INLINE LogicFlow OpPushf(LogicFuncParams) { return OpPushf_Internal<>(LogicPassParams); }
 
-FORCE_INLINE LogicFlow OpPopf(LogicFuncParams) {
-    return GetPrefixes(op).flags.opsize ? OpPopf16(LogicPassParams) : OpPopf32(LogicPassParams);
-}
+FORCE_INLINE LogicFlow OpPopf(LogicFuncParams) { return OpPopf_Internal<>(LogicPassParams); }
 
 FORCE_INLINE LogicFlow OpStc(LogicFuncParams) {
     // F9: STC
@@ -599,10 +604,13 @@ FORCE_INLINE LogicFlow OpBoundWidth(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpBound(LogicFuncParams) {
-    if (OperandIs16<OpsizeSpec::Dynamic>(op)) return OpBoundWidth<int16_t>(LogicPassParams);
+template <class Operands>
+FORCE_INLINE LogicFlow OpBoundWithOperands(LogicFuncParams, const Operands& operands) {
+    if (OperandIs16<OpsizeSpec::Dynamic>(op, operands)) return OpBoundWidth<int16_t>(LogicPassParams);
     return OpBoundWidth<int32_t>(LogicPassParams);
 }
+
+FORCE_INLINE LogicFlow OpBound(LogicFuncParams) { return OpBoundWithOperands(LogicPassParams, OperandSpec::Dynamic{}); }
 
 #define FIBERCPU_BIND_CONTROL_SPECIALIZATIONS
 #include "instruction_kernel_bindings.inc"

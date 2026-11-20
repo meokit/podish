@@ -171,6 +171,29 @@ bool VerifyMovAddressOperands(bool enabled) {
     return true;
 }
 
+bool VerifyStringAndLoopPrefixes(bool enabled) {
+    constexpr uint8_t code[] = {
+        0xf3, 0x66, 0x67, 0xab, // REP STOSW using CX and DI
+        0x67, 0xe3, 2,          // JCXZ skips UD2
+        0x0f, 0x0b,
+    };
+    auto state = LoadCode(code, sizeof(code));
+    X86_MemMap(state.get(), data_address, 4096, 3);
+    X86_SegBaseWrite(state.get(), 0, data_address);
+    X86_RegWrite(state.get(), 0, 0xabcd1234);
+    X86_RegWrite(state.get(), 1, 0xcafe0003);
+    X86_RegWrite(state.get(), 7, 0xccdd0104);
+    X86_SetEFLAGS(state.get(), X86_GetEFLAGS(state.get()) | 0x400);
+
+    const auto end = code_address + sizeof(code);
+    std::array<uint16_t, 3> words{};
+    if (!X86_Run(state.get(), end, 16) || X86_GetEIP(state.get()) != end)
+        return false;
+    X86_MemRead(state.get(), data_address + 0x100, reinterpret_cast<uint8_t*>(words.data()), sizeof(words));
+    return words == std::array<uint16_t, 3>{0x1234, 0x1234, 0x1234} && X86_RegRead(state.get(), 1) == 0xcafe0000 &&
+           X86_RegRead(state.get(), 7) == 0xccdd00fe && HasCompiledEntry(state.get()) == enabled;
+}
+
 bool VerifyDirectBranch(bool enabled) {
     // MOV EAX, 2; CMP EAX, 2; JE over UD2.
     constexpr uint8_t code[] = {0xb8, 2, 0, 0, 0, 0x3d, 2, 0, 0, 0, 0x74, 2, 0x0f, 0x0b};
@@ -495,6 +518,30 @@ bool VerifyVectorPrefixRouting(bool enabled) {
     const auto end = code_address + sizeof(code);
     return X86_Run(state.get(), end, 16) && X86_GetEIP(state.get()) == end &&
            X86_RegRead(state.get(), 2) == 0x12345678 && HasCompiledEntry(state.get()) == enabled;
+}
+
+bool VerifySseArithmeticPrefixes(bool enabled) {
+    const auto run = [enabled]<class T, size_t N>(uint8_t prefix, const std::array<T, N>& lhs,
+                                                  const std::array<T, N>& rhs, bool scalar) {
+        const uint8_t code[] = {prefix, 0x0f, 0x58, 0xc1}; // ADDPS, ADDPD, ADDSS or ADDSD
+        const unsigned offset = prefix == 0;
+        auto state = LoadCode(code + offset, sizeof(code) - offset);
+        X86_WriteXMM(state.get(), 0, reinterpret_cast<const uint8_t*>(lhs.data()));
+        X86_WriteXMM(state.get(), 1, reinterpret_cast<const uint8_t*>(rhs.data()));
+        auto expected = lhs;
+        for (unsigned i = 0; i < (scalar ? 1 : N); ++i)
+            expected[i] += rhs[i];
+
+        const auto end = code_address + sizeof(code) - offset;
+        std::array<T, N> result{};
+        if (!X86_Run(state.get(), end, 16) || X86_GetEIP(state.get()) != end)
+            return false;
+        X86_ReadXMM(state.get(), 0, reinterpret_cast<uint8_t*>(result.data()));
+        return result == expected && HasCompiledEntry(state.get()) == enabled;
+    };
+    constexpr std::array<float, 4> f1{1, 2, 3, 4}, f2{10, 20, 30, 40};
+    constexpr std::array<double, 2> d1{1, 2}, d2{10, 20};
+    return run(0, f1, f2, false) && run(0x66, d1, d2, false) && run(0xf3, f1, f2, true) && run(0xf2, d1, d2, true);
 }
 
 bool VerifyX87Helpers(bool enabled) {
@@ -1076,8 +1123,8 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "LLVM MOV address width, segment or operand width mismatch\n");
         return 1;
     }
-    if (!VerifyDirectBranch(enabled) || X86_GetLLVMJitLiveBlockCount() != 0) {
-        std::fprintf(stderr, "LLVM direct branch or exit mismatch\n");
+    if (!VerifyDirectBranch(enabled) || !VerifyStringAndLoopPrefixes(enabled) || X86_GetLLVMJitLiveBlockCount() != 0) {
+        std::fprintf(stderr, "LLVM direct branch, REP string or counter width mismatch\n");
         return 1;
     }
     if (!VerifyGenericConcat(enabled) || X86_GetLLVMJitLiveBlockCount() != 0) {
@@ -1100,8 +1147,8 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "Shift/bit flags, operands or memory restart mismatch\n");
         return 1;
     }
-    if (!VerifyExtendedInteger(enabled) || !VerifyVectorPrefixRouting(enabled) || !VerifyX87Helpers(enabled) ||
-        X86_GetLLVMJitLiveBlockCount() != 0) {
+    if (!VerifyExtendedInteger(enabled) || !VerifyVectorPrefixRouting(enabled) ||
+        !VerifySseArithmeticPrefixes(enabled) || !VerifyX87Helpers(enabled) || X86_GetLLVMJitLiveBlockCount() != 0) {
         std::fprintf(stderr, "Generated integer, vector prefix or x87 template mismatch\n");
         return 1;
     }

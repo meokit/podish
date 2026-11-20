@@ -909,13 +909,14 @@ FORCE_INLINE LogicFlow OpPmovmskb_Sse(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpGroup_Pshuf(LogicFuncParams) {
+template <class Operands>
+FORCE_INLINE LogicFlow OpGroup_PshufWithOperands(LogicFuncParams, const Operands& operands) {
     // 0F 70
-    if (GetPrefixes(op).flags.opsize) {  // 66: PSHUFD
+    if (operands.ReadPrefixes(op).flags.opsize) {  // 66: PSHUFD
         return OpPshufd_Sse(LogicPassParams);
-    } else if (GetPrefixes(op).flags.repne) {  // F2: PSHUFLW
+    } else if (operands.ReadPrefixes(op).flags.repne) {  // F2: PSHUFLW
         return OpPshuflw_Sse(LogicPassParams);
-    } else if (GetPrefixes(op).flags.rep) {  // F3: PSHUFHW
+    } else if (operands.ReadPrefixes(op).flags.rep) {  // F3: PSHUFHW
         return OpPshufhw_Sse(LogicPassParams);
     } else {
         // PSHUFW (MMX) - Not implemented
@@ -925,16 +926,20 @@ FORCE_INLINE LogicFlow OpGroup_Pshuf(LogicFuncParams) {
     }
 }
 
+FORCE_INLINE LogicFlow OpGroup_Pshuf(LogicFuncParams) {
+    return OpGroup_PshufWithOperands(LogicPassParams, OperandSpec::Dynamic{});
+}
+
 FORCE_INLINE LogicFlow OpGroup_Sse_Shift_Imm_W(LogicFuncParams) {
     // 0F 71 /r
     uint8_t sub = (operand_modrm >> 3) & 7;
     switch (sub) {
         case 2:
-            return OpPsrlw_Sse_Group(LogicPassParams);
+            return OpPsrlw_Sse_Internal<true>(LogicPassParams);
         case 4:
-            return OpPsraw_Sse_Group(LogicPassParams);
+            return OpPsraw_Sse_Internal<true>(LogicPassParams);
         case 6:
-            return OpPsllw_Sse_Group(LogicPassParams);
+            return OpPsllw_Sse_Internal<true>(LogicPassParams);
         default:
             return LogicFlow::Continue;  // #UD
     }
@@ -945,11 +950,11 @@ FORCE_INLINE LogicFlow OpGroup_Sse_Shift_Imm_D(LogicFuncParams) {
     uint8_t sub = (operand_modrm >> 3) & 7;
     switch (sub) {
         case 2:
-            return OpPsrld_Sse_Group(LogicPassParams);
+            return OpPsrld_Sse_Internal<true>(LogicPassParams);
         case 4:
-            return OpPsrad_Sse_Group(LogicPassParams);
+            return OpPsrad_Sse_Internal<true>(LogicPassParams);
         case 6:
-            return OpPslld_Sse_Group(LogicPassParams);
+            return OpPslld_Sse_Internal<true>(LogicPassParams);
         default:
             return LogicFlow::Continue;
     }
@@ -960,11 +965,11 @@ FORCE_INLINE LogicFlow OpGroup_Sse_Shift_Imm_Q(LogicFuncParams) {
     uint8_t sub = (operand_modrm >> 3) & 7;
     switch (sub) {
         case 2:
-            return OpPsrlq_Sse_Group(LogicPassParams);
+            return OpPsrlq_Sse_Internal<true>(LogicPassParams);
         case 3:
             return OpPsrldq_Sse(LogicPassParams);
         case 6:
-            return OpPsllq_Sse_Group(LogicPassParams);
+            return OpPsllq_Sse_Internal<true>(LogicPassParams);
         case 7:
             return OpPslldq_Sse(LogicPassParams);
         default:

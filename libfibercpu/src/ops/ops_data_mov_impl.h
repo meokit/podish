@@ -414,9 +414,9 @@ FORCE_INLINE LogicFlow OpMov_RegImm(LogicFuncParams) {
 
 FORCE_INLINE LogicFlow OpMov_RegImm8(LogicFuncParams) { return OpMovImmediateRegister<uint8_t>(LogicPassParams); }
 
-template <typename T, MovDirection Direction>
-FORCE_INLINE LogicFlow OpMovMoffs(LogicFuncParams) {
-    const uint32_t linear = imm + GetSegmentBase(state, op);
+template <typename T, MovDirection Direction, class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpMovMoffs(LogicFuncParams, const Operands& operands = {}) {
+    const uint32_t linear = imm + GetSegmentBase(state, op, operands);
     if constexpr (Direction == MovDirection::ToRm) {
         const T value = ReadRegGeneric<T>(state, gpr, EAX);
         if (!WriteMem<T, OpOnTLBMiss::Retry>(state, gpr, linear, value, utlb, op)) return LogicFlow::RetryMemoryOp;
@@ -428,13 +428,19 @@ FORCE_INLINE LogicFlow OpMovMoffs(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
+template <MovDirection Direction, class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpMovMoffsScalar(LogicFuncParams, const Operands& operands = {}) {
+    if (OperandIs16<OpsizeSpec::Dynamic>(op, operands))
+        return OpMovMoffs<uint16_t, Direction>(LogicPassParams, operands);
+    return OpMovMoffs<uint32_t, Direction>(LogicPassParams, operands);
+}
+
 FORCE_INLINE LogicFlow OpMov_Moffs_Load_Byte(LogicFuncParams) {
     return OpMovMoffs<uint8_t, MovDirection::FromRm>(LogicPassParams);
 }
 
 FORCE_INLINE LogicFlow OpMov_Moffs_Load_Word(LogicFuncParams) {
-    if (OperandIs16<OpsizeSpec::Dynamic>(op)) return OpMovMoffs<uint16_t, MovDirection::FromRm>(LogicPassParams);
-    return OpMovMoffs<uint32_t, MovDirection::FromRm>(LogicPassParams);
+    return OpMovMoffsScalar<MovDirection::FromRm>(LogicPassParams);
 }
 
 FORCE_INLINE LogicFlow OpMov_Moffs_Store_Byte(LogicFuncParams) {
@@ -442,8 +448,7 @@ FORCE_INLINE LogicFlow OpMov_Moffs_Store_Byte(LogicFuncParams) {
 }
 
 FORCE_INLINE LogicFlow OpMov_Moffs_Store_Word(LogicFuncParams) {
-    if (OperandIs16<OpsizeSpec::Dynamic>(op)) return OpMovMoffs<uint16_t, MovDirection::ToRm>(LogicPassParams);
-    return OpMovMoffs<uint32_t, MovDirection::ToRm>(LogicPassParams);
+    return OpMovMoffsScalar<MovDirection::ToRm>(LogicPassParams);
 }
 
 template <AddrModeSpec Form = AddrModeSpec::Dynamic>
@@ -554,8 +559,8 @@ FORCE_INLINE LogicFlow OpLea_Impl(LogicFuncParams) {
 
 template <class Operands>
 FORCE_INLINE LogicFlow OpLeaWithOperands(LogicFuncParams, const Operands& operands) {
-    if (OperandIs16<OpsizeSpec::Dynamic>(op, operands)) return OpLea_16(LogicPassParams);
-    return OpLea_32(LogicPassParams);
+    if (OperandIs16<OpsizeSpec::Dynamic>(op, operands)) return OpLea_Impl<OpsizeSpec::Opsize16>(LogicPassParams);
+    return OpLea_Impl<OpsizeSpec::Opsize32>(LogicPassParams);
 }
 
 FORCE_INLINE LogicFlow OpLea(LogicFuncParams) { return OpLeaWithOperands(LogicPassParams, OperandSpec::Dynamic{}); }
@@ -564,41 +569,11 @@ FORCE_INLINE LogicFlow OpLea(LogicFuncParams) { return OpLeaWithOperands(LogicPa
 // Stack Operations (Simple)
 // ------------------------------------------------------------------------------------------------
 
-template <RmOperandSpec RegSpec, OpsizeSpec SizeSpec>
-FORCE_INLINE LogicFlow OpPush_Reg_Internal(LogicFuncParams) {
-    constexpr uint8_t FixedReg = static_cast<uint8_t>(RegSpec) - static_cast<uint8_t>(RmOperandSpec::Reg0);
-    if (OperandIs16<SizeSpec>(op)) {
-        if (!Push<uint16_t, true>(state, gpr, static_cast<uint16_t>(gpr.GetReg(state, FixedReg)), utlb, op))
-            return LogicFlow::RestartMemoryOp;
-    } else {
-        if (!Push<uint32_t, true>(state, gpr, gpr.GetReg(state, FixedReg), utlb, op)) return LogicFlow::RestartMemoryOp;
-    }
-    return LogicFlow::Continue;
-}
-
-template <RmOperandSpec RegSpec, OpsizeSpec SizeSpec>
-FORCE_INLINE LogicFlow OpPop_Reg_Internal(LogicFuncParams) {
-    constexpr uint8_t FixedReg = static_cast<uint8_t>(RegSpec) - static_cast<uint8_t>(RmOperandSpec::Reg0);
-    if (OperandIs16<SizeSpec>(op)) {
-        auto val_res = Pop<uint16_t, true>(state, gpr, utlb, op);
-        if (!val_res) return LogicFlow::RestartMemoryOp;
-        gpr.SetReg(state, FixedReg, (gpr.GetReg(state, FixedReg) & 0xFFFF0000) | *val_res);
-    } else {
-        auto val_res = Pop<uint32_t, true>(state, gpr, utlb, op);
-        if (!val_res) return LogicFlow::RestartMemoryOp;
-        gpr.SetReg(state, FixedReg, *val_res);
-    }
-    return LogicFlow::Continue;
-}
-
-#define FIBERCPU_BIND_OPS_DATA_MOV_IMPL_MACRO_6
-#include "instruction_kernel_bindings.inc"
-#undef FIBERCPU_BIND_OPS_DATA_MOV_IMPL_MACRO_6
-
-FORCE_INLINE LogicFlow OpPush_Reg(LogicFuncParams) {
-    // Generic fallback; opcode-specialized handlers should handle the hot path.
-    uint8_t reg = operand_modrm & 7;
-    if (GetPrefixes(op).flags.opsize) {
+template <RmOperandSpec RegSpec = RmOperandSpec::Dynamic, OpsizeSpec SizeSpec = OpsizeSpec::Dynamic,
+          class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpPush_Reg_Internal(LogicFuncParams, const Operands& operands = {}) {
+    const auto reg = MovRegister<RegSpec>(operand_modrm & 7);
+    if (OperandIs16<SizeSpec>(op, operands)) {
         if (!Push<uint16_t, true>(state, gpr, static_cast<uint16_t>(gpr.GetReg(state, reg)), utlb, op))
             return LogicFlow::RestartMemoryOp;
     } else {
@@ -607,32 +582,11 @@ FORCE_INLINE LogicFlow OpPush_Reg(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-enum class PushImmediate { FullWidth, SignExtendedByte };
-
-template <typename T, PushImmediate Kind>
-FORCE_INLINE LogicFlow OpPushImmediate(LogicFuncParams) {
-    T value = static_cast<T>(imm);
-    if constexpr (Kind == PushImmediate::SignExtendedByte) value = static_cast<T>(static_cast<int8_t>(imm));
-    if (!Push<T, true>(state, gpr, value, utlb, op)) return LogicFlow::RestartMemoryOp;
-    return LogicFlow::Continue;
-}
-
-FORCE_INLINE LogicFlow OpPush_Imm32(LogicFuncParams) {
-    if (OperandIs16<OpsizeSpec::Dynamic>(op))
-        return OpPushImmediate<uint16_t, PushImmediate::FullWidth>(LogicPassParams);
-    return OpPushImmediate<uint32_t, PushImmediate::FullWidth>(LogicPassParams);
-}
-
-FORCE_INLINE LogicFlow OpPush_Imm8(LogicFuncParams) {
-    if (OperandIs16<OpsizeSpec::Dynamic>(op))
-        return OpPushImmediate<uint16_t, PushImmediate::SignExtendedByte>(LogicPassParams);
-    return OpPushImmediate<uint32_t, PushImmediate::SignExtendedByte>(LogicPassParams);
-}
-
-FORCE_INLINE LogicFlow OpPop_Reg(LogicFuncParams) {
-    // Generic fallback; opcode-specialized handlers should handle the hot path.
-    uint8_t reg = operand_modrm & 7;
-    if (GetPrefixes(op).flags.opsize) {
+template <RmOperandSpec RegSpec = RmOperandSpec::Dynamic, OpsizeSpec SizeSpec = OpsizeSpec::Dynamic,
+          class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpPop_Reg_Internal(LogicFuncParams, const Operands& operands = {}) {
+    const auto reg = MovRegister<RegSpec>(operand_modrm & 7);
+    if (OperandIs16<SizeSpec>(op, operands)) {
         auto val_res = Pop<uint16_t, true>(state, gpr, utlb, op);
         if (!val_res) return LogicFlow::RestartMemoryOp;
         gpr.SetReg(state, reg, (gpr.GetReg(state, reg) & 0xFFFF0000) | *val_res);
@@ -644,6 +598,38 @@ FORCE_INLINE LogicFlow OpPop_Reg(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
+#define FIBERCPU_BIND_OPS_DATA_MOV_IMPL_MACRO_6
+#include "instruction_kernel_bindings.inc"
+#undef FIBERCPU_BIND_OPS_DATA_MOV_IMPL_MACRO_6
+
+FORCE_INLINE LogicFlow OpPush_Reg(LogicFuncParams) { return OpPush_Reg_Internal<>(LogicPassParams); }
+
+enum class PushImmediate { FullWidth, SignExtendedByte };
+
+template <typename T, PushImmediate Kind>
+FORCE_INLINE LogicFlow OpPushImmediate(LogicFuncParams) {
+    T value = static_cast<T>(imm);
+    if constexpr (Kind == PushImmediate::SignExtendedByte) value = static_cast<T>(static_cast<int8_t>(imm));
+    if (!Push<T, true>(state, gpr, value, utlb, op)) return LogicFlow::RestartMemoryOp;
+    return LogicFlow::Continue;
+}
+
+template <PushImmediate Kind, class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpPushImmediateWithOperands(LogicFuncParams, const Operands& operands = {}) {
+    if (OperandIs16<OpsizeSpec::Dynamic>(op, operands)) return OpPushImmediate<uint16_t, Kind>(LogicPassParams);
+    return OpPushImmediate<uint32_t, Kind>(LogicPassParams);
+}
+
+FORCE_INLINE LogicFlow OpPush_Imm32(LogicFuncParams) {
+    return OpPushImmediateWithOperands<PushImmediate::FullWidth>(LogicPassParams);
+}
+
+FORCE_INLINE LogicFlow OpPush_Imm8(LogicFuncParams) {
+    return OpPushImmediateWithOperands<PushImmediate::SignExtendedByte>(LogicPassParams);
+}
+
+FORCE_INLINE LogicFlow OpPop_Reg(LogicFuncParams) { return OpPop_Reg_Internal<>(LogicPassParams); }
+
 template <typename T, AddrModeSpec Form = AddrModeSpec::Dynamic>
 FORCE_INLINE LogicFlow OpPopModRM(LogicFuncParams) {
     const auto value = Pop<T, true>(state, gpr, utlb, op);
@@ -654,9 +640,14 @@ FORCE_INLINE LogicFlow OpPopModRM(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpPop_Ev(LogicFuncParams) {
-    if (OperandIs16<OpsizeSpec::Dynamic>(op)) return OpPopModRM<uint16_t>(LogicPassParams);
+template <class Operands>
+FORCE_INLINE LogicFlow OpPopRmWithOperands(LogicFuncParams, const Operands& operands) {
+    if (OperandIs16<OpsizeSpec::Dynamic>(op, operands)) return OpPopModRM<uint16_t>(LogicPassParams);
     return OpPopModRM<uint32_t>(LogicPassParams);
+}
+
+FORCE_INLINE LogicFlow OpPop_Ev(LogicFuncParams) {
+    return OpPopRmWithOperands(LogicPassParams, OperandSpec::Dynamic{});
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -679,10 +670,13 @@ FORCE_INLINE LogicFlow PushaWithWidth(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpPusha(LogicFuncParams) {
-    return GetPrefixes(op).flags.opsize ? PushaWithWidth<uint16_t>(LogicPassParams)
-                                        : PushaWithWidth<uint32_t>(LogicPassParams);
+template <class Operands>
+FORCE_INLINE LogicFlow OpPushaWithOperands(LogicFuncParams, const Operands& operands) {
+    return OperandIs16<OpsizeSpec::Dynamic>(op, operands) ? PushaWithWidth<uint16_t>(LogicPassParams)
+                                                          : PushaWithWidth<uint32_t>(LogicPassParams);
 }
+
+FORCE_INLINE LogicFlow OpPusha(LogicFuncParams) { return OpPushaWithOperands(LogicPassParams, OperandSpec::Dynamic{}); }
 
 template <typename T>
 FORCE_INLINE LogicFlow PopaWithWidth(LogicFuncParams) {
@@ -703,10 +697,13 @@ FORCE_INLINE LogicFlow PopaWithWidth(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpPopa(LogicFuncParams) {
-    return GetPrefixes(op).flags.opsize ? PopaWithWidth<uint16_t>(LogicPassParams)
-                                        : PopaWithWidth<uint32_t>(LogicPassParams);
+template <class Operands>
+FORCE_INLINE LogicFlow OpPopaWithOperands(LogicFuncParams, const Operands& operands) {
+    return OperandIs16<OpsizeSpec::Dynamic>(op, operands) ? PopaWithWidth<uint16_t>(LogicPassParams)
+                                                          : PopaWithWidth<uint32_t>(LogicPassParams);
 }
+
+FORCE_INLINE LogicFlow OpPopa(LogicFuncParams) { return OpPopaWithOperands(LogicPassParams, OperandSpec::Dynamic{}); }
 
 template <typename T>
 FORCE_INLINE LogicFlow EnterWithWidth(LogicFuncParams) {
@@ -738,10 +735,13 @@ FORCE_INLINE LogicFlow EnterWithWidth(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpEnter(LogicFuncParams) {
-    return GetPrefixes(op).flags.opsize ? EnterWithWidth<uint16_t>(LogicPassParams)
-                                        : EnterWithWidth<uint32_t>(LogicPassParams);
+template <class Operands>
+FORCE_INLINE LogicFlow OpEnterWithOperands(LogicFuncParams, const Operands& operands) {
+    return OperandIs16<OpsizeSpec::Dynamic>(op, operands) ? EnterWithWidth<uint16_t>(LogicPassParams)
+                                                          : EnterWithWidth<uint32_t>(LogicPassParams);
 }
+
+FORCE_INLINE LogicFlow OpEnter(LogicFuncParams) { return OpEnterWithOperands(LogicPassParams, OperandSpec::Dynamic{}); }
 
 template <typename T>
 FORCE_INLINE LogicFlow OpLeaveWidth(LogicFuncParams) {
@@ -754,10 +754,13 @@ FORCE_INLINE LogicFlow OpLeaveWidth(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpLeave(LogicFuncParams) {
-    if (OperandIs16<OpsizeSpec::Dynamic>(op)) return OpLeaveWidth<uint16_t>(LogicPassParams);
+template <class Operands>
+FORCE_INLINE LogicFlow OpLeaveWithOperands(LogicFuncParams, const Operands& operands) {
+    if (OperandIs16<OpsizeSpec::Dynamic>(op, operands)) return OpLeaveWidth<uint16_t>(LogicPassParams);
     return OpLeaveWidth<uint32_t>(LogicPassParams);
 }
+
+FORCE_INLINE LogicFlow OpLeave(LogicFuncParams) { return OpLeaveWithOperands(LogicPassParams, OperandSpec::Dynamic{}); }
 
 // ------------------------------------------------------------------------------------------------
 // Flag/Misc Operations (LAHF, SAHF, XCHG)
@@ -797,14 +800,24 @@ FORCE_INLINE LogicFlow OpXchgRegister(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpXchg_Reg(LogicFuncParams) {
-    if (OperandIs16<OpsizeSpec::Dynamic>(op)) return OpXchgRegister<uint16_t>(LogicPassParams);
+template <class Operands>
+FORCE_INLINE LogicFlow OpXchgRegWithOperands(LogicFuncParams, const Operands& operands) {
+    if (OperandIs16<OpsizeSpec::Dynamic>(op, operands)) return OpXchgRegister<uint16_t>(LogicPassParams);
     return OpXchgRegister<uint32_t>(LogicPassParams);
 }
 
-FORCE_INLINE LogicFlow OpXchg_EvGv(LogicFuncParams) {
-    if (OperandIs16<OpsizeSpec::Dynamic>(op)) return OpXchgModRM<uint16_t>(LogicPassParams);
+FORCE_INLINE LogicFlow OpXchg_Reg(LogicFuncParams) {
+    return OpXchgRegWithOperands(LogicPassParams, OperandSpec::Dynamic{});
+}
+
+template <class Operands>
+FORCE_INLINE LogicFlow OpXchgRmWithOperands(LogicFuncParams, const Operands& operands) {
+    if (OperandIs16<OpsizeSpec::Dynamic>(op, operands)) return OpXchgModRM<uint16_t>(LogicPassParams);
     return OpXchgModRM<uint32_t>(LogicPassParams);
+}
+
+FORCE_INLINE LogicFlow OpXchg_EvGv(LogicFuncParams) {
+    return OpXchgRmWithOperands(LogicPassParams, OperandSpec::Dynamic{});
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -846,9 +859,9 @@ FORCE_INLINE uint32_t StringDestinationAddress(EmuState* state, uint32_t offset)
     return offset + state->ctx.seg_base[1];  // ES
 }
 
-template <typename T, AddrsizeSpec AddressSize = AddrsizeSpec::Dynamic>
-FORCE_INLINE bool Helper_Movs(LogicFuncParams) {
-    const bool addr16 = AddressIs16<AddressSize>(op);
+template <typename T, AddrsizeSpec AddressSize = AddrsizeSpec::Dynamic, class Operands = OperandSpec::Dynamic>
+FORCE_INLINE bool Helper_Movs(LogicFuncParams, const Operands& operands = {}) {
+    const bool addr16 = AddressIs16<AddressSize>(op, operands);
     const bool df = TestFlagBits(flags_cache, 0x400);  // DF
     const int32_t step = df ? -static_cast<int32_t>(sizeof(T)) : static_cast<int32_t>(sizeof(T));
 
@@ -856,7 +869,7 @@ FORCE_INLINE bool Helper_Movs(LogicFuncParams) {
         const uint32_t esi = GetStringOffset(state, gpr, ESI, addr16);
         const uint32_t edi = GetStringOffset(state, gpr, EDI, addr16);
 
-        const uint32_t src_addr = esi + GetSegmentBase(state, op);
+        const uint32_t src_addr = esi + GetSegmentBase(state, op, operands);
         auto val_res = ReadMem<T, OpOnTLBMiss::Blocking>(state, gpr, src_addr, utlb, op);
         if (!val_res) return false;  // Fault
         T val = *val_res;
@@ -869,7 +882,7 @@ FORCE_INLINE bool Helper_Movs(LogicFuncParams) {
         return true;
     };
 
-    if (GetPrefixes(op).flags.rep) {
+    if (operands.ReadPrefixes(op).flags.rep) {
         while (GetStringCount(state, gpr, addr16) > 0) {
             if (!perform()) return false;
 
@@ -882,22 +895,27 @@ FORCE_INLINE bool Helper_Movs(LogicFuncParams) {
     return true;
 }
 
-template <typename T, AddrsizeSpec AddressSize = AddrsizeSpec::Dynamic>
-FORCE_INLINE LogicFlow OpMovsWithShape(LogicFuncParams) {
-    if (!Helper_Movs<T, AddressSize>(LogicPassParams)) return LogicFlow::ExitOnCurrentEIP;
+template <typename T, AddrsizeSpec AddressSize = AddrsizeSpec::Dynamic, class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpMovsWithShape(LogicFuncParams, const Operands& operands = {}) {
+    if (!Helper_Movs<T, AddressSize>(LogicPassParams, operands)) return LogicFlow::ExitOnCurrentEIP;
     return LogicFlow::Continue;
 }
 
 FORCE_INLINE LogicFlow OpMovs_Byte(LogicFuncParams) { return OpMovsWithShape<uint8_t>(LogicPassParams); }
 
-FORCE_INLINE LogicFlow OpMovs_Word(LogicFuncParams) {
-    if (OperandIs16<OpsizeSpec::Dynamic>(op)) return OpMovsWithShape<uint16_t>(LogicPassParams);
-    return OpMovsWithShape<uint32_t>(LogicPassParams);
+template <class Operands>
+FORCE_INLINE LogicFlow OpMovsWithOperands(LogicFuncParams, const Operands& operands) {
+    if (OperandIs16<OpsizeSpec::Dynamic>(op, operands)) return OpMovsWithShape<uint16_t>(LogicPassParams, operands);
+    return OpMovsWithShape<uint32_t>(LogicPassParams, operands);
 }
 
-template <typename T, AddrsizeSpec AddressSize = AddrsizeSpec::Dynamic>
-FORCE_INLINE LogicFlow OpStosWithShape(LogicFuncParams) {
-    const bool addr16 = AddressIs16<AddressSize>(op);
+FORCE_INLINE LogicFlow OpMovs_Word(LogicFuncParams) {
+    return OpMovsWithOperands(LogicPassParams, OperandSpec::Dynamic{});
+}
+
+template <typename T, AddrsizeSpec AddressSize = AddrsizeSpec::Dynamic, class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpStosWithShape(LogicFuncParams, const Operands& operands = {}) {
+    const bool addr16 = AddressIs16<AddressSize>(op, operands);
     const bool df = TestFlagBits(flags_cache, 0x400);
     const int32_t step = df ? -static_cast<int32_t>(sizeof(T)) : static_cast<int32_t>(sizeof(T));
     const auto perform = [&] {
@@ -908,7 +926,7 @@ FORCE_INLINE LogicFlow OpStosWithShape(LogicFuncParams) {
         SetStringOffset(state, gpr, EDI, edi + step, addr16);
         return true;
     };
-    if (GetPrefixes(op).flags.rep) {
+    if (operands.ReadPrefixes(op).flags.rep) {
         while (GetStringCount(state, gpr, addr16) > 0) {
             if (!perform()) return LogicFlow::ExitOnCurrentEIP;
             if (state->status != EmuStatus::Running) break;
@@ -922,20 +940,25 @@ FORCE_INLINE LogicFlow OpStosWithShape(LogicFuncParams) {
 
 FORCE_INLINE LogicFlow OpStos_Byte(LogicFuncParams) { return OpStosWithShape<uint8_t>(LogicPassParams); }
 
-FORCE_INLINE LogicFlow OpStos_Word(LogicFuncParams) {
-    if (OperandIs16<OpsizeSpec::Dynamic>(op)) return OpStosWithShape<uint16_t>(LogicPassParams);
-    return OpStosWithShape<uint32_t>(LogicPassParams);
+template <class Operands>
+FORCE_INLINE LogicFlow OpStosWithOperands(LogicFuncParams, const Operands& operands) {
+    if (OperandIs16<OpsizeSpec::Dynamic>(op, operands)) return OpStosWithShape<uint16_t>(LogicPassParams, operands);
+    return OpStosWithShape<uint32_t>(LogicPassParams, operands);
 }
 
-template <typename T, AddrsizeSpec AddressSize = AddrsizeSpec::Dynamic>
-FORCE_INLINE bool Helper_Lods(LogicFuncParams) {
-    const bool addr16 = AddressIs16<AddressSize>(op);
+FORCE_INLINE LogicFlow OpStos_Word(LogicFuncParams) {
+    return OpStosWithOperands(LogicPassParams, OperandSpec::Dynamic{});
+}
+
+template <typename T, AddrsizeSpec AddressSize = AddrsizeSpec::Dynamic, class Operands = OperandSpec::Dynamic>
+FORCE_INLINE bool Helper_Lods(LogicFuncParams, const Operands& operands = {}) {
+    const bool addr16 = AddressIs16<AddressSize>(op, operands);
     bool df = TestFlagBits(flags_cache, 0x400);  // DF
     int32_t step = df ? -((int32_t)sizeof(T)) : (int32_t)sizeof(T);
 
     auto perform = [&]() -> bool {
         uint32_t esi = GetStringOffset(state, gpr, ESI, addr16);
-        uint32_t src_addr = esi + GetSegmentBase(state, op);
+        uint32_t src_addr = esi + GetSegmentBase(state, op, operands);
         auto val_res = ReadMem<T, OpOnTLBMiss::Blocking>(state, gpr, src_addr, utlb, op);
         if (!val_res) return false;
         T val = *val_res;
@@ -952,7 +975,7 @@ FORCE_INLINE bool Helper_Lods(LogicFuncParams) {
         return true;
     };
 
-    if (GetPrefixes(op).flags.rep) {
+    if (operands.ReadPrefixes(op).flags.rep) {
         while (GetStringCount(state, gpr, addr16) > 0) {
             if (!perform()) return false;
             if (state->status != EmuStatus::Running) return false;
@@ -964,22 +987,27 @@ FORCE_INLINE bool Helper_Lods(LogicFuncParams) {
     return true;
 }
 
-template <typename T, AddrsizeSpec AddressSize = AddrsizeSpec::Dynamic>
-FORCE_INLINE LogicFlow OpLodsWithShape(LogicFuncParams) {
-    if (!Helper_Lods<T, AddressSize>(LogicPassParams)) return LogicFlow::ExitOnCurrentEIP;
+template <typename T, AddrsizeSpec AddressSize = AddrsizeSpec::Dynamic, class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpLodsWithShape(LogicFuncParams, const Operands& operands = {}) {
+    if (!Helper_Lods<T, AddressSize>(LogicPassParams, operands)) return LogicFlow::ExitOnCurrentEIP;
     return LogicFlow::Continue;
 }
 
 FORCE_INLINE LogicFlow OpLods_Byte(LogicFuncParams) { return OpLodsWithShape<uint8_t>(LogicPassParams); }
 
-FORCE_INLINE LogicFlow OpLods_Word(LogicFuncParams) {
-    if (OperandIs16<OpsizeSpec::Dynamic>(op)) return OpLodsWithShape<uint16_t>(LogicPassParams);
-    return OpLodsWithShape<uint32_t>(LogicPassParams);
+template <class Operands>
+FORCE_INLINE LogicFlow OpLodsWithOperands(LogicFuncParams, const Operands& operands) {
+    if (OperandIs16<OpsizeSpec::Dynamic>(op, operands)) return OpLodsWithShape<uint16_t>(LogicPassParams, operands);
+    return OpLodsWithShape<uint32_t>(LogicPassParams, operands);
 }
 
-template <typename T, AddrsizeSpec AddressSize = AddrsizeSpec::Dynamic>
-FORCE_INLINE bool Helper_Scas(LogicFuncParams) {
-    const bool addr16 = AddressIs16<AddressSize>(op);
+FORCE_INLINE LogicFlow OpLods_Word(LogicFuncParams) {
+    return OpLodsWithOperands(LogicPassParams, OperandSpec::Dynamic{});
+}
+
+template <typename T, AddrsizeSpec AddressSize = AddrsizeSpec::Dynamic, class Operands = OperandSpec::Dynamic>
+FORCE_INLINE bool Helper_Scas(LogicFuncParams, const Operands& operands = {}) {
+    const bool addr16 = AddressIs16<AddressSize>(op, operands);
     bool df = TestFlagBits(flags_cache, 0x400);  // DF
     int32_t step = df ? -((int32_t)sizeof(T)) : (int32_t)sizeof(T);
 
@@ -1005,7 +1033,7 @@ FORCE_INLINE bool Helper_Scas(LogicFuncParams) {
         return true;
     };
 
-    if (GetPrefixes(op).flags.rep || GetPrefixes(op).flags.repne) {
+    if (operands.ReadPrefixes(op).flags.rep || operands.ReadPrefixes(op).flags.repne) {
         while (GetStringCount(state, gpr, addr16) > 0) {
             if (!perform()) return false;
             if (state->status != EmuStatus::Running) return false;
@@ -1013,10 +1041,10 @@ FORCE_INLINE bool Helper_Scas(LogicFuncParams) {
             SetStringCount(state, gpr, GetStringCount(state, gpr, addr16) - 1, addr16);
 
             bool zf = TestFlagBits(flags_cache, ZF_MASK);
-            if (GetPrefixes(op).flags.rep) {
+            if (operands.ReadPrefixes(op).flags.rep) {
                 if (!zf) break;
             }  // REPE: Stop if ZF=0
-            else if (GetPrefixes(op).flags.repne) {
+            else if (operands.ReadPrefixes(op).flags.repne) {
                 if (zf) break;
             }  // REPNE: Stop if ZF=1
         }
@@ -1026,22 +1054,27 @@ FORCE_INLINE bool Helper_Scas(LogicFuncParams) {
     return true;
 }
 
-template <typename T, AddrsizeSpec AddressSize = AddrsizeSpec::Dynamic>
-FORCE_INLINE LogicFlow OpScasWithShape(LogicFuncParams) {
-    if (!Helper_Scas<T, AddressSize>(LogicPassParams)) return LogicFlow::ExitOnCurrentEIP;
+template <typename T, AddrsizeSpec AddressSize = AddrsizeSpec::Dynamic, class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpScasWithShape(LogicFuncParams, const Operands& operands = {}) {
+    if (!Helper_Scas<T, AddressSize>(LogicPassParams, operands)) return LogicFlow::ExitOnCurrentEIP;
     return LogicFlow::Continue;
 }
 
 FORCE_INLINE LogicFlow OpScas_Byte(LogicFuncParams) { return OpScasWithShape<uint8_t>(LogicPassParams); }
 
-FORCE_INLINE LogicFlow OpScas_Word(LogicFuncParams) {
-    if (OperandIs16<OpsizeSpec::Dynamic>(op)) return OpScasWithShape<uint16_t>(LogicPassParams);
-    return OpScasWithShape<uint32_t>(LogicPassParams);
+template <class Operands>
+FORCE_INLINE LogicFlow OpScasWithOperands(LogicFuncParams, const Operands& operands) {
+    if (OperandIs16<OpsizeSpec::Dynamic>(op, operands)) return OpScasWithShape<uint16_t>(LogicPassParams, operands);
+    return OpScasWithShape<uint32_t>(LogicPassParams, operands);
 }
 
-template <typename T, AddrsizeSpec AddressSize = AddrsizeSpec::Dynamic>
-FORCE_INLINE bool Helper_Cmps(LogicFuncParams) {
-    const bool addr16 = AddressIs16<AddressSize>(op);
+FORCE_INLINE LogicFlow OpScas_Word(LogicFuncParams) {
+    return OpScasWithOperands(LogicPassParams, OperandSpec::Dynamic{});
+}
+
+template <typename T, AddrsizeSpec AddressSize = AddrsizeSpec::Dynamic, class Operands = OperandSpec::Dynamic>
+FORCE_INLINE bool Helper_Cmps(LogicFuncParams, const Operands& operands = {}) {
+    const bool addr16 = AddressIs16<AddressSize>(op, operands);
     bool df = TestFlagBits(flags_cache, 0x400);  // DF
     int32_t step = df ? -((int32_t)sizeof(T)) : (int32_t)sizeof(T);
 
@@ -1049,7 +1082,7 @@ FORCE_INLINE bool Helper_Cmps(LogicFuncParams) {
         uint32_t esi = GetStringOffset(state, gpr, ESI, addr16);
         uint32_t edi = GetStringOffset(state, gpr, EDI, addr16);
 
-        uint32_t src_addr = esi + GetSegmentBase(state, op);
+        uint32_t src_addr = esi + GetSegmentBase(state, op, operands);
         auto src_val_res = ReadMem<T, OpOnTLBMiss::Blocking>(state, gpr, src_addr, utlb, op);
         if (!src_val_res) return false;
         T src_val = *src_val_res;
@@ -1066,7 +1099,7 @@ FORCE_INLINE bool Helper_Cmps(LogicFuncParams) {
         return true;
     };
 
-    if (GetPrefixes(op).flags.rep || GetPrefixes(op).flags.repne) {
+    if (operands.ReadPrefixes(op).flags.rep || operands.ReadPrefixes(op).flags.repne) {
         while (GetStringCount(state, gpr, addr16) > 0) {
             if (!perform()) return false;
             if (state->status != EmuStatus::Running) return false;
@@ -1074,10 +1107,10 @@ FORCE_INLINE bool Helper_Cmps(LogicFuncParams) {
             SetStringCount(state, gpr, GetStringCount(state, gpr, addr16) - 1, addr16);
 
             bool zf = TestFlagBits(flags_cache, ZF_MASK);
-            if (GetPrefixes(op).flags.rep) {
+            if (operands.ReadPrefixes(op).flags.rep) {
                 if (!zf) break;
             }  // REPE: Stop if ZF=0
-            else if (GetPrefixes(op).flags.repne) {
+            else if (operands.ReadPrefixes(op).flags.repne) {
                 if (zf) break;
             }  // REPNE: Stop if ZF=1
         }
@@ -1087,29 +1120,32 @@ FORCE_INLINE bool Helper_Cmps(LogicFuncParams) {
     return true;
 }
 
-template <typename T, AddrsizeSpec AddressSize = AddrsizeSpec::Dynamic>
-FORCE_INLINE LogicFlow OpCmpsWithShape(LogicFuncParams) {
-    if (!Helper_Cmps<T, AddressSize>(LogicPassParams)) return LogicFlow::ExitOnCurrentEIP;
+template <typename T, AddrsizeSpec AddressSize = AddrsizeSpec::Dynamic, class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpCmpsWithShape(LogicFuncParams, const Operands& operands = {}) {
+    if (!Helper_Cmps<T, AddressSize>(LogicPassParams, operands)) return LogicFlow::ExitOnCurrentEIP;
     return LogicFlow::Continue;
 }
 
 FORCE_INLINE LogicFlow OpCmps_Byte(LogicFuncParams) { return OpCmpsWithShape<uint8_t>(LogicPassParams); }
 
-FORCE_INLINE LogicFlow OpCmps_Word(LogicFuncParams) {
-    if (OperandIs16<OpsizeSpec::Dynamic>(op)) return OpCmpsWithShape<uint16_t>(LogicPassParams);
-    return OpCmpsWithShape<uint32_t>(LogicPassParams);
+template <class Operands>
+FORCE_INLINE LogicFlow OpCmpsWithOperands(LogicFuncParams, const Operands& operands) {
+    if (OperandIs16<OpsizeSpec::Dynamic>(op, operands)) return OpCmpsWithShape<uint16_t>(LogicPassParams, operands);
+    return OpCmpsWithShape<uint32_t>(LogicPassParams, operands);
 }
 
-FORCE_INLINE LogicFlow OpXlat(LogicFuncParams) {
+FORCE_INLINE LogicFlow OpCmps_Word(LogicFuncParams) {
+    return OpCmpsWithOperands(LogicPassParams, OperandSpec::Dynamic{});
+}
+
+template <class Operands>
+FORCE_INLINE LogicFlow OpXlatWithOperands(LogicFuncParams, const Operands& operands) {
     // D7: XLAT/XLATB
     // AL = [DS:EBX + AL]
     uint32_t ebx = gpr.GetReg(state, EBX);
     uint32_t al = gpr.GetReg(state, EAX) & 0xFF;
     // Segment override is possible, but default is DS.
-    // op->mem.base_offset is not set up for this specific instruction by decoder usually,
-    // so we rely on GetSegmentBase(state, op) and manual calculation.
-    // XLAT implies DS unless overridden.
-    uint32_t addr = ebx + al + GetSegmentBase(state, op);
+    uint32_t addr = ebx + al + GetSegmentBase(state, op, operands);
 
     auto val_res = ReadMem<uint8_t, OpOnTLBMiss::Restart>(state, gpr, addr, utlb, op);
     if (!val_res) return LogicFlow::RestartMemoryOp;
@@ -1119,6 +1155,8 @@ FORCE_INLINE LogicFlow OpXlat(LogicFuncParams) {
     gpr.SetReg(state, EAX, eax);
     return LogicFlow::Continue;
 }
+
+FORCE_INLINE LogicFlow OpXlat(LogicFuncParams) { return OpXlatWithOperands(LogicPassParams, OperandSpec::Dynamic{}); }
 
 #define FIBERCPU_BIND_MOVE_SPECIALIZATIONS
 #include "instruction_kernel_bindings.inc"

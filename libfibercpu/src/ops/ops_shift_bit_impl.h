@@ -64,12 +64,12 @@ FORCE_INLINE LogicFlow OpGroup2_T_Internal(LogicFuncParams) {
 
 template <ShiftWidth Width, ShiftCountSource CountSource, GroupOpSpec SubOp = GroupOpSpec::Dynamic,
           OpsizeSpec Size = OpsizeSpec::Dynamic, AddrModeSpec Form = AddrModeSpec::Dynamic,
-          FlagsSpec Flags = FlagsSpec::Dynamic>
-FORCE_INLINE LogicFlow OpGroup2_Internal(LogicFuncParams) {
+          FlagsSpec Flags = FlagsSpec::Dynamic, class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpGroup2_Internal(LogicFuncParams, const Operands& operands = {}) {
     if constexpr (Width == ShiftWidth::Byte) {
         return OpGroup2_T_Internal<uint8_t, CountSource, SubOp, Flags, Form>(LogicPassParams);
     } else {
-        if (OperandIs16<Size>(op))
+        if (OperandIs16<Size>(op, operands))
             return OpGroup2_T_Internal<uint16_t, CountSource, SubOp, Flags, Form>(LogicPassParams);
         return OpGroup2_T_Internal<uint32_t, CountSource, SubOp, Flags, Form>(LogicPassParams);
     }
@@ -92,14 +92,14 @@ FORCE_INLINE T ModifyBit(T value, unsigned offset, uint8_t subop) {
 
 // A register bit index can address other bytes of the memory bit string.
 template <GroupOpSpec Operation, OpsizeSpec Size = OpsizeSpec::Dynamic, AddrModeSpec Form = AddrModeSpec::Dynamic,
-          FlagsSpec Flags = FlagsSpec::Dynamic>
-FORCE_INLINE LogicFlow OpBitRegister_Internal(LogicFuncParams) {
+          FlagsSpec Flags = FlagsSpec::Dynamic, class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpBitRegister_Internal(LogicFuncParams, const Operands& operands = {}) {
     const uint32_t index = gpr.GetReg(state, (operand_modrm >> 3) & 7);
     constexpr auto subop = static_cast<uint8_t>(Operation);
     if (OperandIsReg<Form>(operand_modrm)) {
         const auto rm = operand_modrm & 7;
         const uint32_t value = gpr.GetReg(state, rm);
-        const unsigned offset = index & (OperandIs16<Size>(op) ? 15 : 31);
+        const unsigned offset = index & (OperandIs16<Size>(op, operands) ? 15 : 31);
         if constexpr (Flags != FlagsSpec::Dead) AssignCF(flags_cache, (value >> offset) & 1);
         if constexpr (Operation != GroupOpSpec::Ext4) gpr.SetReg(state, rm, ModifyBit(value, offset, subop));
     } else {
@@ -148,23 +148,25 @@ FORCE_INLINE LogicFlow OpGroup8_T_Internal(LogicFuncParams) {
 }
 
 template <GroupOpSpec Operation = GroupOpSpec::Dynamic, OpsizeSpec Size = OpsizeSpec::Dynamic,
-          AddrModeSpec Form = AddrModeSpec::Dynamic, FlagsSpec Flags = FlagsSpec::Dynamic>
-FORCE_INLINE LogicFlow OpGroup8_Internal(LogicFuncParams) {
-    if (OperandIs16<Size>(op)) return OpGroup8_T_Internal<uint16_t, Operation, Form, Flags>(LogicPassParams);
+          AddrModeSpec Form = AddrModeSpec::Dynamic, FlagsSpec Flags = FlagsSpec::Dynamic,
+          class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpGroup8_Internal(LogicFuncParams, const Operands& operands = {}) {
+    if (OperandIs16<Size>(op, operands)) return OpGroup8_T_Internal<uint16_t, Operation, Form, Flags>(LogicPassParams);
     return OpGroup8_T_Internal<uint32_t, Operation, Form, Flags>(LogicPassParams);
 }
 
 enum class BitScanOperation { Dynamic, Forward, Reverse, TrailingCount };
 
-template <typename T, BitScanOperation Operation, AddrModeSpec Form, FlagsSpec Flags>
-FORCE_INLINE LogicFlow OpBitScan_T_Internal(LogicFuncParams) {
+template <typename T, BitScanOperation Operation, AddrModeSpec Form, FlagsSpec Flags,
+          class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpBitScan_T_Internal(LogicFuncParams, const Operands& operands = {}) {
     const auto source = ReadModRM<T, OpOnTLBMiss::Restart, 1, Form>(state, gpr, op, operand_modrm, utlb);
     if (!source) return LogicFlow::RestartMemoryOp;
     const auto reg = (operand_modrm >> 3) & 7;
     constexpr bool update_flags = Flags != FlagsSpec::Dead;
 
     if constexpr (Operation == BitScanOperation::Dynamic || Operation == BitScanOperation::TrailingCount) {
-        if (Operation == BitScanOperation::TrailingCount || GetPrefixes(op).flags.rep) {
+        if (Operation == BitScanOperation::TrailingCount || operands.ReadPrefixes(op).flags.rep) {
             const auto count = std::countr_zero(*source);
             if constexpr (update_flags) {
                 AssignCF(flags_cache, *source == 0);
@@ -185,10 +187,11 @@ FORCE_INLINE LogicFlow OpBitScan_T_Internal(LogicFuncParams) {
 }
 
 template <BitScanOperation Operation, OpsizeSpec Size = OpsizeSpec::Dynamic, AddrModeSpec Form = AddrModeSpec::Dynamic,
-          FlagsSpec Flags = FlagsSpec::Dynamic>
-FORCE_INLINE LogicFlow OpBitScan_Internal(LogicFuncParams) {
-    if (OperandIs16<Size>(op)) return OpBitScan_T_Internal<uint16_t, Operation, Form, Flags>(LogicPassParams);
-    return OpBitScan_T_Internal<uint32_t, Operation, Form, Flags>(LogicPassParams);
+          FlagsSpec Flags = FlagsSpec::Dynamic, class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpBitScan_Internal(LogicFuncParams, const Operands& operands = {}) {
+    if (OperandIs16<Size>(op, operands))
+        return OpBitScan_T_Internal<uint16_t, Operation, Form, Flags>(LogicPassParams, operands);
+    return OpBitScan_T_Internal<uint32_t, Operation, Form, Flags>(LogicPassParams, operands);
 }
 
 template <RmOperandSpec Reg = RmOperandSpec::Dynamic>

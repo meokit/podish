@@ -491,7 +491,7 @@ int FindOpcodeIndexForHandler(HandlerFunc handler) {
         }
     }
 
-    return FindGenericOpcodeIndex(handler);
+    return -1;
 }
 
 }  // namespace fiberish

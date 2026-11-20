@@ -8,9 +8,6 @@ namespace fiberish {
 HandlerFunc FindSpecializedHandlerReference(uint16_t, DecodedInstruction*);
 bool MatchesCompiledForTest(const SpecCriteria&, const DecodedInstruction*);
 bool ValidateSpecializationWildcardIndex();
-namespace handwritten_superopcodes {
-bool ValidateHandwrittenSuperOpcodes();
-}
 #ifdef FIBERCPU_TEST_GENERATED_SUPEROPCODES
 bool ValidateGeneratedSequenceLookup();
 #endif
@@ -43,18 +40,18 @@ static bool ValidateProfileOperands() {
         {ops[0].handler, exact, {first, second}, 2},
         {ops[0].handler, alternate, {different_immediate, second}, 2},
     };
-    const OperandIndex<false, false, DecodedOperandShape> index(entries, 2, nullptr, 0);
-    if (index.Find(ops) != exact)
+    const OperandIndex index(entries);
+    if (index.Find(ops, ops->handler) != exact)
         return false;
     ops[0].meta.flags.operand_lowered = 1;
     ops[0].next_eip = 0x10005000;
-    if (index.Find(ops) != exact)
+    if (index.Find(ops, ops->handler) != exact)
         return false;
     ops[0].ext.data.imm++;
-    if (index.Find(ops) != alternate)
+    if (index.Find(ops, ops->handler) != alternate)
         return false;
     ops[1].ext.data.imm++;
-    if (index.Find(ops) != nullptr)
+    if (index.Find(ops, ops->handler) != nullptr)
         return false;
     ops[1].ext.data.imm--;
 
@@ -62,7 +59,7 @@ static bool ValidateProfileOperands() {
     const auto rejects = [&](auto mutate) {
         ops[0] = original;
         mutate(ops[0]);
-        return index.Find(ops) == nullptr;
+        return index.Find(ops, ops->handler) == nullptr;
     };
     return rejects([](auto& op) { op.ext.data.disp++; }) && rejects([](auto& op) { op.ext.data.ea_desc++; }) &&
            rejects([](auto& op) { op.prefixes.all ^= 0x40; }) && rejects([](auto& op) { op.modrm ^= 1; }) &&
@@ -146,10 +143,6 @@ int main() {
             std::fprintf(stderr, "Compiled mask mismatch at sample %u\n", i);
             return 1;
         }
-    }
-    if (!fiberish::handwritten_superopcodes::ValidateHandwrittenSuperOpcodes()) {
-        std::fprintf(stderr, "Handwritten superopcode lookup mismatch\n");
-        return 1;
     }
 #ifdef FIBERCPU_TEST_GENERATED_SUPEROPCODES
     if (!fiberish::ValidateGeneratedSequenceLookup()) {

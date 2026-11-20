@@ -46,13 +46,15 @@ FORCE_INLINE LogicFlow OpGroup1_T_Internal(LogicFuncParams) {
 }
 
 template <Group1Immediate Immediate, FlagsSpec Flags = FlagsSpec::Dynamic, GroupOpSpec SubOp = GroupOpSpec::Dynamic,
-          OpsizeSpec Size = OpsizeSpec::Dynamic, RmOperandSpec Rm = RmOperandSpec::Dynamic>
-FORCE_INLINE LogicFlow OpGroup1_Internal(LogicFuncParams) {
+          OpsizeSpec Size = OpsizeSpec::Dynamic, RmOperandSpec Rm = RmOperandSpec::Dynamic,
+          class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpGroup1_Internal(LogicFuncParams, const Operands& operands = {}) {
     if constexpr (Immediate == Group1Immediate::Byte) {
         static_assert(Size == OpsizeSpec::Dynamic);
         return OpGroup1_T_Internal<uint8_t, Immediate, Flags, SubOp, Rm>(LogicPassParams);
     } else {
-        if (OperandIs16<Size>(op)) return OpGroup1_T_Internal<uint16_t, Immediate, Flags, SubOp, Rm>(LogicPassParams);
+        if (OperandIs16<Size>(op, operands))
+            return OpGroup1_T_Internal<uint16_t, Immediate, Flags, SubOp, Rm>(LogicPassParams);
         return OpGroup1_T_Internal<uint32_t, Immediate, Flags, SubOp, Rm>(LogicPassParams);
     }
 }
@@ -76,13 +78,15 @@ FORCE_INLINE LogicFlow OpGroup3_Eb_Internal(LogicFuncParams) {
 }
 
 template <bool Byte, GroupOpSpec SubOp = GroupOpSpec::Dynamic, OpsizeSpec Size = OpsizeSpec::Dynamic,
-          AddrModeSpec Form = AddrModeSpec::Dynamic, FlagsSpec Flags = FlagsSpec::Dynamic>
-FORCE_INLINE LogicFlow OpGroup3_Internal(LogicFuncParams) {
+          AddrModeSpec Form = AddrModeSpec::Dynamic, FlagsSpec Flags = FlagsSpec::Dynamic,
+          class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpGroup3_Internal(LogicFuncParams, const Operands& operands = {}) {
     constexpr bool update_flags = Flags != FlagsSpec::Dead;
     if constexpr (Byte) {
         return OpGroup3_Ev_T_Internal<uint8_t, update_flags, SubOp, Form>(LogicPassParams);
     } else {
-        if (OperandIs16<Size>(op)) return OpGroup3_Ev_T_Internal<uint16_t, update_flags, SubOp, Form>(LogicPassParams);
+        if (OperandIs16<Size>(op, operands))
+            return OpGroup3_Ev_T_Internal<uint16_t, update_flags, SubOp, Form>(LogicPassParams);
         return OpGroup3_Ev_T_Internal<uint32_t, update_flags, SubOp, Form>(LogicPassParams);
     }
 }
@@ -141,12 +145,12 @@ FORCE_INLINE LogicFlow OpXadd_T_Internal(LogicFuncParams) {
 }
 
 template <bool Byte, OpsizeSpec Size = OpsizeSpec::Dynamic, AddrModeSpec Form = AddrModeSpec::Dynamic,
-          FlagsSpec Flags = FlagsSpec::Dynamic>
-FORCE_INLINE LogicFlow OpXadd_Internal(LogicFuncParams) {
+          FlagsSpec Flags = FlagsSpec::Dynamic, class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpXadd_Internal(LogicFuncParams, const Operands& operands = {}) {
     if constexpr (Byte) {
         return OpXadd_T_Internal<uint8_t, Form, Flags>(LogicPassParams);
     } else {
-        if (OperandIs16<Size>(op)) return OpXadd_T_Internal<uint16_t, Form, Flags>(LogicPassParams);
+        if (OperandIs16<Size>(op, operands)) return OpXadd_T_Internal<uint16_t, Form, Flags>(LogicPassParams);
         return OpXadd_T_Internal<uint32_t, Form, Flags>(LogicPassParams);
     }
 }
@@ -155,12 +159,13 @@ namespace op {
 
 FORCE_INLINE LogicFlow OpGroup3_Ev_Generic(LogicFuncParams) { return OpGroup3_Internal<false>(LogicPassParams); }
 
-FORCE_INLINE LogicFlow OpGroup5_Ev_Generic(LogicFuncParams) {
-    if (GetPrefixes(op).flags.opsize)
-        return OpGroup5_Ev_T_Internal<uint16_t, true>(LogicPassParams);
-    else
-        return OpGroup5_Ev_T_Internal<uint32_t, true>(LogicPassParams);
+template <class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpGroup5_Ev_Internal(LogicFuncParams, const Operands& operands = {}) {
+    if (OperandIs16<OpsizeSpec::Dynamic>(op, operands)) return OpGroup5_Ev_T_Internal<uint16_t, true>(LogicPassParams);
+    return OpGroup5_Ev_T_Internal<uint32_t, true>(LogicPassParams);
 }
+
+FORCE_INLINE LogicFlow OpGroup5_Ev_Generic(LogicFuncParams) { return OpGroup5_Ev_Internal(LogicPassParams); }
 
 #define FIBERCPU_BIND_OPS_GROUPS_IMPL_0
 #define FIBERCPU_BIND_GROUP1
@@ -202,9 +207,9 @@ FORCE_INLINE LogicFlow OpCdq(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-template <OpsizeSpec Size = OpsizeSpec::Dynamic>
-FORCE_INLINE LogicFlow OpCwde_Internal(LogicFuncParams) {
-    if (OperandIs16<Size>(op)) {
+template <OpsizeSpec Size = OpsizeSpec::Dynamic, class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpCwde_Internal(LogicFuncParams, const Operands& operands = {}) {
+    if (OperandIs16<Size>(op, operands)) {
         int8_t val = (int8_t)gpr.GetReg(state, EAX);
         uint32_t current = gpr.GetReg(state, EAX);
         uint32_t res = (current & 0xFFFF0000) | (uint16_t)(int16_t)val;

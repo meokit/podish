@@ -40,11 +40,13 @@ FORCE_INLINE LogicFlow OpDoubleShiftValue(LogicFuncParams, uint8_t count) {
 }
 
 template <DoubleShiftDirection Direction, DoubleShiftCount CountSource, OpsizeSpec Size = OpsizeSpec::Dynamic,
-          AddrModeSpec Form = AddrModeSpec::Dynamic, FlagsSpec Flags = FlagsSpec::Dynamic>
-FORCE_INLINE LogicFlow OpDoubleShift_Internal(LogicFuncParams) {
+          AddrModeSpec Form = AddrModeSpec::Dynamic, FlagsSpec Flags = FlagsSpec::Dynamic,
+          class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpDoubleShift_Internal(LogicFuncParams, const Operands& operands = {}) {
     const uint8_t count = (CountSource == DoubleShiftCount::Immediate ? imm : gpr.GetReg(state, ECX)) & 31;
     if (count == 0) return LogicFlow::Continue;
-    if (OperandIs16<Size>(op)) return OpDoubleShiftValue<uint16_t, Direction, Form, Flags>(LogicPassParams, count);
+    if (OperandIs16<Size>(op, operands))
+        return OpDoubleShiftValue<uint16_t, Direction, Form, Flags>(LogicPassParams, count);
     return OpDoubleShiftValue<uint32_t, Direction, Form, Flags>(LogicPassParams, count);
 }
 

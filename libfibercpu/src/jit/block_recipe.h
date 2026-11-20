@@ -16,6 +16,7 @@ enum LLVMRequirement : uint8_t {
     kRegisterOperand = 1,
     kMemoryOperand = 2,
     kExactOnly = 4,
+    kMemoryWith66 = 8,
 };
 
 struct Operation {
@@ -27,6 +28,7 @@ struct Operation {
         if ((requirements & kRegisterOperand) && (!op.meta.flags.has_modrm || (op.modrm >> 6) != 3)) return false;
         if ((requirements & kMemoryOperand) && !HasMem(&op)) return false;
         if ((requirements & kExactOnly) && !exact) return false;
+        if ((requirements & kMemoryWith66) && op.prefixes.flags.opsize && !HasMem(&op)) return false;
         return extensions == 0xff || (op.meta.flags.has_modrm && (extensions & (1u << ((op.modrm >> 3) & 7))));
     }
 };

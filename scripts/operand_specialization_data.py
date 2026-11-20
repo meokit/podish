@@ -9,8 +9,6 @@ def instruction_targets(catalog):
     targets = {}
     for opcode, name in catalog["fallbacks"].items():
         targets.setdefault(name, set()).add(int(opcode))
-    for opcode, name in catalog.get("generic_fallbacks", {}).items():
-        targets.setdefault(name, set()).add(int(opcode))
     for row in catalog["variants"]:
         targets.setdefault(row["logic"], set()).add(catalog["families"][row["family"]]["opcode"])
     return targets
@@ -23,7 +21,9 @@ def generated_fusions(source):
     }
 
 
-FUSION_CALL = re.compile(r'RUN_SUPEROPCODE_OP\(op::(\w+),[^()]*\)')
+FUSION_CALL = re.compile(
+    r'RUN_SUPEROPCODE_OP_WITH_POLICY\(SlotPolicy\d+, op::(\w+),[^()]*\)'
+)
 
 
 @dataclass(frozen=True)
@@ -35,6 +35,12 @@ class TrainingHandler:
     @property
     def cpp(self):
         return f"DispatchWrapper<op::{self.name}>" if self.kind == "wrapper" else self.name
+
+
+def fusion_training_id(operation_ids):
+    key = b"".join(op_id.to_bytes(4, "little") for op_id in operation_ids)
+    digest = int.from_bytes(hashlib.sha256(key).digest()[:4], "little")
+    return 0x80000000 | (digest & 0x3fffffff)
 
 
 def training_handlers(catalog, fusions):
@@ -52,16 +58,14 @@ def training_handlers(catalog, fusions):
     scalar_ids = {name: add(0, name.encode("ascii"), name, (name,), "wrapper")
                   for name in sorted(instruction_targets(catalog))}
 
-    def add_fusion(domain, name, operations, kind):
+    for name, body in sorted(fusions.items()):
+        operations = tuple(call[1] for call in FUSION_CALL.finditer(body))
         if not 2 <= len(operations) <= 4 or any(op not in scalar_ids for op in operations):
             raise ValueError(f"invalid training fusion recipe: {name}")
-        key = b"".join(scalar_ids[op].to_bytes(4, "little") for op in operations)
-        add(domain, key, name, operations, kind)
-
-    for name, body in sorted(fusions.items()):
-        add_fusion(0x80000000, name, tuple(call[1] for call in FUSION_CALL.finditer(body)), "fused")
-    for row in catalog["handwritten_fusions"]:
-        add_fusion(0xc0000000, row["name"], tuple(row["operations"]), "handwritten")
+        identifier = fusion_training_id(scalar_ids[op] for op in operations)
+        if identifier in handlers:
+            raise ValueError(f"duplicate training identity: {name} (0x{identifier:08x})")
+        handlers[identifier] = TrainingHandler(name, operations, "fused")
     return handlers
 
 
@@ -95,26 +99,14 @@ def resolve_training_plan(plan, catalog, fusions, limit=None):
 
 
 def specialize_fusion(body, original, clone, policies):
-    calls = list(FUSION_CALL.finditer(body))
-    if len(calls) != len(policies):
+    if len(list(FUSION_CALL.finditer(body))) != len(policies):
         raise ValueError("Fusion width does not match selected source: " + original)
-    names = {}
-    declarations = []
-    for i, (call, policy) in reversed(list(enumerate(zip(calls, policies)))):
-        slot = call[0].split(",")[2].strip()
-        alias = f"SlotPolicy{i}"
-        names[slot] = alias
-        declarations.append(f"    using {alias} = {policy};\n")
-        replacement = call[0].replace("RUN_SUPEROPCODE_OP(", f"RUN_SUPEROPCODE_OP_WITH_POLICY({alias}, ", 1)
-        body = body[:call.start()] + replacement + body[call.end():]
-    body = re.sub(r"NextOp\((\w+)\)", lambda match: (
-        f"OperandSpec::Advance<{names[match[1]]}>({match[1]})" if match[1] in names else match[0]
-    ), body)
-    pos = body.index("{") + 1
-    return (body[:pos] + "\n" + "".join(reversed(declarations)) + body[pos:]).replace(original, clone)
+    return re.sub(r'OperandSpec::FusionSlot<SlotMask, (\d+)>',
+                  lambda match: policies[int(match[1])], body).replace(original, clone)
 
 
 METADATA_MASK = 0xdf  # The lowering bit describes the host handler, not the x86 instruction.
+HAS_MODRM = 1
 HAS_MEMORY = 2
 HAS_IMMEDIATE = 4
 

@@ -9,7 +9,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 from gen_instruction_catalog import (
-    is_semantic_variant, llvm_operation_fingerprint, llvm_operation_names, read_catalog, variant_criteria,
+    llvm_operation_fingerprint, llvm_operation_names, read_catalog, variant_criteria,
 )
 from operand_specialization_data import (
     FUSION_CALL, Operand, generated_fusions, instruction_targets, resolve_training_plan, training_plan_match,
@@ -261,11 +261,9 @@ def build_bundle(args):
     # Only canonical identities need a runtime index. The keys of each handler
     # are pre-sorted on disk for binary search with no per-key initialization.
     keys_by_handler = defaultdict(list)
-    sources_by_handler = defaultdict(set)
     for item, recipe in entries:
         original, shapes = shape_key(item)
         keys_by_handler[original].append((shapes, recipe))
-        sources_by_handler[original].update(item["llvm_operations"])
     entry_lines = []
     family_lines = []
     tails = []
@@ -277,7 +275,7 @@ def build_bundle(args):
             tails.extend(shapes[1:])
     emit_array(code_header, "kEntries", "DynamicOperandEntry", entry_lines)
     catalog = read_catalog(args.src / "instruction_catalog.json")
-    base_handlers = set(catalog["fallbacks"].values()) | set(catalog.get("generic_fallbacks", {}).values())
+    base_handlers = set(catalog["fallbacks"].values())
     variants = defaultdict(list)
     for row in catalog["variants"]:
         variants[row["logic"]].append(row)
@@ -296,13 +294,7 @@ def build_bundle(args):
         if name in base_handlers:
             dynamic_only.append(f"{{{original}, {first}, {count}, 1, {{.any_flags = true}}}}")
         for row in variants[name]:
-            if is_semantic_variant(row):
-                dynamic_only.append(f"{{{original}, {first}, {count}, 1, {variant_criteria(row)}}}")
-            else:
-                sources = sources_by_handler[original]
-                if len(sources) == 1:
-                    base, = sources
-                    dynamic_only.append(f"{{DispatchWrapper<op::{base}>, {first}, {count}, 1, {variant_criteria(row)}}}")
+            dynamic_only.append(f"{{{original}, {first}, {count}, 1, {variant_criteria(row)}}}")
     emit_array(code_header, "kFamilies", "OperandFamily", list(dict.fromkeys(dynamic_only)))
     code_header.append("constexpr size_t kFamilyCount = " + str(len(set(dynamic_only))) + ";")
     code_header.append("#endif")

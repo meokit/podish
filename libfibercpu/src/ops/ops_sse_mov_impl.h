@@ -43,13 +43,14 @@ FORCE_INLINE LogicFlow OpMovss_StoreMemory(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpMov_Sse_Load(LogicFuncParams) {
+template <class Operands>
+FORCE_INLINE LogicFlow OpMov_Sse_LoadWithOperands(LogicFuncParams, const Operands& operands) {
     // 0F 10: MOVUPS/MOVUPD/MOVSS/MOVSD
     uint8_t reg = (operand_modrm >> 3) & 7;
     uint8_t rm = operand_modrm & 7;
     simde__m128 dst_val = state->ctx.xmm[reg];
 
-    if (GetPrefixes(op).flags.repne) {  // F2: MOVSD (Load Scalar Double)
+    if (operands.ReadPrefixes(op).flags.repne) {  // F2: MOVSD (Load Scalar Double)
         if ((operand_modrm >> 6) == 3) {
             // Reg->Reg: Move low double, preserve high
             simde__m128 src_val = state->ctx.xmm[rm];
@@ -64,7 +65,7 @@ FORCE_INLINE LogicFlow OpMov_Sse_Load(LogicFuncParams) {
             // set_sd sets low double, zeroes high
             state->ctx.xmm[reg] = simde_mm_castpd_ps(simde_mm_set_sd(val));
         }
-    } else if (GetPrefixes(op).flags.rep) {  // F3: MOVSS (Load Scalar Single)
+    } else if (operands.ReadPrefixes(op).flags.rep) {  // F3: MOVSS (Load Scalar Single)
         if ((operand_modrm >> 6) == 3) {
             // Reg->Reg: Move low float, preserve high
             simde__m128 src_val = state->ctx.xmm[rm];
@@ -80,13 +81,18 @@ FORCE_INLINE LogicFlow OpMov_Sse_Load(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpMov_Sse_Store(LogicFuncParams) {
+FORCE_INLINE LogicFlow OpMov_Sse_Load(LogicFuncParams) {
+    return OpMov_Sse_LoadWithOperands(LogicPassParams, OperandSpec::Dynamic{});
+}
+
+template <class Operands>
+FORCE_INLINE LogicFlow OpMov_Sse_StoreWithOperands(LogicFuncParams, const Operands& operands) {
     // 0F 11: MOVUPS/MOVUPD/MOVSS/MOVSD
     // Op is Store ModRM (Dest) from Reg (Src)
     uint8_t reg = (operand_modrm >> 3) & 7;  // This is SRC Reg
     simde__m128 src_val = state->ctx.xmm[reg];
 
-    if (GetPrefixes(op).flags.repne) {  // F2: MOVSD
+    if (operands.ReadPrefixes(op).flags.repne) {  // F2: MOVSD
         if ((operand_modrm >> 6) == 3) {
             // Reg->Reg: Copy low 64 bits, upper unchanged
             uint8_t dst_reg = operand_modrm & 7;
@@ -99,7 +105,7 @@ FORCE_INLINE LogicFlow OpMov_Sse_Store(LogicFuncParams) {
             simde_mm_store_sd(&val, simde_mm_castps_pd(src_val));
             if (!WriteMem<double, OpOnTLBMiss::Retry>(state, gpr, addr, val, utlb, op)) return LogicFlow::RetryMemoryOp;
         }
-    } else if (GetPrefixes(op).flags.rep) {  // F3: MOVSS
+    } else if (operands.ReadPrefixes(op).flags.rep) {  // F3: MOVSS
         if ((operand_modrm >> 6) == 3) {
             // Reg->Reg: Copy low 32 bits
             uint8_t dst_reg = operand_modrm & 7;
@@ -113,6 +119,10 @@ FORCE_INLINE LogicFlow OpMov_Sse_Store(LogicFuncParams) {
             return LogicFlow::RetryMemoryOp;
     }
     return LogicFlow::Continue;
+}
+
+FORCE_INLINE LogicFlow OpMov_Sse_Store(LogicFuncParams) {
+    return OpMov_Sse_StoreWithOperands(LogicPassParams, OperandSpec::Dynamic{});
 }
 
 FORCE_INLINE LogicFlow OpMovd_Load(LogicFuncParams) {
@@ -148,10 +158,11 @@ FORCE_INLINE LogicFlow OpMovq_Load(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpMovd_Store(LogicFuncParams) {
+template <class Operands>
+FORCE_INLINE LogicFlow OpMovd_StoreWithOperands(LogicFuncParams, const Operands& operands) {
     // 0F 7E: MOVD r/m32, xmm
     // F3 0F 7E: MOVQ xmm, xmm/m64 (Load!)
-    if (GetPrefixes(op).flags.rep) {
+    if (operands.ReadPrefixes(op).flags.rep) {
         return OpMovq_Load(LogicPassParams);
     }
 
@@ -162,6 +173,10 @@ FORCE_INLINE LogicFlow OpMovd_Store(LogicFuncParams) {
     if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, gpr, op, operand_modrm, (uint32_t)i_val, utlb))
         return LogicFlow::RetryMemoryOp;
     return LogicFlow::Continue;
+}
+
+FORCE_INLINE LogicFlow OpMovd_Store(LogicFuncParams) {
+    return OpMovd_StoreWithOperands(LogicPassParams, OperandSpec::Dynamic{});
 }
 
 FORCE_INLINE LogicFlow OpMovq_Store(LogicFuncParams) {
@@ -355,13 +370,14 @@ FORCE_INLINE LogicFlow OpMovlps_Store(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpDup_Sse_Lo(LogicFuncParams) {
+template <class Operands>
+FORCE_INLINE LogicFlow OpDup_Sse_Lo(LogicFuncParams, const Operands& operands) {
     // F2 0F 12: MOVDDUP (Load Double Dup, Low->High)
     // F3 0F 12: MOVSLDUP (Load Float Dup, Evn->Odd)
 
     uint8_t reg = (operand_modrm >> 3) & 7;
 
-    if (GetPrefixes(op).flags.repne) {  // F2: MOVDDUP
+    if (operands.ReadPrefixes(op).flags.repne) {  // F2: MOVDDUP
         simde__m128d src;
         if (operand_modrm >= 0xC0) {
             src = simde_mm_castps_pd(state->ctx.xmm[operand_modrm & 7]);
@@ -381,9 +397,10 @@ FORCE_INLINE LogicFlow OpDup_Sse_Lo(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpDup_Sse_Hi(LogicFuncParams) {
+template <class Operands>
+FORCE_INLINE LogicFlow OpDup_Sse_Hi(LogicFuncParams, const Operands& operands) {
     // F3 0F 16: MOVSHDUP (Load Float Dup, Odd->Evn)
-    if (GetPrefixes(op).flags.rep) {
+    if (operands.ReadPrefixes(op).flags.rep) {
         uint8_t reg = (operand_modrm >> 3) & 7;
         auto src_res = ReadModRM<simde__m128, OpOnTLBMiss::Restart>(state, gpr, op, operand_modrm, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
@@ -394,13 +411,14 @@ FORCE_INLINE LogicFlow OpDup_Sse_Hi(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-FORCE_INLINE LogicFlow OpMovmsk_Unified(LogicFuncParams) {
+template <class Operands>
+FORCE_INLINE LogicFlow OpMovmsk_UnifiedWithOperands(LogicFuncParams, const Operands& operands) {
     // 0F 50: MOVMSKPS / MOVMSKPD (66)
     uint8_t reg = (operand_modrm >> 3) & 7;
     uint8_t rm = operand_modrm & 7;
     simde__m128 src = state->ctx.xmm[rm];
 
-    if (GetPrefixes(op).flags.opsize) {  // 66: MOVMSKPD
+    if (operands.ReadPrefixes(op).flags.opsize) {  // 66: MOVMSKPD
         int mask = simde_mm_movemask_pd(simde_mm_castps_pd(src));
         gpr.SetReg(state, reg, (uint32_t)mask);
     } else {  // None: MOVMSKPS
@@ -408,6 +426,10 @@ FORCE_INLINE LogicFlow OpMovmsk_Unified(LogicFuncParams) {
         gpr.SetReg(state, reg, (uint32_t)mask);
     }
     return LogicFlow::Continue;
+}
+
+FORCE_INLINE LogicFlow OpMovmsk_Unified(LogicFuncParams) {
+    return OpMovmsk_UnifiedWithOperands(LogicPassParams, OperandSpec::Dynamic{});
 }
 
 FORCE_INLINE LogicFlow OpMovnt_Sse(LogicFuncParams) {
@@ -482,13 +504,14 @@ FORCE_INLINE LogicFlow OpGroup_Mov7F(LogicFuncParams) {
     }
 }
 
-FORCE_INLINE LogicFlow OpGroup_Mov12(LogicFuncParams) {
-    if (GetPrefixes(op).flags.opsize) {  // 66: MOVLPD (Load)
+template <class Operands>
+FORCE_INLINE LogicFlow OpGroup_Mov12WithOperands(LogicFuncParams, const Operands& operands) {
+    if (operands.ReadPrefixes(op).flags.opsize) {  // 66: MOVLPD (Load)
         return OpMovlpd_Load(LogicPassParams);
-    } else if (GetPrefixes(op).flags.rep) {  // F3: MOVSLDUP
-        return OpDup_Sse_Lo(LogicPassParams);
-    } else if (GetPrefixes(op).flags.repne) {  // F2: MOVDDUP
-        return OpDup_Sse_Lo(LogicPassParams);
+    } else if (operands.ReadPrefixes(op).flags.rep) {  // F3: MOVSLDUP
+        return OpDup_Sse_Lo(LogicPassParams, operands);
+    } else if (operands.ReadPrefixes(op).flags.repne) {  // F2: MOVDDUP
+        return OpDup_Sse_Lo(LogicPassParams, operands);
     } else if ((operand_modrm >> 6) == 3) {  // None + reg/reg: MOVHLPS
         return OpMovhlps_Reg(LogicPassParams);
     } else {  // None: MOVLPS (Load)
@@ -496,19 +519,29 @@ FORCE_INLINE LogicFlow OpGroup_Mov12(LogicFuncParams) {
     }
 }
 
-FORCE_INLINE LogicFlow OpGroup_Mov13(LogicFuncParams) {
-    if (GetPrefixes(op).flags.opsize) {  // 66: MOVLPD (Store)
+FORCE_INLINE LogicFlow OpGroup_Mov12(LogicFuncParams) {
+    return OpGroup_Mov12WithOperands(LogicPassParams, OperandSpec::Dynamic{});
+}
+
+template <class Operands>
+FORCE_INLINE LogicFlow OpGroup_Mov13WithOperands(LogicFuncParams, const Operands& operands) {
+    if (operands.ReadPrefixes(op).flags.opsize) {  // 66: MOVLPD (Store)
         return OpMovlpd_Store(LogicPassParams);
     } else {  // None: MOVLPS (Store)
         return OpMovlps_Store(LogicPassParams);
     }
 }
 
-FORCE_INLINE LogicFlow OpGroup_Mov16(LogicFuncParams) {
-    if (GetPrefixes(op).flags.opsize) {  // 66: MOVHPD (Load)
+FORCE_INLINE LogicFlow OpGroup_Mov13(LogicFuncParams) {
+    return OpGroup_Mov13WithOperands(LogicPassParams, OperandSpec::Dynamic{});
+}
+
+template <class Operands>
+FORCE_INLINE LogicFlow OpGroup_Mov16WithOperands(LogicFuncParams, const Operands& operands) {
+    if (operands.ReadPrefixes(op).flags.opsize) {  // 66: MOVHPD (Load)
         return OpMovhpd_Load(LogicPassParams);
-    } else if (GetPrefixes(op).flags.rep) {  // F3: MOVSHDUP
-        return OpDup_Sse_Hi(LogicPassParams);
+    } else if (operands.ReadPrefixes(op).flags.rep) {  // F3: MOVSHDUP
+        return OpDup_Sse_Hi(LogicPassParams, operands);
     } else if ((operand_modrm >> 6) == 3) {  // None + reg/reg: MOVLHPS
         return OpMovlhps_Reg(LogicPassParams);
     } else {  // None: MOVHPS (Load)
@@ -516,12 +549,21 @@ FORCE_INLINE LogicFlow OpGroup_Mov16(LogicFuncParams) {
     }
 }
 
-FORCE_INLINE LogicFlow OpGroup_Mov17(LogicFuncParams) {
-    if (GetPrefixes(op).flags.opsize) {  // 66: MOVHPD (Store)
+FORCE_INLINE LogicFlow OpGroup_Mov16(LogicFuncParams) {
+    return OpGroup_Mov16WithOperands(LogicPassParams, OperandSpec::Dynamic{});
+}
+
+template <class Operands>
+FORCE_INLINE LogicFlow OpGroup_Mov17WithOperands(LogicFuncParams, const Operands& operands) {
+    if (operands.ReadPrefixes(op).flags.opsize) {  // 66: MOVHPD (Store)
         return OpMovhpd_Store(LogicPassParams);
     } else {  // None: MOVHPS (Store)
         return OpMovhps_Store(LogicPassParams);
     }
+}
+
+FORCE_INLINE LogicFlow OpGroup_Mov17(LogicFuncParams) {
+    return OpGroup_Mov17WithOperands(LogicPassParams, OperandSpec::Dynamic{});
 }
 
 #define FIBERCPU_BIND_VECTOR_SSE_MOV

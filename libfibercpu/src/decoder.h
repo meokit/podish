@@ -68,7 +68,6 @@ using HandlerFunc = int64_t(ATTR_PRESERVE_NONE*)(EmuState* RESTRICT state, Decod
 
 enum class LogicFlow : uint8_t {
     Continue = 0,
-    ContinueSkipOne = 1,
     ExitOnCurrentEIP = 2,
     ExitOnNextEIP = 3,
     RestartMemoryOp = 4,
@@ -377,11 +376,6 @@ struct alignas(16) DecodedOp {
     static constexpr uint64_t kHasMemoryImmediate = uint64_t{1} << 63;
 
     FORCE_INLINE uint32_t Primary() const { return uint32_t(payload); }
-    FORCE_INLINE uint8_t RawModRM() const { return uint8_t(payload >> kModRMShift); }
-    FORCE_INLINE uint8_t GetModRM() const {
-        const auto raw = RawModRM();
-        return IsCachedBranch() ? raw & 7 : raw;
-    }
     FORCE_INLINE uint8_t RawPrefixes() const { return uint8_t(payload >> kPrefixShift); }
     FORCE_INLINE Prefixes GetPrefixes() const {
         return {uint8_t(RawPrefixes() & (HasCompactImmediate() ? ~compact_imm::kCodeMask : 0xff))};
@@ -462,7 +456,6 @@ FORCE_INLINE uint32_t GetImm(const DecodedOp* op) {
     return GetSingleSlotMemoryImmediate(op);
 }
 
-FORCE_INLINE uint8_t GetModRM(const DecodedOp* op) { return op->GetModRM(); }
 FORCE_INLINE Prefixes GetPrefixes(const DecodedOp* op) { return op->GetPrefixes(); }
 FORCE_INLINE Meta GetMeta(const DecodedOp* op) { return op->GetMeta(); }
 FORCE_INLINE uint32_t GetAddressDescriptor(const DecodedOp* op) { return op->AddressDescriptor(); }

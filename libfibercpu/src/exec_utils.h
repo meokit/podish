@@ -327,12 +327,21 @@ inline bool CheckCondition(uint64_t& flags_cache, uint8_t cond) {
 // Effective Address Calculation
 // ------------------------------------------------------------------------------------------------
 
-FORCE_INLINE uint32_t GetSegmentBase(EmuState* state, const DecodedOp* op) {
-    uint8_t seg = GetPrefixes(op).flags.segment;
+FORCE_INLINE uint32_t GetSegmentBase(EmuState* state, Prefixes prefixes) {
+    const uint8_t seg = prefixes.flags.segment;
     // 1=ES, 2=CS, 3=SS, 4=DS, 5=FS, 6=GS
     // Moffs, XLAT and string source operands default to DS. An explicit
     // override may select any of the six caller-provided segment bases.
     return state->ctx.seg_base[seg == 0 ? 4 : seg];
+}
+
+FORCE_INLINE uint32_t GetSegmentBase(EmuState* state, const DecodedOp* op) {
+    return GetSegmentBase(state, GetPrefixes(op));
+}
+
+template <class Operands>
+FORCE_INLINE uint32_t GetSegmentBase(EmuState* state, const DecodedOp* op, const Operands& operands) {
+    return GetSegmentBase(state, operands.ReadPrefixes(op));
 }
 
 FORCE_INLINE uint32_t ComputeEA(EmuState* state, GprCache& gpr, const DecodedOp* op) {

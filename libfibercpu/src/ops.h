@@ -30,12 +30,7 @@ extern std::array<HandlerFunc, kExitHandlerReplicaCount> g_ExitHandlersFallthrou
 extern std::array<HandlerFunc, kExitHandlerReplicaCount> g_ExitHandlersBranch;
 
 // Specialized Opcode Indices
-enum SpecializedOp : uint16_t {
-    OP_MOV_RR_STORE = 0x200,  // MOV r32, r32 (from 0x89)
-    OP_MOV_RM_STORE = 0x201,  // MOV [mem], r32 (from 0x89)
-    OP_MOV_RR_LOAD = 0x202,   // MOV r32, r32 (from 0x8B)
-    OP_MOV_MR_LOAD = 0x203,   // MOV r32, [mem] (from 0x8B)
-};
+enum SpecializedOp : uint16_t {};
 
 // Diagnostics / tooling helper: map a wrapper handler pointer back to its logical opcode id.
 int FindOpcodeIndexForHandler(HandlerFunc handler);

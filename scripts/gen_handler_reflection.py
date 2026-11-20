@@ -184,6 +184,8 @@ def main() -> int:
     matches: list[tuple[str, str]] = []
     for mangled_name in mangled_names:
         name = demangled.get(mangled_name, "")
+        # Mandatory scalar bindings share their catalog identity. Exporting every
+        # encoding would duplicate the catalog and publish the private table ABI.
         if name.endswith(template_signature):
             matches.append((mangled_name, name))
 

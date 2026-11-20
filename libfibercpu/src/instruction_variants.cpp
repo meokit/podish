@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <cstdio>
+#include <cstdlib>
 #include "instruction_catalog_hash.h"
 #include "ops/ops_alu_impl.h"
 #include "ops/ops_compare_impl.h"
@@ -18,25 +20,31 @@
 #include "ops/ops_sse_fp_impl.h"
 #include "ops/ops_sse_int_impl.h"
 #include "ops/ops_sse_mov_impl.h"
+#include "scalar_bindings.h"
 
 namespace fiberish {
+#define FIBERCPU_SCALAR(Name, Id) extern const ScalarBindingTable Name##_scalar;
+#include "training_scalar_handlers.inc"
+#undef FIBERCPU_SCALAR
+
 namespace {
 struct Fallback {
     uint16_t opcode;
     HandlerFunc handler;
     const char* logic;
 };
-using FusionAlias = std::pair<HandlerFunc, HandlerFunc>;
 #include "instruction_catalog.inc"
 
 struct TrainingOperation {
     uint32_t id;
     HandlerFunc handler;
     const char* name;
-    HandlerFunc slots[2];
+    const ScalarBindingTable* scalar;
 };
 constexpr TrainingOperation training_operations[] = {
+#define FIBERCPU_SCALAR(Name, Id) {Id, DispatchWrapper<op::Name>, "op::" #Name, &Name##_scalar},
 #include "training_scalar_handlers.inc"
+#undef FIBERCPU_SCALAR
 };
 
 struct ScalarBinding {
@@ -55,19 +63,29 @@ const TrainingOperation* FindScalarBinding(HandlerFunc handler) {
     static const auto bindings = [] {
         std::array<ScalarBinding, kScalarBindingCount> result{};
         for (const auto& op : training_operations) {
-            for (const auto key : {op.handler, op.slots[0], op.slots[1]}) {
-                auto index = ScalarBindingIndex(key);
-                while (result[index].handler && result[index].handler != key)
-                    index = (index + 1) & (kScalarBindingCount - 1);
-                if (!result[index].handler) result[index] = {key, &op};
-            }
+            auto index = ScalarBindingIndex(op.handler);
+            while (result[index].handler && result[index].handler != op.handler)
+                index = (index + 1) & (kScalarBindingCount - 1);
+            if (!result[index].handler) result[index] = {op.handler, &op};
         }
         return result;
     }();
     auto index = ScalarBindingIndex(handler);
     while (bindings[index].handler && bindings[index].handler != handler)
         index = (index + 1) & (kScalarBindingCount - 1);
-    return bindings[index].operation;
+    if (const auto* operation = bindings[index].operation) return operation;
+    static const auto executable = [] {
+        ankerl::unordered_dense::map<HandlerFunc, const TrainingOperation*> result;
+        for (const auto& operation : training_operations) {
+            for (auto fallback : operation.scalar->fallback)
+                if (fallback) result.emplace(fallback, &operation);
+            for (const auto& entry : std::span(operation.scalar->entries, operation.scalar->count))
+                result.emplace(entry.handler, &operation);
+        }
+        return result;
+    }();
+    const auto match = executable.find(handler);
+    return match == executable.end() ? nullptr : match->second;
 }
 
 std::vector<X86_InstructionVariant>& MutableCatalog() {
@@ -142,11 +160,10 @@ void RegisterInstructionVariants() {
 }
 
 HandlerFunc FindGenericInstructionHandler(uint16_t opcode, const DecodedInstruction* op) {
-    const auto first = std::ranges::lower_bound(semantic_variant_indices, opcode, {},
-                                                [](uint16_t index) { return variants[index].opcode; });
+    const auto first = std::ranges::lower_bound(variants, opcode, {}, &DeclaredInstructionVariant::opcode);
     const DeclaredInstructionVariant* best = nullptr;
-    for (auto it = first; it != std::end(semantic_variant_indices); ++it) {
-        const auto& candidate = variants[*it];
+    for (auto it = first; it != std::end(variants); ++it) {
+        const auto& candidate = *it;
         if (candidate.opcode != opcode) break;
         if (!candidate.criteria.Matches(op)) continue;
         const auto score = candidate.criteria.GetScore();
@@ -154,22 +171,22 @@ HandlerFunc FindGenericInstructionHandler(uint16_t opcode, const DecodedInstruct
             (score == best->criteria.GetScore() && candidate.rank < best->rank))
             best = &candidate;
     }
-    if (best) return best->handler;
-    const auto fallback = std::ranges::lower_bound(generic_fallbacks, opcode, {}, &Fallback::opcode);
-    return fallback != std::end(generic_fallbacks) && fallback->opcode == opcode ? fallback->handler : nullptr;
-}
-
-int FindGenericOpcodeIndex(HandlerFunc handler) {
-    for (const auto& fallback : generic_fallbacks) {
-        if (fallback.handler == handler) return fallback.opcode;
-    }
-    return -1;
+    return best ? best->handler : nullptr;
 }
 
 BoundScalarHandler BindScalarHandler(HandlerFunc handler, BoundOperandShape shape) {
     const auto* binding = FindScalarBinding(handler);
     if (!binding) return {nullptr, 0, shape};
-    return {binding->slots[shape.slots - 1], binding->id, shape};
+    const auto& table = *binding->scalar;
+    const uint8_t modrm = shape.modrm < 0xc0 || !table.memory_mask ? shape.modrm & table.memory_mask : shape.modrm;
+    const uint16_t key = (uint16_t(shape.slots) << 8) | modrm;
+    const auto entries = std::span(table.entries, table.count);
+    const auto selected = std::ranges::lower_bound(entries, key, {}, &ScalarBindingEntry::key);
+    assert(shape.slots == 1 || shape.slots == 2);
+    const auto executable =
+        selected != entries.end() && selected->key == key ? selected->handler : table.fallback[shape.slots - 1];
+    assert(executable);
+    return {executable, binding->id, shape};
 }
 
 BoundScalarHandler BindScalarHandler(const DecodedInstruction& op) {
@@ -195,11 +212,4 @@ const char* FindTrainingOperationName(uint32_t id) {
     return it != std::end(training_operations) && it->id == id ? it->name : nullptr;
 }
 
-HandlerFunc FindFusionFallbackHandler(HandlerFunc handler) {
-    if constexpr (std::size(fusion_aliases) == 1) return handler;
-    static const ankerl::unordered_dense::map<HandlerFunc, HandlerFunc> aliases(std::begin(fusion_aliases),
-                                                                                std::end(fusion_aliases) - 1);
-    if (const auto it = aliases.find(handler); it != aliases.end()) return it->second;
-    return handler;
-}
 }  // namespace fiberish
