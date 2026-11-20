@@ -849,6 +849,10 @@ bool ConfigureLLVMBlockJit(const SharedJitOptions& settings, std::string& error)
         return false;
     }
     // This is the only fallible step after checking the shared configuration.
+    if (settings.arena_bytes > ExecutableArena::kMaxLLVMCapacity) {
+        error = "JitArenaSize exceeds 2 GiB, the limit for the nearby LLVM code and data ranges";
+        return false;
+    }
     if (settings.arena_bytes && !ExecutableArena::Shared(settings.arena_bytes)) {
         error = "JitArenaSize conflicts with the existing arena or could not be allocated";
         return false;

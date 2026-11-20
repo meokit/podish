@@ -18,9 +18,11 @@ constexpr size_t kBlockAlignment = 16;
 constexpr size_t kSlabBytes = 256 * 1024;
 
 struct DataSegment {
-    llvm::sys::OwningMemoryBlock mapping;
+    std::unique_ptr<ExecutableArena::Region> region;
     unsigned protection;
     bool finalize_only;
+
+    llvm::sys::MemoryBlock Mapping() const { return {region->Data(), region->Size()}; }
 };
 
 }  // namespace
@@ -31,30 +33,21 @@ struct BlockMemoryManager::Slab {
 };
 
 struct BlockMemoryManager::PackedAllocation {
-    struct ResidentData {
-        explicit ResidentData(ExecutableArena::Region reservation) : budget(std::move(reservation)) {}
-
-        ExecutableArena::Region budget;
-        std::vector<llvm::sys::OwningMemoryBlock> mappings;
-    };
-
     std::shared_ptr<Slab> slab;
-    std::unique_ptr<ResidentData> data;
+    std::vector<DataSegment> data;
     std::vector<llvm::orc::shared::WrapperFunctionCall> dealloc_actions;
 };
 
 class BlockMemoryManager::PendingAllocation final : public JITLinkMemoryManager::InFlightAlloc {
 public:
     PendingAllocation(llvm::jitlink::LinkGraph& graph, std::shared_ptr<Slab> slab, uint8_t* address, size_t bytes,
-                      size_t alignment, std::optional<ExecutableArena::Region> data_budget,
-                      std::vector<DataSegment> data)
+                      size_t alignment, std::vector<DataSegment> data)
         : graph_(graph),
           slab_(std::move(slab)),
           address_(address),
           bytes_(bytes),
           working_(bytes ? bytes + alignment - 1 : 0),
           aligned_working_(bytes ? llvm::alignAddr(working_.data(), llvm::Align(alignment)) : 0),
-          data_budget_(std::move(data_budget)),
           data_(std::move(data)) {}
 
     char* WorkingMemory() const { return reinterpret_cast<char*>(aligned_working_); }
@@ -62,17 +55,14 @@ public:
     void abandon(OnAbandonedFunction on_abandoned) override {
         slab_.reset();
         data_.clear();
-        data_budget_.reset();
         on_abandoned(llvm::Error::success());
     }
 
     void finalize(OnFinalizedFunction on_finalized) override {
-        for (auto& segment : data_) {
-            if (auto error =
-                    llvm::sys::Memory::protectMappedMemory(segment.mapping.getMemoryBlock(), segment.protection)) {
+        for (const auto& segment : data_) {
+            if (auto error = llvm::sys::Memory::protectMappedMemory(segment.Mapping(), segment.protection)) {
                 slab_.reset();
                 data_.clear();
-                data_budget_.reset();
                 return on_finalized(llvm::errorCodeToError(error));
             }
         }
@@ -89,19 +79,13 @@ public:
                 if (!actions) {
                     slab_.reset();
                     data_.clear();
-                    data_budget_.reset();
                     return on_finalized(actions.takeError());
                 }
                 auto allocation = std::make_unique<PackedAllocation>();
                 allocation->slab = std::move(slab_);
                 allocation->dealloc_actions = std::move(*actions);
-                if (data_budget_->Size()) {
-                    allocation->data = std::make_unique<PackedAllocation::ResidentData>(std::move(*data_budget_));
-                    for (auto& segment : data_) {
-                        if (!segment.finalize_only) allocation->data->mappings.push_back(std::move(segment.mapping));
-                    }
-                }
-                data_.clear();
+                std::erase_if(data_, [](const DataSegment& segment) { return segment.finalize_only; });
+                allocation->data = std::move(data_);
                 on_finalized(FinalizedAlloc(llvm::orc::ExecutorAddr::fromPtr(allocation.release())));
             });
     }
@@ -113,7 +97,6 @@ private:
     const size_t bytes_;
     std::vector<char> working_;
     const uintptr_t aligned_working_;
-    std::optional<ExecutableArena::Region> data_budget_;
     std::vector<DataSegment> data_;
 };
 
@@ -123,11 +106,22 @@ BlockMemoryManager::~BlockMemoryManager() = default;
 
 void BlockMemoryManager::allocate(const llvm::jitlink::JITLinkDylib*, llvm::jitlink::LinkGraph& graph,
                                   OnAllocatedFunction on_allocated) {
-    llvm::jitlink::BasicLayout layout(graph);
     using llvm::jitlink::BasicLayout;
     using llvm::jitlink::JITLinkError;
     using llvm::orc::MemLifetime;
+    using llvm::orc::MemProt;
     using llvm::sys::Memory;
+
+    // Mach-O JITLink initially marks non-instruction sections writable.
+    // Group immutable sections separately so they can be sealed after fixups.
+    for (auto& section : graph.sections()) {
+        const auto name = section.getName();
+        if (name == "__TEXT,__const" || name == "__TEXT,__cstring" ||
+            name.starts_with("__TEXT,__literal") || name == "__DATA,__const" ||
+            name.starts_with("__DATA_CONST,"))
+            section.setMemProt(MemProt::Read);
+    }
+    BasicLayout layout(graph);
     BasicLayout::Segment* text = nullptr;
     size_t text_bytes = 0;
     size_t alignment = kBlockAlignment;
@@ -144,7 +138,7 @@ void BlockMemoryManager::allocate(const llvm::jitlink::JITLinkDylib*, llvm::jitl
             text = &segment;
             alignment = std::max<size_t>(alignment, segment.Alignment.value());
             text_bytes = llvm::alignTo(bytes, alignment);
-        } else if (group.getMemLifetime() == MemLifetime::Standard) {
+        } else {
             data_bytes += llvm::alignTo(bytes, page_size_);
         }
     }
@@ -154,9 +148,6 @@ void BlockMemoryManager::allocate(const llvm::jitlink::JITLinkDylib*, llvm::jitl
         needs_flush_ = arena_->FitsFreshGeneration(slab_bytes, data_bytes);
         on_allocated(llvm::make_error<CodeBudgetExceeded>());
     };
-    auto data_budget = arena_->ReserveData(data_bytes);
-    if (!data_budget) return on_budget_exhausted();
-
     std::shared_ptr<Slab> slab;
     uint8_t* address = nullptr;
     size_t offset = 0;
@@ -173,25 +164,27 @@ void BlockMemoryManager::allocate(const llvm::jitlink::JITLinkDylib*, llvm::jitl
         address = slab->region->Data() + offset;
     }
 
-    // Non-executable segments keep their protections and use separate mappings
-    // near the text. JITLink still checks the reach of every relocation.
-    const llvm::sys::MemoryBlock near_text(address, text_bytes);
+    // Every data segment has a page-aligned reservation in the arena's nearby
+    // data range. Set the final protection after JITLink applies its fixups.
     std::vector<DataSegment> data;
     for (auto& [group, segment] : layout.segments()) {
         if (&segment == text) continue;
         const size_t bytes = std::max<size_t>(1, segment.ContentSize + segment.ZeroFillSize);
-        std::error_code error;
-        auto mapping = Memory::allocateMappedMemory(bytes, address ? &near_text : nullptr,
-                                                    Memory::MF_READ | Memory::MF_WRITE, error);
-        if (error) return on_allocated(llvm::errorCodeToError(error));
-        segment.WorkingMem = static_cast<char*>(mapping.base());
-        segment.Addr = llvm::orc::ExecutorAddr::fromPtr(mapping.base());
-        data.push_back({llvm::sys::OwningMemoryBlock(mapping),
+        auto region = arena_->ReserveData(bytes);
+        if (!region) return on_budget_exhausted();
+        if (auto error = Memory::protectMappedMemory({region->Data(), region->Size()},
+                                                      Memory::MF_READ | Memory::MF_WRITE))
+            return on_allocated(llvm::errorCodeToError(error));
+        // BasicLayout assigns zero-fill addresses without writing those bytes.
+        // The underlying pages may still contain data from an older block.
+        std::memset(region->Data(), 0, bytes);
+        segment.WorkingMem = reinterpret_cast<char*>(region->Data());
+        segment.Addr = llvm::orc::ExecutorAddr::fromPtr(region->Data());
+        data.push_back({std::move(region),
                         llvm::orc::toSysMemoryProtectionFlags(group.getMemProt()),
                         group.getMemLifetime() == MemLifetime::Finalize});
     }
-    auto pending = std::make_unique<PendingAllocation>(graph, slab, address, text_bytes, alignment,
-                                                       std::move(data_budget), std::move(data));
+    auto pending = std::make_unique<PendingAllocation>(graph, slab, address, text_bytes, alignment, std::move(data));
     if (text) {
         text->Addr = llvm::orc::ExecutorAddr::fromPtr(address);
         text->WorkingMem = pending->WorkingMemory();

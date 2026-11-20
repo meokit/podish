@@ -1,7 +1,10 @@
 #include "bindings.h"
 #include "decoder.h"
 #if FIBERCPU_LLVM_JIT
+#include "jit/executable_arena.h"
 #include "jit/llvm_block_jit.h"
+#include <mach/mach.h>
+#include <mach/mach_vm.h>
 #endif
 
 #include <array>
@@ -692,6 +695,18 @@ bool VerifyPackedArena() {
 }
 
 #if FIBERCPU_LLVM_JIT
+bool HasPageProtection(mach_vm_address_t address, vm_prot_t protection) {
+    mach_vm_address_t base = address;
+    mach_vm_size_t size = 0;
+    vm_region_basic_info_data_64_t info{};
+    mach_msg_type_number_t count = VM_REGION_BASIC_INFO_COUNT_64;
+    mach_port_t object = MACH_PORT_NULL;
+    const auto result = mach_vm_region(mach_task_self(), &base, &size, VM_REGION_BASIC_INFO_64,
+                                       reinterpret_cast<vm_region_info_t>(&info), &count, &object);
+    if (object != MACH_PORT_NULL) mach_port_deallocate(mach_task_self(), object);
+    return result == KERN_SUCCESS && base <= address && address - base < size && info.protection == protection;
+}
+
 bool VerifyFlushWithActivePeer(const auto& trigger_flush) {
     constexpr uint8_t interrupt[] = {0xcd, 0x80};
     auto peer = LoadCode(interrupt, sizeof(interrupt));
@@ -733,6 +748,12 @@ bool VerifyPackedBudget() {
     auto state = LoadCode(code, sizeof(code));
     if (!X86_ConfigureCodeCache(state.get(), 1024 * 1024, arena_bytes))
         return false;
+    auto arena = fiberish::ExecutableArena::Shared();
+    auto data_slot = arena->ReserveData(page_size);
+    if (!data_slot) return false;
+    const auto constant_page = reinterpret_cast<mach_vm_address_t>(data_slot->Data());
+    data_slot.reset();
+    if (!HasPageProtection(constant_page, VM_PROT_NONE)) return false;
     X86_MemMap(state.get(), data_address, 4096, 3);
     X86_RegWrite(state.get(), 1, data_address);
     State forked(X86_Clone(state.get(), 0), X86_Destroy);
@@ -743,11 +764,20 @@ bool VerifyPackedBudget() {
         return false;
     const auto run = [&](uint32_t expected) {
         X86_SetEIP(state.get(), code_address);
-        return X86_Run(state.get(), end, 16) && X86_RegRead(state.get(), 0) == expected;
+        if (!X86_Run(state.get(), end, 16) || X86_RegRead(state.get(), 0) != expected) return false;
+        float stored = 0;
+        X86_MemRead(state.get(), data_address, reinterpret_cast<uint8_t*>(&stored), sizeof(stored));
+        return stored == 2.0f;
     };
-    if (!run(2) || !HasCompiledEntry(state.get()) || ReadJitCacheBytes(state.get()) != slab_bytes + page_size ||
+    if (!run(2)) return false;
+    const auto* first = FindCompiledBlock(state.get());
+    if (!first || !HasPageProtection(constant_page, VM_PROT_READ) ||
+        ReadJitCacheBytes(state.get()) != slab_bytes + page_size ||
         !X86_Run(forked.get(), end, 16) || !HasCompiledEntry(forked.get()))
         return false;
+    const auto code_page = reinterpret_cast<mach_vm_address_t>(first->entry) & ~mach_vm_address_t{0xfff};
+    const auto distance = code_page < constant_page ? constant_page - code_page : code_page - constant_page;
+    if (distance >= (uint64_t{1} << 32)) return false;
     uint8_t immediate = 2;
     const auto trigger_flush = [&] {
         for (; immediate <= 64; ++immediate) {
@@ -758,12 +788,13 @@ bool VerifyPackedBudget() {
                 return false;
             if (!HasCompiledEntry(state.get()))
                 return X86_GetLLVMJitLiveBlockCount() == 0 && ReadJitCacheBytes(state.get()) == 0 &&
-                       ReadJitCacheBytes(forked.get()) == 0;
+                       ReadJitCacheBytes(forked.get()) == 0 && HasPageProtection(constant_page, VM_PROT_NONE);
         }
         return false;
     };
     if (!VerifyFlushWithActivePeer(trigger_flush) || !run(immediate + 1) ||
-        !HasCompiledEntry(state.get()) || X86_GetLLVMJitLiveBlockCount() != 1)
+        !HasCompiledEntry(state.get()) || X86_GetLLVMJitLiveBlockCount() != 1 ||
+        !HasPageProtection(constant_page, VM_PROT_READ))
         return false;
     X86_DumpStats(state.get(), stats, sizeof(stats));
     if (!std::strstr(stats, "\"code_cache_flush_count\":1"))
@@ -794,6 +825,8 @@ bool VerifyCpuRunOptions(const char* path) {
     };
 
     if (configure({"JitWorkers=5", "LlvmPipeline=unknown-pass"}) || !std::strstr(error, "LlvmPipeline"))
+        return false;
+    if (configure({"JitArenaSize=3g"}) || !std::strstr(error, "JitArenaSize exceeds 2 GiB"))
         return false;
     const auto online = configure({"JitMode=exact", "JitHotThreshold=2", "LlvmPipeline=O1", "JitWorkers=0"});
     if (!online || configure({"JitWorkers=2"}) || !std::strstr(error, "JitWorkers"))

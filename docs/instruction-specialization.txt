@@ -106,7 +106,9 @@ for unknown names, invalid values or unavailable build features.
 
 BlockCacheSize defaults to 64 MiB per MMU and is inherited by forked MMUs.
 JitArenaSize defaults to 128 MiB per host process and is rounded up to a
-host page. Sizes accept bytes or binary suffixes such as k, m and g.
+host page. LLVM builds accept up to 2 GiB to keep code and data within
+the AArch64 Page21 relocation range. Sizes accept bytes or binary suffixes
+such as k, m and g.
 --block-cache-size and --jit-arena-size are legacy CLI shorthands. A saved
 spec with both old JIT limits migrates to the smaller nonzero size.
 
@@ -126,11 +128,12 @@ stop, then X86_DestroyRun to release the configuration. Legacy native
 callers can still set cache budgets with X86_ConfigureCodeCache.
 
 The arena charges reserved executable slabs, the dynamic instruction
-specialization region and page-rounded resident LLVM data. LLVM packs
-code into 256 KiB slabs inside the shared MAP_JIT mapping and maps its data
-nearby with separate non-executable permissions. JITLink relocates each
-block at its final address. The linker publishes it after copying the
-bytes and invalidating the instruction cache.
+specialization region and page-rounded LLVM data. It reserves two address
+ranges at initialization, each sized to the budget, with one shared limit on
+allocations. LLVM packs code into 256 KiB slabs in the MAP_JIT range and
+allocates data pages in the nearby non-executable range. JITLink relocates
+each block at its final addresses, applies the data permissions, copies the
+code and invalidates the instruction cache before publishing the entry.
 
 Online LLVM blocks share one process-wide cache generation. Each successful
 link transfers its ORC resources to the generation tracker. The generation
