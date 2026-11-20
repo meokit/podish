@@ -26,10 +26,15 @@
 #define PG_DMA_OFFSET 0x3273
 #define PG_DMA_PITCH 0x3274
 #define PG_IMAGE_PRESERVED 0x30D2
+#define EGL_CONTEXT_MINOR_VERSION_KHR 0x30FB
+#define EGL_CONTEXT_FLAGS_KHR 0x30FC
+#define EGL_CONTEXT_OPENGL_DEBUG_BIT_KHR 0x0001
+#define EGL_OPENGL_ES3_BIT_KHR 0x0040
 
 enum surface_kind { PBUFFER, FBDEV, WAYLAND, FBDEV_PBUFFER, GBM };
 struct context {
     uint32_t id;
+    EGLint version;
     struct context* next;
 };
 struct surface {
@@ -50,6 +55,7 @@ struct display {
     void* native;
     int managed_gbm;
     int initialized;
+    EGLint renderable;
     struct context* contexts;
     struct surface* surfaces;
     struct image* images;
@@ -295,7 +301,7 @@ EGLBoolean eglInitialize(EGLDisplay display, EGLint* major, EGLint* minor) {
     if (!d)
         return EGL_FALSE;
     if (!d->initialized) {
-        if (pg_gl(PG_INIT, PG_ABI) != PG_ABI)
+        if (pg_gl(PG_INIT, PG_ABI, pg_ptr(&d->renderable)) != PG_ABI)
             return fail(EGL_NOT_INITIALIZED);
         d->initialized = 1;
     }
@@ -356,9 +362,9 @@ const char* eglQueryString(EGLDisplay display, EGLint name) {
         return "OpenGL_ES";
     case EGL_EXTENSIONS:
         if (d->managed_gbm)
-            return "EGL_KHR_surfaceless_context EGL_KHR_no_config_context EGL_KHR_image_base "
+            return "EGL_KHR_create_context EGL_KHR_surfaceless_context EGL_KHR_no_config_context EGL_KHR_image_base "
                    "EGL_EXT_image_dma_buf_import EGL_EXT_image_dma_buf_import_modifiers";
-        return "EGL_KHR_surfaceless_context";
+        return "EGL_KHR_create_context EGL_KHR_surfaceless_context";
     default:
         fail(EGL_BAD_PARAMETER);
         return NULL;
@@ -383,7 +389,7 @@ static EGLint config_attribute(const struct display* display, EGLint attr) {
         return EGL_PBUFFER_BIT | (display->platform == PG_PLATFORM_SURFACELESS ? 0 : EGL_WINDOW_BIT);
     case EGL_RENDERABLE_TYPE:
     case EGL_CONFORMANT:
-        return EGL_OPENGL_ES2_BIT;
+        return display->renderable;
     case EGL_NATIVE_VISUAL_ID:
         return display->platform == PG_PLATFORM_GBM ? PG_GBM_ARGB8888 : 0;
     case EGL_NATIVE_RENDERABLE:
@@ -516,24 +522,37 @@ EGLContext eglCreateContext(EGLDisplay display, EGLConfig config, EGLContext sha
     if (share && !lookup_context(d, share))
         return EGL_NO_CONTEXT;
 
-    EGLint version = 1;
+    EGLint version = 1, minor = 0, flags = 0;
     for (const EGLint* a = attribs; a && *a != EGL_NONE; a += 2) {
-        if (a[0] != EGL_CONTEXT_CLIENT_VERSION)
+        switch (a[0]) {
+        case EGL_CONTEXT_CLIENT_VERSION:
+            version = a[1];
+            break;
+        case EGL_CONTEXT_MINOR_VERSION_KHR:
+            minor = a[1];
+            break;
+        case EGL_CONTEXT_FLAGS_KHR:
+            flags = a[1];
+            break;
+        default:
             return (fail(EGL_BAD_ATTRIBUTE), EGL_NO_CONTEXT);
-        version = a[1];
+        }
     }
-    if (version != 2)
+    if (flags & ~EGL_CONTEXT_OPENGL_DEBUG_BIT_KHR)
+        return (fail(EGL_BAD_ATTRIBUTE), EGL_NO_CONTEXT);
+    if (minor != 0 || (version != 2 && version != 3) || (version == 3 && !(d->renderable & EGL_OPENGL_ES3_BIT_KHR)))
         return (fail(EGL_BAD_MATCH), EGL_NO_CONTEXT);
 
     struct context* c = calloc(1, sizeof(*c));
     if (!c)
         return (fail(EGL_BAD_ALLOC), EGL_NO_CONTEXT);
-    int id = pg_gl(PG_CREATE_CONTEXT, pg_ptr(share), managed);
+    int id = pg_gl(PG_CREATE_CONTEXT, pg_ptr(share), managed, version, flags);
     if (!called(id)) {
         free(c);
         return EGL_NO_CONTEXT;
     }
     c->id = (uint32_t)id;
+    c->version = version;
     c->next = d->contexts;
     d->contexts = c;
     return (EGLContext)(uintptr_t)c->id;
@@ -556,13 +575,14 @@ EGLBoolean eglDestroyContext(EGLDisplay display, EGLContext context) {
 EGLBoolean eglQueryContext(EGLDisplay display, EGLContext context, EGLint attribute, EGLint* value) {
     WITH_LOCK;
     struct display* d = lookup(display, 1);
-    if (!d || !lookup_context(d, context))
+    struct context** link = d ? lookup_context(d, context) : NULL;
+    if (!link)
         return EGL_FALSE;
     if (!value)
         return fail(EGL_BAD_PARAMETER);
     switch (attribute) {
     case EGL_CONTEXT_CLIENT_VERSION:
-        *value = 2;
+        *value = (*link)->version;
         break;
     case EGL_CONTEXT_CLIENT_TYPE:
         *value = EGL_OPENGL_ES_API;

@@ -4,7 +4,7 @@
 
 PODISH_EXPORT void glActiveTexture(GLenum texture) { pg_gl(64, (uint32_t)texture); }
 PODISH_EXPORT void glAttachShader(GLuint program, GLuint shader) { pg_gl(65, (uint32_t)program, (uint32_t)shader); }
-PODISH_EXPORT void glBindAttribLocation(GLuint program, GLuint index, const GLchar *name) { pg_gl(66, (uint32_t)program, (uint32_t)index, (uint32_t)(uintptr_t)name); }
+PODISH_EXPORT void glBindAttribLocation(GLuint program, GLuint index, const GLchar *name) { pg_gl(66, (uint32_t)program, (uint32_t)index, pg_ptr(name)); }
 PODISH_EXPORT void glBindBuffer(GLenum target, GLuint buffer) { pg_gl(67, (uint32_t)target, (uint32_t)buffer); }
 PODISH_EXPORT void glBindFramebuffer(GLenum target, GLuint framebuffer) { pg_gl(68, (uint32_t)target, (uint32_t)framebuffer); }
 PODISH_EXPORT void glBindRenderbuffer(GLenum target, GLuint renderbuffer) { pg_gl(69, (uint32_t)target, (uint32_t)renderbuffer); }
@@ -14,8 +14,8 @@ PODISH_EXPORT void glBlendEquation(GLenum mode) { pg_gl(72, (uint32_t)mode); }
 PODISH_EXPORT void glBlendEquationSeparate(GLenum modeRGB, GLenum modeAlpha) { pg_gl(73, (uint32_t)modeRGB, (uint32_t)modeAlpha); }
 PODISH_EXPORT void glBlendFunc(GLenum sfactor, GLenum dfactor) { pg_gl(74, (uint32_t)sfactor, (uint32_t)dfactor); }
 PODISH_EXPORT void glBlendFuncSeparate(GLenum sfactorRGB, GLenum dfactorRGB, GLenum sfactorAlpha, GLenum dfactorAlpha) { pg_gl(75, (uint32_t)sfactorRGB, (uint32_t)dfactorRGB, (uint32_t)sfactorAlpha, (uint32_t)dfactorAlpha); }
-PODISH_EXPORT void glBufferData(GLenum target, GLsizeiptr size, const void *data, GLenum usage) { pg_gl(76, (uint32_t)target, (uint32_t)size, (uint32_t)(uintptr_t)data, (uint32_t)usage); }
-PODISH_EXPORT void glBufferSubData(GLenum target, GLintptr offset, GLsizeiptr size, const void *data) { pg_gl(77, (uint32_t)target, (uint32_t)offset, (uint32_t)size, (uint32_t)(uintptr_t)data); }
+PODISH_EXPORT void glBufferData(GLenum target, GLsizeiptr size, const void *data, GLenum usage) { pg_gl(76, (uint32_t)target, (uint32_t)size, pg_ptr(data), (uint32_t)usage); }
+PODISH_EXPORT void glBufferSubData(GLenum target, GLintptr offset, GLsizeiptr size, const void *data) { pg_gl(77, (uint32_t)target, (uint32_t)offset, (uint32_t)size, pg_ptr(data)); }
 PODISH_EXPORT GLenum glCheckFramebufferStatus(GLenum target) { return (GLenum)pg_gl(78, (uint32_t)target); }
 PODISH_EXPORT void glClear(GLbitfield mask) { pg_gl(79, (uint32_t)mask); }
 PODISH_EXPORT void glClearColor(GLfloat red, GLfloat green, GLfloat blue, GLfloat alpha) { pg_gl(80, pg_float(red), pg_float(green), pg_float(blue), pg_float(alpha)); }
@@ -23,19 +23,19 @@ PODISH_EXPORT void glClearDepthf(GLfloat d) { pg_gl(81, pg_float(d)); }
 PODISH_EXPORT void glClearStencil(GLint s) { pg_gl(82, (uint32_t)s); }
 PODISH_EXPORT void glColorMask(GLboolean red, GLboolean green, GLboolean blue, GLboolean alpha) { pg_gl(83, (uint32_t)red, (uint32_t)green, (uint32_t)blue, (uint32_t)alpha); }
 PODISH_EXPORT void glCompileShader(GLuint shader) { pg_gl(84, (uint32_t)shader); }
-PODISH_EXPORT void glCompressedTexImage2D(GLenum target, GLint level, GLenum internalformat, GLsizei width, GLsizei height, GLint border, GLsizei imageSize, const void *data) { pg_gl(85, (uint32_t)target, (uint32_t)level, (uint32_t)internalformat, (uint32_t)width, (uint32_t)height, (uint32_t)border, (uint32_t)imageSize, (uint32_t)(uintptr_t)data); }
-PODISH_EXPORT void glCompressedTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height, GLenum format, GLsizei imageSize, const void *data) { pg_gl(86, (uint32_t)target, (uint32_t)level, (uint32_t)xoffset, (uint32_t)yoffset, (uint32_t)width, (uint32_t)height, (uint32_t)format, (uint32_t)imageSize, (uint32_t)(uintptr_t)data); }
+PODISH_EXPORT void glCompressedTexImage2D(GLenum target, GLint level, GLenum internalformat, GLsizei width, GLsizei height, GLint border, GLsizei imageSize, const void *data) { pg_gl(85, (uint32_t)target, (uint32_t)level, (uint32_t)internalformat, (uint32_t)width, (uint32_t)height, (uint32_t)border, (uint32_t)imageSize, pg_ptr(data)); }
+PODISH_EXPORT void glCompressedTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height, GLenum format, GLsizei imageSize, const void *data) { pg_gl(86, (uint32_t)target, (uint32_t)level, (uint32_t)xoffset, (uint32_t)yoffset, (uint32_t)width, (uint32_t)height, (uint32_t)format, (uint32_t)imageSize, pg_ptr(data)); }
 PODISH_EXPORT void glCopyTexImage2D(GLenum target, GLint level, GLenum internalformat, GLint x, GLint y, GLsizei width, GLsizei height, GLint border) { pg_gl(87, (uint32_t)target, (uint32_t)level, (uint32_t)internalformat, (uint32_t)x, (uint32_t)y, (uint32_t)width, (uint32_t)height, (uint32_t)border); }
 PODISH_EXPORT void glCopyTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint x, GLint y, GLsizei width, GLsizei height) { pg_gl(88, (uint32_t)target, (uint32_t)level, (uint32_t)xoffset, (uint32_t)yoffset, (uint32_t)x, (uint32_t)y, (uint32_t)width, (uint32_t)height); }
 PODISH_EXPORT GLuint glCreateProgram(void) { return (GLuint)pg_gl(89); }
 PODISH_EXPORT GLuint glCreateShader(GLenum type) { return (GLuint)pg_gl(90, (uint32_t)type); }
 PODISH_EXPORT void glCullFace(GLenum mode) { pg_gl(91, (uint32_t)mode); }
-PODISH_EXPORT void glDeleteBuffers(GLsizei n, const GLuint *buffers) { pg_gl(92, (uint32_t)n, (uint32_t)(uintptr_t)buffers); }
-PODISH_EXPORT void glDeleteFramebuffers(GLsizei n, const GLuint *framebuffers) { pg_gl(93, (uint32_t)n, (uint32_t)(uintptr_t)framebuffers); }
+PODISH_EXPORT void glDeleteBuffers(GLsizei n, const GLuint *buffers) { pg_gl(92, (uint32_t)n, pg_ptr(buffers)); }
+PODISH_EXPORT void glDeleteFramebuffers(GLsizei n, const GLuint *framebuffers) { pg_gl(93, (uint32_t)n, pg_ptr(framebuffers)); }
 PODISH_EXPORT void glDeleteProgram(GLuint program) { pg_gl(94, (uint32_t)program); }
-PODISH_EXPORT void glDeleteRenderbuffers(GLsizei n, const GLuint *renderbuffers) { pg_gl(95, (uint32_t)n, (uint32_t)(uintptr_t)renderbuffers); }
+PODISH_EXPORT void glDeleteRenderbuffers(GLsizei n, const GLuint *renderbuffers) { pg_gl(95, (uint32_t)n, pg_ptr(renderbuffers)); }
 PODISH_EXPORT void glDeleteShader(GLuint shader) { pg_gl(96, (uint32_t)shader); }
-PODISH_EXPORT void glDeleteTextures(GLsizei n, const GLuint *textures) { pg_gl(97, (uint32_t)n, (uint32_t)(uintptr_t)textures); }
+PODISH_EXPORT void glDeleteTextures(GLsizei n, const GLuint *textures) { pg_gl(97, (uint32_t)n, pg_ptr(textures)); }
 PODISH_EXPORT void glDepthFunc(GLenum func) { pg_gl(98, (uint32_t)func); }
 PODISH_EXPORT void glDepthMask(GLboolean flag) { pg_gl(99, (uint32_t)flag); }
 PODISH_EXPORT void glDepthRangef(GLfloat n, GLfloat f) { pg_gl(100, pg_float(n), pg_float(f)); }
@@ -43,7 +43,7 @@ PODISH_EXPORT void glDetachShader(GLuint program, GLuint shader) { pg_gl(101, (u
 PODISH_EXPORT void glDisable(GLenum cap) { pg_gl(102, (uint32_t)cap); }
 PODISH_EXPORT void glDisableVertexAttribArray(GLuint index) { pg_gl(103, (uint32_t)index); }
 PODISH_EXPORT void glDrawArrays(GLenum mode, GLint first, GLsizei count) { pg_gl(104, (uint32_t)mode, (uint32_t)first, (uint32_t)count); }
-PODISH_EXPORT void glDrawElements(GLenum mode, GLsizei count, GLenum type, const void *indices) { pg_gl(105, (uint32_t)mode, (uint32_t)count, (uint32_t)type, (uint32_t)(uintptr_t)indices); }
+PODISH_EXPORT void glDrawElements(GLenum mode, GLsizei count, GLenum type, const void *indices) { pg_gl(105, (uint32_t)mode, (uint32_t)count, (uint32_t)type, pg_ptr(indices)); }
 PODISH_EXPORT void glEnable(GLenum cap) { pg_gl(106, (uint32_t)cap); }
 PODISH_EXPORT void glEnableVertexAttribArray(GLuint index) { pg_gl(107, (uint32_t)index); }
 PODISH_EXPORT void glFinish(void) { pg_gl(108); }
@@ -51,99 +51,203 @@ PODISH_EXPORT void glFlush(void) { pg_gl(109); }
 PODISH_EXPORT void glFramebufferRenderbuffer(GLenum target, GLenum attachment, GLenum renderbuffertarget, GLuint renderbuffer) { pg_gl(110, (uint32_t)target, (uint32_t)attachment, (uint32_t)renderbuffertarget, (uint32_t)renderbuffer); }
 PODISH_EXPORT void glFramebufferTexture2D(GLenum target, GLenum attachment, GLenum textarget, GLuint texture, GLint level) { pg_gl(111, (uint32_t)target, (uint32_t)attachment, (uint32_t)textarget, (uint32_t)texture, (uint32_t)level); }
 PODISH_EXPORT void glFrontFace(GLenum mode) { pg_gl(112, (uint32_t)mode); }
-PODISH_EXPORT void glGenBuffers(GLsizei n, GLuint *buffers) { pg_gl(113, (uint32_t)n, (uint32_t)(uintptr_t)buffers); }
+PODISH_EXPORT void glGenBuffers(GLsizei n, GLuint *buffers) { pg_gl(113, (uint32_t)n, pg_ptr(buffers)); }
 PODISH_EXPORT void glGenerateMipmap(GLenum target) { pg_gl(114, (uint32_t)target); }
-PODISH_EXPORT void glGenFramebuffers(GLsizei n, GLuint *framebuffers) { pg_gl(115, (uint32_t)n, (uint32_t)(uintptr_t)framebuffers); }
-PODISH_EXPORT void glGenRenderbuffers(GLsizei n, GLuint *renderbuffers) { pg_gl(116, (uint32_t)n, (uint32_t)(uintptr_t)renderbuffers); }
-PODISH_EXPORT void glGenTextures(GLsizei n, GLuint *textures) { pg_gl(117, (uint32_t)n, (uint32_t)(uintptr_t)textures); }
-PODISH_EXPORT void glGetActiveAttrib(GLuint program, GLuint index, GLsizei bufSize, GLsizei *length, GLint *size, GLenum *type, GLchar *name) { pg_gl(118, (uint32_t)program, (uint32_t)index, (uint32_t)bufSize, (uint32_t)(uintptr_t)length, (uint32_t)(uintptr_t)size, (uint32_t)(uintptr_t)type, (uint32_t)(uintptr_t)name); }
-PODISH_EXPORT void glGetActiveUniform(GLuint program, GLuint index, GLsizei bufSize, GLsizei *length, GLint *size, GLenum *type, GLchar *name) { pg_gl(119, (uint32_t)program, (uint32_t)index, (uint32_t)bufSize, (uint32_t)(uintptr_t)length, (uint32_t)(uintptr_t)size, (uint32_t)(uintptr_t)type, (uint32_t)(uintptr_t)name); }
-PODISH_EXPORT void glGetAttachedShaders(GLuint program, GLsizei maxCount, GLsizei *count, GLuint *shaders) { pg_gl(120, (uint32_t)program, (uint32_t)maxCount, (uint32_t)(uintptr_t)count, (uint32_t)(uintptr_t)shaders); }
-PODISH_EXPORT GLint glGetAttribLocation(GLuint program, const GLchar *name) { return (GLint)pg_gl(121, (uint32_t)program, (uint32_t)(uintptr_t)name); }
-PODISH_EXPORT void glGetBooleanv(GLenum pname, GLboolean *data) { pg_gl(122, (uint32_t)pname, (uint32_t)(uintptr_t)data); }
-PODISH_EXPORT void glGetBufferParameteriv(GLenum target, GLenum pname, GLint *params) { pg_gl(123, (uint32_t)target, (uint32_t)pname, (uint32_t)(uintptr_t)params); }
+PODISH_EXPORT void glGenFramebuffers(GLsizei n, GLuint *framebuffers) { pg_gl(115, (uint32_t)n, pg_ptr(framebuffers)); }
+PODISH_EXPORT void glGenRenderbuffers(GLsizei n, GLuint *renderbuffers) { pg_gl(116, (uint32_t)n, pg_ptr(renderbuffers)); }
+PODISH_EXPORT void glGenTextures(GLsizei n, GLuint *textures) { pg_gl(117, (uint32_t)n, pg_ptr(textures)); }
+PODISH_EXPORT void glGetActiveAttrib(GLuint program, GLuint index, GLsizei bufSize, GLsizei *length, GLint *size, GLenum *type, GLchar *name) { pg_gl(118, (uint32_t)program, (uint32_t)index, (uint32_t)bufSize, pg_ptr(length), pg_ptr(size), pg_ptr(type), pg_ptr(name)); }
+PODISH_EXPORT void glGetActiveUniform(GLuint program, GLuint index, GLsizei bufSize, GLsizei *length, GLint *size, GLenum *type, GLchar *name) { pg_gl(119, (uint32_t)program, (uint32_t)index, (uint32_t)bufSize, pg_ptr(length), pg_ptr(size), pg_ptr(type), pg_ptr(name)); }
+PODISH_EXPORT void glGetAttachedShaders(GLuint program, GLsizei maxCount, GLsizei *count, GLuint *shaders) { pg_gl(120, (uint32_t)program, (uint32_t)maxCount, pg_ptr(count), pg_ptr(shaders)); }
+PODISH_EXPORT GLint glGetAttribLocation(GLuint program, const GLchar *name) { return (GLint)pg_gl(121, (uint32_t)program, pg_ptr(name)); }
+PODISH_EXPORT void glGetBooleanv(GLenum pname, GLboolean *data) { pg_gl(122, (uint32_t)pname, pg_ptr(data)); }
+PODISH_EXPORT void glGetBufferParameteriv(GLenum target, GLenum pname, GLint *params) { pg_gl(123, (uint32_t)target, (uint32_t)pname, pg_ptr(params)); }
 PODISH_EXPORT GLenum glGetError(void) { return (GLenum)pg_gl(124); }
-PODISH_EXPORT void glGetFloatv(GLenum pname, GLfloat *data) { pg_gl(125, (uint32_t)pname, (uint32_t)(uintptr_t)data); }
-PODISH_EXPORT void glGetFramebufferAttachmentParameteriv(GLenum target, GLenum attachment, GLenum pname, GLint *params) { pg_gl(126, (uint32_t)target, (uint32_t)attachment, (uint32_t)pname, (uint32_t)(uintptr_t)params); }
-PODISH_EXPORT void glGetIntegerv(GLenum pname, GLint *data) { pg_gl(127, (uint32_t)pname, (uint32_t)(uintptr_t)data); }
-PODISH_EXPORT void glGetProgramiv(GLuint program, GLenum pname, GLint *params) { pg_gl(128, (uint32_t)program, (uint32_t)pname, (uint32_t)(uintptr_t)params); }
-PODISH_EXPORT void glGetProgramInfoLog(GLuint program, GLsizei bufSize, GLsizei *length, GLchar *infoLog) { pg_gl(129, (uint32_t)program, (uint32_t)bufSize, (uint32_t)(uintptr_t)length, (uint32_t)(uintptr_t)infoLog); }
-PODISH_EXPORT void glGetRenderbufferParameteriv(GLenum target, GLenum pname, GLint *params) { pg_gl(130, (uint32_t)target, (uint32_t)pname, (uint32_t)(uintptr_t)params); }
-PODISH_EXPORT void glGetShaderiv(GLuint shader, GLenum pname, GLint *params) { pg_gl(131, (uint32_t)shader, (uint32_t)pname, (uint32_t)(uintptr_t)params); }
-PODISH_EXPORT void glGetShaderInfoLog(GLuint shader, GLsizei bufSize, GLsizei *length, GLchar *infoLog) { pg_gl(132, (uint32_t)shader, (uint32_t)bufSize, (uint32_t)(uintptr_t)length, (uint32_t)(uintptr_t)infoLog); }
-PODISH_EXPORT void glGetShaderPrecisionFormat(GLenum shadertype, GLenum precisiontype, GLint *range, GLint *precision) { pg_gl(133, (uint32_t)shadertype, (uint32_t)precisiontype, (uint32_t)(uintptr_t)range, (uint32_t)(uintptr_t)precision); }
-PODISH_EXPORT void glGetShaderSource(GLuint shader, GLsizei bufSize, GLsizei *length, GLchar *source) { pg_gl(134, (uint32_t)shader, (uint32_t)bufSize, (uint32_t)(uintptr_t)length, (uint32_t)(uintptr_t)source); }
+PODISH_EXPORT void glGetFloatv(GLenum pname, GLfloat *data) { pg_gl(125, (uint32_t)pname, pg_ptr(data)); }
+PODISH_EXPORT void glGetFramebufferAttachmentParameteriv(GLenum target, GLenum attachment, GLenum pname, GLint *params) { pg_gl(126, (uint32_t)target, (uint32_t)attachment, (uint32_t)pname, pg_ptr(params)); }
+PODISH_EXPORT void glGetIntegerv(GLenum pname, GLint *data) { pg_gl(127, (uint32_t)pname, pg_ptr(data)); }
+PODISH_EXPORT void glGetProgramiv(GLuint program, GLenum pname, GLint *params) { pg_gl(128, (uint32_t)program, (uint32_t)pname, pg_ptr(params)); }
+PODISH_EXPORT void glGetProgramInfoLog(GLuint program, GLsizei bufSize, GLsizei *length, GLchar *infoLog) { pg_gl(129, (uint32_t)program, (uint32_t)bufSize, pg_ptr(length), pg_ptr(infoLog)); }
+PODISH_EXPORT void glGetRenderbufferParameteriv(GLenum target, GLenum pname, GLint *params) { pg_gl(130, (uint32_t)target, (uint32_t)pname, pg_ptr(params)); }
+PODISH_EXPORT void glGetShaderiv(GLuint shader, GLenum pname, GLint *params) { pg_gl(131, (uint32_t)shader, (uint32_t)pname, pg_ptr(params)); }
+PODISH_EXPORT void glGetShaderInfoLog(GLuint shader, GLsizei bufSize, GLsizei *length, GLchar *infoLog) { pg_gl(132, (uint32_t)shader, (uint32_t)bufSize, pg_ptr(length), pg_ptr(infoLog)); }
+PODISH_EXPORT void glGetShaderPrecisionFormat(GLenum shadertype, GLenum precisiontype, GLint *range, GLint *precision) { pg_gl(133, (uint32_t)shadertype, (uint32_t)precisiontype, pg_ptr(range), pg_ptr(precision)); }
+PODISH_EXPORT void glGetShaderSource(GLuint shader, GLsizei bufSize, GLsizei *length, GLchar *source) { pg_gl(134, (uint32_t)shader, (uint32_t)bufSize, pg_ptr(length), pg_ptr(source)); }
 PODISH_EXPORT const GLubyte *glGetString(GLenum name) { return pg_string(135, name); }
-PODISH_EXPORT void glGetTexParameterfv(GLenum target, GLenum pname, GLfloat *params) { pg_gl(136, (uint32_t)target, (uint32_t)pname, (uint32_t)(uintptr_t)params); }
-PODISH_EXPORT void glGetTexParameteriv(GLenum target, GLenum pname, GLint *params) { pg_gl(137, (uint32_t)target, (uint32_t)pname, (uint32_t)(uintptr_t)params); }
-PODISH_EXPORT void glGetUniformfv(GLuint program, GLint location, GLfloat *params) { pg_gl(138, (uint32_t)program, (uint32_t)location, (uint32_t)(uintptr_t)params); }
-PODISH_EXPORT void glGetUniformiv(GLuint program, GLint location, GLint *params) { pg_gl(139, (uint32_t)program, (uint32_t)location, (uint32_t)(uintptr_t)params); }
-PODISH_EXPORT GLint glGetUniformLocation(GLuint program, const GLchar *name) { return (GLint)pg_gl(140, (uint32_t)program, (uint32_t)(uintptr_t)name); }
-PODISH_EXPORT void glGetVertexAttribfv(GLuint index, GLenum pname, GLfloat *params) { pg_gl(141, (uint32_t)index, (uint32_t)pname, (uint32_t)(uintptr_t)params); }
-PODISH_EXPORT void glGetVertexAttribiv(GLuint index, GLenum pname, GLint *params) { pg_gl(142, (uint32_t)index, (uint32_t)pname, (uint32_t)(uintptr_t)params); }
-PODISH_EXPORT void glGetVertexAttribPointerv(GLuint index, GLenum pname, void **pointer) { pg_gl(143, (uint32_t)index, (uint32_t)pname, (uint32_t)(uintptr_t)pointer); }
+PODISH_EXPORT void glGetTexParameterfv(GLenum target, GLenum pname, GLfloat *params) { pg_gl(136, (uint32_t)target, (uint32_t)pname, pg_ptr(params)); }
+PODISH_EXPORT void glGetTexParameteriv(GLenum target, GLenum pname, GLint *params) { pg_gl(137, (uint32_t)target, (uint32_t)pname, pg_ptr(params)); }
+PODISH_EXPORT void glGetUniformfv(GLuint program, GLint location, GLfloat *params) { pg_gl(138, (uint32_t)program, (uint32_t)location, pg_ptr(params)); }
+PODISH_EXPORT void glGetUniformiv(GLuint program, GLint location, GLint *params) { pg_gl(139, (uint32_t)program, (uint32_t)location, pg_ptr(params)); }
+PODISH_EXPORT GLint glGetUniformLocation(GLuint program, const GLchar *name) { return (GLint)pg_gl(140, (uint32_t)program, pg_ptr(name)); }
+PODISH_EXPORT void glGetVertexAttribfv(GLuint index, GLenum pname, GLfloat *params) { pg_gl(141, (uint32_t)index, (uint32_t)pname, pg_ptr(params)); }
+PODISH_EXPORT void glGetVertexAttribiv(GLuint index, GLenum pname, GLint *params) { pg_gl(142, (uint32_t)index, (uint32_t)pname, pg_ptr(params)); }
+PODISH_EXPORT void glGetVertexAttribPointerv(GLuint index, GLenum pname, void **pointer) { pg_gl(143, (uint32_t)index, (uint32_t)pname, pg_ptr(pointer)); }
 PODISH_EXPORT void glHint(GLenum target, GLenum mode) { pg_gl(144, (uint32_t)target, (uint32_t)mode); }
-PODISH_EXPORT GLboolean glIsBuffer(GLuint buffer) { return (GLboolean)pg_gl(145, (uint32_t)buffer); }
-PODISH_EXPORT GLboolean glIsEnabled(GLenum cap) { return (GLboolean)pg_gl(146, (uint32_t)cap); }
-PODISH_EXPORT GLboolean glIsFramebuffer(GLuint framebuffer) { return (GLboolean)pg_gl(147, (uint32_t)framebuffer); }
-PODISH_EXPORT GLboolean glIsProgram(GLuint program) { return (GLboolean)pg_gl(148, (uint32_t)program); }
-PODISH_EXPORT GLboolean glIsRenderbuffer(GLuint renderbuffer) { return (GLboolean)pg_gl(149, (uint32_t)renderbuffer); }
-PODISH_EXPORT GLboolean glIsShader(GLuint shader) { return (GLboolean)pg_gl(150, (uint32_t)shader); }
-PODISH_EXPORT GLboolean glIsTexture(GLuint texture) { return (GLboolean)pg_gl(151, (uint32_t)texture); }
+PODISH_EXPORT GLboolean glIsBuffer(GLuint buffer) { return pg_gl(145, (uint32_t)buffer) > 0; }
+PODISH_EXPORT GLboolean glIsEnabled(GLenum cap) { return pg_gl(146, (uint32_t)cap) > 0; }
+PODISH_EXPORT GLboolean glIsFramebuffer(GLuint framebuffer) { return pg_gl(147, (uint32_t)framebuffer) > 0; }
+PODISH_EXPORT GLboolean glIsProgram(GLuint program) { return pg_gl(148, (uint32_t)program) > 0; }
+PODISH_EXPORT GLboolean glIsRenderbuffer(GLuint renderbuffer) { return pg_gl(149, (uint32_t)renderbuffer) > 0; }
+PODISH_EXPORT GLboolean glIsShader(GLuint shader) { return pg_gl(150, (uint32_t)shader) > 0; }
+PODISH_EXPORT GLboolean glIsTexture(GLuint texture) { return pg_gl(151, (uint32_t)texture) > 0; }
 PODISH_EXPORT void glLineWidth(GLfloat width) { pg_gl(152, pg_float(width)); }
 PODISH_EXPORT void glLinkProgram(GLuint program) { pg_gl(153, (uint32_t)program); }
 PODISH_EXPORT void glPixelStorei(GLenum pname, GLint param) { pg_gl(154, (uint32_t)pname, (uint32_t)param); }
 PODISH_EXPORT void glPolygonOffset(GLfloat factor, GLfloat units) { pg_gl(155, pg_float(factor), pg_float(units)); }
-PODISH_EXPORT void glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void *pixels) { pg_gl(156, (uint32_t)x, (uint32_t)y, (uint32_t)width, (uint32_t)height, (uint32_t)format, (uint32_t)type, (uint32_t)(uintptr_t)pixels); }
+PODISH_EXPORT void glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format, GLenum type, void *pixels) { pg_gl(156, (uint32_t)x, (uint32_t)y, (uint32_t)width, (uint32_t)height, (uint32_t)format, (uint32_t)type, pg_ptr(pixels)); }
 PODISH_EXPORT void glReleaseShaderCompiler(void) { pg_gl(157); }
 PODISH_EXPORT void glRenderbufferStorage(GLenum target, GLenum internalformat, GLsizei width, GLsizei height) { pg_gl(158, (uint32_t)target, (uint32_t)internalformat, (uint32_t)width, (uint32_t)height); }
 PODISH_EXPORT void glSampleCoverage(GLfloat value, GLboolean invert) { pg_gl(159, pg_float(value), (uint32_t)invert); }
 PODISH_EXPORT void glScissor(GLint x, GLint y, GLsizei width, GLsizei height) { pg_gl(160, (uint32_t)x, (uint32_t)y, (uint32_t)width, (uint32_t)height); }
-PODISH_EXPORT void glShaderBinary(GLsizei count, const GLuint *shaders, GLenum binaryFormat, const void *binary, GLsizei length) { pg_gl(161, (uint32_t)count, (uint32_t)(uintptr_t)shaders, (uint32_t)binaryFormat, (uint32_t)(uintptr_t)binary, (uint32_t)length); }
-PODISH_EXPORT void glShaderSource(GLuint shader, GLsizei count, const GLchar *const*string, const GLint *length) { pg_gl(162, (uint32_t)shader, (uint32_t)count, (uint32_t)(uintptr_t)string, (uint32_t)(uintptr_t)length); }
+PODISH_EXPORT void glShaderBinary(GLsizei count, const GLuint *shaders, GLenum binaryFormat, const void *binary, GLsizei length) { pg_gl(161, (uint32_t)count, pg_ptr(shaders), (uint32_t)binaryFormat, pg_ptr(binary), (uint32_t)length); }
+PODISH_EXPORT void glShaderSource(GLuint shader, GLsizei count, const GLchar *const*string, const GLint *length) { pg_gl(162, (uint32_t)shader, (uint32_t)count, pg_ptr(string), pg_ptr(length)); }
 PODISH_EXPORT void glStencilFunc(GLenum func, GLint ref, GLuint mask) { pg_gl(163, (uint32_t)func, (uint32_t)ref, (uint32_t)mask); }
 PODISH_EXPORT void glStencilFuncSeparate(GLenum face, GLenum func, GLint ref, GLuint mask) { pg_gl(164, (uint32_t)face, (uint32_t)func, (uint32_t)ref, (uint32_t)mask); }
 PODISH_EXPORT void glStencilMask(GLuint mask) { pg_gl(165, (uint32_t)mask); }
 PODISH_EXPORT void glStencilMaskSeparate(GLenum face, GLuint mask) { pg_gl(166, (uint32_t)face, (uint32_t)mask); }
 PODISH_EXPORT void glStencilOp(GLenum fail, GLenum zfail, GLenum zpass) { pg_gl(167, (uint32_t)fail, (uint32_t)zfail, (uint32_t)zpass); }
 PODISH_EXPORT void glStencilOpSeparate(GLenum face, GLenum sfail, GLenum dpfail, GLenum dppass) { pg_gl(168, (uint32_t)face, (uint32_t)sfail, (uint32_t)dpfail, (uint32_t)dppass); }
-PODISH_EXPORT void glTexImage2D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLint border, GLenum format, GLenum type, const void *pixels) { pg_gl(169, (uint32_t)target, (uint32_t)level, (uint32_t)internalformat, (uint32_t)width, (uint32_t)height, (uint32_t)border, (uint32_t)format, (uint32_t)type, (uint32_t)(uintptr_t)pixels); }
+PODISH_EXPORT void glTexImage2D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLint border, GLenum format, GLenum type, const void *pixels) { pg_gl(169, (uint32_t)target, (uint32_t)level, (uint32_t)internalformat, (uint32_t)width, (uint32_t)height, (uint32_t)border, (uint32_t)format, (uint32_t)type, pg_ptr(pixels)); }
 PODISH_EXPORT void glTexParameterf(GLenum target, GLenum pname, GLfloat param) { pg_gl(170, (uint32_t)target, (uint32_t)pname, pg_float(param)); }
-PODISH_EXPORT void glTexParameterfv(GLenum target, GLenum pname, const GLfloat *params) { pg_gl(171, (uint32_t)target, (uint32_t)pname, (uint32_t)(uintptr_t)params); }
+PODISH_EXPORT void glTexParameterfv(GLenum target, GLenum pname, const GLfloat *params) { pg_gl(171, (uint32_t)target, (uint32_t)pname, pg_ptr(params)); }
 PODISH_EXPORT void glTexParameteri(GLenum target, GLenum pname, GLint param) { pg_gl(172, (uint32_t)target, (uint32_t)pname, (uint32_t)param); }
-PODISH_EXPORT void glTexParameteriv(GLenum target, GLenum pname, const GLint *params) { pg_gl(173, (uint32_t)target, (uint32_t)pname, (uint32_t)(uintptr_t)params); }
-PODISH_EXPORT void glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height, GLenum format, GLenum type, const void *pixels) { pg_gl(174, (uint32_t)target, (uint32_t)level, (uint32_t)xoffset, (uint32_t)yoffset, (uint32_t)width, (uint32_t)height, (uint32_t)format, (uint32_t)type, (uint32_t)(uintptr_t)pixels); }
+PODISH_EXPORT void glTexParameteriv(GLenum target, GLenum pname, const GLint *params) { pg_gl(173, (uint32_t)target, (uint32_t)pname, pg_ptr(params)); }
+PODISH_EXPORT void glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width, GLsizei height, GLenum format, GLenum type, const void *pixels) { pg_gl(174, (uint32_t)target, (uint32_t)level, (uint32_t)xoffset, (uint32_t)yoffset, (uint32_t)width, (uint32_t)height, (uint32_t)format, (uint32_t)type, pg_ptr(pixels)); }
 PODISH_EXPORT void glUniform1f(GLint location, GLfloat v0) { pg_gl(175, (uint32_t)location, pg_float(v0)); }
-PODISH_EXPORT void glUniform1fv(GLint location, GLsizei count, const GLfloat *value) { pg_gl(176, (uint32_t)location, (uint32_t)count, (uint32_t)(uintptr_t)value); }
+PODISH_EXPORT void glUniform1fv(GLint location, GLsizei count, const GLfloat *value) { pg_gl(176, (uint32_t)location, (uint32_t)count, pg_ptr(value)); }
 PODISH_EXPORT void glUniform1i(GLint location, GLint v0) { pg_gl(177, (uint32_t)location, (uint32_t)v0); }
-PODISH_EXPORT void glUniform1iv(GLint location, GLsizei count, const GLint *value) { pg_gl(178, (uint32_t)location, (uint32_t)count, (uint32_t)(uintptr_t)value); }
+PODISH_EXPORT void glUniform1iv(GLint location, GLsizei count, const GLint *value) { pg_gl(178, (uint32_t)location, (uint32_t)count, pg_ptr(value)); }
 PODISH_EXPORT void glUniform2f(GLint location, GLfloat v0, GLfloat v1) { pg_gl(179, (uint32_t)location, pg_float(v0), pg_float(v1)); }
-PODISH_EXPORT void glUniform2fv(GLint location, GLsizei count, const GLfloat *value) { pg_gl(180, (uint32_t)location, (uint32_t)count, (uint32_t)(uintptr_t)value); }
+PODISH_EXPORT void glUniform2fv(GLint location, GLsizei count, const GLfloat *value) { pg_gl(180, (uint32_t)location, (uint32_t)count, pg_ptr(value)); }
 PODISH_EXPORT void glUniform2i(GLint location, GLint v0, GLint v1) { pg_gl(181, (uint32_t)location, (uint32_t)v0, (uint32_t)v1); }
-PODISH_EXPORT void glUniform2iv(GLint location, GLsizei count, const GLint *value) { pg_gl(182, (uint32_t)location, (uint32_t)count, (uint32_t)(uintptr_t)value); }
+PODISH_EXPORT void glUniform2iv(GLint location, GLsizei count, const GLint *value) { pg_gl(182, (uint32_t)location, (uint32_t)count, pg_ptr(value)); }
 PODISH_EXPORT void glUniform3f(GLint location, GLfloat v0, GLfloat v1, GLfloat v2) { pg_gl(183, (uint32_t)location, pg_float(v0), pg_float(v1), pg_float(v2)); }
-PODISH_EXPORT void glUniform3fv(GLint location, GLsizei count, const GLfloat *value) { pg_gl(184, (uint32_t)location, (uint32_t)count, (uint32_t)(uintptr_t)value); }
+PODISH_EXPORT void glUniform3fv(GLint location, GLsizei count, const GLfloat *value) { pg_gl(184, (uint32_t)location, (uint32_t)count, pg_ptr(value)); }
 PODISH_EXPORT void glUniform3i(GLint location, GLint v0, GLint v1, GLint v2) { pg_gl(185, (uint32_t)location, (uint32_t)v0, (uint32_t)v1, (uint32_t)v2); }
-PODISH_EXPORT void glUniform3iv(GLint location, GLsizei count, const GLint *value) { pg_gl(186, (uint32_t)location, (uint32_t)count, (uint32_t)(uintptr_t)value); }
+PODISH_EXPORT void glUniform3iv(GLint location, GLsizei count, const GLint *value) { pg_gl(186, (uint32_t)location, (uint32_t)count, pg_ptr(value)); }
 PODISH_EXPORT void glUniform4f(GLint location, GLfloat v0, GLfloat v1, GLfloat v2, GLfloat v3) { pg_gl(187, (uint32_t)location, pg_float(v0), pg_float(v1), pg_float(v2), pg_float(v3)); }
-PODISH_EXPORT void glUniform4fv(GLint location, GLsizei count, const GLfloat *value) { pg_gl(188, (uint32_t)location, (uint32_t)count, (uint32_t)(uintptr_t)value); }
+PODISH_EXPORT void glUniform4fv(GLint location, GLsizei count, const GLfloat *value) { pg_gl(188, (uint32_t)location, (uint32_t)count, pg_ptr(value)); }
 PODISH_EXPORT void glUniform4i(GLint location, GLint v0, GLint v1, GLint v2, GLint v3) { pg_gl(189, (uint32_t)location, (uint32_t)v0, (uint32_t)v1, (uint32_t)v2, (uint32_t)v3); }
-PODISH_EXPORT void glUniform4iv(GLint location, GLsizei count, const GLint *value) { pg_gl(190, (uint32_t)location, (uint32_t)count, (uint32_t)(uintptr_t)value); }
-PODISH_EXPORT void glUniformMatrix2fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat *value) { pg_gl(191, (uint32_t)location, (uint32_t)count, (uint32_t)transpose, (uint32_t)(uintptr_t)value); }
-PODISH_EXPORT void glUniformMatrix3fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat *value) { pg_gl(192, (uint32_t)location, (uint32_t)count, (uint32_t)transpose, (uint32_t)(uintptr_t)value); }
-PODISH_EXPORT void glUniformMatrix4fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat *value) { pg_gl(193, (uint32_t)location, (uint32_t)count, (uint32_t)transpose, (uint32_t)(uintptr_t)value); }
+PODISH_EXPORT void glUniform4iv(GLint location, GLsizei count, const GLint *value) { pg_gl(190, (uint32_t)location, (uint32_t)count, pg_ptr(value)); }
+PODISH_EXPORT void glUniformMatrix2fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat *value) { pg_gl(191, (uint32_t)location, (uint32_t)count, (uint32_t)transpose, pg_ptr(value)); }
+PODISH_EXPORT void glUniformMatrix3fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat *value) { pg_gl(192, (uint32_t)location, (uint32_t)count, (uint32_t)transpose, pg_ptr(value)); }
+PODISH_EXPORT void glUniformMatrix4fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat *value) { pg_gl(193, (uint32_t)location, (uint32_t)count, (uint32_t)transpose, pg_ptr(value)); }
 PODISH_EXPORT void glUseProgram(GLuint program) { pg_gl(194, (uint32_t)program); }
 PODISH_EXPORT void glValidateProgram(GLuint program) { pg_gl(195, (uint32_t)program); }
 PODISH_EXPORT void glVertexAttrib1f(GLuint index, GLfloat x) { pg_gl(196, (uint32_t)index, pg_float(x)); }
-PODISH_EXPORT void glVertexAttrib1fv(GLuint index, const GLfloat *v) { pg_gl(197, (uint32_t)index, (uint32_t)(uintptr_t)v); }
+PODISH_EXPORT void glVertexAttrib1fv(GLuint index, const GLfloat *v) { pg_gl(197, (uint32_t)index, pg_ptr(v)); }
 PODISH_EXPORT void glVertexAttrib2f(GLuint index, GLfloat x, GLfloat y) { pg_gl(198, (uint32_t)index, pg_float(x), pg_float(y)); }
-PODISH_EXPORT void glVertexAttrib2fv(GLuint index, const GLfloat *v) { pg_gl(199, (uint32_t)index, (uint32_t)(uintptr_t)v); }
+PODISH_EXPORT void glVertexAttrib2fv(GLuint index, const GLfloat *v) { pg_gl(199, (uint32_t)index, pg_ptr(v)); }
 PODISH_EXPORT void glVertexAttrib3f(GLuint index, GLfloat x, GLfloat y, GLfloat z) { pg_gl(200, (uint32_t)index, pg_float(x), pg_float(y), pg_float(z)); }
-PODISH_EXPORT void glVertexAttrib3fv(GLuint index, const GLfloat *v) { pg_gl(201, (uint32_t)index, (uint32_t)(uintptr_t)v); }
+PODISH_EXPORT void glVertexAttrib3fv(GLuint index, const GLfloat *v) { pg_gl(201, (uint32_t)index, pg_ptr(v)); }
 PODISH_EXPORT void glVertexAttrib4f(GLuint index, GLfloat x, GLfloat y, GLfloat z, GLfloat w) { pg_gl(202, (uint32_t)index, pg_float(x), pg_float(y), pg_float(z), pg_float(w)); }
-PODISH_EXPORT void glVertexAttrib4fv(GLuint index, const GLfloat *v) { pg_gl(203, (uint32_t)index, (uint32_t)(uintptr_t)v); }
-PODISH_EXPORT void glVertexAttribPointer(GLuint index, GLint size, GLenum type, GLboolean normalized, GLsizei stride, const void *pointer) { pg_gl(204, (uint32_t)index, (uint32_t)size, (uint32_t)type, (uint32_t)normalized, (uint32_t)stride, (uint32_t)(uintptr_t)pointer); }
+PODISH_EXPORT void glVertexAttrib4fv(GLuint index, const GLfloat *v) { pg_gl(203, (uint32_t)index, pg_ptr(v)); }
+PODISH_EXPORT void glVertexAttribPointer(GLuint index, GLint size, GLenum type, GLboolean normalized, GLsizei stride, const void *pointer) { pg_gl(204, (uint32_t)index, (uint32_t)size, (uint32_t)type, (uint32_t)normalized, (uint32_t)stride, pg_ptr(pointer)); }
 PODISH_EXPORT void glViewport(GLint x, GLint y, GLsizei width, GLsizei height) { pg_gl(205, (uint32_t)x, (uint32_t)y, (uint32_t)width, (uint32_t)height); }
+PODISH_EXPORT void glReadBuffer(GLenum src) { pg_gl(206, (uint32_t)src); }
+PODISH_EXPORT void glDrawRangeElements(GLenum mode, GLuint start, GLuint end, GLsizei count, GLenum type, const void *indices) { pg_gl(207, (uint32_t)mode, (uint32_t)start, (uint32_t)end, (uint32_t)count, (uint32_t)type, pg_ptr(indices)); }
+PODISH_EXPORT void glTexImage3D(GLenum target, GLint level, GLint internalformat, GLsizei width, GLsizei height, GLsizei depth, GLint border, GLenum format, GLenum type, const void *pixels) { pg_gl(208, (uint32_t)target, (uint32_t)level, (uint32_t)internalformat, (uint32_t)width, (uint32_t)height, (uint32_t)depth, (uint32_t)border, (uint32_t)format, (uint32_t)type, pg_ptr(pixels)); }
+PODISH_EXPORT void glTexSubImage3D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width, GLsizei height, GLsizei depth, GLenum format, GLenum type, const void *pixels) { pg_gl(209, (uint32_t)target, (uint32_t)level, (uint32_t)xoffset, (uint32_t)yoffset, (uint32_t)zoffset, (uint32_t)width, (uint32_t)height, (uint32_t)depth, (uint32_t)format, (uint32_t)type, pg_ptr(pixels)); }
+PODISH_EXPORT void glCopyTexSubImage3D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLint x, GLint y, GLsizei width, GLsizei height) { pg_gl(210, (uint32_t)target, (uint32_t)level, (uint32_t)xoffset, (uint32_t)yoffset, (uint32_t)zoffset, (uint32_t)x, (uint32_t)y, (uint32_t)width, (uint32_t)height); }
+PODISH_EXPORT void glCompressedTexImage3D(GLenum target, GLint level, GLenum internalformat, GLsizei width, GLsizei height, GLsizei depth, GLint border, GLsizei imageSize, const void *data) { pg_gl(211, (uint32_t)target, (uint32_t)level, (uint32_t)internalformat, (uint32_t)width, (uint32_t)height, (uint32_t)depth, (uint32_t)border, (uint32_t)imageSize, pg_ptr(data)); }
+PODISH_EXPORT void glCompressedTexSubImage3D(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width, GLsizei height, GLsizei depth, GLenum format, GLsizei imageSize, const void *data) { pg_gl(212, (uint32_t)target, (uint32_t)level, (uint32_t)xoffset, (uint32_t)yoffset, (uint32_t)zoffset, (uint32_t)width, (uint32_t)height, (uint32_t)depth, (uint32_t)format, (uint32_t)imageSize, pg_ptr(data)); }
+PODISH_EXPORT void glGenQueries(GLsizei n, GLuint *ids) { pg_gl(213, (uint32_t)n, pg_ptr(ids)); }
+PODISH_EXPORT void glDeleteQueries(GLsizei n, const GLuint *ids) { pg_gl(214, (uint32_t)n, pg_ptr(ids)); }
+PODISH_EXPORT GLboolean glIsQuery(GLuint id) { return pg_gl(215, (uint32_t)id) > 0; }
+PODISH_EXPORT void glBeginQuery(GLenum target, GLuint id) { pg_gl(216, (uint32_t)target, (uint32_t)id); }
+PODISH_EXPORT void glEndQuery(GLenum target) { pg_gl(217, (uint32_t)target); }
+PODISH_EXPORT void glGetQueryiv(GLenum target, GLenum pname, GLint *params) { pg_gl(218, (uint32_t)target, (uint32_t)pname, pg_ptr(params)); }
+PODISH_EXPORT void glGetQueryObjectuiv(GLuint id, GLenum pname, GLuint *params) { pg_gl(219, (uint32_t)id, (uint32_t)pname, pg_ptr(params)); }
+PODISH_EXPORT GLboolean glUnmapBuffer(GLenum target) { return pg_gl(220, (uint32_t)target) > 0; }
+PODISH_EXPORT void glGetBufferPointerv(GLenum target, GLenum pname, void **params) { pg_gl(221, (uint32_t)target, (uint32_t)pname, pg_ptr(params)); }
+PODISH_EXPORT void glDrawBuffers(GLsizei n, const GLenum *bufs) { pg_gl(222, (uint32_t)n, pg_ptr(bufs)); }
+PODISH_EXPORT void glUniformMatrix2x3fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat *value) { pg_gl(223, (uint32_t)location, (uint32_t)count, (uint32_t)transpose, pg_ptr(value)); }
+PODISH_EXPORT void glUniformMatrix3x2fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat *value) { pg_gl(224, (uint32_t)location, (uint32_t)count, (uint32_t)transpose, pg_ptr(value)); }
+PODISH_EXPORT void glUniformMatrix2x4fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat *value) { pg_gl(225, (uint32_t)location, (uint32_t)count, (uint32_t)transpose, pg_ptr(value)); }
+PODISH_EXPORT void glUniformMatrix4x2fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat *value) { pg_gl(226, (uint32_t)location, (uint32_t)count, (uint32_t)transpose, pg_ptr(value)); }
+PODISH_EXPORT void glUniformMatrix3x4fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat *value) { pg_gl(227, (uint32_t)location, (uint32_t)count, (uint32_t)transpose, pg_ptr(value)); }
+PODISH_EXPORT void glUniformMatrix4x3fv(GLint location, GLsizei count, GLboolean transpose, const GLfloat *value) { pg_gl(228, (uint32_t)location, (uint32_t)count, (uint32_t)transpose, pg_ptr(value)); }
+PODISH_EXPORT void glBlitFramebuffer(GLint srcX0, GLint srcY0, GLint srcX1, GLint srcY1, GLint dstX0, GLint dstY0, GLint dstX1, GLint dstY1, GLbitfield mask, GLenum filter) { pg_gl(229, (uint32_t)srcX0, (uint32_t)srcY0, (uint32_t)srcX1, (uint32_t)srcY1, (uint32_t)dstX0, (uint32_t)dstY0, (uint32_t)dstX1, (uint32_t)dstY1, (uint32_t)mask, (uint32_t)filter); }
+PODISH_EXPORT void glRenderbufferStorageMultisample(GLenum target, GLsizei samples, GLenum internalformat, GLsizei width, GLsizei height) { pg_gl(230, (uint32_t)target, (uint32_t)samples, (uint32_t)internalformat, (uint32_t)width, (uint32_t)height); }
+PODISH_EXPORT void glFramebufferTextureLayer(GLenum target, GLenum attachment, GLuint texture, GLint level, GLint layer) { pg_gl(231, (uint32_t)target, (uint32_t)attachment, (uint32_t)texture, (uint32_t)level, (uint32_t)layer); }
+PODISH_EXPORT void *glMapBufferRange(GLenum target, GLintptr offset, GLsizeiptr length, GLbitfield access) { uint32_t address = 0; return pg_gl(232, target, offset, length, access, pg_ptr(&address)) == 0 ? (void *)(uintptr_t)address : NULL; }
+PODISH_EXPORT void glFlushMappedBufferRange(GLenum target, GLintptr offset, GLsizeiptr length) { pg_gl(233, (uint32_t)target, (uint32_t)offset, (uint32_t)length); }
+PODISH_EXPORT void glBindVertexArray(GLuint array) { pg_gl(234, (uint32_t)array); }
+PODISH_EXPORT void glDeleteVertexArrays(GLsizei n, const GLuint *arrays) { pg_gl(235, (uint32_t)n, pg_ptr(arrays)); }
+PODISH_EXPORT void glGenVertexArrays(GLsizei n, GLuint *arrays) { pg_gl(236, (uint32_t)n, pg_ptr(arrays)); }
+PODISH_EXPORT GLboolean glIsVertexArray(GLuint array) { return pg_gl(237, (uint32_t)array) > 0; }
+PODISH_EXPORT void glGetIntegeri_v(GLenum target, GLuint index, GLint *data) { pg_gl(238, (uint32_t)target, (uint32_t)index, pg_ptr(data)); }
+PODISH_EXPORT void glBeginTransformFeedback(GLenum primitiveMode) { pg_gl(239, (uint32_t)primitiveMode); }
+PODISH_EXPORT void glEndTransformFeedback(void) { pg_gl(240); }
+PODISH_EXPORT void glBindBufferRange(GLenum target, GLuint index, GLuint buffer, GLintptr offset, GLsizeiptr size) { pg_gl(241, (uint32_t)target, (uint32_t)index, (uint32_t)buffer, (uint32_t)offset, (uint32_t)size); }
+PODISH_EXPORT void glBindBufferBase(GLenum target, GLuint index, GLuint buffer) { pg_gl(242, (uint32_t)target, (uint32_t)index, (uint32_t)buffer); }
+PODISH_EXPORT void glTransformFeedbackVaryings(GLuint program, GLsizei count, const GLchar *const*varyings, GLenum bufferMode) { pg_gl(243, (uint32_t)program, (uint32_t)count, pg_ptr(varyings), (uint32_t)bufferMode); }
+PODISH_EXPORT void glGetTransformFeedbackVarying(GLuint program, GLuint index, GLsizei bufSize, GLsizei *length, GLsizei *size, GLenum *type, GLchar *name) { pg_gl(244, (uint32_t)program, (uint32_t)index, (uint32_t)bufSize, pg_ptr(length), pg_ptr(size), pg_ptr(type), pg_ptr(name)); }
+PODISH_EXPORT void glVertexAttribIPointer(GLuint index, GLint size, GLenum type, GLsizei stride, const void *pointer) { pg_gl(245, (uint32_t)index, (uint32_t)size, (uint32_t)type, (uint32_t)stride, pg_ptr(pointer)); }
+PODISH_EXPORT void glGetVertexAttribIiv(GLuint index, GLenum pname, GLint *params) { pg_gl(246, (uint32_t)index, (uint32_t)pname, pg_ptr(params)); }
+PODISH_EXPORT void glGetVertexAttribIuiv(GLuint index, GLenum pname, GLuint *params) { pg_gl(247, (uint32_t)index, (uint32_t)pname, pg_ptr(params)); }
+PODISH_EXPORT void glVertexAttribI4i(GLuint index, GLint x, GLint y, GLint z, GLint w) { pg_gl(248, (uint32_t)index, (uint32_t)x, (uint32_t)y, (uint32_t)z, (uint32_t)w); }
+PODISH_EXPORT void glVertexAttribI4ui(GLuint index, GLuint x, GLuint y, GLuint z, GLuint w) { pg_gl(249, (uint32_t)index, (uint32_t)x, (uint32_t)y, (uint32_t)z, (uint32_t)w); }
+PODISH_EXPORT void glVertexAttribI4iv(GLuint index, const GLint *v) { pg_gl(250, (uint32_t)index, pg_ptr(v)); }
+PODISH_EXPORT void glVertexAttribI4uiv(GLuint index, const GLuint *v) { pg_gl(251, (uint32_t)index, pg_ptr(v)); }
+PODISH_EXPORT void glGetUniformuiv(GLuint program, GLint location, GLuint *params) { pg_gl(252, (uint32_t)program, (uint32_t)location, pg_ptr(params)); }
+PODISH_EXPORT GLint glGetFragDataLocation(GLuint program, const GLchar *name) { return (GLint)pg_gl(253, (uint32_t)program, pg_ptr(name)); }
+PODISH_EXPORT void glUniform1ui(GLint location, GLuint v0) { pg_gl(254, (uint32_t)location, (uint32_t)v0); }
+PODISH_EXPORT void glUniform2ui(GLint location, GLuint v0, GLuint v1) { pg_gl(255, (uint32_t)location, (uint32_t)v0, (uint32_t)v1); }
+PODISH_EXPORT void glUniform3ui(GLint location, GLuint v0, GLuint v1, GLuint v2) { pg_gl(256, (uint32_t)location, (uint32_t)v0, (uint32_t)v1, (uint32_t)v2); }
+PODISH_EXPORT void glUniform4ui(GLint location, GLuint v0, GLuint v1, GLuint v2, GLuint v3) { pg_gl(257, (uint32_t)location, (uint32_t)v0, (uint32_t)v1, (uint32_t)v2, (uint32_t)v3); }
+PODISH_EXPORT void glUniform1uiv(GLint location, GLsizei count, const GLuint *value) { pg_gl(258, (uint32_t)location, (uint32_t)count, pg_ptr(value)); }
+PODISH_EXPORT void glUniform2uiv(GLint location, GLsizei count, const GLuint *value) { pg_gl(259, (uint32_t)location, (uint32_t)count, pg_ptr(value)); }
+PODISH_EXPORT void glUniform3uiv(GLint location, GLsizei count, const GLuint *value) { pg_gl(260, (uint32_t)location, (uint32_t)count, pg_ptr(value)); }
+PODISH_EXPORT void glUniform4uiv(GLint location, GLsizei count, const GLuint *value) { pg_gl(261, (uint32_t)location, (uint32_t)count, pg_ptr(value)); }
+PODISH_EXPORT void glClearBufferiv(GLenum buffer, GLint drawbuffer, const GLint *value) { pg_gl(262, (uint32_t)buffer, (uint32_t)drawbuffer, pg_ptr(value)); }
+PODISH_EXPORT void glClearBufferuiv(GLenum buffer, GLint drawbuffer, const GLuint *value) { pg_gl(263, (uint32_t)buffer, (uint32_t)drawbuffer, pg_ptr(value)); }
+PODISH_EXPORT void glClearBufferfv(GLenum buffer, GLint drawbuffer, const GLfloat *value) { pg_gl(264, (uint32_t)buffer, (uint32_t)drawbuffer, pg_ptr(value)); }
+PODISH_EXPORT void glClearBufferfi(GLenum buffer, GLint drawbuffer, GLfloat depth, GLint stencil) { pg_gl(265, (uint32_t)buffer, (uint32_t)drawbuffer, pg_float(depth), (uint32_t)stencil); }
+PODISH_EXPORT const GLubyte *glGetStringi(GLenum name, GLuint index) { return pg_string_index(266, name, index); }
+PODISH_EXPORT void glCopyBufferSubData(GLenum readTarget, GLenum writeTarget, GLintptr readOffset, GLintptr writeOffset, GLsizeiptr size) { pg_gl(267, (uint32_t)readTarget, (uint32_t)writeTarget, (uint32_t)readOffset, (uint32_t)writeOffset, (uint32_t)size); }
+PODISH_EXPORT void glGetUniformIndices(GLuint program, GLsizei uniformCount, const GLchar *const*uniformNames, GLuint *uniformIndices) { pg_gl(268, (uint32_t)program, (uint32_t)uniformCount, pg_ptr(uniformNames), pg_ptr(uniformIndices)); }
+PODISH_EXPORT void glGetActiveUniformsiv(GLuint program, GLsizei uniformCount, const GLuint *uniformIndices, GLenum pname, GLint *params) { pg_gl(269, (uint32_t)program, (uint32_t)uniformCount, pg_ptr(uniformIndices), (uint32_t)pname, pg_ptr(params)); }
+PODISH_EXPORT GLuint glGetUniformBlockIndex(GLuint program, const GLchar *uniformBlockName) { return (GLuint)pg_gl(270, (uint32_t)program, pg_ptr(uniformBlockName)); }
+PODISH_EXPORT void glGetActiveUniformBlockiv(GLuint program, GLuint uniformBlockIndex, GLenum pname, GLint *params) { pg_gl(271, (uint32_t)program, (uint32_t)uniformBlockIndex, (uint32_t)pname, pg_ptr(params)); }
+PODISH_EXPORT void glGetActiveUniformBlockName(GLuint program, GLuint uniformBlockIndex, GLsizei bufSize, GLsizei *length, GLchar *uniformBlockName) { pg_gl(272, (uint32_t)program, (uint32_t)uniformBlockIndex, (uint32_t)bufSize, pg_ptr(length), pg_ptr(uniformBlockName)); }
+PODISH_EXPORT void glUniformBlockBinding(GLuint program, GLuint uniformBlockIndex, GLuint uniformBlockBinding) { pg_gl(273, (uint32_t)program, (uint32_t)uniformBlockIndex, (uint32_t)uniformBlockBinding); }
+PODISH_EXPORT void glDrawArraysInstanced(GLenum mode, GLint first, GLsizei count, GLsizei instancecount) { pg_gl(274, (uint32_t)mode, (uint32_t)first, (uint32_t)count, (uint32_t)instancecount); }
+PODISH_EXPORT void glDrawElementsInstanced(GLenum mode, GLsizei count, GLenum type, const void *indices, GLsizei instancecount) { pg_gl(275, (uint32_t)mode, (uint32_t)count, (uint32_t)type, pg_ptr(indices), (uint32_t)instancecount); }
+PODISH_EXPORT GLsync glFenceSync(GLenum condition, GLbitfield flags) { int id = pg_gl(276, (uint32_t)condition, (uint32_t)flags); return id > 0 ? (GLsync)(uintptr_t)id : NULL; }
+PODISH_EXPORT GLboolean glIsSync(GLsync sync) { return pg_gl(277, pg_ptr(sync)) > 0; }
+PODISH_EXPORT void glDeleteSync(GLsync sync) { pg_gl(278, pg_ptr(sync)); }
+PODISH_EXPORT GLenum glClientWaitSync(GLsync sync, GLbitfield flags, GLuint64 timeout) { return (GLenum)pg_gl(279, pg_ptr(sync), (uint32_t)flags, (uint32_t)timeout, (uint32_t)(timeout >> 32)); }
+PODISH_EXPORT void glWaitSync(GLsync sync, GLbitfield flags, GLuint64 timeout) { pg_gl(280, pg_ptr(sync), (uint32_t)flags, (uint32_t)timeout, (uint32_t)(timeout >> 32)); }
+PODISH_EXPORT void glGetInteger64v(GLenum pname, GLint64 *data) { pg_gl(281, (uint32_t)pname, pg_ptr(data)); }
+PODISH_EXPORT void glGetSynciv(GLsync sync, GLenum pname, GLsizei count, GLsizei *length, GLint *values) { pg_gl(282, pg_ptr(sync), (uint32_t)pname, (uint32_t)count, pg_ptr(length), pg_ptr(values)); }
+PODISH_EXPORT void glGetInteger64i_v(GLenum target, GLuint index, GLint64 *data) { pg_gl(283, (uint32_t)target, (uint32_t)index, pg_ptr(data)); }
+PODISH_EXPORT void glGetBufferParameteri64v(GLenum target, GLenum pname, GLint64 *params) { pg_gl(284, (uint32_t)target, (uint32_t)pname, pg_ptr(params)); }
+PODISH_EXPORT void glGenSamplers(GLsizei count, GLuint *samplers) { pg_gl(285, (uint32_t)count, pg_ptr(samplers)); }
+PODISH_EXPORT void glDeleteSamplers(GLsizei count, const GLuint *samplers) { pg_gl(286, (uint32_t)count, pg_ptr(samplers)); }
+PODISH_EXPORT GLboolean glIsSampler(GLuint sampler) { return pg_gl(287, (uint32_t)sampler) > 0; }
+PODISH_EXPORT void glBindSampler(GLuint unit, GLuint sampler) { pg_gl(288, (uint32_t)unit, (uint32_t)sampler); }
+PODISH_EXPORT void glSamplerParameteri(GLuint sampler, GLenum pname, GLint param) { pg_gl(289, (uint32_t)sampler, (uint32_t)pname, (uint32_t)param); }
+PODISH_EXPORT void glSamplerParameteriv(GLuint sampler, GLenum pname, const GLint *param) { pg_gl(290, (uint32_t)sampler, (uint32_t)pname, pg_ptr(param)); }
+PODISH_EXPORT void glSamplerParameterf(GLuint sampler, GLenum pname, GLfloat param) { pg_gl(291, (uint32_t)sampler, (uint32_t)pname, pg_float(param)); }
+PODISH_EXPORT void glSamplerParameterfv(GLuint sampler, GLenum pname, const GLfloat *param) { pg_gl(292, (uint32_t)sampler, (uint32_t)pname, pg_ptr(param)); }
+PODISH_EXPORT void glGetSamplerParameteriv(GLuint sampler, GLenum pname, GLint *params) { pg_gl(293, (uint32_t)sampler, (uint32_t)pname, pg_ptr(params)); }
+PODISH_EXPORT void glGetSamplerParameterfv(GLuint sampler, GLenum pname, GLfloat *params) { pg_gl(294, (uint32_t)sampler, (uint32_t)pname, pg_ptr(params)); }
+PODISH_EXPORT void glVertexAttribDivisor(GLuint index, GLuint divisor) { pg_gl(295, (uint32_t)index, (uint32_t)divisor); }
+PODISH_EXPORT void glBindTransformFeedback(GLenum target, GLuint id) { pg_gl(296, (uint32_t)target, (uint32_t)id); }
+PODISH_EXPORT void glDeleteTransformFeedbacks(GLsizei n, const GLuint *ids) { pg_gl(297, (uint32_t)n, pg_ptr(ids)); }
+PODISH_EXPORT void glGenTransformFeedbacks(GLsizei n, GLuint *ids) { pg_gl(298, (uint32_t)n, pg_ptr(ids)); }
+PODISH_EXPORT GLboolean glIsTransformFeedback(GLuint id) { return pg_gl(299, (uint32_t)id) > 0; }
+PODISH_EXPORT void glPauseTransformFeedback(void) { pg_gl(300); }
+PODISH_EXPORT void glResumeTransformFeedback(void) { pg_gl(301); }
+PODISH_EXPORT void glGetProgramBinary(GLuint program, GLsizei bufSize, GLsizei *length, GLenum *binaryFormat, void *binary) { pg_gl(302, (uint32_t)program, (uint32_t)bufSize, pg_ptr(length), pg_ptr(binaryFormat), pg_ptr(binary)); }
+PODISH_EXPORT void glProgramBinary(GLuint program, GLenum binaryFormat, const void *binary, GLsizei length) { pg_gl(303, (uint32_t)program, (uint32_t)binaryFormat, pg_ptr(binary), (uint32_t)length); }
+PODISH_EXPORT void glProgramParameteri(GLuint program, GLenum pname, GLint value) { pg_gl(304, (uint32_t)program, (uint32_t)pname, (uint32_t)value); }
+PODISH_EXPORT void glInvalidateFramebuffer(GLenum target, GLsizei numAttachments, const GLenum *attachments) { pg_gl(305, (uint32_t)target, (uint32_t)numAttachments, pg_ptr(attachments)); }
+PODISH_EXPORT void glInvalidateSubFramebuffer(GLenum target, GLsizei numAttachments, const GLenum *attachments, GLint x, GLint y, GLsizei width, GLsizei height) { pg_gl(306, (uint32_t)target, (uint32_t)numAttachments, pg_ptr(attachments), (uint32_t)x, (uint32_t)y, (uint32_t)width, (uint32_t)height); }
+PODISH_EXPORT void glTexStorage2D(GLenum target, GLsizei levels, GLenum internalformat, GLsizei width, GLsizei height) { pg_gl(307, (uint32_t)target, (uint32_t)levels, (uint32_t)internalformat, (uint32_t)width, (uint32_t)height); }
+PODISH_EXPORT void glTexStorage3D(GLenum target, GLsizei levels, GLenum internalformat, GLsizei width, GLsizei height, GLsizei depth) { pg_gl(308, (uint32_t)target, (uint32_t)levels, (uint32_t)internalformat, (uint32_t)width, (uint32_t)height, (uint32_t)depth); }
+PODISH_EXPORT void glGetInternalformativ(GLenum target, GLenum internalformat, GLenum pname, GLsizei count, GLint *params) { pg_gl(309, (uint32_t)target, (uint32_t)internalformat, (uint32_t)pname, (uint32_t)count, pg_ptr(params)); }
 
 void *pg_get_gl_proc(const char *name)
 {
@@ -290,6 +394,110 @@ void *pg_get_gl_proc(const char *name)
         { "glVertexAttrib4fv", (void *)&glVertexAttrib4fv },
         { "glVertexAttribPointer", (void *)&glVertexAttribPointer },
         { "glViewport", (void *)&glViewport },
+        { "glReadBuffer", (void *)&glReadBuffer },
+        { "glDrawRangeElements", (void *)&glDrawRangeElements },
+        { "glTexImage3D", (void *)&glTexImage3D },
+        { "glTexSubImage3D", (void *)&glTexSubImage3D },
+        { "glCopyTexSubImage3D", (void *)&glCopyTexSubImage3D },
+        { "glCompressedTexImage3D", (void *)&glCompressedTexImage3D },
+        { "glCompressedTexSubImage3D", (void *)&glCompressedTexSubImage3D },
+        { "glGenQueries", (void *)&glGenQueries },
+        { "glDeleteQueries", (void *)&glDeleteQueries },
+        { "glIsQuery", (void *)&glIsQuery },
+        { "glBeginQuery", (void *)&glBeginQuery },
+        { "glEndQuery", (void *)&glEndQuery },
+        { "glGetQueryiv", (void *)&glGetQueryiv },
+        { "glGetQueryObjectuiv", (void *)&glGetQueryObjectuiv },
+        { "glUnmapBuffer", (void *)&glUnmapBuffer },
+        { "glGetBufferPointerv", (void *)&glGetBufferPointerv },
+        { "glDrawBuffers", (void *)&glDrawBuffers },
+        { "glUniformMatrix2x3fv", (void *)&glUniformMatrix2x3fv },
+        { "glUniformMatrix3x2fv", (void *)&glUniformMatrix3x2fv },
+        { "glUniformMatrix2x4fv", (void *)&glUniformMatrix2x4fv },
+        { "glUniformMatrix4x2fv", (void *)&glUniformMatrix4x2fv },
+        { "glUniformMatrix3x4fv", (void *)&glUniformMatrix3x4fv },
+        { "glUniformMatrix4x3fv", (void *)&glUniformMatrix4x3fv },
+        { "glBlitFramebuffer", (void *)&glBlitFramebuffer },
+        { "glRenderbufferStorageMultisample", (void *)&glRenderbufferStorageMultisample },
+        { "glFramebufferTextureLayer", (void *)&glFramebufferTextureLayer },
+        { "glMapBufferRange", (void *)&glMapBufferRange },
+        { "glFlushMappedBufferRange", (void *)&glFlushMappedBufferRange },
+        { "glBindVertexArray", (void *)&glBindVertexArray },
+        { "glDeleteVertexArrays", (void *)&glDeleteVertexArrays },
+        { "glGenVertexArrays", (void *)&glGenVertexArrays },
+        { "glIsVertexArray", (void *)&glIsVertexArray },
+        { "glGetIntegeri_v", (void *)&glGetIntegeri_v },
+        { "glBeginTransformFeedback", (void *)&glBeginTransformFeedback },
+        { "glEndTransformFeedback", (void *)&glEndTransformFeedback },
+        { "glBindBufferRange", (void *)&glBindBufferRange },
+        { "glBindBufferBase", (void *)&glBindBufferBase },
+        { "glTransformFeedbackVaryings", (void *)&glTransformFeedbackVaryings },
+        { "glGetTransformFeedbackVarying", (void *)&glGetTransformFeedbackVarying },
+        { "glVertexAttribIPointer", (void *)&glVertexAttribIPointer },
+        { "glGetVertexAttribIiv", (void *)&glGetVertexAttribIiv },
+        { "glGetVertexAttribIuiv", (void *)&glGetVertexAttribIuiv },
+        { "glVertexAttribI4i", (void *)&glVertexAttribI4i },
+        { "glVertexAttribI4ui", (void *)&glVertexAttribI4ui },
+        { "glVertexAttribI4iv", (void *)&glVertexAttribI4iv },
+        { "glVertexAttribI4uiv", (void *)&glVertexAttribI4uiv },
+        { "glGetUniformuiv", (void *)&glGetUniformuiv },
+        { "glGetFragDataLocation", (void *)&glGetFragDataLocation },
+        { "glUniform1ui", (void *)&glUniform1ui },
+        { "glUniform2ui", (void *)&glUniform2ui },
+        { "glUniform3ui", (void *)&glUniform3ui },
+        { "glUniform4ui", (void *)&glUniform4ui },
+        { "glUniform1uiv", (void *)&glUniform1uiv },
+        { "glUniform2uiv", (void *)&glUniform2uiv },
+        { "glUniform3uiv", (void *)&glUniform3uiv },
+        { "glUniform4uiv", (void *)&glUniform4uiv },
+        { "glClearBufferiv", (void *)&glClearBufferiv },
+        { "glClearBufferuiv", (void *)&glClearBufferuiv },
+        { "glClearBufferfv", (void *)&glClearBufferfv },
+        { "glClearBufferfi", (void *)&glClearBufferfi },
+        { "glGetStringi", (void *)&glGetStringi },
+        { "glCopyBufferSubData", (void *)&glCopyBufferSubData },
+        { "glGetUniformIndices", (void *)&glGetUniformIndices },
+        { "glGetActiveUniformsiv", (void *)&glGetActiveUniformsiv },
+        { "glGetUniformBlockIndex", (void *)&glGetUniformBlockIndex },
+        { "glGetActiveUniformBlockiv", (void *)&glGetActiveUniformBlockiv },
+        { "glGetActiveUniformBlockName", (void *)&glGetActiveUniformBlockName },
+        { "glUniformBlockBinding", (void *)&glUniformBlockBinding },
+        { "glDrawArraysInstanced", (void *)&glDrawArraysInstanced },
+        { "glDrawElementsInstanced", (void *)&glDrawElementsInstanced },
+        { "glFenceSync", (void *)&glFenceSync },
+        { "glIsSync", (void *)&glIsSync },
+        { "glDeleteSync", (void *)&glDeleteSync },
+        { "glClientWaitSync", (void *)&glClientWaitSync },
+        { "glWaitSync", (void *)&glWaitSync },
+        { "glGetInteger64v", (void *)&glGetInteger64v },
+        { "glGetSynciv", (void *)&glGetSynciv },
+        { "glGetInteger64i_v", (void *)&glGetInteger64i_v },
+        { "glGetBufferParameteri64v", (void *)&glGetBufferParameteri64v },
+        { "glGenSamplers", (void *)&glGenSamplers },
+        { "glDeleteSamplers", (void *)&glDeleteSamplers },
+        { "glIsSampler", (void *)&glIsSampler },
+        { "glBindSampler", (void *)&glBindSampler },
+        { "glSamplerParameteri", (void *)&glSamplerParameteri },
+        { "glSamplerParameteriv", (void *)&glSamplerParameteriv },
+        { "glSamplerParameterf", (void *)&glSamplerParameterf },
+        { "glSamplerParameterfv", (void *)&glSamplerParameterfv },
+        { "glGetSamplerParameteriv", (void *)&glGetSamplerParameteriv },
+        { "glGetSamplerParameterfv", (void *)&glGetSamplerParameterfv },
+        { "glVertexAttribDivisor", (void *)&glVertexAttribDivisor },
+        { "glBindTransformFeedback", (void *)&glBindTransformFeedback },
+        { "glDeleteTransformFeedbacks", (void *)&glDeleteTransformFeedbacks },
+        { "glGenTransformFeedbacks", (void *)&glGenTransformFeedbacks },
+        { "glIsTransformFeedback", (void *)&glIsTransformFeedback },
+        { "glPauseTransformFeedback", (void *)&glPauseTransformFeedback },
+        { "glResumeTransformFeedback", (void *)&glResumeTransformFeedback },
+        { "glGetProgramBinary", (void *)&glGetProgramBinary },
+        { "glProgramBinary", (void *)&glProgramBinary },
+        { "glProgramParameteri", (void *)&glProgramParameteri },
+        { "glInvalidateFramebuffer", (void *)&glInvalidateFramebuffer },
+        { "glInvalidateSubFramebuffer", (void *)&glInvalidateSubFramebuffer },
+        { "glTexStorage2D", (void *)&glTexStorage2D },
+        { "glTexStorage3D", (void *)&glTexStorage3D },
+        { "glGetInternalformativ", (void *)&glGetInternalformativ },
     };
     for (unsigned i = 0; i < sizeof(procs) / sizeof(procs[0]); ++i)
         if (!strcmp(name, procs[i].name)) return procs[i].address;

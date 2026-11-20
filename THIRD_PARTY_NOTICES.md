@@ -4,7 +4,7 @@ This document lists all third-party libraries used in this project along with th
 
 ## Guest graphics headers
 
-The EGL, GLES2 and KHR headers under `graphics/guest/include` come from the Khronos EGL and OpenGL registries and retain their MIT and Apache 2.0 notices. [Apache 2.0 license](licenses/Apache-2.0.txt) [MIT license for gl2.h](graphics/guest/include/GLES2/LICENSE) [EGL Registry](https://github.com/KhronosGroup/EGL-Registry) · [OpenGL Registry](https://github.com/KhronosGroup/OpenGL-Registry)
+The EGL, GLES2, GLES3 and KHR headers under `graphics/guest/include` come from the Khronos EGL and OpenGL registries and retain their MIT and Apache 2.0 notices. [Apache 2.0 license](licenses/Apache-2.0.txt) [MIT license for gl2.h and gl3.h](graphics/guest/include/GLES2/LICENSE) [EGL Registry](https://github.com/KhronosGroup/EGL-Registry) · [OpenGL Registry](https://github.com/KhronosGroup/OpenGL-Registry) · [GLES3 header revision](https://github.com/KhronosGroup/OpenGL-Registry/tree/6af574a14089ccfee87efe230ebcdd8742859813/api/GLES3)
 
 The bundled Wayland EGL backend header is from Wayland 1.22.0 and retains its MIT license notice. [Wayland EGL header](https://gitlab.freedesktop.org/wayland/wayland/-/blob/1.22.0/egl/wayland-egl-backend.h)
 

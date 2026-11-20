@@ -23,7 +23,7 @@ trap cleanup EXIT
 mkdir -p "$context"/{tests/{media,kmsdrm,gles},graphics,spec/wayland}
 cp "$root"/tests/media/{Dockerfile,*-probe.c} "$context/tests/media/"
 cp "$root"/tests/kmsdrm/{probe,egl-probe}.c "$context/tests/kmsdrm/"
-cp "$root"/tests/gles/fbdev.c "$context/tests/gles/"
+cp "$root"/tests/gles/{fbdev,es3}.c "$context/tests/gles/"
 cp -r "$root"/graphics/guest "$context/graphics/"
 cp "$root"/spec/wayland/xdg-shell.xml "$context/spec/wayland/"
 

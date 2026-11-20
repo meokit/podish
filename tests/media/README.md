@@ -33,11 +33,14 @@ works on a Win32 or X11 host.
 
 ```sh
 python tests/media/run.py --cli Podish.Cli/bin/Release/net10.0/Podish.Cli.dll --fixture media-fixture \
-    --case fbdev-egl --case wayland-egl --case kms-egl
+    --case fbdev-egl --case fbdev-es3 --case wayland-egl --case kms-egl --case kms-es3
 ```
 
 The KMS probe requires a host EGL swap after GPU synchronization. It fails if
 only the guest page-flip event completes without presenting a frame.
+
+The `fbdev-es3` and `kms-es3` cases require an ANGLE backend with GLES 3.0.
+`fbdev-es3` also runs with `--headless`.
 
 ## SuperTuxKart
 

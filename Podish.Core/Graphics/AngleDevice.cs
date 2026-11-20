@@ -12,8 +12,8 @@ namespace Podish.Core.Graphics;
 internal sealed unsafe partial class AngleDevice : IDisposable
 {
     internal const string Name = "podish-gles";
-    private const uint Request = 0xC0285047;
-    private const uint Abi = 1;
+    private const uint RequestV1 = 0xC0285047, RequestV2 = 0xC0305047;
+    private const uint Abi = 2;
     private const int MaxObjects = 64;
     private const int MaxSurfacePixels = 2 * FramebufferDevice.DimensionLimit * FramebufferDevice.DimensionLimit;
     private const uint Pbuffer = 0, Fbdev = 1, Wayland = 2, FbdevPbuffer = 3, Gbm = 4;
@@ -33,6 +33,7 @@ internal sealed unsafe partial class AngleDevice : IDisposable
     private readonly HashSet<Session> _sessions = [];
     private Session? _hostSession;
     private Binding _hostBinding;
+    private uint _nextSync = 1;
     private bool _disposed;
 
     internal AngleDevice(string directory, FramebufferDevice? framebuffer, KmsEglWindow? kmsWindow, ILogger logger)
@@ -83,8 +84,8 @@ internal sealed unsafe partial class AngleDevice : IDisposable
         }
 
         public override int Ioctl(LinuxFile file, FiberTask task, uint request, uint arg) =>
-            request == Request && file.PrivateData is Session session
-                ? _device.Invoke(session, task, arg)
+            request is RequestV1 or RequestV2 && file.PrivateData is Session session
+                ? _device.Invoke(session, task, arg, request == RequestV2)
                 : -(int)Errno.ENOTTY;
     }
 
@@ -98,9 +99,17 @@ internal sealed unsafe partial class AngleDevice : IDisposable
         internal uint NextId = 1;
     }
 
-    private sealed class Context(nint handle)
+    private sealed class ShareGroup
+    {
+        internal readonly Dictionary<uint, nint> Syncs = [];
+        internal readonly Dictionary<uint, BufferMapping> BufferMappings = [];
+    }
+
+    private sealed class Context(nint handle, uint version, ShareGroup shareGroup)
     {
         internal readonly nint Handle = handle;
+        internal readonly uint Version = version;
+        internal readonly ShareGroup Shared = shareGroup;
         internal readonly Dictionary<uint, Attribute> Attributes = [];
         internal uint Error;
         internal bool Deleted;
@@ -119,18 +128,18 @@ internal sealed unsafe partial class AngleDevice : IDisposable
 
     private readonly record struct Binding(uint Context, uint Draw, uint Read);
 
-    private int Invoke(Session session, FiberTask task, uint address)
+    private int Invoke(Session session, FiberTask task, uint address, bool extended)
     {
         if (_disposed) return -(int)Errno.ENODEV;
         // Forked guests reopen the device and never reuse the parent's guest addresses.
         session.Owner ??= task.Process;
         if (!ReferenceEquals(session.Owner, task.Process)) return -(int)Errno.EPERM;
-        var guest = new GuestMemory(task.CPU);
-        Span<uint> wire = stackalloc uint[1 + 9];
-        var data = MemoryMarshal.AsBytes(wire);
+        var guest = new GuestMemory(task);
+        Span<uint> wire = stackalloc uint[1 + 11];
         try
         {
-            guest.Read(address, data);
+            wire.Clear();
+            guest.Read(address, MemoryMarshal.AsBytes(wire[..(extended ? 12 : 10)]));
             var op = wire[0];
             var args = wire[1..];
             int value;
@@ -146,6 +155,8 @@ internal sealed unsafe partial class AngleDevice : IDisposable
                         value = (int)context.Error;
                         context.Error = 0;
                     }
+                    else if (op >= GlEs3First && (!extended || context.Version < 3))
+                        value = UnsupportedGl(context, op);
                     else
                         value = context.Managed != null && DispatchManagedGl(context, op, args, guest, out var managed)
                             ? managed : DispatchGl(context, op, args, guest);
@@ -173,8 +184,12 @@ internal sealed unsafe partial class AngleDevice : IDisposable
         switch ((EglOperation)op)
         {
             case EglOperation.Initialize: // Initialize and negotiate the wire ABI.
-                return a[0] == Abi ? (int)Abi : -(int)Errno.EINVAL;
-            case EglOperation.CreateContext: return CreateContext(session, a[0], a[1] != 0);
+                if (a[0] == 1) return 1;
+                if (a[0] != Abi) return -(int)Errno.EINVAL;
+                int renderable = AngleLibrary.Es2Bit | (_angle.SupportsEs3 ? AngleLibrary.Es3Bit : 0);
+                guest.Write(a[1], MemoryMarshal.AsBytes(new ReadOnlySpan<int>(in renderable)));
+                return (int)Abi;
+            case EglOperation.CreateContext: return CreateContext(session, a[0], a[1] != 0, a[2], a[3]);
             case EglOperation.DestroyContext: return DeleteContext(session, a[0]);
             case EglOperation.CreateSurface: return CreateSurface(session, (int)a[0], (int)a[1], a[2]);
             case EglOperation.DestroySurface: return DeleteSurface(session, a[0]);
@@ -202,15 +217,20 @@ internal sealed unsafe partial class AngleDevice : IDisposable
         }
     }
 
-    private int CreateContext(Session session, uint share, bool managed)
+    private int CreateContext(Session session, uint share, bool managed, uint version, uint flags)
     {
         if (session.Contexts.Count >= MaxObjects) return -0x3003; // EGL_BAD_ALLOC
+        if (version == 0) version = 2; // Older guest libraries leave this word zero.
+        if (version is not (2 or 3) || (version == 3 && !_angle.SupportsEs3)) return -0x3009;
+        if ((flags & ~1u) != 0) return -0x3004;
+        ShareGroup? shareGroup = null;
         nint shared = 0;
         if (share != 0)
         {
             if (!session.Contexts.TryGetValue(share, out var other) || other.Deleted) return -0x3006;
             if (managed || other.Managed != null) return -0x3009;
             shared = other.Handle;
+            shareGroup = other.Shared;
         }
         if (managed)
         {
@@ -220,12 +240,14 @@ internal sealed unsafe partial class AngleDevice : IDisposable
         }
         int* attributes = stackalloc int[]
         {
-            0x3098, managed ? 3 : 2, 0x3483, 0, 0x3453, 1, 0x3038,
+            0x3098, managed ? 3 : (int)version, 0x30FB, 0, 0x30FC, (int)flags,
+            0x3483, 0, 0x3453, 1, 0x3038,
         };
         var handle = _angle.CreateContext(_angle.Display, Config, shared, attributes);
         if (handle == 0) return AngleError();
         var id = session.NextId++;
-        session.Contexts.Add(id, new Context(handle) { Managed = managed ? new ManagedFramebufferState(_kms!) : null });
+        session.Contexts.Add(id, new Context(handle, version, shareGroup ?? new ShareGroup())
+            { Managed = managed ? new ManagedFramebufferState(_kms!) : null });
         if (managed) _managedOwner = session;
         return (int)id;
     }
@@ -267,6 +289,9 @@ internal sealed unsafe partial class AngleDevice : IDisposable
         {
             _angle.DestroyContext(_angle.Display, ctx.Handle);
             ctx.Managed?.Dispose();
+            if (!session.Contexts.Values.Any(other => ReferenceEquals(ctx.Shared, other.Shared)))
+                foreach (var mapping in ctx.Shared.BufferMappings.Values)
+                    mapping.Release();
         }
     }
 
@@ -435,7 +460,7 @@ internal sealed unsafe partial class AngleDevice : IDisposable
             {
                 // glReadPixels reads the EGL read surface, while swap presents the draw surface.
                 if (binding.Read != id && !Bind(session, binding with { Read = id })) return AngleError();
-                ReadFrame(surface, pixels.AsSpan(0, size));
+                ReadFrame(session.Contexts[binding.Context], surface, pixels.AsSpan(0, size));
                 if (!Bind(session, binding)) return AngleError();
                 if (surface.Kind is Fbdev or FbdevPbuffer)
                 {
@@ -473,21 +498,50 @@ internal sealed unsafe partial class AngleDevice : IDisposable
         return _angle.SwapBuffers(_angle.Display, surface.Handle) != 0 ? 0 : AngleError();
     }
 
-    private void ReadFrame(Surface surface, Span<byte> pixels)
+    private void ReadFrame(Context context, Surface surface, Span<byte> pixels)
     {
         var bindFramebuffer = (delegate* unmanaged[Cdecl]<uint, uint, void>)Gl("glBindFramebuffer");
         var read = (delegate* unmanaged[Cdecl]<int, int, int, int, uint, uint, void*, void>)Gl("glReadPixels");
         var store = (delegate* unmanaged[Cdecl]<uint, int, void>)Gl("glPixelStorei");
-        var pack = GetInteger(0x0D05);
-        var framebuffer = GetInteger(0x8CA6);
-        if (framebuffer != 0) bindFramebuffer(0x8D40, (uint)0);
-        if (pack != 4) store(0x0D05, 4);
-        // A failed read must never copy another frame from a pooled buffer into a guest.
-        pixels.Clear();
-        fixed (byte* ptr = pixels)
-            read(0, 0, surface.Width, surface.Height, 0x1908, 0x1401, ptr);
-        if (pack != 4) store(0x0D05, pack);
-        if (framebuffer != 0) bindFramebuffer(0x8D40, (uint)framebuffer);
+        var es3 = context.Version >= 3 || context.Managed != null;
+        var target = es3 ? ReadFramebuffer : 0x8D40;
+        var framebuffer = (uint)GetInteger(es3 ? ReadFramebufferBinding : 0x8CA6);
+        if (framebuffer != 0) bindFramebuffer(target, 0);
+
+        Span<(uint Parameter, int Previous)> pack = stackalloc (uint, int)[es3 ? 4 : 1];
+        pack[0] = (PackAlignment, GetInteger(PackAlignment));
+        if (es3)
+        {
+            pack[1] = (0x0D02, GetInteger(0x0D02)); // PACK_ROW_LENGTH
+            pack[2] = (0x0D03, GetInteger(0x0D03)); // PACK_SKIP_ROWS
+            pack[3] = (0x0D04, GetInteger(0x0D04)); // PACK_SKIP_PIXELS
+        }
+        var bindBuffer = (delegate* unmanaged[Cdecl]<uint, uint, void>)Gl("glBindBuffer");
+        var pixelBuffer = es3 ? (uint)GetInteger(PixelPackBufferBinding) : 0;
+        var readBuffer = es3 ? (uint)GetInteger(0x0C02) : 0x0405; // READ_BUFFER defaults to BACK
+        var selectReadBuffer = es3 ? (delegate* unmanaged[Cdecl]<uint, void>)Gl("glReadBuffer") : null;
+        try
+        {
+            foreach (var (parameter, previous) in pack)
+            {
+                var desired = parameter == PackAlignment ? 4 : 0;
+                if (previous != desired) store(parameter, desired);
+            }
+            if (pixelBuffer != 0) bindBuffer(PixelPackBuffer, 0);
+            if (readBuffer != 0x0405) selectReadBuffer(0x0405);
+            // A failed read must never copy another frame from a pooled buffer into a guest.
+            pixels.Clear();
+            fixed (byte* ptr = pixels)
+                read(0, 0, surface.Width, surface.Height, 0x1908, 0x1401, ptr);
+        }
+        finally
+        {
+            if (readBuffer != 0x0405) selectReadBuffer(readBuffer);
+            if (pixelBuffer != 0) bindBuffer(PixelPackBuffer, pixelBuffer);
+            foreach (var (parameter, previous) in pack)
+                if (previous != (parameter == PackAlignment ? 4 : 0)) store(parameter, previous);
+            if (framebuffer != 0) bindFramebuffer(target, framebuffer);
+        }
     }
 
     private int AngleError()

@@ -7,6 +7,7 @@ namespace Podish.Core.Graphics;
 internal sealed unsafe partial class AngleDevice
 {
     private const uint FramebufferTarget = 0x8D40, RenderbufferTarget = 0x8D41, ColorAttachment = 0x8CE0;
+    private const uint DrawFramebuffer = 0x8CA9, DrawFramebufferBinding = 0x8CA6;
     private const uint TextureObject = 0x1702;
     private Session? _managedOwner;
 
@@ -106,19 +107,38 @@ internal sealed unsafe partial class AngleDevice
         value = 0;
         switch (op)
         {
+            case GlBindSampler:
+                if (!_kms!.OwnsSampler(a[1])) return false;
+                value = Flag(context, InvalidOperation);
+                return true;
+            case GlIsSampler:
+                return _kms!.OwnsSampler(a[0]);
+            case GlSamplerParameterf or GlSamplerParameterfv or GlSamplerParameteri or GlSamplerParameteriv or
+                 GlGetSamplerParameterfv or GlGetSamplerParameteriv:
+                if (!_kms!.OwnsSampler(a[0])) return false;
+                value = Flag(context, InvalidOperation);
+                return true;
+            case GlDeleteSamplers:
+                var names = guest.Input(a[1], Count(a[0], 4))!;
+                var samplers = MemoryMarshal.Cast<byte, uint>(names.AsSpan(0, (int)a[0] * 4));
+                for (var i = 0; i < samplers.Length; i++)
+                    if (_kms!.OwnsSampler(samplers[i])) samplers[i] = 0;
+                fixed (uint* ptr = samplers)
+                    ((delegate* unmanaged[Cdecl]<int, uint*, void>)Gl("glDeleteSamplers"))(samplers.Length, ptr);
+                return true;
             case GlFinish:
             case GlFlush:
                 if (state.Framebuffers.TryGetValue((uint)GetInteger(0x8CA6), out var target))
                     target.Buffer.Submit();
                 return false;
             case GlFramebufferRenderbuffer:
-                if (a[0] != FramebufferTarget || a[1] != ColorAttachment || a[2] != RenderbufferTarget)
+                if (a[1] != ColorAttachment || a[2] != RenderbufferTarget)
                     return false;
-                var framebuffer = (uint)GetInteger(0x8CA6);
+                var framebuffer = GuestFramebuffer(context, a[0]);
                 if (framebuffer == 0) return false;
                 if (!state.Renderbuffers.TryGetValue(a[3], out var image))
                     return UpdateFramebufferAttachment(context, op, a, guest, framebuffer, out value);
-                SetImageAttachment(state, framebuffer, new ImageAttachment(RenderbufferTarget, a[3], image));
+                SetImageAttachment(state, framebuffer, new ImageAttachment(RenderbufferTarget, a[3], image), a[0]);
                 return true;
             case GlFramebufferTexture2D:
                 if (a[2] == TextureExternal)
@@ -138,23 +158,32 @@ internal sealed unsafe partial class AngleDevice
                 }
                 if (state.Textures.TryGetValue(a[3], out var texture))
                 {
-                    if (a[0] != FramebufferTarget || a[1] != ColorAttachment || a[2] != Texture2D || a[4] != 0)
+                    if (a[1] != ColorAttachment || a[2] != Texture2D || a[4] != 0)
                     {
                         value = Flag(context, InvalidOperation);
                         return true;
                     }
-                    var framebufferName = (uint)GetInteger(0x8CA6);
+                    var framebufferName = GuestFramebuffer(context, a[0]);
                     if (framebufferName == 0)
                     {
                         value = Flag(context, InvalidOperation);
                         return true;
                     }
                     SetImageAttachment(state, framebufferName,
-                        new ImageAttachment(TextureObject, a[3], texture.Buffer, texture));
+                        new ImageAttachment(TextureObject, a[3], texture.Buffer, texture), a[0]);
                     return true;
                 }
-                if (a[0] == FramebufferTarget && a[1] == ColorAttachment)
-                    return UpdateFramebufferAttachment(context, op, a, guest, (uint)GetInteger(0x8CA6), out value);
+                if (a[1] == ColorAttachment)
+                    return UpdateFramebufferAttachment(context, op, a, guest, GuestFramebuffer(context, a[0]), out value);
+                return false;
+            case GlFramebufferTextureLayer:
+                if (_kms!.OwnsTexture(a[2]) || state.ExternalTextures.ContainsKey(a[2]))
+                {
+                    value = Flag(context, InvalidOperation);
+                    return true;
+                }
+                if (a[1] == ColorAttachment)
+                    return UpdateFramebufferAttachment(context, op, a, guest, GuestFramebuffer(context, a[0]), out value);
                 return false;
             case GlDeleteFramebuffers:
                 value = DispatchGl(context, op, a, guest);
@@ -178,8 +207,8 @@ internal sealed unsafe partial class AngleDevice
                 }
                 return false;
             case GlGetFramebufferAttachmentParameteriv:
-                if (a[0] != FramebufferTarget || a[1] != ColorAttachment ||
-                    !state.Framebuffers.TryGetValue((uint)GetInteger(0x8CA6), out var attachment))
+                if (a[1] != ColorAttachment ||
+                    !state.Framebuffers.TryGetValue(GuestFramebuffer(context, a[0]), out var attachment))
                     return false;
                 uint result;
                 switch (a[2])
@@ -187,7 +216,7 @@ internal sealed unsafe partial class AngleDevice
                     case 0x8CD0: result = attachment.Type; break;
                     case 0x8CD1: result = attachment.Name; break;
                     case 0x8CD2 or 0x8CD3 when attachment.Type == TextureObject: result = 0; break;
-                    default: value = Flag(context, InvalidEnum); return true;
+                    default: return false;
                 }
                 guest.Write(a[3], MemoryMarshal.AsBytes(new ReadOnlySpan<uint>(in result)));
                 return true;
@@ -220,10 +249,19 @@ internal sealed unsafe partial class AngleDevice
         }
     }
 
-    private void SetImageAttachment(ManagedFramebufferState state, uint framebuffer, ImageAttachment attachment)
+    private uint GuestFramebuffer(Context context, uint target) => target switch
+    {
+        FramebufferTarget => (uint)GetInteger(DrawFramebufferBinding),
+        DrawFramebuffer when context.Version >= 3 => (uint)GetInteger(DrawFramebufferBinding),
+        ReadFramebuffer when context.Version >= 3 => (uint)GetInteger(ReadFramebufferBinding),
+        _ => 0,
+    };
+
+    private void SetImageAttachment(ManagedFramebufferState state, uint framebuffer, ImageAttachment attachment,
+        uint target = DrawFramebuffer)
     {
         attachment.Buffer.Retain();
-        AttachTexture(attachment.Buffer.Texture);
+        AttachTexture(attachment.Buffer.Texture, target);
         state.Detach(framebuffer);
         state.TextureAttachments.Remove(framebuffer);
         state.Framebuffers.Add(framebuffer, attachment);
@@ -238,23 +276,23 @@ internal sealed unsafe partial class AngleDevice
         value = DispatchGl(context, op, args, guest);
         var query = (delegate* unmanaged[Cdecl]<uint, uint, uint, int*, void>)Gl("glGetFramebufferAttachmentParameteriv");
         int type = 0, name = 0, level = 0;
-        query(FramebufferTarget, ColorAttachment, 0x8CD0, &type);
-        if (type == 0x1702) query(FramebufferTarget, ColorAttachment, 0x8CD1, &name);
+        query(args[0], ColorAttachment, 0x8CD0, &type);
+        if (type == TextureObject) query(args[0], ColorAttachment, 0x8CD1, &name);
         var state = context.Managed!;
         if (state.Framebuffers.TryGetValue(framebuffer, out var before) && (uint)name == before.Buffer.Texture)
             return true;
 
         state.Detach(framebuffer);
         state.TextureAttachments.Remove(framebuffer);
-        if (type == TextureObject && name != 0 && !_kms!.OwnsTexture((uint)name))
+        if (op != GlFramebufferTextureLayer && type == TextureObject && name != 0 && !_kms!.OwnsTexture((uint)name))
         {
-            query(FramebufferTarget, ColorAttachment, 0x8CD2, &level);
+            query(args[0], ColorAttachment, 0x8CD2, &level);
             if (level == 0) state.TextureAttachments[framebuffer] = (uint)name;
         }
         return true;
     }
 
-    private void AttachTexture(uint texture) =>
+    private void AttachTexture(uint texture, uint target = DrawFramebuffer) =>
         ((delegate* unmanaged[Cdecl]<uint, uint, uint, uint, int, void>)Gl("glFramebufferTexture2D"))
-        (FramebufferTarget, ColorAttachment, 0x0DE1, texture, 0);
+        (target, ColorAttachment, 0x0DE1, texture, 0);
 }

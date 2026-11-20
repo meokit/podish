@@ -9,6 +9,7 @@ internal sealed unsafe partial class KmsEglOutput
     private const uint DrawFramebuffer = 0x8CA9;
     private const uint ColorAttachment = 0x8CE0;
     private readonly HashSet<uint> _textures = [];
+    private readonly HashSet<uint> _imageSamplers = [];
     private long _texturePixels;
     private nint _textureContext;
     private uint _readFramebuffer;
@@ -37,6 +38,7 @@ internal sealed unsafe partial class KmsEglOutput
     }
 
     internal bool OwnsTexture(uint name) => _textures.Contains(name);
+    internal bool OwnsSampler(uint name) => _imageSamplers.Contains(name);
 
     private nint GetProc(ReadOnlySpan<byte> name)
     {
@@ -48,6 +50,7 @@ internal sealed unsafe partial class KmsEglOutput
     {
         uint sampler = 0;
         _genSamplers(1, &sampler);
+        if (sampler != 0) _imageSamplers.Add(sampler);
         return sampler;
     }
 
@@ -56,13 +59,18 @@ internal sealed unsafe partial class KmsEglOutput
     internal void SetImageSamplerParameter(uint sampler, uint parameter, int value) =>
         _samplerParameteri(sampler, parameter, value);
 
-    internal void DeleteImageSampler(uint sampler) => _deleteSamplers(1, &sampler);
+    internal void DeleteImageSampler(uint sampler)
+    {
+        _imageSamplers.Remove(sampler);
+        _deleteSamplers(1, &sampler);
+    }
 
     internal void ReleaseImageSamplers(uint[] samplers)
     {
         if (samplers.Length == 0) return;
         using var binding = BindTextureContext(0);
         fixed (uint* ptr = samplers) _deleteSamplers(samplers.Length, ptr);
+        foreach (var sampler in samplers) _imageSamplers.Remove(sampler);
     }
 
     internal TextureBo? AllocateTexture(uint width, uint height, uint format)

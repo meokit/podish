@@ -16,9 +16,12 @@ internal sealed unsafe class AngleLibrary
 
     internal readonly nint Display;
     internal readonly nint Config;
+    internal readonly bool SupportsEs3;
+    internal const int Es2Bit = 0x0004, Es3Bit = 0x0040;
     internal readonly nint[] Gl;
     internal readonly nint MapBufferRange;
     internal readonly nint UnmapBuffer;
+    internal readonly nint GetBufferPointer;
     internal readonly delegate* unmanaged[Cdecl]<nint, nint, nint, int*, nint> CreateContext;
     internal readonly delegate* unmanaged[Cdecl]<nint, nint, uint> DestroyContext;
     internal readonly delegate* unmanaged[Cdecl]<nint, nint, int*, nint> CreatePbufferSurface;
@@ -74,13 +77,22 @@ internal sealed unsafe class AngleLibrary
             MakeCurrent = (delegate* unmanaged[Cdecl]<nint, nint, nint, nint, uint>)Egl("eglMakeCurrent");
             SwapBuffers = (delegate* unmanaged[Cdecl]<nint, nint, uint>)Egl("eglSwapBuffers");
             GetError = (delegate* unmanaged[Cdecl]<int>)Egl("eglGetError");
-            Gl = Array.ConvertAll(AngleDevice.GlNames, name => NativeLibrary.GetExport(_gles, name));
+            Gl = new nint[AngleDevice.GlNames.Length];
+            for (var i = 0; i < Gl.Length; i++)
+            {
+                var name = AngleDevice.GlNames[i];
+                Gl[i] = i < AngleDevice.GlEs3First - AngleDevice.GlFirst
+                    ? NativeLibrary.GetExport(_gles, name)
+                    : NativeLibrary.TryGetExport(_gles, name, out var entry) ? entry : 0;
+            }
 
             var getProc = (delegate* unmanaged[Cdecl]<byte*, nint>)Egl("eglGetProcAddress");
-            fixed (byte* map = "glMapBufferRangeEXT\0"u8, unmap = "glUnmapBufferOES\0"u8)
+            fixed (byte* map = "glMapBufferRangeEXT\0"u8, unmap = "glUnmapBufferOES\0"u8,
+                         pointer = "glGetBufferPointervOES\0"u8)
             {
                 MapBufferRange = getProc(map);
                 UnmapBuffer = getProc(unmap);
+                GetBufferPointer = getProc(pointer);
             }
             fixed (byte* name = "eglGetPlatformDisplayEXT\0"u8)
             {
@@ -119,14 +131,20 @@ internal sealed unsafe class AngleLibrary
             int* configAttrs = stackalloc int[]
             {
                 0x3033, 0x0001, // Pbuffer
-                0x3040, 0x0004, // OpenGL ES 2
+                0x3040, Es2Bit | Es3Bit,
                 0x3024, 8, 0x3023, 8, 0x3022, 8, 0x3021, 8,
                 0x3025, 24, 0x3026, 8, 0x3038,
             };
-            nint config;
+            nint config = 0;
             int count;
-            if (select(Display, configAttrs, &config, 1, &count) == 0 || count == 0)
-                throw new InvalidOperationException($"ANGLE has no RGBA8 GLES 2 pbuffer config (0x{GetError():X}).");
+            SupportsEs3 = Array.IndexOf(Gl, (nint)0) == -1 &&
+                select(Display, configAttrs, &config, 1, &count) != 0 && count > 0;
+            if (!SupportsEs3)
+            {
+                configAttrs[3] = Es2Bit;
+                if (select(Display, configAttrs, &config, 1, &count) == 0 || count == 0)
+                    throw new InvalidOperationException($"ANGLE has no RGBA8 GLES pbuffer config (0x{GetError():X}).");
+            }
             Config = config;
         }
         catch

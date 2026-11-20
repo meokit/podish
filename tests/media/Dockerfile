@@ -2,7 +2,7 @@ FROM debian:bookworm-slim AS build
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc libc6-dev linux-libc-dev libdrm-dev libgbm-dev libpulse-dev libwayland-dev
 WORKDIR /src
-COPY tests/media/*.c tests/kmsdrm/probe.c tests/kmsdrm/egl-probe.c tests/gles/fbdev.c ./
+COPY tests/media/*.c tests/kmsdrm/probe.c tests/kmsdrm/egl-probe.c tests/gles/fbdev.c tests/gles/es3.c ./
 COPY graphics/guest/ ./graphics/
 COPY spec/wayland/xdg-shell.xml ./
 RUN mkdir -p /out/bin /out/graphics && \
@@ -25,6 +25,8 @@ RUN mkdir -p /out/bin /out/graphics && \
         -o /out/bin/podish-kmsdrm-egl-probe && \
     cc -O2 -Wall -Wextra -I graphics/include fbdev.c \
         /out/graphics/libEGL.so.1 /out/graphics/libGLESv2.so.2 -o /out/bin/podish-gles-fbdev-probe && \
+    cc -O2 -Wall -Wextra -I graphics/include es3.c \
+        /out/graphics/libEGL.so.1 /out/graphics/libGLESv2.so.2 -o /out/bin/podish-gles3-probe && \
     cc -O2 -Wall -Wextra -DPROBE_EGL -I graphics/include wayland-probe.c xdg-shell.c \
         -lwayland-client -lwayland-egl /out/graphics/libEGL.so.1 /out/graphics/libGLESv2.so.2 \
         -o /out/bin/podish-wayland-egl-probe

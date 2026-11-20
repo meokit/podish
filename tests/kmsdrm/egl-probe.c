@@ -1,5 +1,5 @@
 #include <EGL/egl.h>
-#include <GLES2/gl2.h>
+#include <GLES3/gl3.h>
 #include <fcntl.h>
 #include <gbm.h>
 #include <poll.h>
@@ -57,19 +57,32 @@ int main(void) {
     require(eglInitialize(display, NULL, NULL), "EGL GBM display");
     EGLConfig config;
     EGLint count;
-    const EGLint attrs[] = {EGL_SURFACE_TYPE, EGL_WINDOW_BIT, EGL_RENDERABLE_TYPE, EGL_OPENGL_ES2_BIT, EGL_NONE};
+    bool es3 = getenv("PODISH_TEST_GLES3") != NULL;
+    const EGLint attrs[] = {EGL_SURFACE_TYPE, EGL_WINDOW_BIT, EGL_RENDERABLE_TYPE,
+                            es3 ? 0x0040 /* EGL_OPENGL_ES3_BIT_KHR */ : EGL_OPENGL_ES2_BIT, EGL_NONE};
     require(eglChooseConfig(display, attrs, &config, 1, &count) && count == 1, "EGL GBM config");
-    const EGLint version[] = {EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE};
+    const EGLint version[] = {EGL_CONTEXT_CLIENT_VERSION, es3 ? 3 : 2, EGL_NONE};
     EGLContext context = eglCreateContext(display, config, EGL_NO_CONTEXT, version);
     EGLSurface surface = eglCreatePlatformWindowSurface(display, config, gbm, NULL);
     require(eglMakeCurrent(display, surface, surface, context), "make GBM window current");
+    if (es3) {
+        GLint major = 0, minor = -1;
+        glGetIntegerv(GL_MAJOR_VERSION, &major);
+        glGetIntegerv(GL_MINOR_VERSION, &minor);
+        require(major == 3 && minor == 0, "GLES 3.0 GBM context");
+    }
     require(gbm_surface_lock_front_buffer(gbm) == NULL, "front BO only becomes available after EGL swap");
 
     struct fb_entry entries[3] = {0};
     uint32_t active = 0;
     for (unsigned frame = 0; frame < 9; ++frame) {
-        glClearColor((frame & 1) ? 1 : 0, (frame & 2) ? 1 : 0, (frame & 4) ? 1 : 0, 1);
-        glClear(GL_COLOR_BUFFER_BIT);
+        const GLfloat color[] = {(frame & 1) != 0, (frame & 2) != 0, (frame & 4) != 0, 1};
+        if (es3) {
+            glClearBufferfv(GL_COLOR, 0, color);
+        } else {
+            glClearColor(color[0], color[1], color[2], color[3]);
+            glClear(GL_COLOR_BUFFER_BIT);
+        }
         require(glGetError() == GL_NO_ERROR && eglSwapBuffers(display, surface), "render and queue GBM BO");
         require_active(fd, crtc, active);
 

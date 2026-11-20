@@ -166,7 +166,7 @@ internal class Program
         var fbdevOption = new Option<bool>(
             "--fbdev",
             "Expose /dev/fb0 and display the guest framebuffer in an SDL window");
-        var glesOption = new Option<bool>("--gles", "Expose ANGLE-backed EGL and OpenGL ES 2.0 to the IA-32 guest");
+        var glesOption = new Option<bool>("--gles", "Expose ANGLE-backed EGL and OpenGL ES up to 3.0 to the IA-32 guest");
         var kmsDrmOption = new Option<bool>("--kmsdrm", "Expose virtual DRM and libgbm. Combine with --gles for GPU output");
         var fbdevSizeOption = new Option<string>(
             "--fbdev-size",

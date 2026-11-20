@@ -1,13 +1,13 @@
 #ifndef PODISH_GLES_TRANSPORT_H
 #define PODISH_GLES_TRANSPORT_H
-#include <GLES2/gl2.h>
+#include <GLES3/gl3.h>
 #include <stdint.h>
 #include <string.h>
 
 #define PODISH_EXPORT __attribute__((visibility("default")))
-#define PG_IOCTL 0xC0285047u
-#define PG_ABI 1u
-#define PG_WORDS 9
+#define PG_IOCTL 0xC0305047u
+#define PG_ABI 2u
+#define PG_WORDS 11
 enum pg_operation {
     PG_INIT = 1,
     PG_CREATE_CONTEXT,
@@ -33,7 +33,7 @@ struct pg_request {
     uint32_t args[PG_WORDS];
 };
 
-_Static_assert(sizeof(struct pg_request) == 40, "Podish GLES ioctl ABI");
+_Static_assert(sizeof(struct pg_request) == 48, "Podish GLES ioctl ABI");
 _Static_assert(sizeof(void*) == 4, "Podish GLES guest requires IA-32");
 
 PODISH_EXPORT int pg_call(uint32_t operation, const uint32_t args[PG_WORDS]);
@@ -41,6 +41,7 @@ PODISH_EXPORT void* pg_get_gl_proc(const char* name);
 PODISH_EXPORT void glEGLImageTargetRenderbufferStorageOES(GLenum target, void* image);
 PODISH_EXPORT void glEGLImageTargetTexture2DOES(GLenum target, void* image);
 const GLubyte* pg_string(uint32_t operation, GLenum name);
+const GLubyte* pg_string_index(uint32_t operation, GLenum name, GLuint index);
 
 #define pg_gl(op, ...) pg_call(op, (const uint32_t[PG_WORDS]){__VA_ARGS__})
 #define pg_ptr(p) ((uint32_t)(uintptr_t)(p))

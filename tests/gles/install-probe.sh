@@ -14,6 +14,7 @@ mkdir -p "$dest"
 cc=("${ZIG:-zig}" cc -target x86-linux-gnu.2.11 -O2 -Wall -Wextra
     -I "$repo/graphics/guest/include")
 "${cc[@]}" "$here/fbdev.c" -L "$guest" -lEGL -lGLESv2 -ldl -o "$dest/podish-gles-fbdev-probe"
+"${cc[@]}" "$here/es3.c" -L "$guest" -lEGL -lGLESv2 -o "$dest/podish-gles3-probe"
 lib=$1/usr/local/lib
 mkdir -p "$lib"
 "${cc[@]}" -fPIC -shared -fvisibility=hidden "$here/game-probe.c" -ldl -o "$lib/podish-gles-game-probe.so"

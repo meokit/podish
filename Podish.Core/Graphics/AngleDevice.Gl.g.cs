@@ -70,15 +70,7 @@ internal sealed unsafe partial class AngleDevice
                 ((delegate* unmanaged[Cdecl]<uint, uint, uint, uint, void>)proc)(a[0], a[1], a[2], a[3]);
                 return 0;
             }
-            case 76: // glBufferData
-            {
-                var b2 = guest.Input(a[2], (int)a[1], nullable: true);
-                fixed (byte* p2 = b2)
-                {
-                    ((delegate* unmanaged[Cdecl]<uint, nint, void*, uint, void>)proc)(a[0], (nint)(int)a[1], p2, a[3]);
-                    return 0;
-                }
-            }
+            case 76: return BufferData(context, proc, a, guest);
             case 77: // glBufferSubData
             {
                 var b3 = guest.Input(a[3], (int)a[2]);
@@ -124,19 +116,23 @@ internal sealed unsafe partial class AngleDevice
             }
             case 85: // glCompressedTexImage2D
             {
-                var b7 = guest.Input(a[7], (int)a[6], nullable: true);
+                var buffered = context.Version >= 3 && GetInteger(PixelUnpackBufferBinding) != 0;
+                var size7 = buffered || a[7] == 0 ? 0 : (int)a[6];
+                var b7 = buffered ? null : guest.Input(a[7], size7, nullable: true);
                 fixed (byte* p7 = b7)
                 {
-                    ((delegate* unmanaged[Cdecl]<uint, int, uint, int, int, int, int, void*, void>)proc)(a[0], (int)a[1], a[2], (int)a[3], (int)a[4], (int)a[5], (int)a[6], p7);
+                    ((delegate* unmanaged[Cdecl]<uint, int, uint, int, int, int, int, void*, void>)proc)(a[0], (int)a[1], a[2], (int)a[3], (int)a[4], (int)a[5], (int)a[6], buffered ? (void*)(nuint)a[7] : p7);
                     return 0;
                 }
             }
             case 86: // glCompressedTexSubImage2D
             {
-                var b8 = guest.Input(a[8], (int)a[7]);
+                var buffered = context.Version >= 3 && GetInteger(PixelUnpackBufferBinding) != 0;
+                var size8 = buffered ? 0 : (int)a[7];
+                var b8 = buffered ? null : guest.Input(a[8], size8);
                 fixed (byte* p8 = b8)
                 {
-                    ((delegate* unmanaged[Cdecl]<uint, int, int, int, int, int, uint, int, void*, void>)proc)(a[0], (int)a[1], (int)a[2], (int)a[3], (int)a[4], (int)a[5], a[6], (int)a[7], p8);
+                    ((delegate* unmanaged[Cdecl]<uint, int, int, int, int, int, uint, int, void*, void>)proc)(a[0], (int)a[1], (int)a[2], (int)a[3], (int)a[4], (int)a[5], a[6], (int)a[7], buffered ? (void*)(nuint)a[8] : p8);
                     return 0;
                 }
             }
@@ -163,15 +159,7 @@ internal sealed unsafe partial class AngleDevice
                 ((delegate* unmanaged[Cdecl]<uint, void>)proc)(a[0]);
                 return 0;
             }
-            case 92: // glDeleteBuffers
-            {
-                var b1 = guest.Input(a[1], Count(a[0], 4));
-                fixed (byte* p1 = b1)
-                {
-                    ((delegate* unmanaged[Cdecl]<int, void*, void>)proc)((int)a[0], p1);
-                    return 0;
-                }
-            }
+            case 92: return DeleteBuffers(context, proc, a, guest);
             case 93: // glDeleteFramebuffers
             {
                 var b1 = guest.Input(a[1], Count(a[0], 4));
@@ -374,7 +362,8 @@ internal sealed unsafe partial class AngleDevice
             }
             case 122: // glGetBooleanv
             {
-                var size1 = StateCount(context, a[0]) * 1;
+                if (a[0] == 0x821D && context.Version >= 3) return WriteExtensionCount<byte>(context, a[1], guest);
+                var size1 = Count((uint)StateCount(a[0]), 1);
                 var b1 = guest.Output(a[1], size1);
                 fixed (byte* p1 = b1)
                 {
@@ -400,7 +389,8 @@ internal sealed unsafe partial class AngleDevice
             }
             case 125: // glGetFloatv
             {
-                var size1 = StateCount(context, a[0]) * 4;
+                if (a[0] == 0x821D && context.Version >= 3) return WriteExtensionCount<float>(context, a[1], guest);
+                var size1 = Count((uint)StateCount(a[0]), 4);
                 var b1 = guest.Output(a[1], size1);
                 fixed (byte* p1 = b1)
                 {
@@ -422,7 +412,8 @@ internal sealed unsafe partial class AngleDevice
             }
             case 127: // glGetIntegerv
             {
-                var size1 = StateCount(context, a[0]) * 4;
+                if (a[0] == 0x821D && context.Version >= 3) return WriteExtensionCount<int>(context, a[1], guest);
+                var size1 = Count((uint)StateCount(a[0]), 4);
                 var b1 = guest.Output(a[1], size1);
                 fixed (byte* p1 = b1)
                 {
@@ -549,7 +540,7 @@ internal sealed unsafe partial class AngleDevice
             }
             case 138: // glGetUniformfv
             {
-                var size2 = UniformCount(context, a[0], (int)a[1]) * 4;
+                var size2 = UniformCount(a[0], (int)a[1]) * 4;
                 var b2 = guest.Output(a[2], size2);
                 fixed (byte* p2 = b2)
                 {
@@ -560,7 +551,7 @@ internal sealed unsafe partial class AngleDevice
             }
             case 139: // glGetUniformiv
             {
-                var size2 = UniformCount(context, a[0], (int)a[1]) * 4;
+                var size2 = UniformCount(a[0], (int)a[1]) * 4;
                 var b2 = guest.Output(a[2], size2);
                 fixed (byte* p2 = b2)
                 {
@@ -651,11 +642,12 @@ internal sealed unsafe partial class AngleDevice
             }
             case 156: // glReadPixels
             {
-                var size6 = PixelBytes(context, a[2], a[3], a[4], a[5], 0x0D05);
-                var b6 = guest.Output(a[6], size6);
+                var buffered = context.Version >= 3 && GetInteger(PixelPackBufferBinding) != 0;
+                var size6 = buffered ? 0 : PixelBytes(context, a[2], a[3], 1, a[4], a[5], pack: true);
+                var b6 = buffered ? null : guest.Output(a[6], size6);
                 fixed (byte* p6 = b6)
                 {
-                    ((delegate* unmanaged[Cdecl]<int, int, int, int, uint, uint, void*, void>)proc)((int)a[0], (int)a[1], (int)a[2], (int)a[3], a[4], a[5], p6);
+                    ((delegate* unmanaged[Cdecl]<int, int, int, int, uint, uint, void*, void>)proc)((int)a[0], (int)a[1], (int)a[2], (int)a[3], a[4], a[5], buffered ? (void*)(nuint)a[6] : p6);
                     guest.WriteOutput(a[6], b6, size6);
                     return 0;
                 }
@@ -724,10 +716,12 @@ internal sealed unsafe partial class AngleDevice
             }
             case 169: // glTexImage2D
             {
-                var b8 = guest.Input(a[8], PixelBytes(context, a[3], a[4], a[6], a[7], 0x0CF5), nullable: true);
+                var buffered = context.Version >= 3 && GetInteger(PixelUnpackBufferBinding) != 0;
+                var size8 = buffered || a[8] == 0 ? 0 : PixelBytes(context, a[3], a[4], 1, a[6], a[7], pack: false, volume: false);
+                var b8 = buffered ? null : guest.Input(a[8], size8, nullable: true);
                 fixed (byte* p8 = b8)
                 {
-                    ((delegate* unmanaged[Cdecl]<uint, int, int, int, int, int, uint, uint, void*, void>)proc)(a[0], (int)a[1], (int)a[2], (int)a[3], (int)a[4], (int)a[5], a[6], a[7], p8);
+                    ((delegate* unmanaged[Cdecl]<uint, int, int, int, int, int, uint, uint, void*, void>)proc)(a[0], (int)a[1], (int)a[2], (int)a[3], (int)a[4], (int)a[5], a[6], a[7], buffered ? (void*)(nuint)a[8] : p8);
                     return 0;
                 }
             }
@@ -761,10 +755,12 @@ internal sealed unsafe partial class AngleDevice
             }
             case 174: // glTexSubImage2D
             {
-                var b8 = guest.Input(a[8], PixelBytes(context, a[4], a[5], a[6], a[7], 0x0CF5));
+                var buffered = context.Version >= 3 && GetInteger(PixelUnpackBufferBinding) != 0;
+                var size8 = buffered ? 0 : PixelBytes(context, a[4], a[5], 1, a[6], a[7], pack: false, volume: false);
+                var b8 = buffered ? null : guest.Input(a[8], size8);
                 fixed (byte* p8 = b8)
                 {
-                    ((delegate* unmanaged[Cdecl]<uint, int, int, int, int, int, uint, uint, void*, void>)proc)(a[0], (int)a[1], (int)a[2], (int)a[3], (int)a[4], (int)a[5], a[6], a[7], p8);
+                    ((delegate* unmanaged[Cdecl]<uint, int, int, int, int, int, uint, uint, void*, void>)proc)(a[0], (int)a[1], (int)a[2], (int)a[3], (int)a[4], (int)a[5], a[6], a[7], buffered ? (void*)(nuint)a[8] : p8);
                     return 0;
                 }
             }
@@ -979,11 +975,777 @@ internal sealed unsafe partial class AngleDevice
                 ((delegate* unmanaged[Cdecl]<int, int, int, int, void>)proc)((int)a[0], (int)a[1], (int)a[2], (int)a[3]);
                 return 0;
             }
+            case 206: // glReadBuffer
+            {
+                ((delegate* unmanaged[Cdecl]<uint, void>)proc)(a[0]);
+                return 0;
+            }
+            case 207: return DrawRangeElements(context, proc, a, guest);
+            case 208: // glTexImage3D
+            {
+                var buffered = context.Version >= 3 && GetInteger(PixelUnpackBufferBinding) != 0;
+                var size9 = buffered || a[9] == 0 ? 0 : PixelBytes(context, a[3], a[4], a[5], a[7], a[8], pack: false, volume: true);
+                var b9 = buffered ? null : guest.Input(a[9], size9, nullable: true);
+                fixed (byte* p9 = b9)
+                {
+                    ((delegate* unmanaged[Cdecl]<uint, int, int, int, int, int, int, uint, uint, void*, void>)proc)(a[0], (int)a[1], (int)a[2], (int)a[3], (int)a[4], (int)a[5], (int)a[6], a[7], a[8], buffered ? (void*)(nuint)a[9] : p9);
+                    return 0;
+                }
+            }
+            case 209: // glTexSubImage3D
+            {
+                var buffered = context.Version >= 3 && GetInteger(PixelUnpackBufferBinding) != 0;
+                var size10 = buffered ? 0 : PixelBytes(context, a[5], a[6], a[7], a[8], a[9], pack: false, volume: true);
+                var b10 = buffered ? null : guest.Input(a[10], size10);
+                fixed (byte* p10 = b10)
+                {
+                    ((delegate* unmanaged[Cdecl]<uint, int, int, int, int, int, int, int, uint, uint, void*, void>)proc)(a[0], (int)a[1], (int)a[2], (int)a[3], (int)a[4], (int)a[5], (int)a[6], (int)a[7], a[8], a[9], buffered ? (void*)(nuint)a[10] : p10);
+                    return 0;
+                }
+            }
+            case 210: // glCopyTexSubImage3D
+            {
+                ((delegate* unmanaged[Cdecl]<uint, int, int, int, int, int, int, int, int, void>)proc)(a[0], (int)a[1], (int)a[2], (int)a[3], (int)a[4], (int)a[5], (int)a[6], (int)a[7], (int)a[8]);
+                return 0;
+            }
+            case 211: // glCompressedTexImage3D
+            {
+                var buffered = context.Version >= 3 && GetInteger(PixelUnpackBufferBinding) != 0;
+                var size8 = buffered || a[8] == 0 ? 0 : (int)a[7];
+                var b8 = buffered ? null : guest.Input(a[8], size8, nullable: true);
+                fixed (byte* p8 = b8)
+                {
+                    ((delegate* unmanaged[Cdecl]<uint, int, uint, int, int, int, int, int, void*, void>)proc)(a[0], (int)a[1], a[2], (int)a[3], (int)a[4], (int)a[5], (int)a[6], (int)a[7], buffered ? (void*)(nuint)a[8] : p8);
+                    return 0;
+                }
+            }
+            case 212: // glCompressedTexSubImage3D
+            {
+                var buffered = context.Version >= 3 && GetInteger(PixelUnpackBufferBinding) != 0;
+                var size10 = buffered ? 0 : (int)a[9];
+                var b10 = buffered ? null : guest.Input(a[10], size10);
+                fixed (byte* p10 = b10)
+                {
+                    ((delegate* unmanaged[Cdecl]<uint, int, int, int, int, int, int, int, uint, int, void*, void>)proc)(a[0], (int)a[1], (int)a[2], (int)a[3], (int)a[4], (int)a[5], (int)a[6], (int)a[7], a[8], (int)a[9], buffered ? (void*)(nuint)a[10] : p10);
+                    return 0;
+                }
+            }
+            case 213: // glGenQueries
+            {
+                var size1 = Count(a[0], 4);
+                var b1 = guest.Output(a[1], size1);
+                fixed (byte* p1 = b1)
+                {
+                    ((delegate* unmanaged[Cdecl]<int, void*, void>)proc)((int)a[0], p1);
+                    guest.WriteOutput(a[1], b1, size1);
+                    return 0;
+                }
+            }
+            case 214: // glDeleteQueries
+            {
+                var b1 = guest.Input(a[1], Count(a[0], 4));
+                fixed (byte* p1 = b1)
+                {
+                    ((delegate* unmanaged[Cdecl]<int, void*, void>)proc)((int)a[0], p1);
+                    return 0;
+                }
+            }
+            case 215: // glIsQuery
+            {
+                return (int)((delegate* unmanaged[Cdecl]<uint, byte>)proc)(a[0]);
+            }
+            case 216: // glBeginQuery
+            {
+                ((delegate* unmanaged[Cdecl]<uint, uint, void>)proc)(a[0], a[1]);
+                return 0;
+            }
+            case 217: // glEndQuery
+            {
+                ((delegate* unmanaged[Cdecl]<uint, void>)proc)(a[0]);
+                return 0;
+            }
+            case 218: // glGetQueryiv
+            {
+                var size2 = 4;
+                var b2 = guest.Output(a[2], size2);
+                fixed (byte* p2 = b2)
+                {
+                    ((delegate* unmanaged[Cdecl]<uint, uint, void*, void>)proc)(a[0], a[1], p2);
+                    guest.WriteOutput(a[2], b2, size2);
+                    return 0;
+                }
+            }
+            case 219: // glGetQueryObjectuiv
+            {
+                var size2 = 4;
+                var b2 = guest.Output(a[2], size2);
+                fixed (byte* p2 = b2)
+                {
+                    ((delegate* unmanaged[Cdecl]<uint, uint, void*, void>)proc)(a[0], a[1], p2);
+                    guest.WriteOutput(a[2], b2, size2);
+                    return 0;
+                }
+            }
+            case 220: return UnmapBuffer(context, proc, a, guest);
+            case 221: return GetBufferPointerv(context, proc, a, guest);
+            case 222: // glDrawBuffers
+            {
+                var b1 = guest.Input(a[1], Count(a[0], 4));
+                fixed (byte* p1 = b1)
+                {
+                    ((delegate* unmanaged[Cdecl]<int, void*, void>)proc)((int)a[0], p1);
+                    return 0;
+                }
+            }
+            case 223: // glUniformMatrix2x3fv
+            {
+                var b3 = guest.Input(a[3], Count(a[1], 24));
+                fixed (byte* p3 = b3)
+                {
+                    ((delegate* unmanaged[Cdecl]<int, int, byte, void*, void>)proc)((int)a[0], (int)a[1], (byte)a[2], p3);
+                    return 0;
+                }
+            }
+            case 224: // glUniformMatrix3x2fv
+            {
+                var b3 = guest.Input(a[3], Count(a[1], 24));
+                fixed (byte* p3 = b3)
+                {
+                    ((delegate* unmanaged[Cdecl]<int, int, byte, void*, void>)proc)((int)a[0], (int)a[1], (byte)a[2], p3);
+                    return 0;
+                }
+            }
+            case 225: // glUniformMatrix2x4fv
+            {
+                var b3 = guest.Input(a[3], Count(a[1], 32));
+                fixed (byte* p3 = b3)
+                {
+                    ((delegate* unmanaged[Cdecl]<int, int, byte, void*, void>)proc)((int)a[0], (int)a[1], (byte)a[2], p3);
+                    return 0;
+                }
+            }
+            case 226: // glUniformMatrix4x2fv
+            {
+                var b3 = guest.Input(a[3], Count(a[1], 32));
+                fixed (byte* p3 = b3)
+                {
+                    ((delegate* unmanaged[Cdecl]<int, int, byte, void*, void>)proc)((int)a[0], (int)a[1], (byte)a[2], p3);
+                    return 0;
+                }
+            }
+            case 227: // glUniformMatrix3x4fv
+            {
+                var b3 = guest.Input(a[3], Count(a[1], 48));
+                fixed (byte* p3 = b3)
+                {
+                    ((delegate* unmanaged[Cdecl]<int, int, byte, void*, void>)proc)((int)a[0], (int)a[1], (byte)a[2], p3);
+                    return 0;
+                }
+            }
+            case 228: // glUniformMatrix4x3fv
+            {
+                var b3 = guest.Input(a[3], Count(a[1], 48));
+                fixed (byte* p3 = b3)
+                {
+                    ((delegate* unmanaged[Cdecl]<int, int, byte, void*, void>)proc)((int)a[0], (int)a[1], (byte)a[2], p3);
+                    return 0;
+                }
+            }
+            case 229: // glBlitFramebuffer
+            {
+                ((delegate* unmanaged[Cdecl]<int, int, int, int, int, int, int, int, uint, uint, void>)proc)((int)a[0], (int)a[1], (int)a[2], (int)a[3], (int)a[4], (int)a[5], (int)a[6], (int)a[7], a[8], a[9]);
+                return 0;
+            }
+            case 230: // glRenderbufferStorageMultisample
+            {
+                ((delegate* unmanaged[Cdecl]<uint, int, uint, int, int, void>)proc)(a[0], (int)a[1], a[2], (int)a[3], (int)a[4]);
+                return 0;
+            }
+            case 231: // glFramebufferTextureLayer
+            {
+                ((delegate* unmanaged[Cdecl]<uint, uint, uint, int, int, void>)proc)(a[0], a[1], a[2], (int)a[3], (int)a[4]);
+                return 0;
+            }
+            case 232: return MapBufferRange(context, proc, a, guest);
+            case 233: return FlushMappedBufferRange(context, proc, a, guest);
+            case 234: // glBindVertexArray
+            {
+                ((delegate* unmanaged[Cdecl]<uint, void>)proc)(a[0]);
+                return 0;
+            }
+            case 235: // glDeleteVertexArrays
+            {
+                var b1 = guest.Input(a[1], Count(a[0], 4));
+                fixed (byte* p1 = b1)
+                {
+                    ((delegate* unmanaged[Cdecl]<int, void*, void>)proc)((int)a[0], p1);
+                    return 0;
+                }
+            }
+            case 236: // glGenVertexArrays
+            {
+                var size1 = Count(a[0], 4);
+                var b1 = guest.Output(a[1], size1);
+                fixed (byte* p1 = b1)
+                {
+                    ((delegate* unmanaged[Cdecl]<int, void*, void>)proc)((int)a[0], p1);
+                    guest.WriteOutput(a[1], b1, size1);
+                    return 0;
+                }
+            }
+            case 237: // glIsVertexArray
+            {
+                return (int)((delegate* unmanaged[Cdecl]<uint, byte>)proc)(a[0]);
+            }
+            case 238: // glGetIntegeri_v
+            {
+                var size2 = 4;
+                var b2 = guest.Output(a[2], size2);
+                fixed (byte* p2 = b2)
+                {
+                    ((delegate* unmanaged[Cdecl]<uint, uint, void*, void>)proc)(a[0], a[1], p2);
+                    guest.WriteOutput(a[2], b2, size2);
+                    return 0;
+                }
+            }
+            case 239: // glBeginTransformFeedback
+            {
+                ((delegate* unmanaged[Cdecl]<uint, void>)proc)(a[0]);
+                return 0;
+            }
+            case 240: // glEndTransformFeedback
+            {
+                ((delegate* unmanaged[Cdecl]<void>)proc)();
+                return 0;
+            }
+            case 241: // glBindBufferRange
+            {
+                ((delegate* unmanaged[Cdecl]<uint, uint, uint, nint, nint, void>)proc)(a[0], a[1], a[2], (nint)(int)a[3], (nint)(int)a[4]);
+                return 0;
+            }
+            case 242: // glBindBufferBase
+            {
+                ((delegate* unmanaged[Cdecl]<uint, uint, uint, void>)proc)(a[0], a[1], a[2]);
+                return 0;
+            }
+            case 243: return TransformFeedbackVaryings(context, proc, a, guest);
+            case 244: // glGetTransformFeedbackVarying
+            {
+                var size3 = 4;
+                var b3 = guest.Output(a[3], size3, nullable: true);
+                var size4 = 4;
+                var b4 = guest.Output(a[4], size4);
+                var size5 = 4;
+                var b5 = guest.Output(a[5], size5);
+                var size6 = Count(a[2], 1);
+                var b6 = guest.Output(a[6], size6);
+                fixed (byte* p3 = b3)
+                fixed (byte* p4 = b4)
+                fixed (byte* p5 = b5)
+                fixed (byte* p6 = b6)
+                {
+                    ((delegate* unmanaged[Cdecl]<uint, uint, int, void*, void*, void*, void*, void>)proc)(a[0], a[1], (int)a[2], p3, p4, p5, p6);
+                    guest.WriteOutput(a[3], b3, size3);
+                    guest.WriteOutput(a[4], b4, size4);
+                    guest.WriteOutput(a[5], b5, size5);
+                    guest.WriteOutput(a[6], b6, size6);
+                    return 0;
+                }
+            }
+            case 245: return VertexAttribIPointer(context, proc, a, guest);
+            case 246: // glGetVertexAttribIiv
+            {
+                var size2 = a[1] == 0x8626 ? 16 : 4;
+                var b2 = guest.Output(a[2], size2);
+                fixed (byte* p2 = b2)
+                {
+                    ((delegate* unmanaged[Cdecl]<uint, uint, void*, void>)proc)(a[0], a[1], p2);
+                    guest.WriteOutput(a[2], b2, size2);
+                    return 0;
+                }
+            }
+            case 247: // glGetVertexAttribIuiv
+            {
+                var size2 = a[1] == 0x8626 ? 16 : 4;
+                var b2 = guest.Output(a[2], size2);
+                fixed (byte* p2 = b2)
+                {
+                    ((delegate* unmanaged[Cdecl]<uint, uint, void*, void>)proc)(a[0], a[1], p2);
+                    guest.WriteOutput(a[2], b2, size2);
+                    return 0;
+                }
+            }
+            case 248: // glVertexAttribI4i
+            {
+                ((delegate* unmanaged[Cdecl]<uint, int, int, int, int, void>)proc)(a[0], (int)a[1], (int)a[2], (int)a[3], (int)a[4]);
+                return 0;
+            }
+            case 249: // glVertexAttribI4ui
+            {
+                ((delegate* unmanaged[Cdecl]<uint, uint, uint, uint, uint, void>)proc)(a[0], a[1], a[2], a[3], a[4]);
+                return 0;
+            }
+            case 250: // glVertexAttribI4iv
+            {
+                var b1 = guest.Input(a[1], 16);
+                fixed (byte* p1 = b1)
+                {
+                    ((delegate* unmanaged[Cdecl]<uint, void*, void>)proc)(a[0], p1);
+                    return 0;
+                }
+            }
+            case 251: // glVertexAttribI4uiv
+            {
+                var b1 = guest.Input(a[1], 16);
+                fixed (byte* p1 = b1)
+                {
+                    ((delegate* unmanaged[Cdecl]<uint, void*, void>)proc)(a[0], p1);
+                    return 0;
+                }
+            }
+            case 252: // glGetUniformuiv
+            {
+                var size2 = UniformCount(a[0], (int)a[1]) * 4;
+                var b2 = guest.Output(a[2], size2);
+                fixed (byte* p2 = b2)
+                {
+                    ((delegate* unmanaged[Cdecl]<uint, int, void*, void>)proc)(a[0], (int)a[1], p2);
+                    guest.WriteOutput(a[2], b2, size2);
+                    return 0;
+                }
+            }
+            case 253: // glGetFragDataLocation
+            {
+                var b1 = guest.String(a[1]);
+                fixed (byte* p1 = b1)
+                {
+                    return (int)((delegate* unmanaged[Cdecl]<uint, void*, int>)proc)(a[0], p1);
+                }
+            }
+            case 254: // glUniform1ui
+            {
+                ((delegate* unmanaged[Cdecl]<int, uint, void>)proc)((int)a[0], a[1]);
+                return 0;
+            }
+            case 255: // glUniform2ui
+            {
+                ((delegate* unmanaged[Cdecl]<int, uint, uint, void>)proc)((int)a[0], a[1], a[2]);
+                return 0;
+            }
+            case 256: // glUniform3ui
+            {
+                ((delegate* unmanaged[Cdecl]<int, uint, uint, uint, void>)proc)((int)a[0], a[1], a[2], a[3]);
+                return 0;
+            }
+            case 257: // glUniform4ui
+            {
+                ((delegate* unmanaged[Cdecl]<int, uint, uint, uint, uint, void>)proc)((int)a[0], a[1], a[2], a[3], a[4]);
+                return 0;
+            }
+            case 258: // glUniform1uiv
+            {
+                var b2 = guest.Input(a[2], Count(a[1], 4));
+                fixed (byte* p2 = b2)
+                {
+                    ((delegate* unmanaged[Cdecl]<int, int, void*, void>)proc)((int)a[0], (int)a[1], p2);
+                    return 0;
+                }
+            }
+            case 259: // glUniform2uiv
+            {
+                var b2 = guest.Input(a[2], Count(a[1], 8));
+                fixed (byte* p2 = b2)
+                {
+                    ((delegate* unmanaged[Cdecl]<int, int, void*, void>)proc)((int)a[0], (int)a[1], p2);
+                    return 0;
+                }
+            }
+            case 260: // glUniform3uiv
+            {
+                var b2 = guest.Input(a[2], Count(a[1], 12));
+                fixed (byte* p2 = b2)
+                {
+                    ((delegate* unmanaged[Cdecl]<int, int, void*, void>)proc)((int)a[0], (int)a[1], p2);
+                    return 0;
+                }
+            }
+            case 261: // glUniform4uiv
+            {
+                var b2 = guest.Input(a[2], Count(a[1], 16));
+                fixed (byte* p2 = b2)
+                {
+                    ((delegate* unmanaged[Cdecl]<int, int, void*, void>)proc)((int)a[0], (int)a[1], p2);
+                    return 0;
+                }
+            }
+            case 262: // glClearBufferiv
+            {
+                var b2 = guest.Input(a[2], a[0] == 0x1800 ? 16 : 4);
+                fixed (byte* p2 = b2)
+                {
+                    ((delegate* unmanaged[Cdecl]<uint, int, void*, void>)proc)(a[0], (int)a[1], p2);
+                    return 0;
+                }
+            }
+            case 263: // glClearBufferuiv
+            {
+                var b2 = guest.Input(a[2], a[0] == 0x1800 ? 16 : 4);
+                fixed (byte* p2 = b2)
+                {
+                    ((delegate* unmanaged[Cdecl]<uint, int, void*, void>)proc)(a[0], (int)a[1], p2);
+                    return 0;
+                }
+            }
+            case 264: // glClearBufferfv
+            {
+                var b2 = guest.Input(a[2], a[0] == 0x1800 ? 16 : 4);
+                fixed (byte* p2 = b2)
+                {
+                    ((delegate* unmanaged[Cdecl]<uint, int, void*, void>)proc)(a[0], (int)a[1], p2);
+                    return 0;
+                }
+            }
+            case 265: // glClearBufferfi
+            {
+                ((delegate* unmanaged[Cdecl]<uint, int, float, int, void>)proc)(a[0], (int)a[1], BitConverter.UInt32BitsToSingle(a[2]), (int)a[3]);
+                return 0;
+            }
+            case 266: return GetStringi(context, proc, a, guest);
+            case 267: // glCopyBufferSubData
+            {
+                ((delegate* unmanaged[Cdecl]<uint, uint, nint, nint, nint, void>)proc)(a[0], a[1], (nint)(int)a[2], (nint)(int)a[3], (nint)(int)a[4]);
+                return 0;
+            }
+            case 268: return GetUniformIndices(context, proc, a, guest);
+            case 269: // glGetActiveUniformsiv
+            {
+                var b2 = guest.Input(a[2], Count(a[1], 4));
+                var size4 = Count(a[1], 4);
+                var b4 = guest.Output(a[4], size4);
+                fixed (byte* p2 = b2)
+                fixed (byte* p4 = b4)
+                {
+                    ((delegate* unmanaged[Cdecl]<uint, int, void*, uint, void*, void>)proc)(a[0], (int)a[1], p2, a[3], p4);
+                    guest.WriteOutput(a[4], b4, size4);
+                    return 0;
+                }
+            }
+            case 270: // glGetUniformBlockIndex
+            {
+                var b1 = guest.String(a[1]);
+                fixed (byte* p1 = b1)
+                {
+                    return (int)((delegate* unmanaged[Cdecl]<uint, void*, uint>)proc)(a[0], p1);
+                }
+            }
+            case 271: // glGetActiveUniformBlockiv
+            {
+                var size3 = UniformBlockCount(a[0], a[1], a[2]) * 4;
+                var b3 = guest.Output(a[3], size3);
+                fixed (byte* p3 = b3)
+                {
+                    ((delegate* unmanaged[Cdecl]<uint, uint, uint, void*, void>)proc)(a[0], a[1], a[2], p3);
+                    guest.WriteOutput(a[3], b3, size3);
+                    return 0;
+                }
+            }
+            case 272: // glGetActiveUniformBlockName
+            {
+                var size3 = 4;
+                var b3 = guest.Output(a[3], size3, nullable: true);
+                var size4 = Count(a[2], 1);
+                var b4 = guest.Output(a[4], size4);
+                fixed (byte* p3 = b3)
+                fixed (byte* p4 = b4)
+                {
+                    ((delegate* unmanaged[Cdecl]<uint, uint, int, void*, void*, void>)proc)(a[0], a[1], (int)a[2], p3, p4);
+                    guest.WriteOutput(a[3], b3, size3);
+                    guest.WriteOutput(a[4], b4, size4);
+                    return 0;
+                }
+            }
+            case 273: // glUniformBlockBinding
+            {
+                ((delegate* unmanaged[Cdecl]<uint, uint, uint, void>)proc)(a[0], a[1], a[2]);
+                return 0;
+            }
+            case 274: return DrawArraysInstanced(context, proc, a, guest);
+            case 275: return DrawElementsInstanced(context, proc, a, guest);
+            case 276: return FenceSync(context, proc, a, guest);
+            case 277: // glIsSync
+            {
+                var sync = context.Shared.Syncs.GetValueOrDefault(a[0]);
+                return (int)((delegate* unmanaged[Cdecl]<nint, byte>)proc)(sync);
+            }
+            case 278: // glDeleteSync
+            {
+                var sync = context.Shared.Syncs.GetValueOrDefault(a[0]);
+                ((delegate* unmanaged[Cdecl]<nint, void>)proc)(sync);
+                    context.Shared.Syncs.Remove(a[0]);
+                return 0;
+            }
+            case 279: // glClientWaitSync
+            {
+                var sync = context.Shared.Syncs.GetValueOrDefault(a[0]);
+                return (int)((delegate* unmanaged[Cdecl]<nint, uint, ulong, uint>)proc)(sync, a[1], a[2] | ((ulong)a[3] << 32));
+            }
+            case 280: // glWaitSync
+            {
+                var sync = context.Shared.Syncs.GetValueOrDefault(a[0]);
+                ((delegate* unmanaged[Cdecl]<nint, uint, ulong, void>)proc)(sync, a[1], a[2] | ((ulong)a[3] << 32));
+                return 0;
+            }
+            case 281: // glGetInteger64v
+            {
+                if (a[0] == 0x821D && context.Version >= 3) return WriteExtensionCount<long>(context, a[1], guest);
+                var size1 = Count((uint)StateCount(a[0]), 8);
+                var b1 = guest.Output(a[1], size1);
+                fixed (byte* p1 = b1)
+                {
+                    ((delegate* unmanaged[Cdecl]<uint, void*, void>)proc)(a[0], p1);
+                    guest.WriteOutput(a[1], b1, size1);
+                    return 0;
+                }
+            }
+            case 282: // glGetSynciv
+            {
+                var sync = context.Shared.Syncs.GetValueOrDefault(a[0]);
+                var size3 = 4;
+                var b3 = guest.Output(a[3], size3, nullable: true);
+                var size4 = Count(a[2], 4);
+                var b4 = guest.Output(a[4], size4);
+                fixed (byte* p3 = b3)
+                fixed (byte* p4 = b4)
+                {
+                    ((delegate* unmanaged[Cdecl]<nint, uint, int, void*, void*, void>)proc)(sync, a[1], (int)a[2], p3, p4);
+                    guest.WriteOutput(a[3], b3, size3);
+                    guest.WriteOutput(a[4], b4, size4);
+                    return 0;
+                }
+            }
+            case 283: // glGetInteger64i_v
+            {
+                var size2 = 8;
+                var b2 = guest.Output(a[2], size2);
+                fixed (byte* p2 = b2)
+                {
+                    ((delegate* unmanaged[Cdecl]<uint, uint, void*, void>)proc)(a[0], a[1], p2);
+                    guest.WriteOutput(a[2], b2, size2);
+                    return 0;
+                }
+            }
+            case 284: // glGetBufferParameteri64v
+            {
+                var size2 = 8;
+                var b2 = guest.Output(a[2], size2);
+                fixed (byte* p2 = b2)
+                {
+                    ((delegate* unmanaged[Cdecl]<uint, uint, void*, void>)proc)(a[0], a[1], p2);
+                    guest.WriteOutput(a[2], b2, size2);
+                    return 0;
+                }
+            }
+            case 285: // glGenSamplers
+            {
+                var size1 = Count(a[0], 4);
+                var b1 = guest.Output(a[1], size1);
+                fixed (byte* p1 = b1)
+                {
+                    ((delegate* unmanaged[Cdecl]<int, void*, void>)proc)((int)a[0], p1);
+                    guest.WriteOutput(a[1], b1, size1);
+                    return 0;
+                }
+            }
+            case 286: // glDeleteSamplers
+            {
+                var b1 = guest.Input(a[1], Count(a[0], 4));
+                fixed (byte* p1 = b1)
+                {
+                    ((delegate* unmanaged[Cdecl]<int, void*, void>)proc)((int)a[0], p1);
+                    return 0;
+                }
+            }
+            case 287: // glIsSampler
+            {
+                return (int)((delegate* unmanaged[Cdecl]<uint, byte>)proc)(a[0]);
+            }
+            case 288: // glBindSampler
+            {
+                ((delegate* unmanaged[Cdecl]<uint, uint, void>)proc)(a[0], a[1]);
+                return 0;
+            }
+            case 289: // glSamplerParameteri
+            {
+                ((delegate* unmanaged[Cdecl]<uint, uint, int, void>)proc)(a[0], a[1], (int)a[2]);
+                return 0;
+            }
+            case 290: // glSamplerParameteriv
+            {
+                var b2 = guest.Input(a[2], 4);
+                fixed (byte* p2 = b2)
+                {
+                    ((delegate* unmanaged[Cdecl]<uint, uint, void*, void>)proc)(a[0], a[1], p2);
+                    return 0;
+                }
+            }
+            case 291: // glSamplerParameterf
+            {
+                ((delegate* unmanaged[Cdecl]<uint, uint, float, void>)proc)(a[0], a[1], BitConverter.UInt32BitsToSingle(a[2]));
+                return 0;
+            }
+            case 292: // glSamplerParameterfv
+            {
+                var b2 = guest.Input(a[2], 4);
+                fixed (byte* p2 = b2)
+                {
+                    ((delegate* unmanaged[Cdecl]<uint, uint, void*, void>)proc)(a[0], a[1], p2);
+                    return 0;
+                }
+            }
+            case 293: // glGetSamplerParameteriv
+            {
+                var size2 = 4;
+                var b2 = guest.Output(a[2], size2);
+                fixed (byte* p2 = b2)
+                {
+                    ((delegate* unmanaged[Cdecl]<uint, uint, void*, void>)proc)(a[0], a[1], p2);
+                    guest.WriteOutput(a[2], b2, size2);
+                    return 0;
+                }
+            }
+            case 294: // glGetSamplerParameterfv
+            {
+                var size2 = 4;
+                var b2 = guest.Output(a[2], size2);
+                fixed (byte* p2 = b2)
+                {
+                    ((delegate* unmanaged[Cdecl]<uint, uint, void*, void>)proc)(a[0], a[1], p2);
+                    guest.WriteOutput(a[2], b2, size2);
+                    return 0;
+                }
+            }
+            case 295: // glVertexAttribDivisor
+            {
+                ((delegate* unmanaged[Cdecl]<uint, uint, void>)proc)(a[0], a[1]);
+                return 0;
+            }
+            case 296: // glBindTransformFeedback
+            {
+                ((delegate* unmanaged[Cdecl]<uint, uint, void>)proc)(a[0], a[1]);
+                return 0;
+            }
+            case 297: // glDeleteTransformFeedbacks
+            {
+                var b1 = guest.Input(a[1], Count(a[0], 4));
+                fixed (byte* p1 = b1)
+                {
+                    ((delegate* unmanaged[Cdecl]<int, void*, void>)proc)((int)a[0], p1);
+                    return 0;
+                }
+            }
+            case 298: // glGenTransformFeedbacks
+            {
+                var size1 = Count(a[0], 4);
+                var b1 = guest.Output(a[1], size1);
+                fixed (byte* p1 = b1)
+                {
+                    ((delegate* unmanaged[Cdecl]<int, void*, void>)proc)((int)a[0], p1);
+                    guest.WriteOutput(a[1], b1, size1);
+                    return 0;
+                }
+            }
+            case 299: // glIsTransformFeedback
+            {
+                return (int)((delegate* unmanaged[Cdecl]<uint, byte>)proc)(a[0]);
+            }
+            case 300: // glPauseTransformFeedback
+            {
+                ((delegate* unmanaged[Cdecl]<void>)proc)();
+                return 0;
+            }
+            case 301: // glResumeTransformFeedback
+            {
+                ((delegate* unmanaged[Cdecl]<void>)proc)();
+                return 0;
+            }
+            case 302: // glGetProgramBinary
+            {
+                var size2 = 4;
+                var b2 = guest.Output(a[2], size2, nullable: true);
+                var size3 = 4;
+                var b3 = guest.Output(a[3], size3);
+                var size4 = Count(a[1], 1);
+                var b4 = guest.Output(a[4], size4);
+                fixed (byte* p2 = b2)
+                fixed (byte* p3 = b3)
+                fixed (byte* p4 = b4)
+                {
+                    ((delegate* unmanaged[Cdecl]<uint, int, void*, void*, void*, void>)proc)(a[0], (int)a[1], p2, p3, p4);
+                    guest.WriteOutput(a[2], b2, size2);
+                    guest.WriteOutput(a[3], b3, size3);
+                    guest.WriteOutput(a[4], b4, size4);
+                    return 0;
+                }
+            }
+            case 303: // glProgramBinary
+            {
+                var b2 = guest.Input(a[2], (int)a[3]);
+                fixed (byte* p2 = b2)
+                {
+                    ((delegate* unmanaged[Cdecl]<uint, uint, void*, int, void>)proc)(a[0], a[1], p2, (int)a[3]);
+                    return 0;
+                }
+            }
+            case 304: // glProgramParameteri
+            {
+                ((delegate* unmanaged[Cdecl]<uint, uint, int, void>)proc)(a[0], a[1], (int)a[2]);
+                return 0;
+            }
+            case 305: // glInvalidateFramebuffer
+            {
+                var b2 = guest.Input(a[2], Count(a[1], 4));
+                fixed (byte* p2 = b2)
+                {
+                    ((delegate* unmanaged[Cdecl]<uint, int, void*, void>)proc)(a[0], (int)a[1], p2);
+                    return 0;
+                }
+            }
+            case 306: // glInvalidateSubFramebuffer
+            {
+                var b2 = guest.Input(a[2], Count(a[1], 4));
+                fixed (byte* p2 = b2)
+                {
+                    ((delegate* unmanaged[Cdecl]<uint, int, void*, int, int, int, int, void>)proc)(a[0], (int)a[1], p2, (int)a[3], (int)a[4], (int)a[5], (int)a[6]);
+                    return 0;
+                }
+            }
+            case 307: // glTexStorage2D
+            {
+                ((delegate* unmanaged[Cdecl]<uint, int, uint, int, int, void>)proc)(a[0], (int)a[1], a[2], (int)a[3], (int)a[4]);
+                return 0;
+            }
+            case 308: // glTexStorage3D
+            {
+                ((delegate* unmanaged[Cdecl]<uint, int, uint, int, int, int, void>)proc)(a[0], (int)a[1], a[2], (int)a[3], (int)a[4], (int)a[5]);
+                return 0;
+            }
+            case 309: // glGetInternalformativ
+            {
+                var size4 = Count(a[3], 4);
+                var b4 = guest.Output(a[4], size4);
+                fixed (byte* p4 = b4)
+                {
+                    ((delegate* unmanaged[Cdecl]<uint, uint, uint, int, void*, void>)proc)(a[0], a[1], a[2], (int)a[3], p4);
+                    guest.WriteOutput(a[4], b4, size4);
+                    return 0;
+                }
+            }
             default: return -(int)Errno.ENOTTY;
         }
     }
 
-    internal const int GlFirst = 64;
+    internal const int GlFirst = 64, GlEs3First = GlFirst + 142;
+    private const int GlBindSampler = 288;
     private const int GlBindTexture = 70;
     private const int GlCompileShader = 84;
     private const int GlCompressedTexImage2D = 85;
@@ -993,35 +1755,50 @@ internal sealed unsafe partial class AngleDevice
     private const int GlDeleteFramebuffers = 93;
     private const int GlDeleteProgram = 94;
     private const int GlDeleteRenderbuffers = 95;
+    private const int GlDeleteSamplers = 286;
     private const int GlDeleteShader = 96;
     private const int GlDeleteTextures = 97;
     private const int GlDetachShader = 101;
     private const int GlDrawArrays = 104;
+    private const int GlDrawArraysInstanced = 274;
     private const int GlDrawElements = 105;
+    private const int GlDrawElementsInstanced = 275;
+    private const int GlDrawRangeElements = 207;
     private const int GlFinish = 108;
     private const int GlFlush = 109;
     private const int GlFramebufferRenderbuffer = 110;
     private const int GlFramebufferTexture2D = 111;
+    private const int GlFramebufferTextureLayer = 231;
     private const int GlGenerateMipmap = 114;
     private const int GlGetError = 124;
     private const int GlGetBooleanv = 122;
     private const int GlGetFloatv = 125;
     private const int GlGetFramebufferAttachmentParameteriv = 126;
     private const int GlGetIntegerv = 127;
+    private const int GlGetStringi = 266;
     private const int GlGetRenderbufferParameteriv = 130;
+    private const int GlGetSamplerParameterfv = 294;
+    private const int GlGetSamplerParameteriv = 293;
     private const int GlGetShaderSource = 134;
     private const int GlGetTexParameterfv = 136;
     private const int GlGetTexParameteriv = 137;
+    private const int GlIsSampler = 287;
     private const int GlIsTexture = 151;
     private const int GlLinkProgram = 153;
     private const int GlRenderbufferStorage = 158;
+    private const int GlSamplerParameterf = 291;
+    private const int GlSamplerParameterfv = 292;
+    private const int GlSamplerParameteri = 289;
+    private const int GlSamplerParameteriv = 290;
     private const int GlTexImage2D = 169;
     private const int GlTexParameterf = 170;
     private const int GlTexParameterfv = 171;
     private const int GlTexParameteri = 172;
     private const int GlTexParameteriv = 173;
     private const int GlTexSubImage2D = 174;
+    private const int GlTexStorage2D = 307;
     private const int GlUseProgram = 194;
+    private const int GlClientWaitSync = 279;
 
     internal static readonly string[] GlNames =
     [
@@ -1167,5 +1944,109 @@ internal sealed unsafe partial class AngleDevice
         "glVertexAttrib4fv",
         "glVertexAttribPointer",
         "glViewport",
+        "glReadBuffer",
+        "glDrawRangeElements",
+        "glTexImage3D",
+        "glTexSubImage3D",
+        "glCopyTexSubImage3D",
+        "glCompressedTexImage3D",
+        "glCompressedTexSubImage3D",
+        "glGenQueries",
+        "glDeleteQueries",
+        "glIsQuery",
+        "glBeginQuery",
+        "glEndQuery",
+        "glGetQueryiv",
+        "glGetQueryObjectuiv",
+        "glUnmapBuffer",
+        "glGetBufferPointerv",
+        "glDrawBuffers",
+        "glUniformMatrix2x3fv",
+        "glUniformMatrix3x2fv",
+        "glUniformMatrix2x4fv",
+        "glUniformMatrix4x2fv",
+        "glUniformMatrix3x4fv",
+        "glUniformMatrix4x3fv",
+        "glBlitFramebuffer",
+        "glRenderbufferStorageMultisample",
+        "glFramebufferTextureLayer",
+        "glMapBufferRange",
+        "glFlushMappedBufferRange",
+        "glBindVertexArray",
+        "glDeleteVertexArrays",
+        "glGenVertexArrays",
+        "glIsVertexArray",
+        "glGetIntegeri_v",
+        "glBeginTransformFeedback",
+        "glEndTransformFeedback",
+        "glBindBufferRange",
+        "glBindBufferBase",
+        "glTransformFeedbackVaryings",
+        "glGetTransformFeedbackVarying",
+        "glVertexAttribIPointer",
+        "glGetVertexAttribIiv",
+        "glGetVertexAttribIuiv",
+        "glVertexAttribI4i",
+        "glVertexAttribI4ui",
+        "glVertexAttribI4iv",
+        "glVertexAttribI4uiv",
+        "glGetUniformuiv",
+        "glGetFragDataLocation",
+        "glUniform1ui",
+        "glUniform2ui",
+        "glUniform3ui",
+        "glUniform4ui",
+        "glUniform1uiv",
+        "glUniform2uiv",
+        "glUniform3uiv",
+        "glUniform4uiv",
+        "glClearBufferiv",
+        "glClearBufferuiv",
+        "glClearBufferfv",
+        "glClearBufferfi",
+        "glGetStringi",
+        "glCopyBufferSubData",
+        "glGetUniformIndices",
+        "glGetActiveUniformsiv",
+        "glGetUniformBlockIndex",
+        "glGetActiveUniformBlockiv",
+        "glGetActiveUniformBlockName",
+        "glUniformBlockBinding",
+        "glDrawArraysInstanced",
+        "glDrawElementsInstanced",
+        "glFenceSync",
+        "glIsSync",
+        "glDeleteSync",
+        "glClientWaitSync",
+        "glWaitSync",
+        "glGetInteger64v",
+        "glGetSynciv",
+        "glGetInteger64i_v",
+        "glGetBufferParameteri64v",
+        "glGenSamplers",
+        "glDeleteSamplers",
+        "glIsSampler",
+        "glBindSampler",
+        "glSamplerParameteri",
+        "glSamplerParameteriv",
+        "glSamplerParameterf",
+        "glSamplerParameterfv",
+        "glGetSamplerParameteriv",
+        "glGetSamplerParameterfv",
+        "glVertexAttribDivisor",
+        "glBindTransformFeedback",
+        "glDeleteTransformFeedbacks",
+        "glGenTransformFeedbacks",
+        "glIsTransformFeedback",
+        "glPauseTransformFeedback",
+        "glResumeTransformFeedback",
+        "glGetProgramBinary",
+        "glProgramBinary",
+        "glProgramParameteri",
+        "glInvalidateFramebuffer",
+        "glInvalidateSubFramebuffer",
+        "glTexStorage2D",
+        "glTexStorage3D",
+        "glGetInternalformativ",
     ];
 }

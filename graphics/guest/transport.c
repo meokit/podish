@@ -66,3 +66,14 @@ const GLubyte* pg_string(uint32_t operation, GLenum name) {
         return NULL;
     return strings[slot];
 }
+
+const GLubyte* pg_string_index(uint32_t operation, GLenum name, GLuint index) {
+    static _Thread_local GLubyte strings[4][64];
+    if (index >= sizeof(strings) / sizeof(strings[0])) {
+        pg_gl(operation, name, index, 0, 0);
+        return NULL;
+    }
+    if (pg_gl(operation, name, index, pg_ptr(strings[index]), sizeof(strings[index])) != 0)
+        return NULL;
+    return strings[index];
+}

@@ -47,7 +47,7 @@ internal sealed unsafe partial class KmsEglOutput : IDisposable
         {
             0x3033, 0x0005, // WINDOW_BIT | PBUFFER_BIT
             0x303A, 1, // BIND_TO_TEXTURE_RGBA
-            0x3040, 4, // OPENGL_ES2_BIT
+            0x3040, AngleLibrary.Es2Bit | AngleLibrary.Es3Bit,
             0x3024, 8, 0x3023, 8, 0x3022, 8, 0x3021, 8, 0x3025, 24, 0x3026, 8, 0x3038
         };
         int count;

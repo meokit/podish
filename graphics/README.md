@@ -1,6 +1,6 @@
 # ANGLE-backed EGL and OpenGL ES
 
-Podish CLI can expose EGL and OpenGL ES 2.0 to IA-32 Linux containers. Enable it with `run --gles` and choose `--fbdev` or `--wayland-server` for visible output. A container with neither display option can use offscreen pbuffers.
+Podish CLI can expose EGL and OpenGL ES 2.0 and 3.0 to IA-32 Linux containers. Enable it with `run --gles` and choose `--fbdev` or `--wayland-server` for visible output. A container with neither display option can use offscreen pbuffers.
 
 ## Build and launch
 
@@ -26,7 +26,9 @@ For fbdev, create an EGL window surface on `EGL_DEFAULT_DISPLAY`. Podish reads b
 
 For Wayland, pass the guest `wl_display` and `wl_egl_window` to EGL. The client uses `libwayland-client.so.0` with `wl_proxy_marshal_flags` (Wayland 1.20+) and the version 3 `wl_egl_window` layout. Swaps commit double-buffered XRGB8888 `wl_shm` buffers to the existing compositor, which releases each buffer for reuse. Input and window management use the same Wayland protocols as other clients.
 
-The guest exposes the GLES 2.0 core API, one RGBA8/D24/S8 config, EGL window surfaces and pbuffers. Swaps use CPU readback. The shaders and GLES rendering commands run on the configured ANGLE backend.
+The guest exposes the GLES 2.0 and 3.0 core entry points through `libGLESv2.so.2` and `eglGetProcAddress`. To request GLES 3.0, select the RGBA8/D24/S8 config with `EGL_OPENGL_ES3_BIT_KHR` in `EGL_RENDERABLE_TYPE` and pass `EGL_CONTEXT_CLIENT_VERSION=3` to `eglCreateContext`. The guest config includes the ES3 bit when the host ANGLE backend supports it. GLES 2.0 clients can continue to select `EGL_OPENGL_ES2_BIT` and request version 2. Rebuild the guest libraries to use GLES 3.0.
+
+GLES commands run on the configured ANGLE backend. fbdev and Wayland shared-memory swaps use CPU readback. Buffer mapping uses guest staging memory with transfers on map, flush and unmap. A write-only map that preserves existing contents can require a synchronized read to initialize staging.
 
 ## Smoke tests
 
@@ -41,6 +43,14 @@ SDL_VIDEODRIVER=dummy dotnet "$cli" run --rm --gles --fbdev --fbdev-size 96x64 \
 ```
 
 The probe compiles shaders, draws with client-side arrays and an element buffer, checks pixel readback, and verifies the color and orientation of pixels read from `/dev/fb0`.
+
+The GLES 3.0 probe checks context negotiation, GLSL ES 3.00 rendering, instanced drawing, 3D texture upload, PBO readback, buffer mapping and synchronization across shared contexts. Its fbdev mode also checks the presented pixels and the GL bindings preserved across swap.
+
+```sh
+dotnet "$cli" run --rm --gles --rootfs "$rootfs" -- /usr/local/bin/podish-gles3-probe
+SDL_VIDEODRIVER=dummy dotnet "$cli" run --rm --gles --fbdev --fbdev-size 96x64 \
+    --rootfs "$rootfs" -e PODISH_TEST_FBDEV=1 -- /usr/local/bin/podish-gles3-probe
+```
 
 For the game tests, install the i386 `chocolate-doom` and `supertux` packages and their dependencies in a Debian 12 rootfs. Copy `doom1.wad` from the [classic games rootfs](../tests/fbdev-games/README.md) to `/usr/share/games/doom/doom1.wad` in that rootfs.
 

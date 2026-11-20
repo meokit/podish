@@ -21,9 +21,13 @@ CASES = {
               "PulseAudio smoke passed", "opened default SDL audio device driver="),
     "fbdev-egl": (["--fbdev", "--fbdev-size", "96x64", "--gles"], "podish-gles-fbdev-probe",
                   "fbdev EGL/GLES smoke passed", "Presented framebuffer mode 96x64"),
+    "fbdev-es3": (["--fbdev", "--fbdev-size", "96x64", "--gles", "-e", "PODISH_TEST_FBDEV=1"],
+                  "podish-gles3-probe", "GLES 3.0 probe passed", "Presented framebuffer mode 96x64"),
     "wayland-egl": (["--wayland-server", "--gles"], "podish-wayland-egl-probe",
                     "Wayland EGL smoke passed", "Wayland SDL host presented surfaces=1"),
     "kms-egl": (["--kmsdrm", "--gles"], "podish-kmsdrm-egl-probe",
+                "KMS GBM EGL smoke passed", "KMS EGL presented a GPU frame"),
+    "kms-es3": (["--kmsdrm", "--gles", "-e", "PODISH_TEST_GLES3=1"], "podish-kmsdrm-egl-probe",
                 "KMS GBM EGL smoke passed", "KMS EGL presented a GPU frame"),
 }
 BASE_CASES = ("fbdev", "wayland", "kms", "pulse")
@@ -60,8 +64,8 @@ def main():
         parser.error("--require-renderer requires --stk-rootfs")
     if args.headless:
         env.update(SDL_VIDEODRIVER="dummy", SDL_AUDIODRIVER="dummy")
-        if "kms-egl" in (args.case or ()):
-            parser.error("kms-egl requires a real SDL window system")
+        if any(case in ("kms-egl", "kms-es3") for case in (args.case or ())):
+            parser.error("KMS EGL cases require a real SDL window system")
     if (args.stk_rootfs or any("--gles" in CASES[case][0] for case in (args.case or ()))) and not env.get("PODISH_ANGLE_DIR"):
         parser.error("EGL cases require PODISH_ANGLE_DIR")
     if args.logs:

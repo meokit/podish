@@ -1369,6 +1369,25 @@ public class VMAManager
         primary.AddressSpaceCodeCacheSequenceSeen = sequence;
     }
 
+    // A device staging allocation belongs to the current guest address space and is
+    // recreated by the driver after fork, independently of the parent's device session.
+    public VmArea MapDeviceStaging(Engine engine, uint length, string name)
+    {
+        using var scope = ProcessAddressSpaceSync.EnterAddressSpaceScope(engine);
+        var address = Mmap(0, length, Protection.Read | Protection.Write,
+            MapFlags.Private | MapFlags.Anonymous, null, 0, name, engine);
+        var area = FindVmArea(address)!;
+        area.DontFork = true;
+        return area;
+    }
+
+    public void UnmapDeviceStaging(Engine engine, VmArea area, uint address, uint length)
+    {
+        using var scope = ProcessAddressSpaceSync.EnterAddressSpaceScope(engine);
+        if (ReferenceEquals(FindVmArea(address), area) && area.Start == address && area.Length == length)
+            ProcessAddressSpaceSync.Munmap(this, engine, address, length);
+    }
+
     public uint Mmap(uint addr, uint len, Protection perms, MapFlags flags, LinuxFile? file, long offset,
         string name, Engine engine)
     {

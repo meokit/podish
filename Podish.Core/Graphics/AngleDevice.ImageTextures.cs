@@ -67,7 +67,7 @@ internal sealed unsafe partial class AngleDevice
                 return _kms!.OwnsTexture(a[0]);
             case GlDeleteTextures:
                 return DeleteGuestTextures(context, a, guest, out value);
-            case GlDrawArrays or GlDrawElements:
+            case GlDrawArrays or GlDrawArraysInstanced or GlDrawElements or GlDrawElementsInstanced or GlDrawRangeElements:
                 if ((state.Textures.Count == 0 || state.TextureUnits.Count == 0) &&
                     state.ExternalPrograms.Count == 0) return false;
                 value = SampleImageTextures(context, op, a, guest);
@@ -77,7 +77,7 @@ internal sealed unsafe partial class AngleDevice
         if (state.Textures.Count == 0 || a[0] != Texture2D ||
             op is not (GlTexParameterf or GlTexParameterfv or GlTexParameteri or GlTexParameteriv or
                        GlTexSubImage2D or GlCopyTexSubImage2D or GlCompressedTexSubImage2D or GlTexImage2D or
-                       GlCopyTexImage2D or GlCompressedTexImage2D or GlGenerateMipmap))
+                       GlCopyTexImage2D or GlCompressedTexImage2D or GlTexStorage2D or GlGenerateMipmap))
             return false;
 
         var bound = (uint)GetInteger(TextureBinding2D);
@@ -114,6 +114,7 @@ internal sealed unsafe partial class AngleDevice
         if (externalUnits == null && (state.Textures.Count == 0 || state.TextureUnits.Count == 0))
             return DispatchGl(context, op, args, guest);
         var previousUnit = (uint)GetInteger(ActiveTexture);
+        var bindings = new List<(uint Unit, uint Texture, uint Sampler)>();
         try
         {
             foreach (var (unit, name) in state.TextureUnits)
@@ -121,8 +122,10 @@ internal sealed unsafe partial class AngleDevice
                 if (externalUnits?.Contains(unit) == true || !state.Textures.TryGetValue(name, out var texture)) continue;
                 if (!texture.Buffer.WaitForSample()) return Flag(context, InvalidOperation);
                 SelectTextureUnit(unit);
+                var sampler = (uint)GetInteger(0x8919); // GL_SAMPLER_BINDING on the active unit
+                bindings.Add((unit, (uint)GetInteger(TextureBinding2D), sampler));
                 BindTexture2D(texture.Buffer.Texture);
-                _kms!.BindImageSampler(unit - Texture0, texture.Sampler);
+                if (sampler == 0) _kms!.BindImageSampler(unit - Texture0, texture.Sampler);
             }
             if (externalUnits != null)
             {
@@ -133,6 +136,7 @@ internal sealed unsafe partial class AngleDevice
                     SelectTextureUnit(unit);
                     var name = texture.Buffer?.Texture ?? EmptyExternalTexture(state);
                     if (name == 0) return Flag(context, 0x0505);
+                    bindings.Add((unit, (uint)GetInteger(TextureBinding2D), (uint)GetInteger(0x8919)));
                     BindTexture2D(name);
                     _kms!.BindImageSampler(unit - Texture0, texture.Sampler);
                 }
@@ -148,21 +152,11 @@ internal sealed unsafe partial class AngleDevice
         }
         finally
         {
-            foreach (var (unit, name) in state.TextureUnits)
+            foreach (var (unit, texture, sampler) in bindings)
             {
-                if (externalUnits?.Contains(unit) == true || !state.Textures.ContainsKey(name)) continue;
                 SelectTextureUnit(unit);
-                _kms!.BindImageSampler(unit - Texture0, 0);
-                BindTexture2D(name);
-            }
-            if (externalUnits != null)
-            {
-                foreach (var unit in externalUnits)
-                {
-                    SelectTextureUnit(unit);
-                    _kms!.BindImageSampler(unit - Texture0, 0);
-                    BindTexture2D(state.TextureUnits.GetValueOrDefault(unit));
-                }
+                _kms!.BindImageSampler(unit - Texture0, sampler);
+                BindTexture2D(texture);
             }
             SelectTextureUnit(previousUnit);
         }
@@ -213,7 +207,7 @@ internal sealed unsafe partial class AngleDevice
         var bind = (delegate* unmanaged[Cdecl]<uint, uint, void>)Gl("glBindFramebuffer");
         foreach (uint framebuffer in attachments)
         {
-            bind(FramebufferTarget, framebuffer);
+            bind(DrawFramebuffer, framebuffer);
             if (replacement == null)
             {
                 AttachTexture(name);
@@ -223,20 +217,20 @@ internal sealed unsafe partial class AngleDevice
             else
                 SetImageAttachment(state, framebuffer, new ImageAttachment(TextureObject, name, replacement.Buffer, replacement));
         }
-        bind(FramebufferTarget, bound);
+        bind(DrawFramebuffer, bound);
     }
 
     private void RespecifyImageTexture(Context context, uint op, Span<uint> args, GuestMemory guest, uint name,
         ImageTexture texture)
     {
-        var preserveBaseLevel = op == GlGenerateMipmap || args[1] != 0;
+        var preserveBaseLevel = op == GlGenerateMipmap || (op != GlTexStorage2D && args[1] != 0);
         if (preserveBaseLevel)
         {
             ClearPreviousMipLevels();
             if (!CopyImageBaseLevel(context, texture.Buffer)) return;
         }
         if (!ForwardTextureOperation(context, op, args, guest)) return;
-        if (!preserveBaseLevel) ClearPreviousMipLevels();
+        if (!preserveBaseLevel && op != GlTexStorage2D) ClearPreviousMipLevels();
 
         RestoreImageAttachments(context.Managed!, name, texture, null);
         context.Managed!.RemoveTexture(name);
