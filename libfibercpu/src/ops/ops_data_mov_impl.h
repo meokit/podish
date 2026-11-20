@@ -283,6 +283,13 @@ FORCE_INLINE LogicFlow OpMovWithOperands(LogicFuncParams, const Operands& operan
     return OpMovModRM<uint32_t, Direction>(LogicPassParams);
 }
 
+template <MovDirection Direction, OpsizeSpec Width>
+FORCE_INLINE LogicFlow OpMovWidth(LogicFuncParams) {
+    static_assert(Width != OpsizeSpec::Dynamic);
+    using T = std::conditional_t<Width == OpsizeSpec::Opsize16, uint16_t, uint32_t>;
+    return OpMovModRM<T, Direction>(LogicPassParams);
+}
+
 FORCE_INLINE LogicFlow OpMov_EvGv(LogicFuncParams) {
     return OpMovWithOperands<MovDirection::ToRm>(LogicPassParams, OperandSpec::Dynamic{});
 }

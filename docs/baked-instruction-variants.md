@@ -72,11 +72,27 @@ Use `FIBERCPU_MODRM_PLAN_FILE` to test a candidate without changing the default.
 The `fibercpu_train_modrm` target runs only the short JavaScript workload.
 To rebuild a candidate from existing profiles, use
 [collect_modrm_hotness.py](../scripts/collect_modrm_hotness.py) with
-`--per-profile` and the unfused `*/blocks.bin` files from the suite.
+`--per-profile --scalar-policies` and the unfused `*/blocks.bin` files from the suite.
 
-When refreshing the separate fusion corpus, run the following on the same
-unfused captures. `BASE` uses the first 32 sequences and `EXTENDED` uses up to
-64. The fusion operand budget defaults to 256 exact shapes.
+The CMake training targets also retain the observed operand width and flag
+liveness for catalogued scalar kernels. The output's `scalar_policies`
+entries refer to the same selected ModRM keys. The decoder matches the policy
+against the decoded prefix and current flag-liveness result. A missing policy
+uses the ModRM-only variant or the architectural handler with its slot count
+bound. Existing plans can omit `scalar_policies`.
+
+An unfused suite build also writes candidate `baked-fusions-v3.json` and
+`baked-fusion-operands-v3.json` files alongside the ModRM plan. The collector
+ranks exact operands and their canonical sequence together. A candidate's
+score is its estimated dispatch savings divided by guest instruction visits,
+summed across workloads. The collector replays each capture with the same
+longest-first matching as the decoder and keeps an operand shape only when
+it increases the estimated savings. The operand plan records estimated
+dispatch savings per workload for review. The default training budget is
+128 sequences and 256 exact shapes. `BASE` uses the first 32 sequences.
+
+Use the same offline collector to refresh the manifests from existing
+unfused profiles:
 
 ```sh
 python3 scripts/collect_baked_fusions.py \
@@ -89,13 +105,16 @@ dotnet Podish.PerfTools/bin/Release/net10.0/Podish.PerfTools.dll gen-superopcode
   --input benchmark/optimization/manifests/baked-fusions-v3.json --top 32 \
   --output libfibercpu/src/generated/superopcodes.generated.cpp
 dotnet Podish.PerfTools/bin/Release/net10.0/Podish.PerfTools.dll gen-superopcodes \
-  --input benchmark/optimization/manifests/baked-fusions-v3.json --top 64 \
+  --input benchmark/optimization/manifests/baked-fusions-v3.json --top 128 \
   --output libfibercpu/src/generated/superopcodes.extended.generated.cpp
 ```
 
 Recapture profiles after changing the canonical instruction identities or the
 decoded operand representation. Build the candidate, run the native and
 PerfTools tests, and validate the workloads before replacing the default.
+Use `FIBERCPU_GENERATED_SUPEROPCODES_FILE` and `FIBERCPU_OPERAND_PLAN_FILE`
+to build with the candidate source and its matching operand plan without
+changing the checked-in tables.
 
 ## Code generation review
 
@@ -103,7 +122,7 @@ Inspect the emitted machine code as part of a table update.
 
 | Path | Expected generated code |
 | --- | --- |
-| Baked scalar | The fixed ModRM operand reaches the kernel as a literal. Register selection and the ModRM register-versus-memory decision disappear when the kernel uses them. The instruction advances one or two slots with a fixed displacement. A scalar key leaves prefixes, flags liveness, addresses and immediate values dynamic unless the kernel can derive them from the key. |
+| Baked scalar | The fixed ModRM operand reaches the kernel as a literal. Register selection and the ModRM register-versus-memory decision disappear when the kernel uses them. The instruction advances one or two slots with a fixed displacement. A ModRM-only key leaves other operands dynamic. A matching scalar policy additionally fixes the width and omits updates to dead flags where specified. |
 | Baked fusion | The exact operand records supply the ModRM, immediates and slot count of every constituent. The final handler performs one tail dispatch. Each memory operation retains its restart/retry exit. |
 | LLVM exact | The block compiler inlines the operation templates with their decoded operands before running the LLVM optimization pipeline. On the ordinary path, a baked memory immediate should appear as an instruction constant and the PC for replay should be a fixed offset from the original slot pointer. Branch targets and links still come from block runtime storage. |
 

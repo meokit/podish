@@ -109,6 +109,8 @@ METADATA_MASK = 0xdf  # The lowering bit describes the host handler, not the x86
 HAS_MODRM = 1
 HAS_MEMORY = 2
 HAS_IMMEDIATE = 4
+NO_FLAGS = 1 << 4
+OPSIZE_PREFIX = 1 << 6
 
 
 @dataclass(frozen=True, order=True)

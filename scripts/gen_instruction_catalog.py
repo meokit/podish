@@ -106,7 +106,8 @@ def add_specializations(catalog, source):
 def kernel_reference(name, arguments):
     if not all(re.fullmatch(r"(?:\w+::)*\w+", arg, re.ASCII) for arg in arguments):
         raise ValueError(f"invalid kernel argument for {name}")
-    return f"{identifier(name)}<{', '.join(arguments)}>"
+    qualified = "::".join(map(identifier, name.split("::")))
+    return f"{qualified}<{', '.join(arguments)}>"
 
 
 def llvm_flag_policy_call(live, dead, *, baked):
@@ -139,8 +140,14 @@ def expand_shift_bit(catalog):
 
     for opcode, width, count_source in config["group2_forms"]:
         shift_width = "Byte" if width == "Fixed8" else "Scalar"
-        bind(opcode, "OpGroup2_Internal", [f"ShiftWidth::{shift_width}", f"ShiftCountSource::{count_source}"],
-             ("GroupOpSpec::Dynamic",))
+        arguments = [f"ShiftWidth::{shift_width}", f"ShiftCountSource::{count_source}"]
+        bind(opcode, "OpGroup2_Internal", arguments, ("GroupOpSpec::Dynamic",))
+        name = catalog["fallbacks"][str(opcode)]
+        size = "$width" if shift_width == "Scalar" else "OpsizeSpec::Dynamic"
+        catalog.setdefault("scalar_policies", {})[name] = {
+            "kernel": "OpGroup2_Internal",
+            "arguments": [*arguments, "GroupOpSpec::Dynamic", size, "AddrModeSpec::Dynamic", "$flags"],
+        }
     for opcode, _, extension in config["register_bit_ops"]:
         bind(opcode, "OpBitRegister_Internal", [f"GroupOpSpec::Ext{extension}"])
     bind(config["group8_opcode"], "OpGroup8_Internal", ["GroupOpSpec::Dynamic"])
@@ -265,24 +272,49 @@ def generate(catalog, output, fusion_source=None, pin_mode=0, pin_mask=0, modrm_
     fusions = generated_fusions(fusion_source.read_text()) if fusion_source else {}
     training = training_handlers(catalog, fusions)
     scalar_plans = scalar_modrm_plans(catalog)
-    selected_modrm = load_baked_modrm(modrm_plan, scalar_plans, training)
+    scalar_policies = catalog.get("scalar_policies", {})
+    selected_modrm, selected_policies = load_baked_modrm(modrm_plan, scalar_plans, training, scalar_policies)
     keep_for = pin_keep(catalog, pin_mode, pin_mask)
     scalar_shards = [[] for _ in range(SHARDS)]
     shard_weights = [0] * SHARDS
     for name in sorted(scalar_plans, key=lambda name: (-len(selected_modrm.get(name, ())), name)):
         plan = scalar_plans[name]
         keys = selected_modrm.get(name, ())
+        variants = selected_policies.get(name, {})
         shard = min(range(SHARDS), key=shard_weights.__getitem__)
-        shard_weights[shard] += len(keys) + 1
+        shard_weights[shard] += len(keys) + len(variants) + 1
         lines = scalar_shards[shard]
         entries = f"{name}_entries"
-        lines.append(f"constexpr std::array<ScalarBindingEntry, {len(keys)}> {entries} = {{{{")
-        lines.extend(f"    MakeScalarBinding<op::{name}, 0x{key:03x}, {keep_for(name, key & 255)}>(),"
-                     for key in keys)
+        targets = {key: f"op::{name}" for key in keys}
+        policies = []
+        if variants:
+            policy = scalar_policies[name]
+            if "$width" in policy["arguments"]:
+                policies.append("kBindWidth")
+            if "$flags" in policy["arguments"]:
+                policies.append("kBindFlags")
+            declarations = set()
+            for key, (width, flags) in sorted(variants.items()):
+                suffix = f"{width or ''}{'_' + flags.title() if flags else ''}"
+                target = f"{name}_Baked{suffix}"
+                if target not in declarations:
+                    declarations.add(target)
+                    modes = {
+                        "$width": f"OpsizeSpec::Opsize{width}",
+                        "$flags": "FlagsSpec::Dead" if flags == "dead" else "FlagsSpec::Live",
+                    }
+                    kernel = kernel_reference(policy["kernel"], [modes.get(arg, arg) for arg in policy["arguments"]])
+                    lines.extend([f"FORCE_INLINE LogicFlow {target}(LogicFuncParams) {{",
+                                  f"    return {kernel}(LogicPassParams);", "}"])
+                targets[key] = target
+        mask = " | ".join(policies) if policies else "0"
+        lines.append(f"constexpr std::array<ScalarBindingEntry, {len(targets)}> {entries} = {{{{")
+        lines.extend(f"    MakeScalarBinding<{target}, 0x{key:04x}, {keep_for(name, key & 255)}>(),"
+                     for key, target in sorted(targets.items()))
         cold = ", ".join(f"DispatchWrapper<op::{name}, OperandSpec::SlotBound<{slots}>>"
                          if slots in plan.slot_counts else "nullptr" for slots in (1, 2))
         lines.extend(["}};", f"extern constinit const ScalarBindingTable {name}_scalar = "
-                      f"{{{entries}.data(), {entries}.size(), 0x{plan.memory_mask:02x}, {{{cold}}}}};"])
+                      f"{{{entries}.data(), {entries}.size(), 0x{plan.memory_mask:02x}, {mask}, {{{cold}}}}};"])
     scalar_headers = ['#include "scalar_bindings.h"'] + [
         f'#include "ops/{header.name}"' for header in sorted(CATALOG.with_name("ops").glob("*_impl.h"))
     ]

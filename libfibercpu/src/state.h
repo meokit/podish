@@ -165,10 +165,7 @@ struct EmuState {
     std::chrono::steady_clock::time_point tsc_start_time;
 
     // Helper function to sync eip
-    void sync_eip_to_op_start(const DecodedOp* op) {
-        const auto slot = last_block->LogicalIndex(op);
-        ctx.eip = last_block->GetNextEip(slot) - last_block->GetOpLength(slot);
-    }
+    void sync_eip_to_op_start(const DecodedOp* op) { ctx.eip = last_block->GetStartEip(op); }
     void sync_eip_to_op_end(const DecodedOp* op) { ctx.eip = last_block->GetNextEip(op); }
 
     union MemOpUnion {

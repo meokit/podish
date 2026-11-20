@@ -626,6 +626,13 @@ struct alignas(16) BasicBlock {
         return start_eip() + PCEnds()[slot] + (anchor_count ? PCAdjustment(slot) : 0);
     }
     FORCE_INLINE uint32_t GetNextEip(const DecodedOp* op) const { return GetNextEip(LogicalIndex(op)); }
+    FORCE_INLINE uint32_t GetStartEip(const DecodedOp* op) const {
+        const auto slot = LogicalIndex(op);
+        if (slot == inst_count()) [[unlikely]]
+            return sentinel_eip;
+        const auto offset = slot ? PCEnds()[slot - 1] : 0;
+        return start_eip() + offset + (anchor_count ? PCAdjustment(slot) : 0);
+    }
     FORCE_INLINE uint8_t GetOpLength(size_t slot) const {
         if (slot == inst_count()) return 0;
         const auto* ends = PCEnds();

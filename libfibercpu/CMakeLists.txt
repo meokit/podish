@@ -564,11 +564,18 @@ if(FIBERCPU_MODRM_TRAIN_PODISH OR FIBERCPU_MODRM_TRAIN_ROOTFS OR FIBERCPU_MODRM_
             message(FATAL_ERROR "FIBERCPU_MODRM_TRAIN_SUITE_ROOTFS must be a prepared rootfs directory")
         endif()
         set(_modrm_suite_output "${CMAKE_CURRENT_BINARY_DIR}/modrm-training-suite/$<CONFIG>")
+        set(_modrm_suite_args)
+        set(_modrm_suite_products "${_modrm_suite_output}/modrm-hotness.json")
+        if(NOT FIBERCPU_STATIC_SPECIALIZATION)
+            list(APPEND _modrm_suite_args --bake-fusions)
+            list(APPEND _modrm_suite_products "${_modrm_suite_output}/baked-fusions-v3.json"
+                                             "${_modrm_suite_output}/baked-fusion-operands-v3.json")
+        endif()
         add_custom_target(fibercpu_train_modrm_suite
             COMMAND ${_modrm_training_command} --suite-rootfs "${FIBERCPU_MODRM_TRAIN_SUITE_ROOTFS}"
-                    --output "${_modrm_suite_output}"
+                    --output "${_modrm_suite_output}" ${_modrm_suite_args}
             DEPENDS fibercpu
-            BYPRODUCTS "${_modrm_suite_output}/modrm-hotness.json"
+            BYPRODUCTS ${_modrm_suite_products}
             COMMENT "Capturing the ModRM training suite"
             USES_TERMINAL
             VERBATIM

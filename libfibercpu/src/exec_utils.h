@@ -116,7 +116,8 @@ FORCE_INLINE MemResult<T> ReadGuestMem(EmuState* state, GprCache& gpr, uint32_t 
                                        const DecodedOp* op) {
 #if FIBERCPU_GPR_PIN_MODE == 4
     if constexpr (!FailOnMiss) {
-        if (auto result = state->mmu.read<T, true>(addr, utlb, op)) return result;
+        if (auto result = state->mmu.read_tlb_only<T>(addr, utlb)) return result;
+        state->sync_eip_to_op_start(op);
         return gpr.WithCanonical(state, [&] { return state->mmu.read_slow<T>(addr); });
     }
 #endif

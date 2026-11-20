@@ -3,6 +3,7 @@
 #include "state.h"
 #include <cstdio>
 #include <cstring>
+#include <memory>
 #include <span>
 
 using namespace fiberish;
@@ -68,8 +69,9 @@ static bool CheckCompactSlots(EmuState* state) {
         const auto handler = binding.handler ? binding.handler : expected.handler;
         if (block->LogicalIndex(slot) != i || NextOp(slot) != block->LogicalOp(i + 1) ||
             slot->HasMemoryImmediate() != cases[i].separate_immediate || got.next_eip != expected.next_eip ||
-            block->GetNextEip(slot) != expected.next_eip || got.len != expected.len || got.handler != handler ||
-            got.meta.all != expected.meta.all || got.modrm != expected.modrm ||
+            block->GetNextEip(slot) != expected.next_eip ||
+            block->GetStartEip(slot) != expected.next_eip - expected.len || got.len != expected.len ||
+            got.handler != handler || got.meta.all != expected.meta.all || got.modrm != expected.modrm ||
             got.prefixes.all != expected.prefixes.all || GetImm(&got) != GetImm(&expected) ||
             (GetExtKind(&expected) == ExtKind::Data && GetImm(slot) != GetImm(&expected))) {
             std::fprintf(stderr, "Compact slot round trip failed at case %zu\n", i);
@@ -92,8 +94,8 @@ static bool CheckCompactSlots(EmuState* state) {
         if (block->ReadOp(i).meta.flags.operand_lowered)
             return false;
     }
-    return block->GetNextEip(block->Sentinel()) == guest_pc && block->GetOpLength(count - 1) == 0 &&
-           block->FallthroughLink() == state->mmu.invalid_code_block();
+    return block->GetNextEip(block->Sentinel()) == guest_pc && block->GetStartEip(block->Sentinel()) == guest_pc &&
+           block->GetOpLength(count - 1) == 0 && block->FallthroughLink() == state->mmu.invalid_code_block();
 }
 
 static bool CheckMaximalPhysicalSlots(EmuState* state, uint32_t address, std::byte* page) {
@@ -110,7 +112,8 @@ static bool CheckMaximalPhysicalSlots(EmuState* state, uint32_t address, std::by
     for (unsigned i = 0; i < count; ++i) {
         const auto* slot = block->LogicalOp(i);
         if (slot != block->FirstOp() + 2 * i || block->LogicalIndex(slot) != i || GetImm(slot) != 0xab ||
-            block->GetNextEip(slot) != address + (i + 1) * sizeof(code) || block->GetOpLength(i) != sizeof(code))
+            block->GetNextEip(slot) != address + (i + 1) * sizeof(code) ||
+            block->GetStartEip(slot) != address + i * sizeof(code) || block->GetOpLength(i) != sizeof(code))
             return false;
     }
     // The leading branch must reach past 63 double-slot instructions and the
@@ -163,6 +166,100 @@ static bool CheckPendingMemoryReplay(EmuState* state) {
     state->mem_op.write.done = true;
     return state->request_write_and_check_pending(address, value, &slots[1]).has_value() &&
            state->mem_op_type == PendingMemOp::None;
+}
+
+static bool CheckDeadFlagsAcrossReplay() {
+    constexpr uint32_t address = 0x1000;
+    auto* state = X86_Create();
+    state->status = EmuStatus::Running;
+    auto* page = X86_AllocatePage(state, address, static_cast<uint8_t>(mem::Property::RX));
+    if (!page) {
+        X86_Destroy(state);
+        return false;
+    }
+
+    constexpr uint8_t dead[] = {0xc1, 0xce, 1, 0x31, 0xdb};              // ROR ESI,1; XOR EBX,EBX.
+    constexpr uint8_t fault[] = {0xc1, 0xce, 1, 0x8b, 0x03, 0x31, 0xdb}; // MOV EAX,[EBX].
+    constexpr uint8_t moffs[] = {0xc1, 0xce, 1, 0xa1, 0x00, 0x40, 0x00, 0x00, 0x31, 0xdb};
+    constexpr uint8_t stack[] = {0xc1, 0xce, 1, 0x50, 0x31, 0xdb};
+    constexpr uint8_t invalid[] = {0xc1, 0xce, 1, 0xfe, 0xf0, 0x31, 0xdb};
+    constexpr uint8_t zero[] = {0xc1, 0xce, 1, 0xc1, 0xce, 32, 0x0f, 0x92, 0xc2};
+    const auto decode = [&](std::span<const uint8_t> code) {
+        state->status = EmuStatus::Running;
+        state->mmu.reset_code_cache();
+        std::memcpy(page, code.data(), code.size());
+        X86_SetEIP(state, address);
+        X86_SetEFLAGS(state, 2);
+        X86_RegWrite(state, ESI, 1);
+        X86_RegWrite(state, EDX, 0);
+        X86_RegWrite(state, EBX, 0x4000);
+        X86_RegWrite(state, ESP, 0x4004);
+        return DecodeBlock(state, address, address + code.size(), code.size());
+    };
+    const auto* block = decode(dead);
+    bool ok = block && block->ReadOp(0).meta.flags.no_flags;
+    block = decode(zero);
+    ok = ok && block && !block->ReadOp(0).meta.flags.no_flags;
+    X86_Run(state, address + sizeof(zero), 16);
+    ok = ok && (X86_RegRead(state, EDX) & 0xff) == 1 && X86_RegRead(state, ESI) == 0x80000000;
+
+    struct FaultCase {
+        std::span<const uint8_t> bytes;
+        int vector;
+    };
+    const FaultCase faults[] = {{fault, 14}, {moffs, 14}, {stack, 14}, {invalid, 6}};
+    for (auto [code, vector] : faults) {
+        block = decode(code);
+        ok = ok && block && !block->ReadOp(0).meta.flags.no_flags;
+        X86_Run(state, address + code.size(), 16);
+        ok =
+            ok && X86_GetFaultVector(state) == vector && X86_GetEIP(state) == address + 3 && (X86_GetEFLAGS(state) & 1);
+    }
+    X86_Destroy(state);
+    return ok;
+}
+
+static bool CheckMemoryFaultEip(bool write, bool single_step, bool concat = false) {
+    constexpr uint32_t code_address = 0x1000;
+    constexpr uint32_t data_address = 0x2000;
+    // INC EDX, optionally followed by a JMP over UD2. The concatenated block
+    // removes the JMP and has a PC discontinuity before the replaying access.
+    constexpr uint8_t prefix[] = {0x42, 0xeb, 0x02, 0x0f, 0x0b};
+    constexpr uint8_t load[] = {0x8b, 0x01, 0x42};
+    constexpr uint8_t store[] = {0xc7, 0x01, 0x78, 0x56, 0x34, 0x12, 0x42};
+    const auto code = write ? std::span<const uint8_t>(store) : std::span<const uint8_t>(load);
+    const uint32_t prefix_size = concat ? sizeof(prefix) : 1;
+    const auto fault_eip = code_address + prefix_size;
+    std::unique_ptr<EmuState, decltype(&X86_Destroy)> state(X86_Create(), X86_Destroy);
+    X86_MemMap(state.get(), code_address, 4096, 7);
+    X86_MemWrite(state.get(), code_address, prefix, prefix_size);
+    X86_MemWrite(state.get(), fault_eip, code.data(), static_cast<uint32_t>(code.size()));
+    X86_ReprotectMappedRange(state.get(), code_address, 4096, 5);
+    X86_RegWrite(state.get(), ECX, data_address);
+    struct Fault {
+        uint32_t eip;
+        bool write;
+        unsigned count = 0;
+        bool matched = false;
+    } fault{fault_eip, write};
+    const auto callback = [](EmuState* cpu, uint32_t address, int is_write, void* data) {
+        auto& result = *static_cast<Fault*>(data);
+        ++result.count;
+        result.matched = address == data_address && bool(is_write) == result.write && X86_GetEIP(cpu) == result.eip &&
+                         X86_RegRead(cpu, EDX) == 1;
+        return 0;
+    };
+    X86_SetFaultCallback(state.get(), callback, &fault);
+    X86_SetEIP(state.get(), single_step ? fault_eip : code_address);
+    if (single_step) {
+        X86_RegWrite(state.get(), EDX, 1);
+        X86_Step(state.get());
+    } else {
+        X86_Run(state.get(), fault_eip + static_cast<uint32_t>(code.size()), 16);
+    }
+    return (!concat || state->block_stats.block_concat_success_direct_jmp == 1) && fault.count == 1 && fault.matched &&
+           state->status == EmuStatus::Fault && X86_GetEIP(state.get()) == fault_eip &&
+           X86_RegRead(state.get(), EDX) == 1 && state->mem_op_type == PendingMemOp::None;
 }
 
 int main() {
@@ -233,7 +330,10 @@ int main() {
     const uint8_t imm32[] = {0xb8, 0x78, 0x56, 0x34, 0x12};
     ok = check_immediate(imm8, 1) && check_immediate(imm16, 2) && check_immediate(imm24, 3) &&
          check_immediate(imm32, 4) && CheckMaximalPhysicalSlots(state, address, page) && ok;
-    ok = CheckPendingMemoryReplay(state) && ok;
+    ok = CheckPendingMemoryReplay(state) && CheckDeadFlagsAcrossReplay() && ok;
+    ok = CheckMemoryFaultEip(false, false) && CheckMemoryFaultEip(true, false) && CheckMemoryFaultEip(false, true) &&
+         CheckMemoryFaultEip(true, true) && CheckMemoryFaultEip(false, false, true) &&
+         CheckMemoryFaultEip(true, false, true) && ok;
     if (!ok)
         std::fprintf(stderr, "Decode storage, fetch boundary or pending replay check failed\n");
     X86_Destroy(state);

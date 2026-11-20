@@ -112,9 +112,15 @@ def scalar_modrm_plans(catalog):
     return plans
 
 
-def load_baked_modrm(path, legal, handlers):
+def scalar_policy_key(width, flags):
+    widths = {None: 0, 16: 1, 32: 2}
+    flag_modes = {None: 0, "live": 1, "dead": 2}
+    return widths[width] << 10 | flag_modes[flags] << 12
+
+
+def load_baked_modrm(path, legal, handlers, policies):
     if path is None:
-        return {}
+        return {}, {}
     plan = json.loads(path.read_text())
     if plan.get("schema_version") != 1 or not isinstance(plan.get("entries"), list):
         raise ValueError(f"{path}: expected a version 1 ModRM table")
@@ -131,7 +137,26 @@ def load_baked_modrm(path, legal, handlers):
         if key not in legal[handler.name].modrm_keys or key in keys:
             raise ValueError(f"{path}: illegal or duplicate shape {handler.name} {key:#05x}")
         keys.add(key)
-    return {name: sorted(keys) for name, keys in selected.items()}
+    variants = defaultdict(dict)
+    for row in plan.get("scalar_policies", []):
+        op_id, slots, modrm = (row[field] for field in ("training_id", "slots", "modrm"))
+        width, flags = row.get("width"), row.get("flags")
+        if any(type(value) is not int for value in (op_id, slots, modrm)) or slots not in (1, 2) or not 0 <= modrm < 256:
+            raise ValueError(f"{path}: invalid scalar policy key {row}")
+        handler = handlers.get(op_id)
+        name = handler.name if handler and handler.kind == "wrapper" else None
+        if name is None or name not in policies:
+            raise ValueError(f"{path}: unsupported scalar policy for training ID 0x{op_id:08x}")
+        arguments = policies[name]["arguments"]
+        if ((width is not None) != ("$width" in arguments) or width not in (None, 16, 32)
+                or (flags is not None) != ("$flags" in arguments) or flags not in (None, "live", "dead")):
+            raise ValueError(f"{path}: invalid scalar policy variant {name} {row}")
+        base = slots << 8 | modrm
+        key = base | scalar_policy_key(width, flags)
+        if base not in selected[name] or key in variants[name]:
+            raise ValueError(f"{path}: absent base ModRM or duplicate scalar policy {name} {row}")
+        variants[name][key] = (width, flags)
+    return {name: sorted(keys) for name, keys in selected.items()}, variants
 
 
 def pin_keep(catalog, pin_mode, pin_mask):

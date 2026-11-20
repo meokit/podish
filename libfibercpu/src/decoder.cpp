@@ -802,16 +802,19 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
                                        : op.prefixes.flags.opsize                 ? 16
                                                                                   : 32;
                 if (count == 0 || (carry_rotate && count % (width + 1) == 0)) break;
-                writes = subop < 4 ? CF_MASK | OF_MASK : DFE_ALL_FLAGS;
+                // Rotates preserve OF for multiple bits in the interpreter.
+                // Shifts clear the arithmetic flags before calculating new ones.
+                writes = subop < 4 ? CF_MASK | (count == 1 ? OF_MASK : 0) : DFE_ALL_FLAGS;
                 break;
             }
             case DFE_TYPE_GROUP3: {
                 uint8_t reg = (op.modrm >> 3) & 7;
-                if (reg == 0 || reg == 1) {  // TEST
+                if (reg < 2 || reg == 3) {  // TEST, NEG
                     writes = DFE_ALL_FLAGS;
-                } else if (reg == 2) {  // NOT
-                } else {                // NEG, MUL
-                    writes = DFE_ALL_FLAGS;
+                } else if (reg == 4 || reg == 5) {  // MUL, IMUL
+                    writes = CF_MASK | OF_MASK;
+                } else if (reg >= 6) {  // DIV, IDIV may fault and preserve the cached flags.
+                    reads = DFE_ALL_FLAGS;
                 }
                 break;
             }
@@ -822,7 +825,7 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
                 }
                 // Group 5 may fault before updating flags or access the stack
                 // even when its explicit operand is a register (CALL, PUSH).
-                if (flat_idx == 0xff && (HasMem(&op) || (reg > 1 && reg != 4))) reads = DFE_ALL_FLAGS;
+                if (reg > 1 && (flat_idx == 0xfe || reg != 4)) reads = DFE_ALL_FLAGS;
                 break;
             }
             case DFE_TYPE_REGISTER_FLAGS:
@@ -846,27 +849,10 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
                 break;
         }
 
-        if (writes != 0 && (writes & live_flags) == 0) {
-            // Dead Flags!
-            op.meta.flags.no_flags = 1;
+        // A restart or fault may expose the flags from before the instruction.
+        if (HasMem(&op) && flat_idx != 0x8d) reads |= DFE_ALL_FLAGS;  // LEA has no memory access.
 
-            // Re-resolve Handler with no_flags set
-            // Note: We might have resolved a specialized handler earlier.
-            // If we have a specialized handler that also supports NoFlags, fantastic.
-            // But currently registered handlers are either Generic, Generic-NF, or Specialized-Attr.
-            // If we have Specialized-Attr (e.g. Add_RegEax), we need Add_RegEax_NF.
-            // But if we only have Add_Generic_NF, we might lose RegEax optimization.
-            // The user implies we should use specialization system to select the best one.
-            HandlerFunc special_h = FindSpecializedHandler(h_idx, &op);
-            if (special_h) {
-                op.handler = special_h;
-            } else {
-                // If no specialized handler found for NoFlags, keep original?
-                // Or try to find generic NF handler?
-                // RegisterNF implementation registers a specialized handler with just no_flags=true.
-                // FindSpecialized will match it if no other constraints block it.
-            }
-        }
+        if (writes != 0 && (writes & live_flags) == 0) op.meta.flags.no_flags = 1;
         live_flags &= ~writes;
         live_flags |= reads;
     }
@@ -1040,7 +1026,7 @@ void BasicBlock::WriteOps(BlockSlotLayout layout, std::span<const DecodedInstruc
         const bool has_data_slot = slot.HasMemoryImmediate();
         slot.handler = op.handler;
         if (!preserve_handlers) {
-            const auto binding = BindScalarHandler(op.handler, {op.modrm, uint8_t(1 + has_data_slot)});
+            const auto binding = BindScalarHandler(op);
             if (binding.handler) slot.handler = binding.handler;
         }
         if (GetExtKind(&op) == ExtKind::ControlFlow) {

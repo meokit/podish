@@ -18,24 +18,20 @@ extern "C" uint64_t FiberReadRealtimeTsc(const EmuState* state) {
 }
 
 template <typename T>
-static inline bool ExecuteMemOp(EmuState* state, DecodedOp* op, mem::MicroTLB& utlb, uint32_t addr, T* value,
-                                bool is_write) {
-    if (!is_write) {
-        auto res = state->mmu.read<T>(addr, &utlb, op);
-        if (!res) {
-            return true;
-        } else {
-            *value = *res;
-        }
-    } else {
-        if (!state->mmu.write<T>(addr, *value, &utlb, op)) return true;
+static inline bool ExecuteMemOp(EmuState* state, mem::MicroTLB& utlb, uint32_t addr, T* value, bool is_write) {
+    if (is_write) {
+        if (state->mmu.write_tlb_only<T>(addr, *value, &utlb)) return false;
+        return !state->mmu.write_slow<T>(addr, *value);
     }
-
+    auto result = state->mmu.read_tlb_only<T>(addr, &utlb);
+    if (!result) result = state->mmu.read_slow<T>(addr);
+    if (!result) return true;
+    *value = *result;
     return false;
 }
 
-static inline bool PerformMemOp(EmuState* state, DecodedOp* op, mem::MicroTLB& utlb, uint32_t addr, uint32_t size,
-                                std::byte* value, bool is_write) {
+static inline bool PerformMemOp(EmuState* state, mem::MicroTLB& utlb, uint32_t addr, uint32_t size, std::byte* value,
+                                bool is_write) {
     struct TSize10 {
         std::byte data[10];
     };
@@ -45,9 +41,9 @@ static inline bool PerformMemOp(EmuState* state, DecodedOp* op, mem::MicroTLB& u
 
     switch (size) {
         case 1:
-            return ExecuteMemOp(state, op, utlb, addr, reinterpret_cast<uint8_t*>(value), is_write);
+            return ExecuteMemOp(state, utlb, addr, reinterpret_cast<uint8_t*>(value), is_write);
         case 2:
-            return ExecuteMemOp(state, op, utlb, addr, reinterpret_cast<uint16_t*>(value), is_write);
+            return ExecuteMemOp(state, utlb, addr, reinterpret_cast<uint16_t*>(value), is_write);
         case 4:
             // Replay can serve a straddle from two warm pages before a
             // blocking write flushes the first page's entry.
@@ -55,14 +51,14 @@ static inline bool PerformMemOp(EmuState* state, DecodedOp* op, mem::MicroTLB& u
                          : state->mmu.try_cross_page_dword_tlb<false>(addr, value)) {
                 return false;
             }
-            return ExecuteMemOp(state, op, utlb, addr, reinterpret_cast<uint32_t*>(value), is_write);
+            return ExecuteMemOp(state, utlb, addr, reinterpret_cast<uint32_t*>(value), is_write);
         case 8:
-            return ExecuteMemOp(state, op, utlb, addr, reinterpret_cast<uint64_t*>(value), is_write);
+            return ExecuteMemOp(state, utlb, addr, reinterpret_cast<uint64_t*>(value), is_write);
         case 10:
-            return ExecuteMemOp(state, op, utlb, addr, reinterpret_cast<TSize10*>(value),
+            return ExecuteMemOp(state, utlb, addr, reinterpret_cast<TSize10*>(value),
                                 is_write);  // 80-bit extended precision
         case 16:
-            return ExecuteMemOp(state, op, utlb, addr, reinterpret_cast<TSize16*>(value), is_write);
+            return ExecuteMemOp(state, utlb, addr, reinterpret_cast<TSize16*>(value), is_write);
         default:
             __builtin_unreachable();
     }
@@ -82,9 +78,12 @@ ATTR_PRESERVE_NONE int64_t MemoryOpGeneric(EmuState* RESTRICT state, DecodedOp* 
         state->clear_pending_mem_op();
         return instr_limit;
     }
+    // A TLB-only attempt never calls a guest observer. Recover the faulting
+    // instruction's EIP once, before replay can invoke callbacks or fault.
+    if (state->mem_op_type != PendingMemOp::None) state->sync_eip_to_op_start(op);
     if (state->mem_op_type == PendingMemOp::Read) {
         auto& mem_op = state->mem_op.read;
-        const bool fault = PerformMemOp(state, op, utlb, mem_op.addr, mem_op.size, mem_op.data.data(), false);
+        const bool fault = PerformMemOp(state, utlb, mem_op.addr, mem_op.size, mem_op.data.data(), false);
         if (!fault) {
             mem_op.done = true;
         } else {
@@ -97,7 +96,7 @@ ATTR_PRESERVE_NONE int64_t MemoryOpGeneric(EmuState* RESTRICT state, DecodedOp* 
         }
     } else if (state->mem_op_type == PendingMemOp::Write) {
         auto& mem_op = state->mem_op.write;
-        const bool fault = PerformMemOp(state, op, utlb, mem_op.addr, mem_op.size, mem_op.data.data(), true);
+        const bool fault = PerformMemOp(state, utlb, mem_op.addr, mem_op.size, mem_op.data.data(), true);
         if (!fault) {
             mem_op.done = true;
         } else {

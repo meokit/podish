@@ -585,6 +585,20 @@
     "bswap_first_opcode": 456,
     "bswap_registers": ["Eax", "Ecx", "Edx", "Ebx", "Esp", "Ebp", "Esi", "Edi"]
   },
+  "scalar_policies": {
+    "OpAdd_EvGv": {"kernel": "OpAdd_EvGv_Internal", "arguments": ["$flags", "$width"]},
+    "OpAdd_GvEv": {"kernel": "OpAdd_GvEv_Internal", "arguments": ["$flags", "$width"]},
+    "OpOr_EvGv": {"kernel": "OpOr_EvGv_Internal", "arguments": ["$flags", "$width"]},
+    "OpOr_GvEv": {"kernel": "OpOr_GvEv_Internal", "arguments": ["$flags", "$width"]},
+    "OpAnd_EvGv": {"kernel": "OpAnd_EvGv_Internal", "arguments": ["$flags", "$width"]},
+    "OpAnd_GvEv": {"kernel": "OpAnd_GvEv_Internal", "arguments": ["$flags", "$width"]},
+    "OpSub_EvGv": {"kernel": "OpSub_EvGv_Internal", "arguments": ["$flags", "$width"]},
+    "OpSub_GvEv": {"kernel": "OpSub_GvEv_Internal", "arguments": ["$flags", "$width"]},
+    "OpXor_EvGv": {"kernel": "OpXor_EvGv_Internal", "arguments": ["$flags", "$width"]},
+    "OpXor_GvEv": {"kernel": "OpXor_GvEv_Internal", "arguments": ["$flags", "$width"]},
+    "OpMov_EvGv": {"kernel": "op::OpMovWidth", "arguments": ["op::MovDirection::ToRm", "$width"]},
+    "OpMov_GvEv": {"kernel": "op::OpMovWidth", "arguments": ["op::MovDirection::FromRm", "$width"]}
+  },
   "bindings": {
     "FIBERCPU_BIND_OPS_ALU_IMPL_0": [
       {"name": "OpAdd_EbGb", "kernel": "OpAdd_EbGb_Internal", "arguments": ["FlagsSpec::Dynamic"]},

@@ -11,7 +11,9 @@ import struct
 
 from collect_operand_specializations import SRC, blocks
 from gen_instruction_catalog import read_catalog
-from operand_specialization_data import HAS_MEMORY, HAS_MODRM, generated_fusions, training_handlers
+from operand_specialization_data import (
+    HAS_MEMORY, HAS_MODRM, NO_FLAGS, OPSIZE_PREFIX, generated_fusions, training_handlers,
+)
 from scalar_modrm import scalar_modrm_plans
 
 
@@ -33,7 +35,7 @@ def compact_immediates():
     return mask, set(range(last + 1)) | set(table)
 
 
-def read_modrm_counts(profiles, fusion_source):
+def read_modrm_counts(profiles, fusion_source, collect_policies):
     catalog = read_catalog()
     fusions = generated_fusions(fusion_source.read_text()) if fusion_source else {}
     handlers = training_handlers(catalog, fusions)
@@ -41,6 +43,8 @@ def read_modrm_counts(profiles, fusion_source):
     scalar_ids = {handler.name: op_id for op_id, handler in handlers.items() if handler.kind == "wrapper"}
     prefix_mask, immediates = compact_immediates()
     hits = Counter()
+    policy_hits = Counter()
+    policies = catalog.get("scalar_policies", {}) if collect_policies else {}
 
     for profile in profiles:
         for executions, ops in blocks(profile):
@@ -69,12 +73,18 @@ def read_modrm_counts(profiles, fusion_source):
                         slots = 2
                     if (slots << 8 | modrm) not in binding.modrm_keys:
                         raise ValueError(f"{profile}: missing scalar binding {name}, ModRM 0x{modrm:02x}, {slots} slots")
-                    hits[scalar_ids[name], slots, modrm] += executions
+                    key = scalar_ids[name], slots, modrm
+                    hits[key] += executions
+                    if name in policies:
+                        arguments = policies[name]["arguments"]
+                        width = (16 if op.prefixes & OPSIZE_PREFIX else 32) if "$width" in arguments else None
+                        flags = ("dead" if op.meta & NO_FLAGS else "live") if "$flags" in arguments else None
+                        policy_hits[key, width, flags] += executions
                 cursor = end
 
     if not hits:
         raise ValueError("no weighted ModRM observations; recapture with FIBERCPU_ENABLE_BLOCK_PROFILE=ON")
-    return hits
+    return hits, policy_hits
 
 
 def hot_keys(hits, coverage):
@@ -101,29 +111,55 @@ def hotness_report(hits, keys):
                 weighted_count=total, coverage=selected / total, entries=entries)
 
 
-def collect_modrm_hotness(profiles, fusion_source, coverage):
-    hits = read_modrm_counts(profiles, fusion_source)
-    return hotness_report(hits, hot_keys(hits, coverage))
+def add_scalar_policies(report, policy_hits, keys):
+    def order(item):
+        (key, width, flags), count = item
+        return -count, key, width or 0, flags or ""
+
+    report["scalar_policies"] = [
+        dict(training_id=op_id, slots=slots, modrm=modrm, width=width, flags=flags, estimated_visits=visits)
+        for ((op_id, slots, modrm), width, flags), visits in sorted(policy_hits.items(), key=order)
+        if (op_id, slots, modrm) in keys and visits > 0
+    ]
 
 
-def collect_workload_union(profiles, fusion_source, coverage):
-    counts = {name: read_modrm_counts([path], fusion_source) for name, path in profiles.items()}
-    keys = set().union(*(hot_keys(hits, coverage) for hits in counts.values()))
+def collect_modrm_hotness(profiles, fusion_source, coverage, scalar_policies=False):
+    hits, policy_hits = read_modrm_counts(profiles, fusion_source, scalar_policies)
+    keys = hot_keys(hits, coverage)
+    report = hotness_report(hits, keys)
+    if scalar_policies:
+        add_scalar_policies(report, policy_hits, keys)
+    return report
+
+
+def collect_workload_union(profiles, fusion_source, coverage, scalar_policies=False):
+    counts = {name: read_modrm_counts([path], fusion_source, scalar_policies)
+              for name, path in profiles.items()}
+    keys = set().union(*(hot_keys(hits, coverage) for hits, _ in counts.values()))
     total = Counter()
-    for hits in counts.values():
+    total_policies = Counter()
+    for hits, policy_hits in counts.values():
         total.update(hits)
+        total_policies.update(policy_hits)
     report = hotness_report(total, keys)
     report["workloads"] = {name: dict(observed_keys=len(hits),
                                       coverage=sum(hits[key] for key in keys) / sum(hits.values()))
-                           for name, hits in counts.items()}
+                           for name, (hits, _) in counts.items()}
+    if scalar_policies:
+        add_scalar_policies(report, total_policies, keys)
     return report
 
 
 def write_hotness(output, report):
-    metadata = {key: value for key, value in report.items() if key != "entries"}
+    tables = ("entries", "scalar_policies")
+    metadata = {key: value for key, value in report.items() if key not in tables}
     prefix = json.dumps(metadata, indent=2).removesuffix("\n}")
-    entries = ",\n".join("    " + json.dumps(row) for row in report["entries"])
-    output.write_text(f'{prefix},\n  "entries": [\n{entries}\n  ]\n}}\n', encoding="utf-8")
+    chunks = [prefix]
+    for table in tables:
+        if table in report:
+            entries = ",\n".join("    " + json.dumps(row) for row in report[table])
+            chunks.append(f',\n  "{table}": [\n{entries}\n  ]')
+    output.write_text("".join(chunks) + "\n}\n", encoding="utf-8")
     print(f"Retained {len(report['entries'])}/{report['observed_keys']} ModRM bindings "
           f"covering {report['coverage']:.4%} of weighted visits", flush=True)
 
@@ -135,6 +171,8 @@ def main():
     parser.add_argument("--coverage", default=str(DEFAULT_COVERAGE), help="Weighted visit fraction to retain")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--per-profile", action="store_true", help="Take the union of the hot keys of each profile")
+    parser.add_argument("--scalar-policies", action="store_true",
+                        help="Also bake observed operand widths and dead/live flags for supported scalar kernels")
     args = parser.parse_args()
     profiles = [path / "blocks.bin" if path.is_dir() else path for path in args.profiles]
     try:
@@ -143,9 +181,9 @@ def main():
             named = {path.parent.name: path for path in profiles}
             if len(named) != len(profiles):
                 raise ValueError("per-profile captures need distinct directory names")
-            report = collect_workload_union(named, args.fusions, coverage)
+            report = collect_workload_union(named, args.fusions, coverage, args.scalar_policies)
         else:
-            report = collect_modrm_hotness(profiles, args.fusions, coverage)
+            report = collect_modrm_hotness(profiles, args.fusions, coverage, args.scalar_policies)
         args.output.parent.mkdir(parents=True, exist_ok=True)
         write_hotness(args.output, report)
     except InvalidOperation:

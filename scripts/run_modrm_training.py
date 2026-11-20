@@ -11,6 +11,7 @@ import sys
 import tempfile
 import time
 
+from collect_baked_fusions import bake
 from collect_modrm_hotness import DEFAULT_COVERAGE, collect_modrm_hotness, collect_workload_union, write_hotness
 from collect_operand_specializations import ROOT
 
@@ -48,6 +49,8 @@ def train(args):
     output = args.output.resolve()
     if podish.parent == output or podish.parent in output.parents:
         raise ValueError("publish Podish.Cli to a dedicated directory outside the training output tree")
+    if args.bake_fusions and (not args.suite_rootfs or args.fusions):
+        raise ValueError("--bake-fusions requires the unfused training suite")
     output.mkdir(parents=True, exist_ok=True)
     env = dict(os.environ, FIBERCPU_LLVM_JIT="0", FIBERCPU_DYNAMIC_SPECIALIZATION="0",
                FIBERCPU_LINKED_BLOCK_CACHE="0", PODISH_SKIP_BLOCKS_EXPORT="0")
@@ -78,13 +81,19 @@ def train(args):
         ])
         if args.suite_rootfs:
             profiles = {"fast-deep-equal": profile, **capture_suite(run, args.suite_rootfs.resolve(strict=True), workspace)}
-            report = collect_workload_union(profiles, args.fusions, DEFAULT_COVERAGE)
+            report = collect_workload_union(profiles, args.fusions, DEFAULT_COVERAGE, scalar_policies=True)
+            if args.bake_fusions:
+                candidates = workspace / "baked-fusions-v3.json"
+                operands = workspace / "baked-fusion-operands-v3.json"
+                bake(list(profiles.values()), candidates, operands)
+                for result in (candidates, operands):
+                    result.replace(output / result.name)
             for name, capture in profiles.items():
                 destination = output / name
                 destination.mkdir(exist_ok=True)
                 capture.replace(destination / capture.name)
         else:
-            report = collect_modrm_hotness([profile], args.fusions, DEFAULT_COVERAGE)
+            report = collect_modrm_hotness([profile], args.fusions, DEFAULT_COVERAGE, scalar_policies=True)
             profile.replace(output / profile.name)
         hotness = workspace / "modrm-hotness.json"
         write_hotness(hotness, report)
@@ -99,6 +108,7 @@ def main():
         parser.add_argument(f"--{name}", type=Path, required=True)
     parser.add_argument("--fusions", type=Path)
     parser.add_argument("--suite-rootfs", type=Path, help="Also capture GNU tools and both CoreMark builds")
+    parser.add_argument("--bake-fusions", action="store_true", help="Bake exact fusion candidates from unfused captures")
     try:
         train(parser.parse_args())
     except subprocess.CalledProcessError as error:

@@ -174,23 +174,30 @@ HandlerFunc FindGenericInstructionHandler(uint16_t opcode, const DecodedInstruct
     return best ? best->handler : nullptr;
 }
 
-BoundScalarHandler BindScalarHandler(HandlerFunc handler, BoundOperandShape shape) {
-    const auto* binding = FindScalarBinding(handler);
+BoundScalarHandler BindScalarHandler(const DecodedInstruction& op) {
+    const auto shape = BoundOperandShape::Read(op);
+    const auto* binding = FindScalarBinding(op.handler);
     if (!binding) return {nullptr, 0, shape};
     const auto& table = *binding->scalar;
     const uint8_t modrm = shape.modrm < 0xc0 || !table.memory_mask ? shape.modrm & table.memory_mask : shape.modrm;
     const uint16_t key = (uint16_t(shape.slots) << 8) | modrm;
     const auto entries = std::span(table.entries, table.count);
-    const auto selected = std::ranges::lower_bound(entries, key, {}, &ScalarBindingEntry::key);
+    const auto find = [&](uint16_t lookup) -> HandlerFunc {
+        const auto selected = std::ranges::lower_bound(entries, lookup, {}, &ScalarBindingEntry::key);
+        return selected != entries.end() && selected->key == lookup ? selected->handler : nullptr;
+    };
     assert(shape.slots == 1 || shape.slots == 2);
-    const auto executable =
-        selected != entries.end() && selected->key == key ? selected->handler : table.fallback[shape.slots - 1];
+    HandlerFunc executable = nullptr;
+    if (table.policies) {
+        uint16_t policy_key = key;
+        if (table.policies & kBindWidth) policy_key |= (op.prefixes.flags.opsize ? 1u : 2u) << 10;
+        if (table.policies & kBindFlags) policy_key |= (op.meta.flags.no_flags ? 2u : 1u) << 12;
+        executable = find(policy_key);
+    }
+    if (!executable) executable = find(key);
+    if (!executable) executable = table.fallback[shape.slots - 1];
     assert(executable);
     return {executable, binding->id, shape};
-}
-
-BoundScalarHandler BindScalarHandler(const DecodedInstruction& op) {
-    return BindScalarHandler(op.handler, BoundOperandShape::Read(op));
 }
 
 HandlerFunc CanonicalBoundHandler(HandlerFunc handler) {

@@ -424,18 +424,26 @@ MemResult<void> Mmu::write_tlb_only(GuestAddr addr, T val, MicroTLB* utlb) {
 template <typename T, bool fail_on_tlb_miss>
 [[nodiscard]] FORCE_INLINE MemResult<T> Mmu::read(GuestAddr addr, MicroTLB* utlb, const DecodedOp* cur_op) {
     if (auto result = read_tlb_only<T>(addr, utlb)) return result;
-    get_state()->sync_eip_to_op_start(cur_op);
-    if constexpr (fail_on_tlb_miss) return std::unexpected(FaultCode::PageFault);
-    return read_slow<T>(addr);
+    // Nonblocking callers pass the op to the replay handler. Only blocking
+    // accesses can invoke observers before returning to the opcode.
+    if constexpr (fail_on_tlb_miss) {
+        return std::unexpected(FaultCode::PageFault);
+    } else {
+        get_state()->sync_eip_to_op_start(cur_op);
+        return read_slow<T>(addr);
+    }
 }
 
 // Write
 template <typename T, bool fail_on_tlb_miss>
 [[nodiscard]] FORCE_INLINE MemResult<void> Mmu::write(GuestAddr addr, T val, MicroTLB* utlb, const DecodedOp* cur_op) {
     if (auto result = write_tlb_impl<T, true, !fail_on_tlb_miss>(addr, val, utlb)) return result;
-    get_state()->sync_eip_to_op_start(cur_op);
-    if constexpr (fail_on_tlb_miss) return std::unexpected(FaultCode::PageFault);
-    return write_slow<T>(addr, val);
+    if constexpr (fail_on_tlb_miss) {
+        return std::unexpected(FaultCode::PageFault);
+    } else {
+        get_state()->sync_eip_to_op_start(cur_op);
+        return write_slow<T>(addr, val);
+    }
 }
 
 // Read Slow
