@@ -977,7 +977,10 @@ if(FIBERCPU_TEST_SPECIALIZATION_INDEX)
             "FIBERCPU_LLVM_JIT=generic;FIBERCPU_LLVM_JIT_HOT_THRESHOLD=1;FIBERCPU_LLVM_JIT_WORKERS=0")
         add_test(NAME llvm_block_specialized COMMAND llvm_block_test enabled)
         set_tests_properties(llvm_block_specialized PROPERTIES ENVIRONMENT
-            "FIBERCPU_LLVM_JIT=1;FIBERCPU_LLVM_JIT_HOT_THRESHOLD=1;FIBERCPU_LLVM_JIT_WORKERS=0")
+            "FIBERCPU_LLVM_JIT=1;FIBERCPU_LLVM_JIT_HOT_THRESHOLD=1;FIBERCPU_LLVM_JIT_WORKERS=0;FIBERCPU_LLVM_FOLD_OPERAND_LOADS=0")
+        add_test(NAME llvm_block_folded COMMAND llvm_block_test enabled)
+        set_tests_properties(llvm_block_folded PROPERTIES ENVIRONMENT
+            "FIBERCPU_LLVM_JIT=1;FIBERCPU_LLVM_JIT_HOT_THRESHOLD=1;FIBERCPU_LLVM_JIT_WORKERS=0;FIBERCPU_LLVM_FOLD_OPERAND_LOADS=1")
         add_test(NAME llvm_block_hot COMMAND llvm_block_test hot)
         set_tests_properties(llvm_block_hot PROPERTIES ENVIRONMENT
             "FIBERCPU_LLVM_JIT=1;FIBERCPU_LLVM_JIT_HOT_THRESHOLD=4;FIBERCPU_LLVM_JIT_WORKERS=0")
@@ -996,6 +999,9 @@ if(FIBERCPU_TEST_SPECIALIZATION_INDEX)
         add_test(NAME llvm_block_async COMMAND llvm_block_test async)
         set_tests_properties(llvm_block_async PROPERTIES ENVIRONMENT
             "FIBERCPU_LLVM_JIT=1;FIBERCPU_LLVM_JIT_HOT_THRESHOLD=1;FIBERCPU_LLVM_JIT_WORKERS=2")
+        add_test(NAME llvm_block_async_folded COMMAND llvm_block_test async)
+        set_tests_properties(llvm_block_async_folded PROPERTIES ENVIRONMENT
+            "FIBERCPU_LLVM_JIT=1;FIBERCPU_LLVM_JIT_HOT_THRESHOLD=1;FIBERCPU_LLVM_JIT_WORKERS=2;FIBERCPU_LLVM_FOLD_OPERAND_LOADS=1")
         set(_weighted_test_profile "${CMAKE_CURRENT_BINARY_DIR}/llvm-weighted-block-test.profile")
         add_test(NAME llvm_cpu_run_options COMMAND llvm_block_test options "${_weighted_test_profile}")
         set_tests_properties(llvm_cpu_run_options PROPERTIES FIXTURES_SETUP llvm_weighted_profile

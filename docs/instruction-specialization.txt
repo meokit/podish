@@ -122,7 +122,17 @@ sets its block admission count (1 through 65535). These options override
 the equivalent Host environment settings. JitWorkers accepts 0 through 8.
 LlvmPipeline accepts an LLVM IR optimization level (O0, O1, O2, O3, Os, Oz)
 or a textual pass pipeline. The default is O2 with dead template definitions
-removed early online. Worker count, pipeline and JIT arena capacity are
+removed early online. LlvmFoldOperandLoads=on enables extra folding of
+decoded operand reads after LLVM inlines the exact block template. The
+default is off. Use FIBERCPU_LLVM_FOLD_OPERAND_LOADS=1 to set the process
+default or to enable the same pass in fibercpu_llvm_cache when generating
+a linked cache. The pass uses the packed layout of single- and two-slot
+instructions and keeps branch targets, link offsets and mutable bits live.
+The existing exact-operand argument bindings apply in both settings.
+
+  podish run -XX:JitMode=exact -XX:LlvmFoldOperandLoads=on IMAGE COMMAND
+
+Worker count, pipeline, operand load folding and JIT arena capacity are
 shared by the host process. Once initialized, an explicit conflicting value
 fails. A run with no override uses the shared setting.
 

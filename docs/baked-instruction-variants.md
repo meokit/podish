@@ -117,6 +117,10 @@ online compiler. Extract and disassemble the matching object with
 [extract_linked_block_cache.py](../scripts/extract_linked_block_cache.py).
 Also run the probe with `JitMode=exact` to exercise execution and replay.
 
+Use `-XX:LlvmFoldOperandLoads=on` for the extra post-inline folding pass in
+the online exact compiler. To compare offline objects from the same profile,
+build once with `FIBERCPU_LLVM_FOLD_OPERAND_LOADS=1` and once with `=0`.
+
 The initial ARM64 review counted 1,258 baked scalar symbols, including 17
 two-slot bindings. The inspected Group 1 register add advanced 16 bytes. The
 two-slot memory compare loaded its immediate from offset 24 and advanced 32

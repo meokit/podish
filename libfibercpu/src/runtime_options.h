@@ -22,6 +22,7 @@ struct CpuRunOptions {
 struct SharedJitOptions {
     std::optional<unsigned> workers;
     std::optional<std::string_view> pipeline;
+    std::optional<bool> fold_operand_loads;
     size_t arena_bytes = 0;
 };
 

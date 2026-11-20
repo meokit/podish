@@ -83,9 +83,15 @@ unsigned DefaultWorkerCount() {
     return parsed.ec == std::errc{} && parsed.ptr == end ? std::min(threads, 8u) : 2u;
 }
 
+bool DefaultFoldOperandLoads() {
+    const auto* value = std::getenv("FIBERCPU_LLVM_FOLD_OPERAND_LOADS");
+    return value && std::strcmp(value, "1") == 0;
+}
+
 struct RuntimeOptions {
     std::string pipeline;
     unsigned workers = DefaultWorkerCount();
+    bool fold_operand_loads = DefaultFoldOperandLoads();
 };
 
 struct RuntimeConfiguration {
@@ -479,8 +485,9 @@ public:
         // under the same lock that serializes the linker and arena reset.
         thread_local BlockIR worker_ir;
         std::unique_ptr<llvm::MemoryBuffer> object;
-        if (auto module =
-                PrepareLLVMBlock(worker_ir.templates, key, name, /*prune_dead_globals=*/true, Options().pipeline)) {
+        const auto& options = Options();
+        if (auto module = PrepareLLVMBlock(worker_ir.templates, key, name, /*prune_dead_globals=*/true,
+                                           options.pipeline, options.fold_operand_loads)) {
             auto result = jit_->getIRCompileLayer().getCompiler()(*module);
             if (result)
                 object = std::move(*result);
@@ -533,12 +540,13 @@ public:
         if (!llvm_block_cache::WriteRecord(output, LinkedBlockCacheHostCPU())) return -1;
         int compiled = 0;
         block_recipe::Plan plan;
+        const bool fold_operand_loads = DefaultFoldOperandLoads();
         for (const auto& recipe : recipes) {
             const auto record = recipe.key;
             bool exact;
             if (!llvm_block_cache::DecodeKey(record, plan, exact) || !exact) return -1;
             auto module = PrepareLLVMBlock(ir.templates, plan.Key(true), ObjectEntryName(compiled),
-                                           /*prune_dead_globals=*/false, pipeline);
+                                           /*prune_dead_globals=*/false, pipeline, fold_operand_loads);
             if (!module) continue;
             auto object = compiler(*module);
             if (!object) {
@@ -846,6 +854,11 @@ bool ConfigureLLVMBlockJit(const SharedJitOptions& settings, std::string& error)
         error = "LlvmPipeline conflicts with the existing process-wide LLVM pipeline";
         return false;
     }
+    if (config.frozen && settings.fold_operand_loads &&
+        *settings.fold_operand_loads != config.options.fold_operand_loads) {
+        error = "LlvmFoldOperandLoads conflicts with the existing process-wide LLVM operand folding setting";
+        return false;
+    }
     // This is the only fallible step after checking the shared configuration.
     if (settings.arena_bytes > ExecutableArena::kMaxLLVMCapacity) {
         error = "JitArenaSize exceeds 2 GiB, the limit for the nearby LLVM code and data ranges";
@@ -857,6 +870,7 @@ bool ConfigureLLVMBlockJit(const SharedJitOptions& settings, std::string& error)
     }
     if (settings.workers) config.options.workers = *settings.workers;
     if (pipeline) config.options.pipeline = std::move(*pipeline);
+    if (settings.fold_operand_loads) config.options.fold_operand_loads = *settings.fold_operand_loads;
     config.frozen = true;
     return true;
 }

@@ -41,6 +41,6 @@ llvm::Expected<std::string> ParseLLVMBlockPipeline(llvm::StringRef level, llvm::
 
 std::unique_ptr<llvm::Module> PrepareLLVMBlock(const LLVMOperandTemplates& templates, block_recipe::BlockKeyView key,
                                                llvm::StringRef entry_name, bool prune_dead_globals = false,
-                                               llvm::StringRef custom_pipeline = {});
+                                               llvm::StringRef custom_pipeline = {}, bool fold_operand_loads = false);
 
 }  // namespace fiberish

@@ -337,12 +337,6 @@ FORCE_INLINE bool NeedsSeparateSlot(const DecodedInstruction& op) {
     return NeedsSeparateSlot(HasMem(&op), op.prefixes.all, GetImm(&op));
 }
 
-FORCE_INLINE bool HasFreePrefixBits(const DecodedInstruction& op) { return (op.prefixes.all & kCodeMask) == 0; }
-
-FORCE_INLINE uint8_t Code(const DecodedInstruction& op) {
-    if (!HasMem(&op) || !HasFreePrefixBits(op)) return 0;
-    return Encode(GetImm(&op));
-}
 }  // namespace compact_imm
 
 // Keep link offsets in eight-byte units on both 32- and 64-bit hosts.
@@ -374,6 +368,20 @@ struct alignas(16) DecodedOp {
     static constexpr uint64_t kHasMemory = uint64_t{2} << kMetaShift;
     static constexpr uint64_t kHasModRM = uint64_t{Meta::has_modrm_mask} << kMetaShift;
     static constexpr uint64_t kHasMemoryImmediate = uint64_t{1} << 63;
+
+    static constexpr uint64_t PackOperandHeader(uint8_t modrm, uint8_t prefixes, uint8_t metadata) {
+        return (uint64_t{modrm} << kModRMShift) | (uint64_t{prefixes} << kPrefixShift) |
+               (uint64_t{metadata & 0x3fu} << kMetaShift);
+    }
+
+    static constexpr uint64_t PackMemoryPayload(uint64_t header, uint32_t ea, uint32_t displacement,
+                                                uint32_t immediate) {
+        const auto payload = header | (uint64_t{memdesc::CompactEA(ea)} << kAddressShift) | displacement;
+        constexpr uint64_t prefix_mask = uint64_t{compact_imm::kCodeMask} << kPrefixShift;
+        const auto code = (header & prefix_mask) ? 0 : compact_imm::Encode(immediate);
+        if (code) return (payload & ~kHasModRM) | (uint64_t(code) << kPrefixShift);
+        return payload | (immediate ? kHasMemoryImmediate : 0);
+    }
 
     FORCE_INLINE uint32_t Primary() const { return uint32_t(payload); }
     FORCE_INLINE uint8_t RawPrefixes() const { return uint8_t(payload >> kPrefixShift); }

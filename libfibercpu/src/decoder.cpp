@@ -972,9 +972,7 @@ finalize:
 namespace {
 
 uint64_t PackOperand(const DecodedInstruction& op) {
-    const auto common = (uint64_t{op.modrm} << DecodedOp::kModRMShift) |
-                        (uint64_t{op.prefixes.all} << DecodedOp::kPrefixShift) |
-                        (uint64_t{op.meta.all & 0x3fu} << DecodedOp::kMetaShift);
+    const auto common = DecodedOp::PackOperandHeader(op.modrm, op.prefixes.all, op.meta.all);
     if (!HasMem(&op)) {
         const auto ext_kind = GetExtKind(&op);
         const auto branch_width =
@@ -987,12 +985,8 @@ uint64_t PackOperand(const DecodedInstruction& op) {
         }
         return common | (uint64_t(ext_kind) << DecodedOp::kAddressShift) | value;
     }
-    const auto address = uint64_t(memdesc::CompactEA(GetAddressDescriptor(&op)));
     assert(op.meta.flags.has_modrm);
-    const auto operands = common | (address << DecodedOp::kAddressShift) | GetDisplacement(&op);
-    if (const auto code = compact_imm::Code(op))
-        return (operands & ~DecodedOp::kHasModRM) | (uint64_t{code} << DecodedOp::kPrefixShift);
-    return operands | (GetImm(&op) ? DecodedOp::kHasMemoryImmediate : 0);
+    return DecodedOp::PackMemoryPayload(common, GetAddressDescriptor(&op), GetDisplacement(&op), GetImm(&op));
 }
 
 }  // namespace

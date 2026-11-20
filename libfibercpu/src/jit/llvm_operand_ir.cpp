@@ -1,23 +1,151 @@
 #include "jit/llvm_operand_ir.h"
 
+#include <optional>
 #include <vector>
 
 #include <llvm/ADT/SmallBitVector.h>
 #include <llvm/ADT/SmallPtrSet.h>
+#include <llvm/Analysis/ValueTracking.h>
 #include <llvm/ExecutionEngine/Orc/JITTargetMachineBuilder.h>
 #include <llvm/IR/Constants.h>
+#include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/InstIterator.h>
 #include <llvm/IR/PassManager.h>
 #include <llvm/IR/Verifier.h>
 #include <llvm/Passes/PassBuilder.h>
+#include <llvm/Support/KnownBits.h>
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/Transforms/IPO/GlobalDCE.h>
+#include <llvm/Transforms/Scalar/InstSimplifyPass.h>
 #include <llvm/Transforms/Scalar/SimplifyCFG.h>
 #include <llvm/Transforms/Utils/Cloning.h>
 #include <llvm/Transforms/Utils/Local.h>
 
 namespace fiberish {
 namespace {
+
+struct KnownPayload {
+    uint64_t value = 0;
+    uint64_t mask = 0;
+};
+
+KnownPayload EncodeKnownPayload(const DecodedOperandShape& operand) {
+    const uint8_t metadata = operand.encoding >> 16;
+    const auto header =
+        DecodedOp::PackOperandHeader(uint8_t(operand.encoding), uint8_t(operand.encoding >> 8), metadata);
+    constexpr uint64_t lowered = uint64_t{Meta::operand_lowered_mask} << DecodedOp::kMetaShift;
+    const auto kind = ExtKind(metadata >> 6);
+    if (kind == ExtKind::Data) {
+        const auto value =
+            (header & DecodedOp::kHasMemory)
+                ? DecodedOp::PackMemoryPayload(header, operand.ea_desc, operand.displacement, operand.immediate)
+                : header | operand.immediate;
+        return {value, ~lowered};
+    }
+    if (kind == ExtKind::ControlFlow) {
+        // The absolute target, link offset and branch width are not in the key.
+        constexpr uint64_t width_bits = uint64_t{3} << DecodedOp::kBranchWidthShift;
+        constexpr uint64_t mask =
+            ((uint64_t{1} << DecodedOp::kAddressShift) - (uint64_t{1} << 32)) & ~(lowered | width_bits);
+        return {header | DecodedOp::kBranchTag, mask};
+    }
+    return {};
+}
+
+std::optional<llvm::KnownBits> KnownOperandUse(const llvm::Value& input, const llvm::User& user,
+                                               const llvm::KnownBits& bits) {
+    if (auto* cast = llvm::dyn_cast<llvm::CastInst>(&user); cast && cast->getType()->isIntegerTy()) {
+        const auto width = cast->getType()->getIntegerBitWidth();
+        if (cast->getOpcode() == llvm::Instruction::Trunc) return bits.trunc(width);
+        if (cast->getOpcode() == llvm::Instruction::ZExt) return bits.zext(width);
+        if (cast->getOpcode() == llvm::Instruction::SExt) return bits.sext(width);
+        return {};
+    }
+    const auto* op = llvm::dyn_cast<llvm::Instruction>(&user);
+    if (!op || op->getNumOperands() != 2) return {};
+    const bool input_first = op->getOperand(0) == &input;
+    const auto* constant = llvm::dyn_cast<llvm::ConstantInt>(op->getOperand(input_first ? 1 : 0));
+    if (!constant) return {};
+    const auto other = llvm::KnownBits::makeConstant(constant->getValue());
+    switch (op->getOpcode()) {
+        case llvm::Instruction::And:
+            return bits & other;
+        case llvm::Instruction::Or:
+            return bits | other;
+        case llvm::Instruction::Xor:
+            return bits ^ other;
+        case llvm::Instruction::Shl:
+            if (input_first && constant->getValue().ult(bits.getBitWidth())) return llvm::KnownBits::shl(bits, other);
+            break;
+        case llvm::Instruction::LShr:
+            if (input_first && constant->getValue().ult(bits.getBitWidth())) return llvm::KnownBits::lshr(bits, other);
+            break;
+        case llvm::Instruction::AShr:
+            if (input_first && constant->getValue().ult(bits.getBitWidth())) return llvm::KnownBits::ashr(bits, other);
+            break;
+        case llvm::Instruction::ICmp: {
+            const auto predicate = llvm::cast<llvm::ICmpInst>(op)->getPredicate();
+            if (predicate != llvm::CmpInst::ICMP_EQ && predicate != llvm::CmpInst::ICMP_NE) break;
+            if (auto equal = llvm::KnownBits::eq(bits, other))
+                return llvm::KnownBits::makeConstant(llvm::APInt(1, *equal == (predicate == llvm::CmpInst::ICMP_EQ)));
+            break;
+        }
+        default:
+            break;
+    }
+    return {};
+}
+
+void FoldKnownOperandBits(llvm::Value& value, const llvm::KnownBits& bits,
+                          llvm::SmallPtrSetImpl<llvm::Value*>& visited) {
+    if (value.use_empty() || bits.isUnknown() || !visited.insert(&value).second) return;
+    if (bits.isConstant()) {
+        value.replaceAllUsesWith(llvm::ConstantInt::get(value.getType(), bits.getConstant()));
+        return;
+    }
+    for (auto* user : llvm::make_early_inc_range(value.users())) {
+        if (const auto known = KnownOperandUse(value, *user, bits)) FoldKnownOperandBits(*user, *known, visited);
+    }
+}
+
+void BakeLLVMOperandLoads(llvm::Function& entry, block_recipe::BlockKeyView key) {
+    const auto& layout = entry.getParent()->getDataLayout();
+    if (!layout.isLittleEndian()) return;
+
+    // Index the physical slots, including each adjacent immediate slot.
+    llvm::SmallVector<KnownPayload, 2 * block_recipe::kMaxOps> payloads;
+    for (size_t i = 0; i < key.operations.size(); ++i) {
+        const auto& operand = key.operands[i];
+        payloads.push_back(EncodeKnownPayload(operand));
+        if (key.operations[i].shape.slots == 2) payloads.push_back({operand.immediate, UINT64_MAX});
+    }
+
+    const auto* ops = entry.getArg(1);
+    llvm::SmallVector<llvm::LoadInst*, 32> dead_loads;
+    for (auto& inst : llvm::instructions(entry)) {
+        auto* load = llvm::dyn_cast<llvm::LoadInst>(&inst);
+        if (!load || !load->isSimple() || !load->getType()->isIntegerTy()) continue;
+        const auto width = load->getType()->getIntegerBitWidth();
+        if (width % 8 || width > 64) continue;
+        int64_t offset = 0;
+        if (llvm::GetPointerBaseWithConstantOffset(load->getPointerOperand(), offset, layout) != ops || offset < 0)
+            continue;
+        const auto slot = size_t(offset) / sizeof(DecodedOp);
+        const auto byte = size_t(offset) % sizeof(DecodedOp);
+        constexpr auto payload_offset = offsetof(DecodedOp, payload);
+        if (slot >= payloads.size() || byte < payload_offset || byte + width / 8 > payload_offset + sizeof(uint64_t))
+            continue;
+        const auto& [value, mask] = payloads[slot];
+        const auto shift = 8 * (byte - payload_offset);
+        llvm::KnownBits bits(width);
+        bits.Zero = llvm::APInt(width, (~value & mask) >> shift);
+        bits.One = llvm::APInt(width, (value & mask) >> shift);
+        llvm::SmallPtrSet<llvm::Value*, 16> visited;
+        FoldKnownOperandBits(*load, bits, visited);
+        if (load->use_empty()) dead_loads.push_back(load);
+    }
+    for (auto* load : dead_loads) load->eraseFromParent();
+}
 
 bool InlineLLVMKernel(llvm::CallInst& call, llvm::Function& kernel, BoundOperandShape binding,
                       const DecodedOperandShape* shape) {
@@ -39,7 +167,8 @@ bool InlineLLVMKernel(llvm::CallInst& call, llvm::Function& kernel, BoundOperand
     return llvm::InlineFunction(call, info).isSuccess();
 }
 
-bool OptimizeLLVMModule(llvm::Module& module, bool prune_dead_globals, llvm::StringRef custom_pipeline) {
+bool OptimizeLLVMModule(llvm::Module& module, bool prune_dead_globals, llvm::StringRef custom_pipeline,
+                        bool fold_operand_loads) {
     llvm::LoopAnalysisManager loops;
     llvm::FunctionAnalysisManager functions;
     llvm::CGSCCAnalysisManager call_graph;
@@ -57,6 +186,7 @@ bool OptimizeLLVMModule(llvm::Module& module, bool prune_dead_globals, llvm::Str
     if (custom_pipeline.empty()) {
         pipeline.addPass(passes.buildPerModuleDefaultPipeline(llvm::OptimizationLevel::O2));
     } else {
+        if (fold_operand_loads) pipeline.addPass(llvm::createModuleToFunctionPassAdaptor(llvm::InstSimplifyPass()));
         // Resolve the constantized step and exit guards even for a minimal
         // user pipeline. Unused template bodies must never reach codegen.
         pipeline.addPass(llvm::createModuleToFunctionPassAdaptor(llvm::SimplifyCFGPass()));
@@ -134,12 +264,19 @@ bool LLVMOperandTemplates::IsTemplateGlobal(const llvm::GlobalValue* value) cons
 
 std::unique_ptr<llvm::Module> PrepareLLVMBlock(const LLVMOperandTemplates& templates, block_recipe::BlockKeyView key,
                                                llvm::StringRef entry_name, bool prune_dead_globals,
-                                               llvm::StringRef custom_pipeline) {
-    if (!templates.IsValid()) return {};
+                                               llvm::StringRef custom_pipeline, bool fold_operand_loads) {
+    if (!templates.IsValid() || key.operations.size() > block_recipe::kMaxOps) return {};
     const bool exact = key.IsExact();
+    if (exact && key.operands.size() != key.operations.size()) return {};
+    fold_operand_loads &= exact;
     llvm::SmallPtrSet<const llvm::GlobalValue*, 32> kernels;
+    std::array<size_t, block_recipe::kMaxOps> slot_offsets;
+    size_t next_offset = 0;
+    size_t step_index = 0;
     for (const auto& operation : key.operations) {
         if (operation.shape.slots < 1 || operation.shape.slots > 2) return {};
+        slot_offsets[step_index++] = next_offset;
+        next_offset += operation.shape.slots * sizeof(DecodedOp);
         const auto* kernel = templates.Get(operation.id, exact);
         if (!kernel) return {};
         kernels.insert(kernel);
@@ -199,15 +336,27 @@ std::unique_ptr<llvm::Module> PrepareLLVMBlock(const LLVMOperandTemplates& templ
         const auto& operation = key.operations[slot];
         const auto* source = templates.Get(operation.id, exact);
         auto* target = llvm::dyn_cast_or_null<llvm::Function>(values.lookup(source));
+        if (fold_operand_loads) {
+            // A kernel runs only at its step. The running cursor also flows
+            // into exits, so its incoming PHIs need not name that same slot.
+            // Give the kernel a direct pointer before inlining its loads.
+            llvm::IRBuilder<> builder(call);
+            auto* op =
+                builder.CreateInBoundsGEP(builder.getInt8Ty(), entry->getArg(1), builder.getInt64(slot_offsets[slot]));
+            call->setArgOperand(5, op);  // DecodedOp* in LogicFuncParams.
+        }
         if (!target || !InlineLLVMKernel(*call, *target, operation.shape, exact ? &key.operands[slot] : nullptr))
             return {};
     }
+    if (fold_operand_loads) BakeLLVMOperandLoads(*entry, key);
 
     entry->setName(entry_name);
     for (auto& function : *module) {
         if (&function != entry && !function.isDeclaration()) function.setLinkage(llvm::GlobalValue::InternalLinkage);
     }
-    if (!OptimizeLLVMModule(*module, prune_dead_globals, custom_pipeline) || llvm::verifyModule(*module)) return {};
+    if (!OptimizeLLVMModule(*module, prune_dead_globals, custom_pipeline, fold_operand_loads) ||
+        llvm::verifyModule(*module))
+        return {};
     for (auto& inst : llvm::instructions(*entry)) {
         const auto* call = llvm::dyn_cast<llvm::CallBase>(&inst);
         const auto* fn = call ? call->getCalledFunction() : nullptr;

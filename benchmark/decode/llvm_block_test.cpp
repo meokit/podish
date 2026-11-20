@@ -7,6 +7,7 @@
 #include <mach/mach_vm.h>
 #endif
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -563,6 +564,28 @@ bool VerifyX87Helpers(bool enabled) {
     return value == 0x40000000 && HasCompiledEntry(state.get()) == enabled;
 }
 
+bool VerifyTwoSlotX87Prefixes(bool enabled) {
+    constexpr uint8_t code[] = {
+        0x81, 0x42, 0x34, 0x78, 0x56, 0x34, 0x12, // ADD dword [EDX+0x34], 0x12345678 uses two slots
+        0x66, 0xd9, 0x72, 0x50,                   // FNSTENV m14byte [EDX+0x50]
+    };
+    auto state = LoadCode(code, sizeof(code));
+    X86_MemMap(state.get(), data_address, 4096, 3);
+    X86_RegWrite(state.get(), 2, data_address);
+    std::array<uint8_t, 28> environment;
+    environment.fill(0xa5);
+    X86_MemWrite(state.get(), data_address + 0x50, environment.data(), environment.size());
+
+    const auto end = code_address + sizeof(code);
+    if (!X86_Run(state.get(), end, 16) || X86_GetEIP(state.get()) != end || HasCompiledEntry(state.get()) != enabled)
+        return false;
+    uint32_t value = 0;
+    X86_MemRead(state.get(), data_address + 0x34, reinterpret_cast<uint8_t*>(&value), sizeof(value));
+    X86_MemRead(state.get(), data_address + 0x50, environment.data(), environment.size());
+    return value == 0x12345678 && environment[0] == 0x7f && environment[1] == 0x03 &&
+           std::ranges::all_of(std::span(environment).subspan(14), [](auto byte) { return byte == 0xa5; });
+}
+
 bool VerifyStackWidths(bool enabled) {
     constexpr uint8_t code[] = {0x66, 0x50, 0x66, 0x5a}; // PUSH AX; POP DX
     auto state = LoadCode(code, sizeof(code));
@@ -930,8 +953,13 @@ bool VerifyCpuRunOptions(const char* path) {
         return false;
     if (configure({"JitArenaSize=3g"}) || !std::strstr(error, "JitArenaSize exceeds 2 GiB"))
         return false;
-    const auto online = configure({"JitMode=exact", "JitHotThreshold=2", "LlvmPipeline=O1", "JitWorkers=0"});
+    if (configure({"LlvmFoldOperandLoads=invalid"}) || !std::strstr(error, "LlvmFoldOperandLoads"))
+        return false;
+    const auto online =
+        configure({"JitMode=exact", "JitHotThreshold=2", "LlvmPipeline=O1", "JitWorkers=0", "LlvmFoldOperandLoads=on"});
     if (!online || configure({"JitWorkers=2"}) || !std::strstr(error, "JitWorkers"))
+        return false;
+    if (configure({"LlvmFoldOperandLoads=off"}) || !std::strstr(error, "LlvmFoldOperandLoads"))
         return false;
     const std::string output = std::string("WeightedProfilePath=") + path;
     const auto profile =
@@ -1148,7 +1176,8 @@ int main(int argc, char** argv) {
         return 1;
     }
     if (!VerifyExtendedInteger(enabled) || !VerifyVectorPrefixRouting(enabled) ||
-        !VerifySseArithmeticPrefixes(enabled) || !VerifyX87Helpers(enabled) || X86_GetLLVMJitLiveBlockCount() != 0) {
+        !VerifySseArithmeticPrefixes(enabled) || !VerifyX87Helpers(enabled) || !VerifyTwoSlotX87Prefixes(enabled) ||
+        X86_GetLLVMJitLiveBlockCount() != 0) {
         std::fprintf(stderr, "Generated integer, vector prefix or x87 template mismatch\n");
         return 1;
     }
