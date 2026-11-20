@@ -1024,7 +1024,8 @@ BlockSlotLayout BlockSlotLayout::Inspect(uint32_t start_eip, std::span<const Dec
     return layout;
 }
 
-void BasicBlock::WriteOps(BlockSlotLayout layout, std::span<const DecodedInstruction> ops, BasicBlock* invalid) {
+void BasicBlock::WriteOps(BlockSlotLayout layout, std::span<const DecodedInstruction> ops, BasicBlock* invalid,
+                          bool preserve_handlers) {
     slot_count = static_cast<uint8_t>(layout.PhysicalSlotCount());
     sentinel_slot_index = slot_count - 1;
     set_inst_count(layout.logical_slot_count - 1);
@@ -1055,9 +1056,13 @@ void BasicBlock::WriteOps(BlockSlotLayout layout, std::span<const DecodedInstruc
         ends[i] = offset;
         expected = op.next_eip;
         auto& slot = FirstOp()[physical_index++];
-        const auto binding = BindScalarHandler(op);
-        slot.handler = binding.handler ? binding.handler : op.handler;
         slot.payload = PackOperand(op);
+        const bool has_data_slot = slot.HasMemoryImmediate();
+        slot.handler = op.handler;
+        if (!preserve_handlers) {
+            const auto binding = BindScalarHandler(op.handler, {op.modrm, uint8_t(1 + has_data_slot)});
+            if (binding.handler) slot.handler = binding.handler;
+        }
         if (GetExtKind(&op) == ExtKind::ControlFlow) {
             const auto distance = reinterpret_cast<std::byte*>(branch_link) - reinterpret_cast<std::byte*>(&slot);
             const auto units = distance / sizeof(BlockBranchLink);
@@ -1066,8 +1071,8 @@ void BasicBlock::WriteOps(BlockSlotLayout layout, std::span<const DecodedInstruc
             slot.payload |= uint64_t(units) << DecodedOp::kAddressShift;
             (branch_link++)->target = invalid;
         }
-        assert(binding.shape.slots == 1 + slot.HasMemoryImmediate());
-        if (slot.HasMemoryImmediate()) {
+        assert(compact_imm::NeedsSeparateSlot(op) == has_data_slot);
+        if (has_data_slot) {
             data_mask->logical |= bit;
             data_mask->physical[physical_index / 64] |= uint64_t{1} << (physical_index % 64);
             auto& data = FirstOp()[physical_index++];

@@ -5,7 +5,7 @@ import argparse, json, pathlib, re
 from gen_instruction_catalog import read_catalog
 from operand_specialization_data import (
     FUSION_CALL, Operand, generated_fusions, instruction_targets, resolve_training_plan, specialize_fusion,
-    training_plan_match,
+    training_plan_match, training_handlers,
 )
 
 p = argparse.ArgumentParser()
@@ -35,8 +35,23 @@ catalog = read_catalog(a.catalog)
 targets = instruction_targets(catalog)
 plan = json.loads(pathlib.Path(a.plan).read_text())
 fusions = generated_fusions(source)
+base_displacement_handlers = []
 try:
     decoded_match = training_plan_match(plan) == "decoded"
+    base_displacement_ids = plan.get("base_displacement_ids", [])
+    if not isinstance(base_displacement_ids, list) or any(
+            type(identifier) is not int or not 0 < identifier <= 0xffffffff
+            for identifier in base_displacement_ids):
+        raise ValueError("expected unsigned training IDs in base_displacement_ids")
+    if len(set(base_displacement_ids)) != len(base_displacement_ids):
+        raise ValueError("duplicate training ID in base_displacement_ids")
+    if base_displacement_ids and not a.fused_only and a.mode in (1, 3):
+        plan_handlers = training_handlers(catalog, fusions)
+        for identifier in base_displacement_ids:
+            item = plan_handlers.get(identifier)
+            if item is None or item.kind != "wrapper" or item.name not in targets:
+                raise ValueError(f"unknown base-and-displacement handler ID: {identifier:#010x}")
+            base_displacement_handlers.append(item.name)
     plan = resolve_training_plan(plan, catalog, fusions, None if decoded_match else a.budget)
 except ValueError as error:
     p.error(str(error))
@@ -83,7 +98,7 @@ if not a.fused_only and a.mode in (1, 3):
                 p.error(f"unknown or duplicate compact-immediate handler: {name}")
             compact[name] = values
 
-if decoded_match:
+if decoded_match or base_displacement_handlers:
     # Custom fusion source may include only the kernels used in that table.
     headers = a.catalog.parent / "ops"
     code.extend(f'#include "ops/{header.name}"' for header in sorted(headers.glob("*_impl.h")))
@@ -188,6 +203,35 @@ code += ['};', f'constexpr bool has_compact_immediates = {str(bool(compact)).low
     }
     return nullptr;
 }"""]
+code += ["""struct BaseDisplacementEntry {
+    HandlerFunc original;
+    const HandlerFunc* variants[2];
+};""", 'static constexpr BaseDisplacementEntry base_displacements[] = {']
+for name in base_displacement_handlers:
+    code.append(f'    {{DispatchWrapper<op::{name}>, '
+                f'{{BaseDisplacementVariants<op::{name}, false>.data(), BaseDisplacementVariants<op::{name}, true>.data()}}}},')
+if not base_displacement_handlers:
+    code.append('    {},')
+code += ['};', f'constexpr bool has_base_displacements = {str(bool(base_displacement_handlers)).lower()};',
+        """HandlerFunc FindBaseDisplacement(const DecodedInstruction* op) {
+    if constexpr (has_base_displacements) {
+        if (!HasMem(op) || HasImm(op) || GetExtKind(op) != ExtKind::Data) return nullptr;
+        const auto prefixes = op->prefixes.all;
+        if (prefixes != 0 && prefixes != prefix::OPSIZE) return nullptr;
+        const auto ea = GetAddressDescriptor(op);
+        if (memdesc::IndexOffset(ea) != kNoRegOffset) return nullptr;
+        static const auto index = [] {
+            ankerl::unordered_dense::map<HandlerFunc, const BaseDisplacementEntry*> result;
+            for (const auto& entry : base_displacements) result[entry.original] = &entry;
+            return result;
+        }();
+        const auto found = index.find(op->handler);
+        const auto base = memdesc::BaseOffset(ea) / sizeof(uint32_t);
+        if (found != index.end() && base < kBaseDisplacementVariantCount)
+            return found->second->variants[prefixes != 0][base];
+    }
+    return nullptr;
+}"""]
 code += ['static const RegisterOperandEntry registers[] = {'] + (registers or ['    {},']) + ['};',
          f'constexpr size_t register_count = {len(registers)};',
          'const auto& OperandLookup() {',
@@ -199,6 +243,12 @@ code += ['static const RegisterOperandEntry registers[] = {'] + (registers or ['
         for (size_t i=0; i<shape_count; ++i) result[shapes[i].replacement] = shapes[i].original;
         if constexpr (has_compact_immediates) {
             for (const auto& entry : compact_immediates) result[entry.replacement] = entry.original;
+        }
+        if constexpr (has_base_displacements) {
+            for (const auto& entry : base_displacements)
+                for (const auto* variants : entry.variants)
+                    for (unsigned base = 0; base < kBaseDisplacementVariantCount; ++base)
+                        result[variants[base]] = entry.original;
         }
         DecodedInstruction dummy{};
         for (size_t i=0; i<register_count; ++i) {
@@ -213,7 +263,8 @@ code += ['static const RegisterOperandEntry registers[] = {'] + (registers or ['
     return found == originals.end() ? handler : found->second;
 }''', 'HandlerFunc LowerOperandHandler(const DecodedInstruction* op) {',
          '    if (const auto specialized = OperandLookup().Find(op)) return specialized;',
-         '    return FindCompactImmediate(op);',
+         '    if (const auto immediate = FindCompactImmediate(op)) return immediate;',
+         '    return FindBaseDisplacement(op);',
           '}',
          'HandlerFunc LowerFusionOperandHandler(const DecodedInstruction* op, HandlerFunc handler) {',
          '    return OperandLookup().Find(op, handler);', '}',

@@ -307,7 +307,14 @@ static BasicBlock* BuildBlockConcat(EmuState* state, const BasicBlock* a, const 
     void* mem =
         state->mmu.try_allocate_block_bytes(BasicBlock::CalculateSize(layout, retain_scalar_handlers), start_eip);
     if (!mem) return nullptr;
-    ApplySuperOpcodesToBlockOps(ops.data(), concat_count, !retain_scalar_handlers);
+    // Static scalar lowering depends on each instruction's original operands.
+    // In this build the published slots already carry the correct handlers.
+#if !FIBERCPU_ENABLE_SUPEROPCODES && !FIBERCPU_DYNAMIC_OPERANDS
+    const bool preserve_handlers = !retain_scalar_handlers;
+#else
+    constexpr bool preserve_handlers = false;
+#endif
+    if (!preserve_handlers) ApplySuperOpcodesToBlockOps(ops.data(), concat_count, !retain_scalar_handlers);
     auto* concat = new (mem) BasicBlock;
     state->mmu.remember_allocated_block(concat);
 
@@ -319,7 +326,7 @@ static BasicBlock* BuildBlockConcat(EmuState* state, const BasicBlock* a, const 
     concat->fallthrough_eip = b->fallthrough_eip;
     concat->set_terminal_kind(b->terminal_kind());
     concat->has_unfused_handlers = retain_scalar_handlers;
-    concat->WriteOps(layout, ops, state->mmu.invalid_code_block());
+    concat->WriteOps(layout, ops, state->mmu.invalid_code_block(), preserve_handlers);
 
 #if FIBERCPU_BLOCK_COMPILATION
     if (retain_scalar_handlers) {

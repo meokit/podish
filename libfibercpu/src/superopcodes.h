@@ -75,7 +75,7 @@ void ApplySuperOpcodesToBlockOps(DecodedInstruction* ops, uint32_t op_count, boo
     do {                                                                                                      \
         policy::Assume(cur_op);                                                                               \
         auto flow = target(state, cur_op, &utlb, policy::Immediate(cur_op), policy::ModRM(cur_op), &branch,   \
-                           flags_cache, FIBERCPU_GPR_CACHE);                                                  \
+                           flags_cache, OperandGprCache<policy>(FIBERCPU_GPR_CACHE));                         \
         if (flow != LogicFlow::Continue) [[unlikely]] {                                                       \
             HANDLE_SUPEROPCODE_FLOW_WITH_POLICY(policy, flow, state, cur_op, instr_limit, utlb, utlb_tags,    \
                                                 utlb_addend, branch, flags_cache);                            \

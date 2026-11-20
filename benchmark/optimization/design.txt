@@ -95,6 +95,11 @@ Each match includes a catalog training ID, instruction length, ModRM
 base/index/scale/segment, displacement and immediate. It guards every constituent
 of a generated fusion. Addresses after relocation, resolved branch targets and
 guest memory values are runtime inputs. Training and analysis require BLK2 v3.
+
+A plan can also list scalar training IDs in base_displacement_ids. These
+handlers share one baked address per base register and operand width. They
+match 32-bit addresses with no index, segment override or immediate, keep the
+displacement in the Op, and are selected after an exact operand match.
 Recapture older profiles and regenerate their operand plans and fusion manifests.
 Reviewed encoding-only plans use the same v3 IDs with "match": "encoding".
 Their shape keys keep ModRM, prefixes and effective address encoding.

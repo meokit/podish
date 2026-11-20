@@ -14,6 +14,7 @@ struct BoundScalarHandler {
 };
 
 void RegisterInstructionVariants();
+BoundScalarHandler BindScalarHandler(HandlerFunc handler, BoundOperandShape shape);
 BoundScalarHandler BindScalarHandler(const DecodedInstruction& op);
 HandlerFunc CanonicalBoundHandler(HandlerFunc handler);
 HandlerFunc FindGenericInstructionHandler(uint16_t opcode, const DecodedInstruction* op);

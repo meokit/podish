@@ -22,6 +22,9 @@ struct GprCache {
 #undef FIBERCPU_CACHE_FIELD
 #endif
 
+    // Dispatch supplies this only for the current instruction's matched address.
+    const BakedAddress* baked_address = nullptr;
+
     FORCE_INLINE uint32_t GetReg(EmuState* state, unsigned index) const {
         const uint32_t value = state->ctx.regs[index];
 #if FIBERCPU_GPR_PIN_MODE == 4
@@ -30,6 +33,17 @@ struct GprCache {
 #undef FIBERCPU_CACHE_READ
 #else
         return value;
+#endif
+    }
+
+    FORCE_INLINE uint32_t GetAddressIndex(EmuState* state, unsigned index) const {
+        const uint32_t value = state->ctx.regs[index];
+#if FIBERCPU_GPR_PIN_MODE == 4
+#define FIBERCPU_CACHE_INDEX(id, reg, slot, ...) (id != ESP && index == id) ? reg:
+        return index == ESP ? 0 : FIBERCPU_FOR_EACH_PIN(FIBERCPU_CACHE_INDEX) value;
+#undef FIBERCPU_CACHE_INDEX
+#else
+        return index == ESP ? 0 : value;
 #endif
     }
 
@@ -322,28 +336,32 @@ FORCE_INLINE uint32_t GetSegmentBase(EmuState* state, const DecodedOp* op) {
 }
 
 FORCE_INLINE uint32_t ComputeEA(EmuState* state, GprCache& gpr, const DecodedOp* op) {
-    // Computes Effective Address (no segment base)
-    // Branchless calculation using pre-calculated offsets to registers (or zero register)
-    uint32_t ea_desc = GetAddressDescriptor(op);
-    uint32_t base = gpr.GetRegFromOffset(state, memdesc::BaseOffset(ea_desc));
-    uint32_t index = gpr.GetRegFromOffset(state, memdesc::IndexOffset(ea_desc));
-
-    // index is usually 0 if no index (pointing to zero reg)
-    // base is usually 0 if no base (pointing to zero reg)
-    uint32_t offset = base + (index << memdesc::Scale(ea_desc)) + GetDisplacement(op);
-    // Address size controls offset arithmetic, independently of operand width.
-    // Truncate before adding the segment base, including for LEA destinations.
-    return GetPrefixes(op).flags.addrsize ? offset & 0xFFFFu : offset;
+    if (const auto* address = gpr.baked_address) {
+        const auto ea = address->descriptor;
+        const auto base_offset = memdesc::BaseOffset(ea);
+        const auto index_offset = memdesc::IndexOffset(ea);
+        const auto base = base_offset == kNoRegOffset ? 0 : gpr.GetRegFromOffset(state, base_offset);
+        const auto index = index_offset == kNoRegOffset ? 0 : gpr.GetRegFromOffset(state, index_offset);
+        const auto displacement = address->displacement_known ? address->displacement : GetDisplacement(op);
+        const auto offset = base + (index << memdesc::Scale(ea)) + displacement;
+        return address->address16 ? offset & 0xffffu : offset;
+    }
+    const uint32_t base = gpr.GetReg(state, op->AddressBase());
+    const uint32_t index = gpr.GetAddressIndex(state, op->AddressIndex());
+    const uint32_t offset = base + (index << op->AddressScale()) + GetDisplacement(op);
+    // Address width wraps the offset before the addition of the segment base.
+    return op->AddressIs16() ? offset & 0xffffu : offset;
 }
 
-FORCE_INLINE uint32_t GetMemSegmentBase(EmuState* state, const DecodedOp* op) {
-    const uint8_t seg = memdesc::ResolvedSegment(GetAddressDescriptor(op));
+FORCE_INLINE uint32_t GetMemSegmentBase(EmuState* state, const GprCache& gpr, const DecodedOp* op) {
+    const auto seg =
+        gpr.baked_address ? memdesc::ResolvedSegment(gpr.baked_address->descriptor) : op->ResolvedMemorySegment();
     return state->ctx.seg_base[seg];
 }
 
 FORCE_INLINE uint32_t ComputeLinearAddress(EmuState* state, GprCache& gpr, const DecodedOp* op) {
     uint32_t ea = ComputeEA(state, gpr, op);
-    return ea + GetMemSegmentBase(state, op);
+    return ea + GetMemSegmentBase(state, gpr, op);
 }
 
 // ------------------------------------------------------------------------------------------------

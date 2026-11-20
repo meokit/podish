@@ -4,6 +4,7 @@
 #include <array>
 #include <bit>
 #include <type_traits>
+#include <utility>
 #include <vector>
 #include "dispatch.h"
 
@@ -68,6 +69,17 @@ HandlerFunc SelectEncodedOperand(const DecodedInstruction* op) {
         return DispatchWrapper<Target, OperandSpec::Encoded<Role, PinWriteClass::Other, Byte, OpcodeRegister>>;
     }
 }
+
+constexpr size_t kBaseDisplacementVariantCount = 1 + kNoRegOffset / sizeof(uint32_t);
+
+template <LogicFunc Target, bool Operand16, size_t... Base>
+constexpr auto MakeBaseDisplacementVariants(std::index_sequence<Base...>) {
+    return std::array<HandlerFunc, sizeof...(Base)>{
+        DispatchWrapper<Target, OperandSpec::BaseDisplacement<Base, Operand16>>...};
+}
+template <LogicFunc Target, bool Operand16>
+inline constexpr auto BaseDisplacementVariants =
+    MakeBaseDisplacementVariants<Target, Operand16>(std::make_index_sequence<kBaseDisplacementVariantCount>{});
 
 FORCE_INLINE uint64_t OperandShape(const DecodedInstruction* op) {
     const uint32_t ea = op->meta.flags.has_mem ? GetExt(op)->data.ea_desc : 0;

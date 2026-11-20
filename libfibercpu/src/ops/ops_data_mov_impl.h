@@ -19,31 +19,32 @@ namespace fiberish {
 template <AddrIndexSpec IndexSpec = AddrIndexSpec::Dynamic, AddrBaseRegSpec BaseRegSpec = AddrBaseRegSpec::Dynamic,
           AddrSegmentSpec SegmentSpec = AddrSegmentSpec::Dynamic, AddrsizeSpec AddressSize = AddrsizeSpec::Dynamic>
 FORCE_INLINE uint32_t ComputeLinearAddressSpecialized(EmuState* state, GprCache& gpr, const DecodedOp* op) {
-    const uint32_t ea_desc = GetAddressDescriptor(op);
+    if (gpr.baked_address) return ComputeLinearAddress(state, gpr, op);
     uint32_t addr = GetDisplacement(op);
 
     if constexpr (BaseRegSpec == AddrBaseRegSpec::Dynamic) {
-        addr += gpr.GetRegFromOffset(state, memdesc::BaseOffset(ea_desc));
+        addr += gpr.GetReg(state, op->AddressBase());
     } else if constexpr (BaseRegSpec != AddrBaseRegSpec::Absent) {
         addr += gpr.GetReg(state, static_cast<int>(BaseRegSpec));
     }
 
     if constexpr (IndexSpec == AddrIndexSpec::Dynamic) {
-        const uint32_t index = gpr.GetRegFromOffset(state, memdesc::IndexOffset(ea_desc));
-        addr += index << memdesc::Scale(ea_desc);
+        const uint32_t index = gpr.GetAddressIndex(state, op->AddressIndex());
+        addr += index << op->AddressScale();
     } else if constexpr (IndexSpec != AddrIndexSpec::Absent) {
-        addr += gpr.GetReg(state, static_cast<int>(IndexSpec)) << memdesc::Scale(ea_desc);
+        addr += gpr.GetReg(state, static_cast<int>(IndexSpec)) << op->AddressScale();
     }
 
-    if (AddressIs16<AddressSize>(op)) addr &= 0xFFFFu;
+    if (AddressSize == AddrsizeSpec::Addr16 || (AddressSize == AddrsizeSpec::Dynamic && op->AddressIs16()))
+        addr &= 0xFFFFu;
 
     if constexpr (SegmentSpec == AddrSegmentSpec::Dynamic) {
-        addr += GetMemSegmentBase(state, op);
+        addr += GetMemSegmentBase(state, gpr, op);
     } else if constexpr (SegmentSpec == AddrSegmentSpec::Default) {
         // "NoSegment" means no override, not an architectural zero base.
         // Keep specialized handlers correct if a caller supplies non-flat DS/SS.
         if constexpr (BaseRegSpec == AddrBaseRegSpec::Dynamic) {
-            addr += GetMemSegmentBase(state, op);
+            addr += GetMemSegmentBase(state, gpr, op);
         } else {
             constexpr int segment =
                 (BaseRegSpec == AddrBaseRegSpec::Esp || BaseRegSpec == AddrBaseRegSpec::Ebp) ? 3 : 4;

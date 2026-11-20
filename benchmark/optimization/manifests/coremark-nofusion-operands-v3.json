@@ -703,4 +703,11 @@
   {"kind":"wrapper","originalId":532330405,"width":1,"operands":[{"modrm":1,"prefixes":0,"meta":140,"length":5,"ea_desc":0,"disp":0,"imm":4294967068}],"count":329460,"dispatch_count":329460},
   {"kind":"wrapper","originalId":648081024,"width":1,"operands":[{"modrm":2,"prefixes":0,"meta":0,"length":1,"ea_desc":0,"disp":0,"imm":0}],"count":300229,"dispatch_count":300229},
   {"kind":"wrapper","originalId":854625039,"width":1,"operands":[{"modrm":58,"prefixes":0,"meta":7,"length":3,"ea_desc":526344,"disp":0,"imm":0}],"count":300006,"dispatch_count":300006}
-]}
+],
+  "base_displacement_ids": [
+    158624894, 894809926, 606219231, 145248965, 843811492, 557500189,
+    88061088, 862756640, 1045634527, 211941651, 862019004, 68047131,
+    56884158, 823635085, 901808274, 878923552, 829260726, 977532048,
+    193083609, 278907765, 263557642, 16637281, 610664779, 868834744
+  ]
+}

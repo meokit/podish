@@ -139,6 +139,12 @@ FORCE_INLINE ATTR_PRESERVE_NONE int64_t OpExitBlockImpl(EmuState* RESTRICT state
                                                                   target_eip, flags_cache FIBERCPU_PIN_RELOAD);
 }
 
+template <class OperandPolicy>
+FORCE_INLINE GprCache OperandGprCache(GprCache gpr) {
+    if constexpr (requires { OperandPolicy::baked_address; }) gpr.baked_address = OperandPolicy::baked_address;
+    return gpr;
+}
+
 template <LogicFunc Target, class OperandPolicy = OperandSpec::Dynamic>
 ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
                                            mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
@@ -154,7 +160,7 @@ ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState* RESTRICT state, DecodedOp* 
     OperandPolicy::Assume(op);
     // Execute Logic
     auto flow = Target(state, op, &utlb, OperandPolicy::Immediate(op), OperandPolicy::ModRM(op), &branch, flags_cache,
-                       FIBERCPU_GPR_CACHE);
+                       OperandGprCache<OperandPolicy>(FIBERCPU_GPR_CACHE));
     mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
 
     switch (flow) {

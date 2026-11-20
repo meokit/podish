@@ -190,6 +190,13 @@ FORCE_INLINE constexpr uint8_t ResolvedSegment(uint32_t ea_desc) {
 }
 }  // namespace memdesc
 
+struct BakedAddress {
+    uint32_t descriptor;
+    uint32_t displacement;
+    bool address16;
+    bool displacement_known = true;
+};
+
 enum class RelativeBranchWidth : uint8_t { None, Byte, Word, Dword };
 
 struct DecodedControlFlowData {
@@ -370,8 +377,9 @@ struct alignas(16) DecodedOp {
     static constexpr uint64_t kHasMemoryImmediate = uint64_t{1} << 63;
 
     FORCE_INLINE uint32_t Primary() const { return uint32_t(payload); }
+    FORCE_INLINE uint8_t RawModRM() const { return uint8_t(payload >> kModRMShift); }
     FORCE_INLINE uint8_t GetModRM() const {
-        const auto raw = uint8_t(payload >> kModRMShift);
+        const auto raw = RawModRM();
         return IsCachedBranch() ? raw & 7 : raw;
     }
     FORCE_INLINE uint8_t RawPrefixes() const { return uint8_t(payload >> kPrefixShift); }
@@ -392,10 +400,19 @@ struct alignas(16) DecodedOp {
         return {uint8_t(meta | ((meta >> 1) & Meta::has_modrm_mask) | (uint8_t(GetExtKind()) << 6))};
     }
 
+    FORCE_INLINE unsigned AddressBase() const { return (payload >> kAddressShift) & 15; }
+    // ESP has no SIB index encoding. In the compact EA it means no index.
+    FORCE_INLINE unsigned AddressIndex() const { return (payload >> (kAddressShift + 4)) & 7; }
+    FORCE_INLINE unsigned AddressScale() const { return (payload >> (kAddressShift + 7)) & 3; }
+    FORCE_INLINE bool AddressIs16() const { return payload & (uint64_t{prefix::ADDRSIZE} << kPrefixShift); }
+    FORCE_INLINE unsigned ResolvedMemorySegment() const {
+        const unsigned segment = (payload >> (kPrefixShift + 3)) & 7;
+        const unsigned default_segment = (AddressBase() & ~1u) == ESP ? 3 : 4;
+        return segment == 0 || HasCompactImmediate() ? default_segment : segment;
+    }
     FORCE_INLINE uint32_t AddressDescriptor() const {
-        const auto address = uint16_t(payload >> kAddressShift);
-        const auto index = uint8_t((address >> 4) & 7);
-        return memdesc::PackEA((address & 15) * 4, (index == ESP ? 8 : index) * 4, (address >> 7) & 3,
+        const auto index = AddressIndex();
+        return memdesc::PackEA(AddressBase() * 4, (index == ESP ? 8 : index) * 4, AddressScale(),
                                GetPrefixes().flags.segment);
     }
 
@@ -614,7 +631,8 @@ struct alignas(16) BasicBlock {
         return uint8_t(ends[slot] - (slot ? ends[slot - 1] : 0));
     }
 
-    void WriteOps(BlockSlotLayout layout, std::span<const DecodedInstruction> ops, BasicBlock* invalid);
+    void WriteOps(BlockSlotLayout layout, std::span<const DecodedInstruction> ops, BasicBlock* invalid,
+                  bool preserve_handlers = false);
     DecodedInstruction ReadOp(size_t slot) const;
 
     BlockTerminalKind terminal_kind() const { return static_cast<BlockTerminalKind>(terminal_kind_raw); }

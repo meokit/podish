@@ -1,6 +1,8 @@
 #include "instruction_variants.h"
 #include <ankerl/unordered_dense.h>
 #include <algorithm>
+#include <array>
+#include <bit>
 #include "instruction_catalog_hash.h"
 #include "ops/ops_alu_impl.h"
 #include "ops/ops_compare_impl.h"
@@ -37,18 +39,35 @@ constexpr TrainingOperation training_operations[] = {
 #include "training_scalar_handlers.inc"
 };
 
-const auto& ScalarBindings() {
+struct ScalarBinding {
+    HandlerFunc handler = nullptr;
+    const TrainingOperation* operation = nullptr;
+};
+
+constexpr size_t kScalarBindingCount = std::bit_ceil(6 * std::size(training_operations));
+
+size_t ScalarBindingIndex(HandlerFunc handler) {
+    const auto address = reinterpret_cast<uintptr_t>(handler) >> 2;
+    return (address ^ (address >> 13)) & (kScalarBindingCount - 1);
+}
+
+const TrainingOperation* FindScalarBinding(HandlerFunc handler) {
     static const auto bindings = [] {
-        ankerl::unordered_dense::map<HandlerFunc, const TrainingOperation*> result;
-        result.reserve(3 * std::size(training_operations));
+        std::array<ScalarBinding, kScalarBindingCount> result{};
         for (const auto& op : training_operations) {
-            result.try_emplace(op.handler, &op);
-            result.try_emplace(op.slots[0], &op);
-            result.try_emplace(op.slots[1], &op);
+            for (const auto key : {op.handler, op.slots[0], op.slots[1]}) {
+                auto index = ScalarBindingIndex(key);
+                while (result[index].handler && result[index].handler != key)
+                    index = (index + 1) & (kScalarBindingCount - 1);
+                if (!result[index].handler) result[index] = {key, &op};
+            }
         }
         return result;
     }();
-    return bindings;
+    auto index = ScalarBindingIndex(handler);
+    while (bindings[index].handler && bindings[index].handler != handler)
+        index = (index + 1) & (kScalarBindingCount - 1);
+    return bindings[index].operation;
 }
 
 std::vector<X86_InstructionVariant>& MutableCatalog() {
@@ -147,24 +166,24 @@ int FindGenericOpcodeIndex(HandlerFunc handler) {
     return -1;
 }
 
+BoundScalarHandler BindScalarHandler(HandlerFunc handler, BoundOperandShape shape) {
+    const auto* binding = FindScalarBinding(handler);
+    if (!binding) return {nullptr, 0, shape};
+    return {binding->slots[shape.slots - 1], binding->id, shape};
+}
+
 BoundScalarHandler BindScalarHandler(const DecodedInstruction& op) {
-    const auto shape = BoundOperandShape::Read(op);
-    const auto& bindings = ScalarBindings();
-    const auto it = bindings.find(op.handler);
-    if (it == bindings.end()) return {nullptr, 0, shape};
-    return {it->second->slots[shape.slots - 1], it->second->id, shape};
+    return BindScalarHandler(op.handler, BoundOperandShape::Read(op));
 }
 
 HandlerFunc CanonicalBoundHandler(HandlerFunc handler) {
-    const auto& bindings = ScalarBindings();
-    const auto it = bindings.find(handler);
-    return it == bindings.end() ? handler : it->second->handler;
+    if (const auto* binding = FindScalarBinding(handler)) return binding->handler;
+    return handler;
 }
 
 uint32_t FindScalarTrainingId(HandlerFunc handler) {
-    const auto& bindings = ScalarBindings();
-    const auto it = bindings.find(handler);
-    return it == bindings.end() ? 0 : it->second->id;
+    if (const auto* binding = FindScalarBinding(handler)) return binding->id;
+    return 0;
 }
 
 uint32_t TrainingOperationIdAt(uint32_t index) {

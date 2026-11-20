@@ -107,31 +107,30 @@ struct DecodedOperandShape {
 };
 
 namespace OperandSpec {
+template <unsigned Base, bool Operand16>
+struct BaseDisplacement : SlotBound<1> {
+    static constexpr BakedAddress address{memdesc::PackEA(Base * 4, kNoRegOffset, 0, 0), 0, false, false};
+    static constexpr const BakedAddress* baked_address = &address;
+    static FORCE_INLINE uint8_t ModRM(const DecodedOp* op) { return op->RawModRM(); }
+    static constexpr uint32_t Immediate(const DecodedOp*) { return 0; }
+    static FORCE_INLINE void Assume(const DecodedOp* op) {
+        const auto prefixes = op->RawPrefixes();
+        __builtin_assume(prefixes == (Operand16 ? prefix::OPSIZE : 0));
+    }
+};
+
 template <DecodedOperandShape Shape, unsigned Keep = 0>
 struct Profile {
     static constexpr unsigned keep_mask = Keep;
     static constexpr unsigned slots = Shape.SlotCount();
     static constexpr uint8_t ModRM(const DecodedOp*) { return uint8_t(Shape.encoding); }
+    static constexpr uint8_t metadata = uint8_t(Shape.encoding >> 16);
+    static constexpr uint8_t prefixes = uint8_t(Shape.encoding >> 8);
+    static constexpr BakedAddress address{Shape.ea_desc, Shape.displacement, (prefixes & prefix::ADDRSIZE) != 0};
+    static constexpr const BakedAddress* baked_address = (metadata & 0xc2) == 2 ? &address : nullptr;
     static FORCE_INLINE void Assume(const DecodedOp* op) {
-        constexpr uint8_t metadata = uint8_t(Shape.encoding >> 16);
-        constexpr auto prefixes = uint8_t(Shape.encoding >> 8);
-        constexpr auto size_bits = prefix::OPSIZE | prefix::ADDRSIZE;
         const auto decoded_prefixes = GetPrefixes(op).all;
-        const auto decoded_sizes = op->RawPrefixes() & size_bits;
-        const auto meta = GetMeta(op).all;
         __builtin_assume(decoded_prefixes == prefixes);
-        __builtin_assume(decoded_sizes == (prefixes & size_bits));
-        __builtin_assume((meta & DecodedOperandShape::metadata_mask) == metadata);
-        if constexpr ((metadata & 0xc2) == 2) {
-            // This is the packed encoding that downstream addressing code
-            // reads. The inverse conversion hides its fields from LLVM.
-            const auto packed = (op->payload >> DecodedOp::kAddressShift) & 0x1ff;
-            const auto segment = memdesc::ResolvedSegment(GetAddressDescriptor(op));
-            const auto displacement = GetDisplacement(op);
-            __builtin_assume(packed == memdesc::CompactEA(Shape.ea_desc));
-            __builtin_assume(segment == memdesc::ResolvedSegment(Shape.ea_desc));
-            __builtin_assume(displacement == Shape.displacement);
-        }
     }
     static constexpr uint32_t Immediate(const DecodedOp*) { return Shape.immediate; }
 };
@@ -164,11 +163,11 @@ namespace OperandSpec {
 template <PinWriteRole Role, PinWriteClass Class, bool Byte>
 struct Register : Dynamic {
     static constexpr unsigned slots = 1;
+    static FORCE_INLINE uint8_t ModRM(const DecodedOp* op) { return op->RawModRM() | 0xc0; }
     static FORCE_INLINE uint32_t Immediate(const DecodedOp* op) { return op->Primary(); }
     static constexpr unsigned keep_mask = FIBERCPU_PIN_KEEP_MASK & ~PinArgumentBit(Class);
     static FORCE_INLINE void Assume(const DecodedOp* op) {
-        const auto modrm = GetModRM(op);
-        __builtin_assume((modrm & 0xC0) == 0xC0);
+        const auto modrm = ModRM(op);
         if constexpr (Role != PinWriteRole::None) {
             const unsigned field = Role == PinWriteRole::Rm ? modrm : modrm >> 3;
             const unsigned parent = field & (Byte ? 3 : 7);
