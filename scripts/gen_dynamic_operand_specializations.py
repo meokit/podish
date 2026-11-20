@@ -9,7 +9,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 from gen_instruction_catalog import (
-    llvm_operation_fingerprint, llvm_operation_names, read_catalog, variant_criteria,
+    is_semantic_variant, llvm_operation_fingerprint, llvm_operation_names, read_catalog, variant_criteria,
 )
 from operand_specialization_data import (
     FUSION_CALL, Operand, generated_fusions, instruction_targets, resolve_training_plan, training_plan_match,
