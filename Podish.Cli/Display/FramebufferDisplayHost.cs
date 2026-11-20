@@ -6,10 +6,26 @@ namespace Podish.Cli.Display;
 
 internal sealed class FramebufferDisplayHost(
     ILoggerFactory loggerFactory,
-    FramebufferDevice framebuffer)
+    FramebufferDevice framebuffer) : IDisposable
 {
     private readonly HashSet<uint> _pressedKeys = [];
+    private SdlDisplayBackend? _backend;
+    private IDisplayOutput? _output;
     private int _buttons;
+
+    public void Start()
+    {
+        _backend = new SdlDisplayBackend(loggerFactory.CreateLogger<SdlDisplayBackend>());
+        _output = _backend.CreateOutput(new DisplayOutputOptions(
+            framebuffer.MaximumWidth, framebuffer.MaximumHeight, "Podish Framebuffer",
+            DisplayVSyncMode.Disabled, Resizable: false, HideSystemCursor: true));
+    }
+
+    public void Dispose()
+    {
+        _output?.Dispose();
+        _backend?.Dispose();
+    }
 
     public void RunMainLoop(Task runtimeTask)
     {
@@ -17,9 +33,7 @@ internal sealed class FramebufferDisplayHost(
         int height = framebuffer.MaximumHeight;
         var pixels = new byte[checked(width * height * 4)];
         var logger = loggerFactory.CreateLogger<FramebufferDisplayHost>();
-        using var backend = new SdlDisplayBackend(loggerFactory.CreateLogger<SdlDisplayBackend>());
-        using var output = backend.CreateOutput(new DisplayOutputOptions(
-            width, height, "Podish Framebuffer", DisplayVSyncMode.Disabled, Resizable: false, HideSystemCursor: true));
+        var output = _output ?? throw new InvalidOperationException("Framebuffer display was not started.");
         IDisplayTexture? texture = null;
 
         try
@@ -35,17 +49,19 @@ internal sealed class FramebufferDisplayHost(
 
                 if (framebuffer.TryCopyFrame(pixels, out int frameWidth, out int frameHeight))
                 {
-                    if (texture == null || texture.Width != frameWidth || texture.Height != frameHeight)
+                    bool modeChanged = texture == null || texture.Width != frameWidth || texture.Height != frameHeight;
+                    if (modeChanged)
                     {
                         texture?.Dispose();
                         texture = output.Renderer.CreateTexture(new DisplayTextureDescriptor(
                             frameWidth, frameHeight, DisplayPixelFormat.Xrgb8888));
-                        logger.LogDebug("Presenting framebuffer mode {Width}x{Height}", frameWidth, frameHeight);
                     }
 
-                    texture.Update(pixels.AsSpan(0, frameWidth * frameHeight * 4), frameWidth * 4);
+                    texture!.Update(pixels.AsSpan(0, frameWidth * frameHeight * 4), frameWidth * 4);
                     output.Renderer.Blit(texture);
                     output.Present();
+                    if (modeChanged)
+                        logger.LogDebug("Presented framebuffer mode {Width}x{Height}", frameWidth, frameHeight);
                 }
 
                 Thread.Sleep(16);

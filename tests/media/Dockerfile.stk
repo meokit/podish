@@ -1,0 +1,24 @@
+FROM debian:bookworm-slim AS build
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    g++ cmake ninja-build pkg-config xz-utils \
+    libcurl4-openssl-dev libfreetype-dev libgles-dev libharfbuzz-dev \
+    libjpeg-dev libopenal-dev libpng-dev libsdl2-dev libshaderc-dev \
+    libssl-dev libvulkan-dev libvorbis-dev zlib1g-dev
+WORKDIR /src
+COPY SuperTuxKart-1.4-src.tar.xz /tmp/
+RUN tar -xJf /tmp/SuperTuxKart-1.4-src.tar.xz --strip-components=1
+ARG BUILD_JOBS=6
+RUN cmake -S . -B /build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_C_FLAGS="-msse2 -mfpmath=sse" -DCMAKE_CXX_FLAGS="-msse2 -mfpmath=sse" \
+    -DUSE_GLES2=ON -DBUILD_RECORDER=OFF -DUSE_WIIUSE=OFF -DUSE_SQLITE3=OFF && \
+    cmake --build /build --parallel "$BUILD_JOBS" && \
+    install -s -D /build/bin/supertuxkart /out/usr/local/bin/supertuxkart-gles-sse2 && \
+    mkdir -p /out/usr/local/share/supertuxkart && \
+    cp -a data /out/usr/local/share/supertuxkart/
+
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libcurl4 libfreetype6 libharfbuzz0b libjpeg62-turbo libopenal1 libpng16-16 \
+    libsdl2-2.0-0 libshaderc1 libssl3 libstdc++6 libvorbisfile3 zlib1g && \
+    rm -rf /var/lib/apt/lists/*
+COPY --from=build /out/ /

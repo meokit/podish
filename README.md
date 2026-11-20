@@ -60,12 +60,13 @@ Podish is roughly **2× iSH** and roughly **9× QEMU TCI** on the same class of 
 | Networking tools | `git`, `OpenSSH` | Verified | `git clone` works; validates VFS / DNS / TLS paths |
 | Framebuffer games | PrBoom (DOOM shareware), SuperTux | Verified | Debian i386 SDL 1.2 fbcon with sound and music through PulseAudio |
 | ANGLE-backed GLES 2.0 | Chocolate Doom, SuperTux | Verified on macOS/Metal | IA-32 EGL over ioctls with [fbdev and Wayland output](graphics/README.md) |
+| ANGLE KMS direct display | SuperTuxKart 1.4 (GLES2) | Verified on Windows and Linux/WSL2 | Virtual KMS/GBM presenting directly to a host EGL window; see the [race probe](tests/media/README.md#supertuxkart) |
 | X11 desktop | X.Org, Openbox, xeyes, xclock, xterm | Verified | Guest fbdev driver with host SDL2 output |
 | Heavy modern runtime | `Node.js` | Starts | Usable for simple scripts; V8 JIT can trigger occasional crashes. Disabling V8 JIT stabilizes it at a steep performance cost. |
 
 **Experimental / in progress:**
 
-- **Wayland bridge** (`Podish.Wayland`): forwards guest Wayland clients to host SDL windows. `foot` terminal works; SDL2-based apps require EGL/GBM paths not yet implemented.
+- **Wayland bridge** (`Podish.Wayland`): forwards guest Wayland clients to host SDL windows. Shared-memory frames and [ANGLE-backed EGL clients](graphics/README.md) are supported.
 - **PulseAudio bridge** (`Podish.Pulse`): redirects guest audio to host backends. `ffplay -nodisp` plays audio; general desktop audio is rough.
 
 ---

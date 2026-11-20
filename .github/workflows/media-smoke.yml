@@ -1,0 +1,54 @@
+name: Media smoke
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  guest:
+    name: Build IA-32 media fixture
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash tests/media/build-fixture.sh media-fixture
+      - uses: actions/upload-artifact@v4
+        with:
+          name: media-fixture
+          path: media-fixture/
+          if-no-files-found: error
+
+  smoke:
+    name: Media smoke (${{ matrix.os }})
+    needs: guest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install Linux native dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y clang-20 cmake ninja-build libc++-20-dev libc++abi-20-dev libsdl2-2.0-0
+          echo /usr/lib/llvm-20/bin >> "$GITHUB_PATH"
+      - uses: actions/download-artifact@v4
+        with:
+          name: media-fixture
+          path: media-fixture
+      - name: Build CLI
+        # Media probes do not depend on the generated CPU superopcode set.
+        run: dotnet build Podish.Cli -c Release -m:1 -p:EnableSuperOpcodes=OFF
+      - name: Exercise guest devices and host SDL
+        run: python tests/media/run.py --cli Podish.Cli/bin/Release/net10.0/Podish.Cli.dll --fixture media-fixture --headless

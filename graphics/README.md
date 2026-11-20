@@ -12,7 +12,7 @@ export PODISH_ANGLE_DIR=/path/to/host/angle/libraries
 dotnet build Podish.Cli -c Release
 ```
 
-On macOS, an Electron distribution's `Libraries` directory is one way to obtain the matching `libEGL.dylib` and `libGLESv2.dylib`. Podish selects ANGLE's Metal backend there. Other desktop platforms use ANGLE's default backend. The guest build targets glibc 2.11 or later. Set `PODISH_GLES_GUEST_DIR` if you build the guest libraries outside `artifacts/podish-gles/guest` or launch Podish from another working directory. [ANGLE build instructions](https://chromium.googlesource.com/angle/angle/+/main/doc/DevSetup.md)
+An Electron distribution is one way to obtain matching host ANGLE libraries. Use `libEGL.dll` and `libGLESv2.dll` on Windows, `libEGL.so` and `libGLESv2.so` on Linux, or the matching `.dylib` files from Electron's `Libraries` directory on macOS. Podish selects ANGLE's Metal backend on macOS, Vulkan for KMS window output on Windows and Linux, and ANGLE's default backend for other Windows and Linux EGL uses. The guest build targets glibc 2.11 or later. Set `PODISH_GLES_GUEST_DIR` if you build the guest libraries outside `artifacts/podish-gles/guest` or launch Podish from another working directory. [ANGLE build instructions](https://chromium.googlesource.com/angle/angle/+/main/doc/DevSetup.md)
 
 ```sh
 cli=Podish.Cli/bin/Release/net10.0/Podish.Cli.dll
@@ -60,7 +60,7 @@ The game probe selects SDL2's `opengles2` backend, checks for a nonuniform frame
 
 Combine `--kmsdrm --gles` to open a host SDL window and enable GPU-backed GBM surfaces. A GBM surface has three texture-bindable EGL pbuffers. Guest EGL swap publishes a finished BO, then KMS modeset or flip selects the BO to present. The host ANGLE context samples it into the window using `eglBindTexImage`. The virtual flip event follows the GPU fence. Frame pixels stay in ANGLE during this path.
 
-The macOS Metal path is tested with Chocolate Doom and SuperTux. SDL also supplies native window handles for Windows, X11 and Wayland on Linux. The corresponding host ANGLE build must support window and texture-bindable pbuffer surfaces on that platform.
+The macOS Metal path is tested with Chocolate Doom and SuperTux. The Windows and Linux KMS path requires a Vulkan-enabled ANGLE build, a Vulkan driver, and a real SDL window. SDL supplies Win32 or X11 window handles; a native Wayland window also requires both SDL and ANGLE to be built with Wayland support. The window and pbuffer config must support binding the pbuffer to a texture, and ANGLE must support EGL fence sync. See [the cross-platform media probes](../tests/media/README.md) for setup and SuperTuxKart.
 
 Use an IA-32 glibc rootfs with `libdrm2`, `libdrm-dev` and `libgbm-dev` to build the smoke tests. The development headers can also be provided with the host variables `DRM_HEADERS` and `GBM_HEADERS`.
 

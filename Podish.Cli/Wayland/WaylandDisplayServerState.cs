@@ -39,10 +39,10 @@ internal sealed class WaylandDisplayServerState : IDisposable
     public WaylandDesktopOptions DesktopOptions { get; }
     public IWaylandFramePresenter Presenter { get; }
 
+    public void Start() => _host.Start();
+
     public void RunMainLoop(Task runtimeTask, WaylandDisplayIngressBridge ingressBridge)
     {
-        _host.Start();
-
         while (!runtimeTask.IsCompleted)
         {
             bool dirty = DrainCommands(out List<ulong> consumed, out bool shutdownRequested);

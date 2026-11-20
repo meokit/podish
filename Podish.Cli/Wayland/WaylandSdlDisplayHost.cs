@@ -148,9 +148,8 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
     public void Render()
     {
         EnsureStarted();
-        _logger.LogDebug("Wayland SDL host render surfaces={Count} zOrder={ZOrderCount}", _surfaces.Count,
-            _zOrder.Count);
         _renderer!.Clear(ToDisplayColor(_theme.Desktop.Background));
+        int presented = 0;
 
         foreach (var sceneSurfaceId in _zOrder)
         {
@@ -171,9 +170,11 @@ internal sealed class WaylandSdlDisplayHost : IDisposable
 
             DrawDecoration(surface);
             _renderer.Blit(surface.Texture, destination: ToDisplayRect(surface.Bounds));
+            presented++;
         }
 
         _output!.Present();
+        _logger.LogDebug("Wayland SDL host presented surfaces={Count}", presented);
     }
 
     private void UpsertSurface(ulong sceneSurfaceId, WaylandShmFrame frame, WaylandSurfaceBounds bounds)

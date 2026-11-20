@@ -201,6 +201,21 @@ int main(void) {
     state = drmModeGetCrtc(fd, crtc);
     require(state && state->buffer_id == first_fb, "KMS framebuffer retains BO after guest handle closes");
     drmModeFreeCrtc(state);
+    /* The standalone probe also runs without a display. With --fbdev, verify
+       that the active BO reaches the preview and allow time for an SDL upload. */
+    int preview = open("/dev/fb0", O_RDONLY | O_CLOEXEC);
+    if (preview >= 0) {
+        uint32_t scanout;
+        off_t offset = (4 * mode.hdisplay + 3) * sizeof(scanout);
+        require(pread(preview, &scanout, sizeof(scanout), offset) == sizeof(scanout) &&
+                    (scanout & 0xffffff) == 0xa05533,
+                "verify KMS scanout in the framebuffer preview");
+        close(preview);
+        usleep(250000);
+        puts("DRM framebuffer preview passed");
+    } else {
+        require(errno == ENOENT, "open optional framebuffer preview");
+    }
     require(drmModeRmFB(fd, first_fb) == 0 && drmModeRmFB(fd, second_fb) == 0, "remove KMS framebuffers");
     gbm_bo_destroy(second);
     gbm_device_destroy(device);
