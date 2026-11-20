@@ -50,13 +50,18 @@ Typed facts
 The kernel-side types in instruction_kernel_spec.h include OpsizeSpec,
 AddrModeSpec, FlagsSpec, RmOperandSpec and GroupOpSpec. Their Dynamic cases
 use decoded inputs or preserve the generic flags behavior. The common
-OperandSpec policies provide Dynamic, Exact, Profile, Register and Encoded
-dispatch paths. OperandSpec::Profile can fix the decoded fields and immediate
-for a kernel independent of its internal template parameters.
+OperandSpec policies bind slot count and trained operands. Opcode and
+mandatory-prefix semantics come from the architectural catalog.
+OperandSpec::Profile binds exact decoded operands for baked fusions.
 
 RegisterSpecializedHandler can publish a rule after initialization. A runtime
 rule affects future decodes, and the caller owns the lifetime of its code.
 The catalog exposes build-time metadata independently of runtime registration.
+
+Baked instruction variants
+--------------------------
+See baked-instruction-variants.md for the current CMake training targets, the
+checked-in scalar and fusion plans, and the machine-code review procedure.
 
 Dynamic operand templates
 -------------------------
@@ -208,38 +213,14 @@ first, and misses go to the online compiler. X86_GetLinkedBlockHitCount counts
 linked block entry installations. Linked handlers persist for the lifetime of the
 library and use no per-MMU JIT allocation budget.
 
-Tool metadata and fusion snapshot
----------------------------------
-X86_GetInstructionVariantCount/GetInstructionVariant expose immutable, build-local
-handler pointers together with names, families, normalized constraints, priorities,
-fusion parents and stable variant keys. The key includes opcode, logic reference
-and normalized constraints; addresses and registration order are not identities.
-The C ABI and managed bindings expose schema_version=1. Function pointers are
-only meaningful in the process/library that returned them. Disabled native
-variants keep their metadata and report a null handler.
-
-PerfTools reads generated/instruction_fusion_families.json for cross-platform
-baking. This small checked-in snapshot is exported from the native declarations;
-the baker no longer maintains a separate specializationFamilies dictionary.
-The source fingerprint is embedded at CMake configuration and checked on export
-and load. Hashing normalizes CRLF, so checkout line endings do not alter identity.
-No target library needs to be loaded while cross-compiling or generating source.
-
-After editing declaration inputs:
-  1. Build the native library against the existing checked-in fusion source.
-     For an already configured macOS tree:
-       cmake --build Fiberish.X86/build_native/host -j 3
-  2. Build PerfTools, then export the snapshot:
-       dotnet build Podish.PerfTools/Podish.PerfTools.csproj -c Release
-       dotnet Podish.PerfTools/bin/Release/net10.0/Podish.PerfTools.dll export-instruction-catalog --library Fiberish.X86/build_native/host/libfibercpu.dylib
-  3. Regenerate the selected fusion source using the normal gen-superopcodes
-     command if the approved expansion set changed. Review both generated files.
-  4. Run CPU tests with fusion ON/OFF and PerfTools tests.
-
-Use the corresponding .so/.dll path on other hosts. Export requires a native
-library built from the current catalog; stale libraries/snapshots are rejected.
-Initial native bootstrap uses the existing fusion source without running the
-baker. Custom SuperOpcodeManifest builds can generate again after the export.
+Tool metadata
+-------------
+X86_GetInstructionVariantCount/GetInstructionVariant expose the architectural
+catalog with normalized encodings and stable variant keys. X86_GetTrainingHandlerId
+canonicalizes native and baked handlers to structured training IDs. Use the
+handler-reflection API to inspect individual native symbols within the current
+process. The baked-fusion generator reads the numerical sequences from its
+profile manifest.
 
 Migration evidence (Apple M5 Max, macOS ARM64)
 --------------------------------------------
