@@ -14,6 +14,55 @@ namespace Fiberish.Tests.Syscalls;
 public class InotifyEventTests
 {
     [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void Read_DeliversAnEventAcrossGuestPageBoundary(bool vectored)
+    {
+        using var env = new SyscallTestEnv();
+        var fd = (uint)env.Invoke("SysInotifyInit1", LinuxConstants.IN_NONBLOCK);
+        env.PutString(0x10000, "/");
+        var wd = env.Invoke("SysInotifyAddWatch", fd, 0x10000, LinuxConstants.IN_CREATE);
+        Assert.True(wd > 0);
+        InotifyEvents.Raise(env.Sb.Root.Inode!, LinuxConstants.IN_CREATE, "user-home.desktop");
+
+        const uint resultAddress = 0x13000;
+        Assert.Equal(0, env.Invoke("SysIoctl", fd, LinuxConstants.FIONREAD, resultAddress));
+        Span<byte> count = stackalloc byte[4];
+        Assert.True(env.Engine.CopyFromUser(resultAddress, count));
+        var available = BinaryPrimitives.ReadInt32LittleEndian(count);
+        Assert.InRange(available, 34, 64);
+
+        const uint destination = 0x10fec;
+        var result = env.Invoke("SysRead", fd, destination, 20);
+        Assert.Equal(-(int)Errno.EINVAL, result);
+        if (vectored)
+        {
+            Span<byte> table = stackalloc byte[16];
+            BinaryPrimitives.WriteUInt32LittleEndian(table, destination);
+            BinaryPrimitives.WriteUInt32LittleEndian(table[4..], 20);
+            BinaryPrimitives.WriteUInt32LittleEndian(table[8..], 0x12000);
+            BinaryPrimitives.WriteUInt32LittleEndian(table[12..], 4096);
+            Assert.True(env.Engine.CopyToUser(0x14000, table));
+            Assert.Equal(-(int)Errno.EINVAL, env.Invoke("SysReadV", fd, 0x14000, 2));
+            BinaryPrimitives.WriteUInt32LittleEndian(table[4..], 4096);
+            Assert.True(env.Engine.CopyToUser(0x14000, table));
+            result = env.Invoke("SysReadV", fd, 0x14000, 2);
+        }
+        else
+        {
+            result = env.Invoke("SysRead", fd, destination, 4096);
+        }
+
+        Assert.Equal(available, result);
+        Span<byte> record = stackalloc byte[available];
+        Assert.True(env.Engine.CopyFromUser(destination, record));
+        Assert.Equal(wd, BinaryPrimitives.ReadInt32LittleEndian(record));
+        Assert.Equal(LinuxConstants.IN_CREATE, BinaryPrimitives.ReadUInt32LittleEndian(record[4..]));
+        Assert.True(record[16..34].SequenceEqual("user-home.desktop\0"u8));
+        Assert.Equal(-(int)Errno.EAGAIN, env.Invoke("SysRead", fd, destination, 4096));
+    }
+
+    [Theory]
     [InlineData(LinuxConstants.IN_ACCESS, true)]
     [InlineData(LinuxConstants.IN_OPEN, true)]
     [InlineData(LinuxConstants.IN_CLOSE_WRITE, true)]

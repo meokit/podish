@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using Fiberish.Core;
 using Fiberish.Core.VFS.TTY;
 using Fiberish.Native;
+using Fiberish.Syscalls;
 
 namespace Fiberish.VFS;
 
@@ -10,6 +11,7 @@ public sealed class VirtualConsoleInput
 {
     private volatile TtyDiscipline? _terminal;
     private Ps2MouseInode? _mouse;
+    private EvdevInode? _evdevKeyboard, _evdevPointer;
     private int _keyboardMode = 1;
     private int _displayMode;
     private byte _leds;
@@ -36,6 +38,14 @@ public sealed class VirtualConsoleInput
         _terminal = terminal;
     }
 
+    internal void RegisterEvdev(SyscallManager syscalls, KernelScheduler scheduler)
+    {
+        syscalls.RegisterVirtualCharacterDevice("input/event0",
+            sb => _evdevKeyboard = new EvdevInode(sb, scheduler, pointer: false));
+        syscalls.RegisterVirtualCharacterDevice("input/event1",
+            sb => _evdevPointer = new EvdevInode(sb, scheduler, pointer: true));
+    }
+
     internal void Detach()
     {
         _terminal = null;
@@ -52,7 +62,9 @@ public sealed class VirtualConsoleInput
         var tty = _terminal;
         tty?.Scheduler.RunIngress(() =>
         {
-            if (ReferenceEquals(_terminal, tty)) _mouse!.Move(dx, dy, buttons);
+            if (!ReferenceEquals(_terminal, tty)) return;
+            _mouse!.Move(dx, dy, buttons);
+            _evdevPointer?.PublishPointer(dx, dy, buttons);
         });
     }
 
@@ -61,7 +73,18 @@ public sealed class VirtualConsoleInput
         var tty = _terminal;
         tty?.Scheduler.RunIngress(() =>
         {
-            if (ReferenceEquals(_terminal, tty)) Key(tty, evdevKey, pressed);
+            if (!ReferenceEquals(_terminal, tty)) return;
+            Key(tty, evdevKey, pressed);
+            _evdevKeyboard?.PublishKey(evdevKey, pressed);
+        });
+    }
+
+    public void PublishWheel(int x, int y)
+    {
+        var tty = _terminal;
+        tty?.Scheduler.RunIngress(() =>
+        {
+            if (ReferenceEquals(_terminal, tty)) _evdevPointer?.PublishWheel(x, y);
         });
     }
 

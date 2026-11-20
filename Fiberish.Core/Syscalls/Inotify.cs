@@ -211,22 +211,24 @@ public sealed class InotifyInode : TmpfsInode
 
                 pending.CopyTo(buffer[written..]);
                 written += pending.Length;
-                _pendingEvents.Dequeue();
-
-                // Keep the overflow marker pending until it has actually been read; a
-                // partial read must not allow a second IN_Q_OVERFLOW into the queue.
-                if (BinaryPrimitives.ReadInt32LittleEndian(pending.AsSpan(0, 4)) == -1 &&
-                    BinaryPrimitives.ReadUInt32LittleEndian(pending.AsSpan(4, 4)) == LinuxConstants.IN_Q_OVERFLOW)
-                    _overflowQueued = false;
-            }
-
-            if (_pendingEvents.Count == 0)
-            {
-                _hasLastEvent = false;
-                _lastEventPayload = null;
+                DequeueEventLocked(pending);
             }
 
             return written;
+        }
+    }
+
+    private void DequeueEventLocked(byte[] pending)
+    {
+        _pendingEvents.Dequeue();
+        // Keep the overflow marker pending until its entire record has been read.
+        if (BinaryPrimitives.ReadInt32LittleEndian(pending) == -1 &&
+            BinaryPrimitives.ReadUInt32LittleEndian(pending.AsSpan(4)) == LinuxConstants.IN_Q_OVERFLOW)
+            _overflowQueued = false;
+        if (_pendingEvents.Count == 0)
+        {
+            _hasLastEvent = false;
+            _lastEventPayload = null;
         }
     }
 
@@ -237,10 +239,65 @@ public sealed class InotifyInode : TmpfsInode
         return -(int)Errno.EBADF;
     }
 
-    public override ValueTask<int> ReadV(Engine engine, LinuxFile file, FiberTask? task,
+    public override async ValueTask<int> ReadV(Engine engine, LinuxFile file, FiberTask? task,
         ArraySegment<Iovec> iovs, long offset, int flags)
     {
-        return ReadVViaHostBuffer(engine, file, task, iovs, offset, flags);
+        var total = 0;
+        foreach (var iov in iovs)
+        {
+            if (iov.Len == 0) continue;
+            int result;
+            while ((result = ReadEventsToUser(engine, iov)) == -(int)Errno.EAGAIN)
+            {
+                if ((file.Flags & FileFlags.O_NONBLOCK) != 0 || (flags & 8) != 0 || task == null)
+                    break;
+                if (await WaitForRead(file, task) == AwaitResult.Interrupted)
+                {
+                    result = -(int)Errno.ERESTARTSYS;
+                    break;
+                }
+            }
+            if (result < 0) return total > 0 ? total : result;
+            if (offset == -1) file.Position += result;
+            total += result;
+            if (result < iov.Len) break;
+        }
+
+        return total;
+    }
+
+    private int ReadEventsToUser(Engine engine, Iovec iov)
+    {
+        lock (_lock)
+        {
+            if (_pendingEvents.Count == 0) return -(int)Errno.EAGAIN;
+
+            var written = 0;
+            while (_pendingEvents.TryPeek(out var pending))
+            {
+                if (pending.Length > iov.Len - (uint)written)
+                    return written > 0 ? written : -(int)Errno.EINVAL;
+
+                // One inotify record can span guest pages within this buffer.
+                if (!engine.CopyToUser(iov.BaseAddr + (uint)written, pending))
+                    return written > 0 ? written : -(int)Errno.EFAULT;
+                DequeueEventLocked(pending);
+                written += pending.Length;
+            }
+
+            return written;
+        }
+    }
+
+    public override int Ioctl(LinuxFile file, FiberTask task, uint request, uint arg)
+    {
+        if (request != LinuxConstants.FIONREAD) return base.Ioctl(file, task, request, arg);
+        int bytes;
+        lock (_lock)
+            bytes = _pendingEvents.Sum(pending => pending.Length);
+        Span<byte> count = stackalloc byte[sizeof(int)];
+        BinaryPrimitives.WriteInt32LittleEndian(count, bytes);
+        return task.CPU.CopyToUser(arg, count) ? 0 : -(int)Errno.EFAULT;
     }
 
     public override ValueTask<int> WriteV(Engine engine, LinuxFile file, FiberTask? task,

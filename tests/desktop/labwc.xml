@@ -1,0 +1,13 @@
+<?xml version="1.0"?>
+<labwc_config>
+  <windowRules>
+    <windowRule identifier="pcmanfm-qt">
+      <action name="ResizeTo" width="382" height="235" />
+      <action name="MoveTo" x="24" y="42" />
+    </windowRule>
+    <windowRule identifier="qterminal">
+      <action name="ResizeTo" width="402" height="204" />
+      <action name="MoveTo" x="216" y="216" />
+    </windowRule>
+  </windowRules>
+</labwc_config>

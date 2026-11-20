@@ -88,6 +88,9 @@ internal sealed class FramebufferDisplayHost(
             case DisplayInputEventKind.PointerMotion:
                 framebuffer.Input.PublishPointer(input.DeltaX, input.DeltaY, _buttons);
                 break;
+            case DisplayInputEventKind.PointerWheel:
+                framebuffer.Input.PublishWheel(input.DeltaX, input.DeltaY);
+                break;
             case DisplayInputEventKind.PointerButton:
                 int button = input.Button switch
                 {

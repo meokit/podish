@@ -3,6 +3,7 @@ using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
 using Fiberish.Core;
 using Fiberish.Native;
+using Fiberish.Syscalls;
 using Timer = Fiberish.Core.Timer;
 
 namespace Fiberish.VFS;
@@ -15,6 +16,7 @@ internal sealed class EpollItem
     public bool IsEdgeArmed;
     public uint Events;
     public int Fd;
+    public FiberTask? SignalTask;
     public LinuxFile File = null!;
     public bool IsReady;
     public short LastObservedEvents;
@@ -153,7 +155,10 @@ public class EpollInode : TmpfsInode, IDispatcherWaitSource, IDispatcherEdgeWait
             }
 
             var item = new EpollItem
-                { Fd = fd, File = targetFile, Events = events, Data = data, Dispatcher = dispatcher };
+            {
+                Fd = fd, File = targetFile, Events = events, Data = data, Dispatcher = dispatcher,
+                SignalTask = targetFile.IoInode is SignalFdInode ? task : null
+            };
             lock (_lifetimeGate)
             {
                 if (_released != 0) return -(int)Errno.EBADF;
@@ -284,8 +289,10 @@ public class EpollInode : TmpfsInode, IDispatcherWaitSource, IDispatcherEdgeWait
                 CheckAndRegister(item);
         }
 
-        if ((item.Events & LinuxConstants.EPOLLET) != 0 &&
-            openedInode is IDispatcherEdgeWaitSource edgeWaitSource)
+        if (openedInode is SignalFdInode signalFd && item.SignalTask is { } signalTask)
+            item.WaitRegistration = signalFd.RegisterWaitHandle(signalTask, () => RunOnOwner(RePoll), watchEvents);
+        else if ((item.Events & LinuxConstants.EPOLLET) != 0 &&
+                 openedInode is IDispatcherEdgeWaitSource edgeWaitSource)
             item.WaitRegistration = edgeWaitSource.RegisterEdgeTriggeredWaitHandle(item.File,
                 item.Dispatcher ?? throw new InvalidOperationException("Epoll host socket watch requires dispatcher."),
                 RePoll, watchEvents);
@@ -344,7 +351,17 @@ public class EpollInode : TmpfsInode, IDispatcherWaitSource, IDispatcherEdgeWait
         var openedInode = item.File.IoInode
                           ?? throw new InvalidOperationException("Epoll watch target inode is unavailable.");
 
-        if (openedInode is IDispatcherEdgeWaitSource edgeWaitSource)
+        if (openedInode is SignalFdInode signalFd && item.SignalTask is { } signalTask)
+        {
+            item.WaitRegistration = signalFd.RegisterWaitHandle(signalTask,
+                () => RunOnOwner(RePollForEdge), watchEvents, nextSignal: true);
+            if (item.WaitRegistration != null)
+            {
+                item.IsEdgeArmed = true;
+                return;
+            }
+        }
+        else if (openedInode is IDispatcherEdgeWaitSource edgeWaitSource)
         {
             var dispatcher = item.Dispatcher
                              ?? throw new InvalidOperationException(
@@ -506,7 +523,12 @@ public class EpollInode : TmpfsInode, IDispatcherWaitSource, IDispatcherEdgeWait
     private short PollWatch(EpollItem item, short events)
     {
         lock (item.LifetimeGate)
-            return IsWatchActive(item) ? item.File.IoInode!.Poll(item.File, events) : (short)0;
+        {
+            if (!IsWatchActive(item)) return 0;
+            return item.File.IoInode is SignalFdInode signalFd && item.SignalTask is { } signalTask
+                ? signalFd.Poll(signalTask, events)
+                : item.File.IoInode!.Poll(item.File, events);
+        }
     }
 
     private void RefreshPendingWatches()

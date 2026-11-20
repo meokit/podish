@@ -1,3 +1,4 @@
+using System.Text;
 using Fiberish.Core;
 using Fiberish.Syscalls;
 using Fiberish.VFS;
@@ -52,7 +53,8 @@ internal static class ContainerGraphics
                         sb => card = new DrmCardInode(sb, scheduler, device?.HasKmsOutput == true, framebuffer,
                             device is { HasKmsOutput: true } ? device.AllocateTextureBo : null));
                     syscalls.RegisterVirtualCharacterDevice("dri/renderD128", _ => card!.CreateRenderNode());
-                    MountDrmSysfs(syscalls);
+                    if (framebuffer != null) syscalls.RegisterFramebufferEvdev(framebuffer, scheduler);
+                    MountGraphicsSysfs(syscalls, framebuffer != null);
                 }
                 return device;
             }
@@ -69,9 +71,9 @@ internal static class ContainerGraphics
         }
     }
 
-    private static void MountDrmSysfs(SyscallManager syscalls)
+    private static void MountGraphicsSysfs(SyscallManager syscalls, bool input)
     {
-        using var source = new MountFile(syscalls.CreateDetachedTmpfsMount("podish-drm-sysfs"));
+        using var source = new MountFile(syscalls.CreateDetachedTmpfsMount("podish-graphics-sysfs"));
         var mount = source.Mount!;
         // libudev verifies the filesystem type of the canonical device directory.
         mount.Root.SuperBlock.Type = new FileSystemType { Name = "sysfs" };
@@ -82,6 +84,7 @@ internal static class ContainerGraphics
         syscalls.WriteFileInDetachedMount(mount, "bus/platform/uevent", []);
         syscalls.CreateSymlinkInDetachedMount(mount, device + "/subsystem", "/sys/bus/platform");
 
+        if (input) MountInputDiscovery(syscalls, mount);
         foreach (var tree in new[] { "dev/char", "class/drm", device, "bus/platform" })
             syscalls.BindMountSubtree(mount, tree, "/sys/" + tree, readOnly: true);
 
@@ -96,5 +99,39 @@ internal static class ContainerGraphics
             syscalls.CreateSymlinkInDetachedMount(mount, $"dev/char/226:{minor}", "/sys/" + path);
             syscalls.CreateSymlinkInDetachedMount(mount, "class/drm/" + name, "/sys/" + path);
         }
+    }
+
+    private static void MountInputDiscovery(SyscallManager syscalls, Mount sysfs)
+    {
+        using var database = new MountFile(syscalls.CreateDetachedTmpfsMount("podish-input-udev"));
+        var udev = database.Mount!;
+        const string devices = "devices/virtual/input";
+        for (var index = 0; index < 2; index++)
+        {
+            var keyboard = index == 0;
+            var parent = $"{devices}/input{index}";
+            var name = $"event{index}";
+            var path = $"{parent}/{name}";
+            var number = $"13:{64 + index}";
+            var deviceName = keyboard ? "Podish Keyboard" : "Podish Mouse";
+            var category = keyboard ? "KEYBOARD" : "MOUSE";
+            syscalls.WriteFileInDetachedMount(sysfs, parent + "/name", Encoding.ASCII.GetBytes(deviceName + "\n"));
+            syscalls.WriteFileInDetachedMount(sysfs, parent + "/uevent",
+                Encoding.ASCII.GetBytes($"NAME=\"{deviceName}\"\nPRODUCT=6/0/0/1\n"));
+            syscalls.WriteFileInDetachedMount(sysfs, path + "/uevent",
+                Encoding.ASCII.GetBytes($"MAJOR=13\nMINOR={64 + index}\nDEVNAME=input/{name}\n"));
+            syscalls.WriteFileInDetachedMount(sysfs, path + "/dev", Encoding.ASCII.GetBytes(number + "\n"));
+            syscalls.CreateSymlinkInDetachedMount(sysfs, parent + "/subsystem", "/sys/class/input");
+            syscalls.CreateSymlinkInDetachedMount(sysfs, path + "/subsystem", "/sys/class/input");
+            syscalls.CreateSymlinkInDetachedMount(sysfs, $"class/input/input{index}", "/sys/" + parent);
+            syscalls.CreateSymlinkInDetachedMount(sysfs, "class/input/" + name, "/sys/" + path);
+            syscalls.CreateSymlinkInDetachedMount(sysfs, "dev/char/" + number, "/sys/" + path);
+            syscalls.WriteFileInDetachedMount(udev, "data/c" + number, Encoding.ASCII.GetBytes(
+                $"I:1\nE:ID_INPUT=1\nE:ID_INPUT_{category}=1\nE:ID_SEAT=seat0\nG:seat\nQ:seat\nV:1\n"));
+            syscalls.WriteFileInDetachedMount(udev, "tags/seat/c" + number, []);
+        }
+        syscalls.BindMountSubtree(sysfs, devices, "/sys/" + devices, readOnly: true);
+        syscalls.BindMountSubtree(sysfs, "class/input", "/sys/class/input", readOnly: true);
+        syscalls.BindMountSubtree(udev, "", "/run/udev", readOnly: true);
     }
 }

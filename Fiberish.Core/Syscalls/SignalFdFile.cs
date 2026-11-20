@@ -84,14 +84,14 @@ public class SignalFdInode : TmpfsInode, ITaskWaitSource
         return RegisterWaitHandle(task, callback, events) != null;
     }
 
-    public IDisposable? RegisterWaitHandle(FiberTask task, Action callback, short events)
+    public IDisposable? RegisterWaitHandle(FiberTask task, Action callback, short events, bool nextSignal = false)
     {
         if ((events & LinuxConstants.POLLIN) == 0)
             return null;
 
         using (EnterStateScope())
         {
-            if (HasPendingMatchedSignalUnsafe(task))
+            if (!nextSignal && HasPendingMatchedSignalUnsafe(task))
             {
                 callback();
                 return NoopWaitRegistration.Instance;

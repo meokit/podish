@@ -817,18 +817,7 @@ public partial class SyscallManager
                 nameBytes.CopyTo(buf.AsSpan(10));
                 buf[10 + nameBytes.Length] = 0; // null terminator
 
-                var dType = entry.Type switch
-                {
-                    InodeType.Directory => (byte)4,
-                    InodeType.File => (byte)8,
-                    InodeType.Symlink => (byte)10,
-                    InodeType.CharDev => (byte)2,
-                    InodeType.BlockDev => (byte)6,
-                    InodeType.Fifo => (byte)1,
-                    InodeType.Socket => (byte)12,
-                    _ => (byte)0
-                };
-                buf[reclen - 1] = dType;
+                buf[reclen - 1] = DirectoryEntryType(entry.Type);
 
                 if (!engine.CopyToUser(baseAddr, buf))
                     return -(int)Errno.EFAULT;
@@ -1949,6 +1938,18 @@ LocResolvedUtimens64:
         }
     }
 
+    private static byte DirectoryEntryType(InodeType type) => type switch
+    {
+        InodeType.Fifo => 1,
+        InodeType.CharDev => 2,
+        InodeType.Directory => 4,
+        InodeType.BlockDev => 6,
+        InodeType.File => 8,
+        InodeType.Symlink => 10,
+        InodeType.Socket => 12,
+        _ => 0,
+    };
+
     private static bool WriteDirentRecord(Engine engine, uint baseAddr, DirectoryEntry entry, int recLen, long nextOffset)
     {
         byte[]? rented = null;
@@ -1962,9 +1963,7 @@ LocResolvedUtimens64:
             BinaryPrimitives.WriteInt64LittleEndian(buf.Slice(8, 8), nextOffset);
             BinaryPrimitives.WriteUInt16LittleEndian(buf.Slice(16, 2), (ushort)recLen);
 
-            byte dType = 8; // DT_REG
-            if (entry.Type == InodeType.Directory) dType = 4;
-            buf[18] = dType;
+            buf[18] = DirectoryEntryType(entry.Type);
 
             var nameBytes = entry.Name.Bytes;
             nameBytes.CopyTo(buf.Slice(19, nameBytes.Length));

@@ -588,6 +588,47 @@ public class WaitSyscallTests
             BinaryPrimitives.ReadUInt64LittleEndian(env.Read(eventsPtr, 12).AsSpan(4, 8)));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task EpollPwait2_SignalFdWakesForBlockedSignals(bool edgeTriggered)
+    {
+        using var env = new TestEnv();
+        const uint eventsPtr = 0x1A000, watchPtr = 0x1B000, bufferPtr = 0x1C000;
+        env.MapUserPage(eventsPtr);
+        env.MapUserPage(watchPtr);
+        env.MapUserPage(bufferPtr);
+        const Signal signal = Signal.SIGTERM;
+        var mask = 1UL << ((int)signal - 1);
+        env.Task.SignalMask = mask;
+        var inode = new SignalFdInode(11, env.SyscallManager.MemfdSuperBlock, mask);
+        var file = new LinuxFile(new Dentry(FsName.FromString("signalfd"), inode, null,
+            env.SyscallManager.MemfdSuperBlock), FileFlags.O_NONBLOCK, env.SyscallManager.AnonMount);
+        var fd = env.SyscallManager.AllocFD(file);
+        var epfd = await Invoke(env, "SysEpollCreate1", 0, 0, 0, 0, 0, 0);
+
+        var watch = new byte[12];
+        BinaryPrimitives.WriteUInt32LittleEndian(watch, LinuxConstants.EPOLLIN |
+            (edgeTriggered ? LinuxConstants.EPOLLET : 0));
+        env.Write(watchPtr, watch);
+        Assert.Equal(0, await Invoke(env, "SysEpollCtl", (uint)epfd, LinuxConstants.EPOLL_CTL_ADD,
+            (uint)fd, watchPtr, 0, 0));
+
+        for (var i = 0; i < 2; i++)
+        {
+            var wait = env.StartOnScheduler(() =>
+                env.Invoke("SysEpollPwait2", (uint)epfd, eventsPtr, 1, 0, 0, 0));
+            Assert.False(wait.IsCompleted);
+            await env.WaitForBackgroundSchedulerAsync();
+            await env.PostSignalAsync((int)signal);
+
+            Assert.Equal(1, await wait.WaitAsync(TimeSpan.FromSeconds(5)));
+            Assert.Equal(LinuxConstants.EPOLLIN, BinaryPrimitives.ReadUInt32LittleEndian(env.Read(eventsPtr, 12)));
+            Assert.Equal(128, await Invoke(env, "SysRead", (uint)fd, bufferPtr, 128, 0, 0, 0));
+            Assert.Equal((uint)signal, BinaryPrimitives.ReadUInt32LittleEndian(env.Read(bufferPtr, 128)));
+        }
+    }
+
     [Fact]
     public async Task EpollPwait2_TtyEdgeTriggeredRead_RearmsAfterRead()
     {

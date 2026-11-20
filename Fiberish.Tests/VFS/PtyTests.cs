@@ -250,6 +250,33 @@ public class PtyTests
     }
 
     [Fact]
+    public void PtmxInode_Fionread_ReportsBytesWrittenBySlave()
+    {
+        using var ctx = new PtyTaskContext();
+        var superBlock = new TmpfsSuperBlock(new FileSystemType { Name = "tmpfs" }, new DeviceNumberManager());
+        var inode = new PtmxInode(superBlock, ctx.Manager, new MockSignalBroadcaster(), _logger);
+        var file = new LinuxFile(new Dentry(FsName.FromString("ptmx"), inode, null, superBlock), FileFlags.O_RDWR, null!);
+        inode.Open(file);
+        var pair = Assert.IsType<PtyPair>(file.PrivateData);
+        pair.Master.InputBuffer.Write("input"u8);
+        pair.Slave.Write("out"u8);
+
+        const uint address = 0x20000;
+        ctx.MapUserPage(address);
+        Span<byte> data = stackalloc byte[4];
+        Assert.Equal(0, inode.Ioctl(file, ctx.Task, LinuxConstants.FIONREAD, address));
+        Assert.True(ctx.Engine.CopyFromUser(address, data));
+        Assert.Equal(3, BitConverter.ToInt32(data));
+
+        Assert.Equal(3, inode.ReadToHost(ctx.Task, file, data, 0));
+        Assert.True(data[..3].SequenceEqual("out"u8));
+        Assert.Equal(0, inode.Ioctl(file, ctx.Task, LinuxConstants.FIONREAD, address));
+        Assert.True(ctx.Engine.CopyFromUser(address, data));
+        Assert.Equal(0, BitConverter.ToInt32(data));
+        inode.Release(file);
+    }
+
+    [Fact]
     public void PtmxInode_Tiocswinsz_ForwardsToSlaveDiscipline()
     {
         using var ctx = new PtyTaskContext();

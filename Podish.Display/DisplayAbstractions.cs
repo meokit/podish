@@ -47,7 +47,8 @@ public enum DisplayInputEventKind
     WindowFocusGained,
     KeyboardKey,
     TextInput,
-    TextEditing
+    TextEditing,
+    PointerWheel
 }
 
 public readonly record struct DisplayInputEvent(

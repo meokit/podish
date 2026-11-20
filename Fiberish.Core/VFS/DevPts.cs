@@ -392,7 +392,7 @@ public class PtmxInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
 
         return request switch
         {
-            LinuxConstants.TIOCGPTN or LinuxConstants.TIOCSPTLCK or LinuxConstants.TIOCGPTLCK
+            LinuxConstants.FIONREAD or LinuxConstants.TIOCGPTN or LinuxConstants.TIOCSPTLCK or LinuxConstants.TIOCGPTLCK
                 => pair.Master.Ioctl(task, request, arg),
             _ => pair.Slave.GetOrCreateDiscipline(_broadcaster, _logger, task.CommonKernel).Ioctl(task, request, arg)
         };

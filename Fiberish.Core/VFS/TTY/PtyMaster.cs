@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using Fiberish.Native;
 using Fiberish.VFS;
 using Microsoft.Extensions.Logging;
@@ -83,6 +84,12 @@ public class PtyMaster
         var engine = task.CPU;
         switch (request)
         {
+            case LinuxConstants.FIONREAD:
+            {
+                Span<byte> count = stackalloc byte[sizeof(int)];
+                BinaryPrimitives.WriteInt32LittleEndian(count, OutputBuffer.Count);
+                return engine.CopyToUser(arg, count) ? 0 : -(int)Errno.EFAULT;
+            }
             case LinuxConstants.TIOCGPTN:
                 // Get PTY number
                 var index = (uint)_pair.Index;

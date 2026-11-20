@@ -152,6 +152,16 @@ internal sealed unsafe class SdlDisplayOutput : IDisplayOutput
                         DeltaY = ev.Motion.Yrel
                     });
                     break;
+                case EventType.Mousewheel:
+                {
+                    var direction = (uint)ev.Wheel.Direction == 1 ? -1 : 1; // SDL_MOUSEWHEEL_FLIPPED
+                    _pendingInputEvents.Add(new DisplayInputEvent(DisplayInputEventKind.PointerWheel)
+                    {
+                        DeltaX = direction * ev.Wheel.X,
+                        DeltaY = direction * ev.Wheel.Y
+                    });
+                    break;
+                }
                 case EventType.Mousebuttondown:
                 case EventType.Mousebuttonup:
                 {
