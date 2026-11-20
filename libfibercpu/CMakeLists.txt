@@ -530,6 +530,52 @@ set(FIBERCPU_FINAL_SOURCES
 
 add_library(fibercpu ${FIBERCPU_LIBRARY_TYPE} ${FIBERCPU_FINAL_SOURCES})
 
+set(FIBERCPU_MODRM_TRAIN_PODISH "" CACHE FILEPATH "Published Podish.Cli.dll for short ModRM training")
+set(FIBERCPU_MODRM_TRAIN_ROOTFS "" CACHE PATH "Prepared IA-32 Node/Webpack rootfs for short ModRM training")
+set(FIBERCPU_MODRM_TRAIN_SUITE_ROOTFS "" CACHE PATH "Prepared IA-32 GNU and CoreMark rootfs for full ModRM training")
+if(FIBERCPU_MODRM_TRAIN_PODISH OR FIBERCPU_MODRM_TRAIN_ROOTFS OR FIBERCPU_MODRM_TRAIN_SUITE_ROOTFS)
+    if(NOT EXISTS "${FIBERCPU_MODRM_TRAIN_PODISH}" OR NOT IS_DIRECTORY "${FIBERCPU_MODRM_TRAIN_ROOTFS}")
+        message(FATAL_ERROR "ModRM training requires FIBERCPU_MODRM_TRAIN_PODISH and FIBERCPU_MODRM_TRAIN_ROOTFS")
+    endif()
+    if(NOT FIBERCPU_ENABLE_BLOCK_PROFILE OR FIBERCPU_BUILD_STATIC OR CMAKE_CROSSCOMPILING)
+        message(FATAL_ERROR "ModRM training requires a host shared build with FIBERCPU_ENABLE_BLOCK_PROFILE=ON")
+    endif()
+    find_program(FIBERCPU_MODRM_TRAIN_DOTNET dotnet REQUIRED)
+    set(_modrm_training_output "${CMAKE_CURRENT_BINARY_DIR}/modrm-training/$<CONFIG>")
+    set(_modrm_training_fusions)
+    if(FIBERCPU_HAVE_GENERATED_SUPEROPCODES)
+        list(APPEND _modrm_training_fusions --fusions "${FIBERCPU_GENERATED_SUPEROPCODES_FILE}")
+    endif()
+    set(_modrm_training_command
+        "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/run_modrm_training.py"
+        --dotnet "${FIBERCPU_MODRM_TRAIN_DOTNET}" --podish "${FIBERCPU_MODRM_TRAIN_PODISH}"
+        --library "$<TARGET_FILE:fibercpu>" --rootfs "${FIBERCPU_MODRM_TRAIN_ROOTFS}"
+        ${_modrm_training_fusions})
+    add_custom_target(fibercpu_train_modrm
+        COMMAND ${_modrm_training_command} --output "${_modrm_training_output}"
+        DEPENDS fibercpu
+        BYPRODUCTS "${_modrm_training_output}/blocks.bin" "${_modrm_training_output}/modrm-hotness.json"
+        COMMENT "Capturing a short Node.js ModRM training profile"
+        USES_TERMINAL
+        VERBATIM
+    )
+    if(FIBERCPU_MODRM_TRAIN_SUITE_ROOTFS)
+        if(NOT IS_DIRECTORY "${FIBERCPU_MODRM_TRAIN_SUITE_ROOTFS}")
+            message(FATAL_ERROR "FIBERCPU_MODRM_TRAIN_SUITE_ROOTFS must be a prepared rootfs directory")
+        endif()
+        set(_modrm_suite_output "${CMAKE_CURRENT_BINARY_DIR}/modrm-training-suite/$<CONFIG>")
+        add_custom_target(fibercpu_train_modrm_suite
+            COMMAND ${_modrm_training_command} --suite-rootfs "${FIBERCPU_MODRM_TRAIN_SUITE_ROOTFS}"
+                    --output "${_modrm_suite_output}"
+            DEPENDS fibercpu
+            BYPRODUCTS "${_modrm_suite_output}/modrm-hotness.json"
+            COMMENT "Capturing the ModRM training suite"
+            USES_TERMINAL
+            VERBATIM
+        )
+    endif()
+endif()
+
 target_compile_definitions(fibercpu PRIVATE FIBERCPU_SUPEROPCODE_SET_SHA256="${FIBERCPU_SUPEROPCODE_SET_SHA256}")
 target_compile_definitions(fibercpu_core PRIVATE FIBERCPU_SUPEROPCODE_SET_SHA256="${FIBERCPU_SUPEROPCODE_SET_SHA256}")
 target_compile_definitions(fibercpu_core PRIVATE)
