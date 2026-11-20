@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 
 namespace Podish.Core.Graphics;
@@ -7,6 +8,8 @@ internal sealed unsafe partial class KmsEglOutput : IDisposable
 {
     private const int BackBuffer = 0x3084;
     private const int Texture2D = 0x0DE1;
+    private static readonly Lazy<nint> WslD3d12Core = new(() =>
+        NativeLibrary.TryLoad("/usr/lib/wsl/lib/libd3d12core.so", out var handle) ? handle : 0);
     private readonly AngleLibrary _angle;
     private readonly KmsEglWindow _window;
     private readonly ILogger _logger;
@@ -69,6 +72,14 @@ internal sealed unsafe partial class KmsEglOutput : IDisposable
             var fence = Fence();
             Require(fence != 0, "initialize EGL fence synchronization");
             DestroyFence(fence);
+            var glGetString = (delegate* unmanaged[Cdecl]<uint, nint>)Gl("glGetString");
+            var renderer = Marshal.PtrToStringUTF8(glGetString(0x1F01 /* GL_RENDERER */));
+            // WSL's D3D12 runtime can leave a pthread destructor on this render
+            // thread after Dozen closes the module. Keep the system module mapped
+            // until process exit so that destructor still has valid code.
+            if (OperatingSystem.IsLinux() && renderer?.Contains("Dozen", StringComparison.OrdinalIgnoreCase) == true)
+                _ = WslD3d12Core.Value;
+            _logger.LogInformation("KMS EGL renderer: {Renderer}", renderer);
             Require(angle.MakeCurrent(angle.Display, 0, 0, 0) != 0, "unbind KMS output EGL context");
         }
         catch

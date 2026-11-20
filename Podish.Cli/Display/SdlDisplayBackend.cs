@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Runtime.InteropServices;
 using Microsoft.Extensions.Logging;
 using Podish.Display;
@@ -484,7 +485,7 @@ internal sealed unsafe class SdlDisplayRenderer : IDisplayRenderer
             flags |= RendererFlags.Presentvsync;
 
         _renderer = _sdl.CreateRenderer(window, -1, (uint)flags);
-        if (_renderer == null && vSyncMode == DisplayVSyncMode.Disabled)
+        if (_renderer == null)
         {
             flags = RendererFlags.Software;
             _renderer = _sdl.CreateRenderer(window, -1, (uint)flags);
@@ -501,7 +502,8 @@ internal sealed unsafe class SdlDisplayRenderer : IDisplayRenderer
             ? DisplayRendererKind.Accelerated
             : ((flags & RendererFlags.Accelerated) != 0 ? DisplayRendererKind.Accelerated : DisplayRendererKind.Software);
 
-        _logger.LogInformation("Opened SDL renderer kind={Kind} vsync={VSync}", Kind, vSyncMode);
+        _logger.LogInformation("Opened SDL renderer kind={Kind} vsync={VSync}", Kind,
+            (rendererFlags & (uint)RendererFlags.Presentvsync) != 0);
     }
 
     public DisplayRendererKind Kind { get; }
@@ -533,18 +535,28 @@ internal sealed unsafe class SdlDisplayRenderer : IDisplayRenderer
         if (texture == null)
             throw new InvalidOperationException($"SDL create texture failed: {GetError()}");
 
-        var blendMode = descriptor.Format == DisplayPixelFormat.Argb8888
-            ? _sdl.ComposeCustomBlendMode(
-                BlendFactor.One,
-                BlendFactor.OneMinusSrcAlpha,
-                BlendOperation.Add,
-                BlendFactor.One,
-                BlendFactor.OneMinusSrcAlpha,
-                BlendOperation.Add)
-            : BlendMode.None;
-        ThrowIfFailed(_sdl.SetTextureBlendMode(texture, blendMode), "set texture blend mode");
-
-        return new SdlDisplayTexture(_sdl, texture, descriptor);
+        try
+        {
+            bool useStraightAlpha = false;
+            if (descriptor.Format == DisplayPixelFormat.Argb8888)
+            {
+                var premultipliedBlend = _sdl.ComposeCustomBlendMode(
+                    BlendFactor.One, BlendFactor.OneMinusSrcAlpha, BlendOperation.Add,
+                    BlendFactor.One, BlendFactor.OneMinusSrcAlpha, BlendOperation.Add);
+                // SDL's software renderer only supports the standard blend modes.
+                useStraightAlpha = _sdl.SetTextureBlendMode(texture, premultipliedBlend) != 0;
+                if (useStraightAlpha)
+                    ThrowIfFailed(_sdl.SetTextureBlendMode(texture, BlendMode.Blend), "set texture blend mode");
+            }
+            else
+                ThrowIfFailed(_sdl.SetTextureBlendMode(texture, BlendMode.None), "set texture blend mode");
+            return new SdlDisplayTexture(_sdl, texture, descriptor, useStraightAlpha);
+        }
+        catch
+        {
+            _sdl.DestroyTexture(texture);
+            throw;
+        }
     }
 
     public void Clear(DisplayColor color)
@@ -615,11 +627,13 @@ internal sealed unsafe class SdlDisplayRenderer : IDisplayRenderer
 internal sealed unsafe class SdlDisplayTexture : IDisplayTexture
 {
     private readonly Sdl _sdl;
+    private readonly bool _useStraightAlpha;
     private bool _disposed;
 
-    public SdlDisplayTexture(Sdl sdl, Texture* texture, DisplayTextureDescriptor descriptor)
+    public SdlDisplayTexture(Sdl sdl, Texture* texture, DisplayTextureDescriptor descriptor, bool useStraightAlpha)
     {
         _sdl = sdl;
+        _useStraightAlpha = useStraightAlpha;
         Texture = texture;
         Width = descriptor.Width;
         Height = descriptor.Height;
@@ -637,6 +651,40 @@ internal sealed unsafe class SdlDisplayTexture : IDisplayTexture
     }
 
     public void Update(DisplayRect rect, ReadOnlySpan<byte> pixels, int pitch)
+    {
+        if (!_useStraightAlpha)
+        {
+            Upload(rect, pixels, pitch);
+            return;
+        }
+
+        int rowBytes = checked(rect.Width * 4);
+        int bytes = checked(rowBytes * rect.Height);
+        byte[] rented = ArrayPool<byte>.Shared.Rent(bytes);
+        try
+        {
+            for (int y = 0; y < rect.Height; y++)
+            {
+                var source = pixels.Slice(y * pitch, rowBytes);
+                var target = rented.AsSpan(y * rowBytes, rowBytes);
+                for (int x = 0; x < rowBytes; x += 4)
+                {
+                    // ARGB8888 is laid out B, G, R, A in these little-endian uploads.
+                    byte alpha = target[x + 3] = source[x + 3];
+                    for (int component = 0; component < 3; component++)
+                        target[x + component] = alpha == 0 ? (byte)0 :
+                            (byte)Math.Min(255, (source[x + component] * 255 + alpha / 2) / alpha);
+                }
+            }
+            Upload(rect, rented.AsSpan(0, bytes), rowBytes);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(rented);
+        }
+    }
+
+    private void Upload(DisplayRect rect, ReadOnlySpan<byte> pixels, int pitch)
     {
         fixed (byte* pixelPtr = pixels)
         {

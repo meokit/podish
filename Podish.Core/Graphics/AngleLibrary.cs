@@ -87,7 +87,9 @@ internal sealed unsafe class AngleLibrary
                 var platformDisplay = (delegate* unmanaged[Cdecl]<uint, nint, int*, nint>)getProc(name);
                 if (platformDisplay == null)
                     throw new InvalidOperationException("ANGLE does not export eglGetPlatformDisplayEXT.");
-                // ANGLE uses Metal on macOS and its default backend on other hosts.
+                // KMS scanout needs a window config that supports texture-bound
+                // pbuffers and EGL fence sync. ANGLE's default D3D11 (Windows)
+                // and GLX (Linux/X11) backends do not provide both.
                 int* attribs = stackalloc int[5];
                 var i = 0;
                 if (OperatingSystem.IsMacOS())
@@ -95,10 +97,10 @@ internal sealed unsafe class AngleLibrary
                     attribs[i++] = 0x3203; // EGL_PLATFORM_ANGLE_TYPE_ANGLE
                     attribs[i++] = 0x3489; // Metal
                 }
-                else if (OperatingSystem.IsWindows() && window != null)
+                else if (window != null && (OperatingSystem.IsWindows() || OperatingSystem.IsLinux()))
                 {
                     attribs[i++] = 0x3203;
-                    attribs[i++] = 0x3208; // D3D11
+                    attribs[i++] = 0x3450; // Vulkan
                 }
                 if (_nativePlatform != 0)
                 {

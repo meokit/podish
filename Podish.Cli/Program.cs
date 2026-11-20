@@ -505,7 +505,7 @@ internal class Program
             metadata.UpdatedAt = DateTimeOffset.UtcNow;
             PodishContainerMetadataStore.Write(containersDir, metadata);
 
-            var exitCode = await RunContainerOnDisplayThread(spec.Fbdev || (spec.KmsDrm && spec.Gles), () => RunContainer(
+            var exitCode = await RunContainerOnDisplayThread(spec.Fbdev || spec.WaylandServer || (spec.KmsDrm && spec.Gles), () => RunContainer(
                 rootfsPath,
                 spec.Exe ?? string.Empty,
                 spec.ExeArgs,
@@ -715,7 +715,7 @@ internal class Program
             metadata.ExitCode = null;
             metadata.UpdatedAt = DateTimeOffset.UtcNow;
             PodishContainerMetadataStore.Write(containersDir, metadata);
-            var exitCode = await RunContainerOnDisplayThread(spec.Fbdev || (spec.KmsDrm && spec.Gles), () => RunContainer(
+            var exitCode = await RunContainerOnDisplayThread(spec.Fbdev || spec.WaylandServer || (spec.KmsDrm && spec.Gles), () => RunContainer(
                 rootfsPath,
                 exeOverride ?? spec.Exe ?? string.Empty,
                 hasEntrypointOverride ? exeArgsOverride : spec.ExeArgs,
@@ -1666,7 +1666,7 @@ internal class Program
         var framebuffer = fbdevSize is DisplaySize size ? new FramebufferDevice(size.Width, size.Height) : null;
         var enableKmsOutput = enableKmsDrm && enableGles && framebuffer == null && !enableWaylandServer;
         var processController = framebuffer != null || enableKmsOutput ? new ContainerProcessController() : null;
-        var framebufferHost = framebuffer != null ? new FramebufferDisplayHost(ProgramLoggerFactory, framebuffer) : null;
+        using var framebufferHost = framebuffer != null ? new FramebufferDisplayHost(ProgramLoggerFactory, framebuffer) : null;
         try
         {
             using var kmsBackend = enableKmsOutput
@@ -1684,6 +1684,17 @@ internal class Program
                 return 125;
             }
             using var kmsOutput = kmsWindow;
+            try
+            {
+                // A short guest can finish before SDL creates its window, especially on X11.
+                framebufferHost?.Start();
+                waylandDisplayState?.Start();
+            }
+            catch (Exception ex) when (ex is InvalidOperationException or DllNotFoundException or EntryPointNotFoundException)
+            {
+                Logger.LogError("SDL display initialization failed. {Message}", ex.Message);
+                return 125;
+            }
             var runtimeTask = runtimeThread.Start(new ContainerRunRequest
             {
                 RootfsPath = rootfsPath,
