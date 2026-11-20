@@ -44,7 +44,7 @@ struct SpecCriteria {
 
     bool RequiresMemShape() const { return base_offset_mask || index_offset_mask || scale_mask || segment_mask; }
 
-    bool Matches(const DecodedOp* op) const {
+    bool Matches(const DecodedInstruction* op) const {
         const uint8_t modrm = op->modrm;
 
         if (op->meta.flags.has_modrm) {
@@ -67,7 +67,7 @@ struct SpecCriteria {
     }
 
     // ModRM and flag liveness are already selected by the immutable index.
-    bool MatchesIndexedRemainder(const DecodedOp* op) const {
+    bool MatchesIndexedRemainder(const DecodedInstruction* op) const {
         if (prefix_mask && (op->prefixes.all & prefix_mask) != prefix_val) return false;
         if (memory_only && !op->meta.flags.has_mem) return false;
 
@@ -130,6 +130,6 @@ struct SpecializedEntry {
 void RegisterSpecializedHandler(uint16_t opcode, SpecCriteria criteria, HandlerFunc handler, int priority);
 
 // Lookup
-HandlerFunc FindSpecializedHandler(uint16_t handler_index, DecodedOp* op);
+HandlerFunc FindSpecializedHandler(uint16_t handler_index, DecodedInstruction* op);
 
 }  // namespace fiberish

@@ -4,7 +4,7 @@ import argparse, json, pathlib, re
 
 from gen_instruction_catalog import read_catalog
 from operand_specialization_data import (
-    FUSION_CALL, Operand, generated_fusions, instruction_targets, resolve_training_plan, specialize_profile_fusion,
+    FUSION_CALL, Operand, generated_fusions, instruction_targets, resolve_training_plan, specialize_fusion,
     training_plan_match,
 )
 
@@ -13,6 +13,7 @@ p.add_argument('--source', required=True)
 p.add_argument('--plan', required=True)
 p.add_argument('--catalog', required=True, type=pathlib.Path)
 p.add_argument('--output', required=True)
+p.add_argument('--compact-immediates', required=True, type=pathlib.Path)
 p.add_argument('--mode', type=int, default=0)
 p.add_argument('--budget', type=int, default=256)
 p.add_argument('--pin-specialization', type=int, default=0)
@@ -69,10 +70,25 @@ def keep_for(name, shape):
     return all_pins & ~pin_bits.get(idx, 0)
 
 code = ['// Generated decoded operand lowering.', '#include "operand_specialization.h"']
+compact = {}
+if not a.fused_only and a.mode in (1, 3):
+    for row in json.loads(a.compact_immediates.read_text()):
+        values = row["immediates"]
+        if not values or any(type(value) is not int or not 0 < value <= 0xffffffff for value in values):
+            p.error("expected nonzero uint32 compact immediates")
+        if len(set(values)) != len(values):
+            p.error("duplicate compact immediate in selector")
+        for name in row["handlers"]:
+            if name not in targets or name in compact:
+                p.error(f"unknown or duplicate compact-immediate handler: {name}")
+            compact[name] = values
+
 if decoded_match:
     # Custom fusion source may include only the kernels used in that table.
     headers = a.catalog.parent / "ops"
     code.extend(f'#include "ops/{header.name}"' for header in sorted(headers.glob("*_impl.h")))
+elif compact:
+    code.extend(['#include "ops/ops_data_mov_impl.h"', '#include "ops/ops_groups_impl.h"'])
 code.append('namespace fiberish {')
 entries = []
 skipped = 0
@@ -114,13 +130,8 @@ if a.mode in (1, 3) and (decoded_match or not basic_pin):
             if len(calls) != width:
                 raise ValueError('Fusion width does not match selected source: ' + original)
             clone = f'OperandClone_{i:03d}_{original}'
-            if decoded_match:
-                body = specialize_profile_fusion(body, original, clone, operands)
-            else:
-                assumptions = [f'    OperandSpec::AssumeOperandShape<{cpp_shapes[j]}>(op + {j});\n' for j in range(width)]
-                pos = body.index('{') + 1
-                body = body[:pos] + '\n' + ''.join(assumptions) + body[pos:]
-                body = body.replace(original, clone)
+            policy = 'OperandSpec::Profile' if decoded_match else 'OperandSpec::Exact'
+            body = specialize_fusion(body, original, clone, [f'{policy}<{shape}>' for shape in cpp_shapes[:width]])
             keep = all_pins
             for call, shape in zip(calls, shapes):
                 keep &= keep_for(call[1], shape)
@@ -146,6 +157,37 @@ if not a.fused_only and (a.mode in (2, 3) or a.pin_mode >= 3):
             registers.append(f'    {{DispatchWrapper<op::{name}>, SelectEncodedOperand<op::{name}, PinWriteRole::{role}, {str(byte).lower()}, {str(group == "Opcode").lower()}>, PinOperandForm::{group}}},')
         else:
             registers.append(f'    {{DispatchWrapper<op::{name}>, SelectRegisterOperand<op::{name}, PinWriteRole::{role}, {str(byte).lower()}, {str(group == "Group").lower()}>}},')
+code += ["""struct CompactImmediateEntry {
+    HandlerFunc original;
+    uint32_t immediate;
+    HandlerFunc replacement;
+};""", 'static constexpr CompactImmediateEntry compact_immediates[] = {']
+for name, values in compact.items():
+    for value in values:
+        code.append(f'    {{DispatchWrapper<op::{name}>, {value}u, '
+                    f'DispatchWrapper<op::{name}, OperandSpec::CompactImmediate<{value}u>>}},')
+if not compact:
+    code.append('    {},')
+code += ['};', f'constexpr bool has_compact_immediates = {str(bool(compact)).lower()};',
+         """HandlerFunc FindCompactImmediate(const DecodedInstruction* op) {
+    if constexpr (has_compact_immediates) {
+        if (!HasMem(op) || !compact_imm::HasFreePrefixBits(*op)) return nullptr;
+        const auto imm = GetImm(op);
+        if (!imm) return nullptr;
+        using Variants = std::vector<CompactImmediateEntry>;
+        static const auto index = [] {
+            ankerl::unordered_dense::map<HandlerFunc, Variants> map;
+            for (const auto& entry : compact_immediates) map[entry.original].push_back(entry);
+            return map;
+        }();
+        const auto found = index.find(op->handler);
+        if (found == index.end()) return nullptr;
+        for (const auto& entry : found->second) {
+            if (entry.immediate == imm) return entry.replacement;
+        }
+    }
+    return nullptr;
+}"""]
 code += ['static const RegisterOperandEntry registers[] = {'] + (registers or ['    {},']) + ['};',
          f'constexpr size_t register_count = {len(registers)};',
          'const auto& OperandLookup() {',
@@ -155,7 +197,10 @@ code += ['static const RegisterOperandEntry registers[] = {'] + (registers or ['
     static const auto originals = [] {
         ankerl::unordered_dense::map<HandlerFunc, HandlerFunc> result;
         for (size_t i=0; i<shape_count; ++i) result[shapes[i].replacement] = shapes[i].original;
-        DecodedOp dummy{};
+        if constexpr (has_compact_immediates) {
+            for (const auto& entry : compact_immediates) result[entry.replacement] = entry.original;
+        }
+        DecodedInstruction dummy{};
         for (size_t i=0; i<register_count; ++i) {
             for (unsigned modrm=0xc0; modrm<=0xff; ++modrm) {
                 dummy.modrm = modrm;
@@ -166,15 +211,17 @@ code += ['static const RegisterOperandEntry registers[] = {'] + (registers or ['
     }();
     const auto found = originals.find(handler);
     return found == originals.end() ? handler : found->second;
-}''', 'HandlerFunc LowerOperandHandler(const DecodedOp* op) {',
-         '    return OperandLookup().Find(op);',
+}''', 'HandlerFunc LowerOperandHandler(const DecodedInstruction* op) {',
+         '    if (const auto specialized = OperandLookup().Find(op)) return specialized;',
+         '    return FindCompactImmediate(op);',
           '}',
-         'HandlerFunc LowerFusionOperandHandler(const DecodedOp* op, HandlerFunc handler) {',
+         'HandlerFunc LowerFusionOperandHandler(const DecodedInstruction* op, HandlerFunc handler) {',
          '    return OperandLookup().Find(op, handler);', '}',
-         'bool AcceptFusionOperandShape(const DecodedOp* op, HandlerFunc handler) {',
+         'bool AcceptFusionOperandShape(const DecodedInstruction* op, HandlerFunc handler) {',
          '    return OperandLookup().Find(op, handler) != nullptr;',
          '}', '} // namespace fiberish']
 path = pathlib.Path(a.output); path.parent.mkdir(parents=True, exist_ok=True); path.write_text('\n'.join(code) + '\n')
-print(f'Operand lowering: {len(entries)} exact shapes, {len(registers)} register families')
+print(f'Operand lowering: {len(entries)} exact shapes, {len(registers)} register families, '
+      f'{sum(map(len, compact.values()))} compact immediate handlers')
 if decoded_match and skipped:
     print(f'Skipped {skipped} operand entries absent from the selected instruction or fusion source')

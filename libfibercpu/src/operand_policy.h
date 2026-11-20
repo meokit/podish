@@ -4,26 +4,77 @@
 #include "decoder.h"
 
 namespace fiberish {
+// The mandatory part of a runtime binding. Use the raw ModRM byte so exact
+// templates and the assembler agree even for instructions that consume only part of it.
+struct BoundOperandShape {
+    uint8_t modrm;
+    uint8_t slots;
+
+    auto operator<=>(const BoundOperandShape&) const = default;
+
+    static FORCE_INLINE BoundOperandShape Read(const DecodedInstruction& op) {
+        return {op.modrm, uint8_t(1 + compact_imm::NeedsSeparateSlot(op))};
+    }
+};
+
 namespace OperandSpec {
 struct Dynamic {
     static constexpr unsigned keep_mask = 0;
+    static constexpr unsigned slots = 0;
+    static FORCE_INLINE uint8_t ModRM(const DecodedOp* op) { return GetModRM(op); }
     static FORCE_INLINE void Assume(const DecodedOp*) {}
     static FORCE_INLINE uint32_t Immediate(const DecodedOp* op) { return GetImm(op); }
 };
+template <unsigned Slots>
+struct SlotBound : Dynamic {
+    static_assert(Slots == 1 || Slots == 2);
+    static constexpr unsigned slots = Slots;
+    static FORCE_INLINE uint32_t Immediate(const DecodedOp* op) {
+        if constexpr (Slots == 2) return (op + 1)->Primary();
+        return op->HasMemory() ? GetSingleSlotMemoryImmediate(op) : op->Primary();
+    }
+};
+
+template <uint32_t Value>
+struct CompactImmediate : Dynamic {
+    static constexpr unsigned slots = 1;
+    static_assert(compact_imm::Encode(Value) != 0);
+
+    static FORCE_INLINE void Assume(const DecodedOp* op) {
+        const bool compact = op->HasCompactImmediate();
+        const auto modrm = GetModRM(op);
+        __builtin_assume(compact);
+        __builtin_assume((modrm & 0xc0) != 0xc0);
+    }
+    static constexpr uint32_t Immediate(const DecodedOp*) { return Value; }
+};
+
 template <uint64_t Shape>
 FORCE_INLINE void AssumeOperandShape(const DecodedOp* op) {
-    __builtin_assume(op->modrm == (Shape & 255));
-    __builtin_assume(op->prefixes.all == ((Shape >> 8) & 255));
+    const auto prefixes = GetPrefixes(op).all;
+    __builtin_assume(prefixes == ((Shape >> 8) & 255));
     if constexpr (Shape >> 16) {
-        const auto* ext = GetExt(op);
-        __builtin_assume(ext->data.ea_desc == uint32_t(Shape >> 16));
+        const auto ea = GetAddressDescriptor(op);
+        __builtin_assume(ea == uint32_t(Shape >> 16));
     }
 }
 template <uint64_t Shape, unsigned Keep = 0>
 struct Exact : Dynamic {
     static constexpr unsigned keep_mask = Keep;
+    static constexpr unsigned slots = 1;
+    static constexpr uint8_t ModRM(const DecodedOp*) { return uint8_t(Shape); }
+    static FORCE_INLINE uint32_t Immediate(const DecodedOp* op) {
+        if constexpr (Shape >> 16) return GetSingleSlotMemoryImmediate(op);
+        return op->Primary();
+    }
     static FORCE_INLINE void Assume(const DecodedOp* op) { AssumeOperandShape<Shape>(op); }
 };
+
+template <class Policy>
+FORCE_INLINE DecodedOp* Advance(DecodedOp* op) {
+    if constexpr (Policy::slots) return op + Policy::slots;
+    return NextOp(op);
+}
 
 }  // namespace OperandSpec
 
@@ -37,9 +88,13 @@ struct DecodedOperandShape {
 
     static constexpr uint8_t metadata_mask = 0xdf;  // Exclude operand_lowered.
 
+    constexpr unsigned SlotCount() const {
+        return 1 + compact_imm::NeedsSeparateSlot((encoding >> 16) & 2, uint8_t(encoding >> 8), immediate);
+    }
+
     auto operator<=>(const DecodedOperandShape&) const = default;
 
-    static FORCE_INLINE DecodedOperandShape Read(const DecodedOp* op) {
+    static FORCE_INLINE DecodedOperandShape Read(const DecodedInstruction* op) {
         const bool data_memory = HasMem(op) && GetExtKind(op) == ExtKind::Data;
         return {
             uint32_t(op->modrm) | (uint32_t(op->prefixes.all) << 8) | (uint32_t(op->meta.all & metadata_mask) << 16) |
@@ -55,18 +110,27 @@ namespace OperandSpec {
 template <DecodedOperandShape Shape, unsigned Keep = 0>
 struct Profile {
     static constexpr unsigned keep_mask = Keep;
+    static constexpr unsigned slots = Shape.SlotCount();
+    static constexpr uint8_t ModRM(const DecodedOp*) { return uint8_t(Shape.encoding); }
     static FORCE_INLINE void Assume(const DecodedOp* op) {
         constexpr uint8_t metadata = uint8_t(Shape.encoding >> 16);
-        __builtin_assume(op->modrm == uint8_t(Shape.encoding));
-        __builtin_assume(op->prefixes.all == uint8_t(Shape.encoding >> 8));
-        __builtin_assume((op->meta.all & DecodedOperandShape::metadata_mask) == metadata);
-        __builtin_assume(op->len == uint8_t(Shape.encoding >> 24));
+        constexpr auto prefixes = uint8_t(Shape.encoding >> 8);
+        constexpr auto size_bits = prefix::OPSIZE | prefix::ADDRSIZE;
+        const auto decoded_prefixes = GetPrefixes(op).all;
+        const auto decoded_sizes = op->RawPrefixes() & size_bits;
+        const auto meta = GetMeta(op).all;
+        __builtin_assume(decoded_prefixes == prefixes);
+        __builtin_assume(decoded_sizes == (prefixes & size_bits));
+        __builtin_assume((meta & DecodedOperandShape::metadata_mask) == metadata);
         if constexpr ((metadata & 0xc2) == 2) {
-            __builtin_assume(op->ext.data.ea_desc == Shape.ea_desc);
-            __builtin_assume(op->ext.data.disp == Shape.displacement);
-        }
-        if constexpr (metadata & 4) {
-            __builtin_assume(op->ext.data.imm == Shape.immediate);
+            // This is the packed encoding that downstream addressing code
+            // reads. The inverse conversion hides its fields from LLVM.
+            const auto packed = (op->payload >> DecodedOp::kAddressShift) & 0x1ff;
+            const auto segment = memdesc::ResolvedSegment(GetAddressDescriptor(op));
+            const auto displacement = GetDisplacement(op);
+            __builtin_assume(packed == memdesc::CompactEA(Shape.ea_desc));
+            __builtin_assume(segment == memdesc::ResolvedSegment(Shape.ea_desc));
+            __builtin_assume(displacement == Shape.displacement);
         }
     }
     static constexpr uint32_t Immediate(const DecodedOp*) { return Shape.immediate; }
@@ -99,11 +163,14 @@ FORCE_INLINE void AssumePinClass(unsigned parent) {
 namespace OperandSpec {
 template <PinWriteRole Role, PinWriteClass Class, bool Byte>
 struct Register : Dynamic {
+    static constexpr unsigned slots = 1;
+    static FORCE_INLINE uint32_t Immediate(const DecodedOp* op) { return op->Primary(); }
     static constexpr unsigned keep_mask = FIBERCPU_PIN_KEEP_MASK & ~PinArgumentBit(Class);
     static FORCE_INLINE void Assume(const DecodedOp* op) {
-        __builtin_assume((op->modrm & 0xC0) == 0xC0);
+        const auto modrm = GetModRM(op);
+        __builtin_assume((modrm & 0xC0) == 0xC0);
         if constexpr (Role != PinWriteRole::None) {
-            const unsigned field = Role == PinWriteRole::Rm ? op->modrm : op->modrm >> 3;
+            const unsigned field = Role == PinWriteRole::Rm ? modrm : modrm >> 3;
             const unsigned parent = field & (Byte ? 3 : 7);
             AssumePinClass<Class, Byte>(parent);
         }
@@ -115,12 +182,15 @@ template <PinWriteRole Role, PinWriteClass Class, bool Byte, bool OpcodeRegister
 struct Encoded : Dynamic {
     static constexpr unsigned keep_mask = FIBERCPU_PIN_KEEP_MASK & ~PinArgumentBit(Class);
     static FORCE_INLINE void Assume(const DecodedOp* op) {
-        if constexpr (OpcodeRegister)
-            __builtin_assume(!op->meta.flags.has_modrm);
-        else
-            __builtin_assume((op->modrm & 0xc0) != 0xc0);
+        const auto modrm = GetModRM(op);
+        if constexpr (OpcodeRegister) {
+            const auto meta = GetMeta(op);
+            __builtin_assume(!meta.flags.has_modrm);
+        } else {
+            __builtin_assume((modrm & 0xc0) != 0xc0);
+        }
         if constexpr (Role != PinWriteRole::None) {
-            const unsigned field = Role == PinWriteRole::Reg ? op->modrm >> 3 : op->modrm;
+            const unsigned field = Role == PinWriteRole::Reg ? modrm >> 3 : modrm;
             const unsigned parent = field & (Byte ? 3 : 7);
             AssumePinClass<Class, Byte>(parent);
         }

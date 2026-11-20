@@ -19,6 +19,7 @@
 namespace fiberish {
 
 extern "C" bool FiberLLVMUseStep(unsigned index);
+extern "C" unsigned FiberLLVMSlotCount(unsigned index);
 extern "C" LLVMBlockExit FiberLLVMExit();
 extern "C" LogicFlow FiberLLVMPlaceholder(unsigned index, uint32_t encoding, uint32_t ea_desc, uint32_t displacement,
                                           LogicFuncParams);
@@ -36,13 +37,17 @@ FORCE_INLINE LogicFlow RunLLVMFlagPolicy(uint8_t metadata, LogicFuncParams) {
     extern "C" LogicFlow FiberLLVMTemplate_##Name(unsigned, uint32_t encoding, uint32_t ea_desc,            \
                                                   uint32_t displacement, LogicFuncParams) {                 \
         const auto metadata = uint8_t(encoding >> 16);                                                      \
-        __builtin_assume(op->modrm == uint8_t(encoding));                                                   \
-        __builtin_assume(op->prefixes.all == uint8_t(encoding >> 8));                                       \
-        __builtin_assume((op->meta.all & DecodedOperandShape::metadata_mask) == metadata);                  \
-        __builtin_assume(op->len == uint8_t(encoding >> 24));                                               \
+        const auto prefixes = GetPrefixes(op).all;                                                          \
+        const auto meta = GetMeta(op).all;                                                                  \
+        const auto length = GetOpLength(state, op);                                                         \
+        __builtin_assume(prefixes == uint8_t(encoding >> 8));                                               \
+        __builtin_assume((meta & DecodedOperandShape::metadata_mask) == metadata);                          \
+        __builtin_assume(length == uint8_t(encoding >> 24));                                                \
         if ((metadata & 0xc2) == 2) {                                                                       \
-            __builtin_assume(op->ext.data.ea_desc == ea_desc);                                              \
-            __builtin_assume(op->ext.data.disp == displacement);                                            \
+            const auto ea = GetAddressDescriptor(op);                                                       \
+            const auto disp = GetDisplacement(op);                                                          \
+            __builtin_assume(ea == ea_desc);                                                                \
+            __builtin_assume(disp == displacement);                                                         \
         }                                                                                                   \
         return Exact;                                                                                       \
     }
@@ -65,16 +70,20 @@ extern "C" const LLVMOperationTable FiberLLVMOperationTable = {
     },
 };
 
-#define FIBERCPU_LLVM_STEP(I)                                                                                      \
-    do {                                                                                                           \
-        if (!FiberLLVMUseStep(I)) goto dispatch_tail;                                                              \
-        auto flow = FiberLLVMPlaceholder(I, 0, 0, 0, state, current, &utlb, GetImm(current), &branch, flags_cache, \
-                                         FIBERCPU_GPR_CACHE);                                                      \
-        if (flow != LogicFlow::Continue) {                                                                         \
-            HANDLE_SUPEROPCODE_FLOW(flow, state, current, instr_limit, utlb, utlb_tags, utlb_addend, branch,       \
-                                    flags_cache);                                                                  \
-        }                                                                                                          \
-        current = NextOp(current);                                                                                 \
+#define FIBERCPU_LLVM_STEP(I)                                                                                          \
+    do {                                                                                                               \
+        if (!FiberLLVMUseStep(I)) goto dispatch_tail;                                                                  \
+        const auto slots = FiberLLVMSlotCount(I);                                                                      \
+        const auto imm = slots == 2             ? (current + 1)->Primary()                                             \
+                         : current->HasMemory() ? GetSingleSlotMemoryImmediate(current)                                \
+                                                : current->Primary();                                                  \
+        auto flow =                                                                                                    \
+            FiberLLVMPlaceholder(I, 0, 0, 0, state, current, &utlb, imm, 0, &branch, flags_cache, FIBERCPU_GPR_CACHE); \
+        if (flow != LogicFlow::Continue) {                                                                             \
+            HANDLE_SUPEROPCODE_FLOW(flow, state, current, instr_limit, utlb, utlb_tags, utlb_addend, branch,           \
+                                    flags_cache);                                                                      \
+        }                                                                                                              \
+        current += slots;                                                                                              \
     } while (false)
 
 // Clang supplies the exact threaded ABI and shared SuperOpcode exits. Step

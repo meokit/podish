@@ -388,7 +388,7 @@ def generate(catalog, output, fusion_source=None):
             bindings.append(f"FORCE_INLINE LogicFlow {name}(LogicFuncParams) {{")
             if shape := row.get("shape"):
                 bindings.append(f"    spec::AssumeInstructionShape<spec::family::{shape['family']}, "
-                                f"{spec_expression(shape['spec'])}>(op);")
+                                f"{spec_expression(shape['spec'])}>(op, operand_modrm);")
             if generic:
                 bindings.append("#if FIBERCPU_STATIC_SPECIALIZATION")
             entry = identifier(row["base"]) if "base" in row else kernel_reference(row["kernel"], arguments)
@@ -453,7 +453,9 @@ def generate(catalog, output, fusion_source=None):
         if handler.kind == "wrapper":
             if name not in always_available:
                 scalar_training.append("#if FIBERCPU_STATIC_SPECIALIZATION")
-            scalar_training.append(f'    {{0x{op_id:08x}u, DispatchWrapper<op::{name}>, "op::{name}"}},')
+            scalar_training.append(f'    {{0x{op_id:08x}u, DispatchWrapper<op::{name}>, "op::{name}", '
+                                   f'{{DispatchWrapper<op::{name}, OperandSpec::SlotBound<1>>, '
+                                   f'DispatchWrapper<op::{name}, OperandSpec::SlotBound<2>>}}}},')
             if name not in always_available:
                 scalar_training.append("#endif")
         elif handler.kind == "fused":

@@ -94,19 +94,24 @@ def resolve_training_plan(plan, catalog, fusions, limit=None):
     return rows
 
 
-def specialize_profile_fusion(body, original, clone, operands):
+def specialize_fusion(body, original, clone, policies):
     calls = list(FUSION_CALL.finditer(body))
-    if len(calls) != len(operands):
+    if len(calls) != len(policies):
         raise ValueError("Fusion width does not match selected source: " + original)
-    for call, operand in reversed(list(zip(calls, operands))):
-        replacement = "RUN_SUPEROPCODE_OP_IMM" + call[0][len("RUN_SUPEROPCODE_OP"):-1]
-        body = body[:call.start()] + replacement + f", 0x{operand.imm:08x}u)" + body[call.end():]
-    assumptions = "".join(
-        f"    OperandSpec::Profile<{operand.cpp()}>::Assume(op + {i});\n"
-        for i, operand in enumerate(operands)
-    )
+    names = {}
+    declarations = []
+    for i, (call, policy) in reversed(list(enumerate(zip(calls, policies)))):
+        slot = call[0].split(",")[2].strip()
+        alias = f"SlotPolicy{i}"
+        names[slot] = alias
+        declarations.append(f"    using {alias} = {policy};\n")
+        replacement = call[0].replace("RUN_SUPEROPCODE_OP(", f"RUN_SUPEROPCODE_OP_WITH_POLICY({alias}, ", 1)
+        body = body[:call.start()] + replacement + body[call.end():]
+    body = re.sub(r"NextOp\((\w+)\)", lambda match: (
+        f"OperandSpec::Advance<{names[match[1]]}>({match[1]})" if match[1] in names else match[0]
+    ), body)
     pos = body.index("{") + 1
-    return (body[:pos] + "\n" + assumptions + body[pos:]).replace(original, clone)
+    return (body[:pos] + "\n" + "".join(reversed(declarations)) + body[pos:]).replace(original, clone)
 
 
 METADATA_MASK = 0xdf  # The lowering bit describes the host handler, not the x86 instruction.

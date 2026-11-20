@@ -7,8 +7,16 @@
 
 namespace fiberish {
 
+struct BoundScalarHandler {
+    HandlerFunc handler;
+    uint32_t id;
+    BoundOperandShape shape;
+};
+
 void RegisterInstructionVariants();
-HandlerFunc FindGenericInstructionHandler(uint16_t opcode, const DecodedOp* op);
+BoundScalarHandler BindScalarHandler(const DecodedInstruction& op);
+HandlerFunc CanonicalBoundHandler(HandlerFunc handler);
+HandlerFunc FindGenericInstructionHandler(uint16_t opcode, const DecodedInstruction* op);
 int FindGenericOpcodeIndex(HandlerFunc handler);
 HandlerFunc FindFusionFallbackHandler(HandlerFunc handler);
 uint32_t FindScalarTrainingId(HandlerFunc handler);

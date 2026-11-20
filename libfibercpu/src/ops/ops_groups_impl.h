@@ -20,14 +20,20 @@ enum class Group1Immediate { Byte, OperandWidth, SignExtendedByte };
 
 template <typename T, Group1Immediate Immediate, FlagsSpec Flags, GroupOpSpec SubOp, RmOperandSpec Rm>
 FORCE_INLINE LogicFlow OpGroup1_T_Internal(LogicFuncParams) {
+    constexpr auto form = Rm == RmOperandSpec::Dynamic ? AddrModeSpec::Dynamic : AddrModeSpec::ModReg;
+    const bool register_operand = OperandIsReg<form>(operand_modrm);
+    const uint8_t rm = Rm >= RmOperandSpec::Reg0 && Rm <= RmOperandSpec::Reg7
+                           ? uint8_t(Rm) - uint8_t(RmOperandSpec::Reg0)
+                           : operand_modrm & 7;
     T dest;
-    if constexpr (Rm == RmOperandSpec::ModReg) {
-        dest = ReadRegGeneric<T>(state, gpr, op->modrm & 7);
-    } else if constexpr (Rm >= RmOperandSpec::Reg0 && Rm <= RmOperandSpec::Reg7) {
-        constexpr uint8_t index = static_cast<uint8_t>(Rm) - static_cast<uint8_t>(RmOperandSpec::Reg0);
-        dest = ReadRegGeneric<T>(state, gpr, index);
+    uint32_t address = 0;
+    if (register_operand) {
+        dest = ReadRegGeneric<T>(state, gpr, rm);
     } else {
-        const auto res = ReadModRM<T, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
+        // The read either completes or restarts the instruction. Reuse the
+        // address for writeback once the read has completed.
+        address = ComputeLinearAddress(state, gpr, op);
+        const auto res = ReadMem<T, OpOnTLBMiss::Restart>(state, gpr, address, utlb, op);
         if (!res) return LogicFlow::RestartMemoryOp;
         dest = *res;
     }
@@ -35,7 +41,8 @@ FORCE_INLINE LogicFlow OpGroup1_T_Internal(LogicFuncParams) {
     auto src = static_cast<T>(imm);
     if constexpr (Immediate == Group1Immediate::SignExtendedByte) src = static_cast<T>(static_cast<int8_t>(imm));
 
-    return Helper_Group1<T, Flags != FlagsSpec::Dead, SubOp, Rm>(state, gpr, op, flags_cache, dest, src, utlb);
+    return Helper_Group1<T, Flags != FlagsSpec::Dead, SubOp>(state, gpr, op, operand_modrm, flags_cache, dest, src,
+                                                             utlb, register_operand, rm, address);
 }
 
 template <Group1Immediate Immediate, FlagsSpec Flags = FlagsSpec::Dynamic, GroupOpSpec SubOp = GroupOpSpec::Dynamic,
@@ -57,9 +64,10 @@ FORCE_INLINE LogicFlow OpGroup1_Internal(LogicFuncParams) {
 template <typename T, bool UpdateFlags, GroupOpSpec SubOp = GroupOpSpec::Dynamic,
           AddrModeSpec Form = AddrModeSpec::Dynamic>
 FORCE_INLINE LogicFlow OpGroup3_Ev_T_Internal(LogicFuncParams) {
-    const auto value = ReadModRM<T, OpOnTLBMiss::Restart, 1, Form>(state, gpr, op, utlb);
+    const ModRMRmwOperand<Form> operand(state, gpr, op, operand_modrm);
+    const auto value = operand.template Read<T, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!value) return LogicFlow::RestartMemoryOp;
-    return Helper_Group3<T, UpdateFlags, SubOp>(state, gpr, op, flags_cache, *value, utlb, imm);
+    return Helper_Group3<T, UpdateFlags, SubOp>(state, gpr, op, operand_modrm, operand, flags_cache, *value, utlb, imm);
 }
 
 template <bool UpdateFlags, GroupOpSpec SubOp = GroupOpSpec::Dynamic>
@@ -86,11 +94,11 @@ FORCE_INLINE LogicFlow OpGroup3_Internal(LogicFuncParams) {
 template <bool UpdateFlags, GroupOpSpec FixedSubOp = GroupOpSpec::Dynamic>
 FORCE_INLINE LogicFlow OpGroup4_Eb_Internal(LogicFuncParams) {
     // FE
-    auto val_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
+    const ModRMRmwOperand<> operand(state, gpr, op, operand_modrm);
+    const auto val_res = operand.Read<uint8_t, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!val_res) return LogicFlow::RestartMemoryOp;
-    uint8_t val = *val_res;
-
-    return Helper_Group4<uint8_t, UpdateFlags, FixedSubOp>(state, gpr, op, flags_cache, val, utlb);
+    return Helper_Group4<uint8_t, UpdateFlags, FixedSubOp>(state, gpr, op, operand_modrm, operand, flags_cache,
+                                                           *val_res, utlb);
 }
 
 // =========================================================================================
@@ -99,21 +107,11 @@ FORCE_INLINE LogicFlow OpGroup4_Eb_Internal(LogicFuncParams) {
 
 template <typename T, bool UpdateFlags, GroupOpSpec FixedSubOp = GroupOpSpec::Dynamic>
 FORCE_INLINE LogicFlow OpGroup5_Ev_T_Internal(LogicFuncParams) {
-    // FF
-    // RMW Instructions!
-    // Must use Blocking memory op to avoid looping
-    T val;
-    if constexpr (sizeof(T) == 2) {
-        auto res = ReadModRM<uint16_t, OpOnTLBMiss::Blocking>(state, gpr, op, utlb);
-        if (!res) return LogicFlow::ExitOnCurrentEIP;
-        val = *res;
-    } else {
-        auto res = ReadModRM<uint32_t, OpOnTLBMiss::Blocking>(state, gpr, op, utlb);
-        if (!res) return LogicFlow::ExitOnCurrentEIP;
-        val = *res;
-    }
-
-    return Helper_Group5<T, UpdateFlags, FixedSubOp>(state, gpr, op, flags_cache, val, utlb, branch);
+    const ModRMRmwOperand<> operand(state, gpr, op, operand_modrm);
+    const auto value = operand.Read<T, OpOnTLBMiss::Blocking>(state, gpr, op, utlb);
+    if (!value) return LogicFlow::ExitOnCurrentEIP;
+    return Helper_Group5<T, UpdateFlags, FixedSubOp>(state, gpr, op, operand_modrm, operand, flags_cache, *value, utlb,
+                                                     branch);
 }
 
 template <typename T, bool UpdateFlags, GroupOpSpec FixedSubOp>
@@ -125,16 +123,17 @@ FORCE_INLINE LogicFlow OpGroup5_Ev_Control_Internal(LogicFuncParams) {
 
 template <typename T, AddrModeSpec Form = AddrModeSpec::Dynamic, FlagsSpec Flags = FlagsSpec::Dynamic>
 FORCE_INLINE LogicFlow OpXadd_T_Internal(LogicFuncParams) {
-    const auto destination = ReadModRM<T, OpOnTLBMiss::Restart, 1, Form>(state, gpr, op, utlb);
+    const ModRMRmwOperand<Form> operand(state, gpr, op, operand_modrm);
+    const auto destination = operand.template Read<T, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!destination) return LogicFlow::RestartMemoryOp;
 
-    const uint8_t reg = (op->modrm >> 3) & 7;
+    const uint8_t reg = (operand_modrm >> 3) & 7;
     const T source = ReadRegGeneric<T>(state, gpr, reg);
     // Commit flags only after the write succeeds; the source can participate
     // in the destination address and must not be modified before that write.
     uint64_t updated_flags = flags_cache;
     const T result = AluAdd<T, Flags != FlagsSpec::Dead>(state, updated_flags, *destination, source);
-    if (!WriteModRM<T, OpOnTLBMiss::Blocking, 1, Form>(state, gpr, op, result, utlb))
+    if (!operand.template Write<T, OpOnTLBMiss::Blocking>(state, gpr, op, result, utlb))
         return LogicFlow::ExitOnCurrentEIP;
     flags_cache = updated_flags;
     WriteRegGeneric<T>(state, gpr, reg, *destination);
@@ -157,7 +156,7 @@ namespace op {
 FORCE_INLINE LogicFlow OpGroup3_Ev_Generic(LogicFuncParams) { return OpGroup3_Internal<false>(LogicPassParams); }
 
 FORCE_INLINE LogicFlow OpGroup5_Ev_Generic(LogicFuncParams) {
-    if (op->prefixes.flags.opsize)
+    if (GetPrefixes(op).flags.opsize)
         return OpGroup5_Ev_T_Internal<uint16_t, true>(LogicPassParams);
     else
         return OpGroup5_Ev_T_Internal<uint32_t, true>(LogicPassParams);
@@ -231,7 +230,7 @@ FORCE_INLINE LogicFlow OpUd2_Groups(LogicFuncParams) {
 
 template <GroupOpSpec SubOp = GroupOpSpec::Dynamic>
 FORCE_INLINE LogicFlow OpGroup9_Internal(LogicFuncParams) {
-    const uint8_t sub = GroupOperation<SubOp>(op);
+    const uint8_t sub = GroupOperation<SubOp>(operand_modrm);
     if (sub == 1) {  // CMPXCHG8B
         uint32_t addr = ComputeLinearAddress(state, gpr, op);
         auto mem_res = ReadMem<uint64_t, OpOnTLBMiss::Restart>(state, gpr, addr, utlb, op);

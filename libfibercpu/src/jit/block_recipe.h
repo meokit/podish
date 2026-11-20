@@ -1,8 +1,8 @@
 #pragma once
 
+#include "instruction_variants.h"
 #include "jit/llvm_block_jit.h"
 #include "llvm_op_ids.h"
-#include "operand_policy.h"
 
 #include <algorithm>
 #include <array>
@@ -23,7 +23,7 @@ struct Operation {
     uint8_t requirements;
     uint8_t extensions;
 
-    bool Matches(const DecodedOp& op, bool exact) const {
+    bool Matches(const DecodedInstruction& op, bool exact) const {
         if ((requirements & kRegisterOperand) && (!op.meta.flags.has_modrm || (op.modrm >> 6) != 3)) return false;
         if ((requirements & kMemoryOperand) && !HasMem(&op)) return false;
         if ((requirements & kExactOnly) && !exact) return false;
@@ -31,14 +31,21 @@ struct Operation {
     }
 };
 
-inline bool CanPlanOp(const DecodedOp& op) {
+inline bool CanPlanOp(const DecodedInstruction& op) {
     return op.len && !op.prefixes.flags.lock && (!HasMem(&op) || GetExtKind(&op) == ExtKind::Data);
 }
 
+struct BoundOperation {
+    OpId id;
+    BoundOperandShape shape;
+    auto operator<=>(const BoundOperation&) const = default;
+};
+
 // The presence of operands distinguishes exact keys from generic keys.
+// Generic kernels still bake the mandatory runtime binding.
 struct BlockKeyView {
     LLVMBlockExit exit;
-    std::span<const OpId> operations;
+    std::span<const BoundOperation> operations;
     std::span<const DecodedOperandShape> operands;
 
     bool IsExact() const { return !operands.empty(); }
@@ -62,7 +69,7 @@ struct BlockKeyView {
 };
 
 struct Plan {
-    std::array<OpId, kMaxOps> operations;
+    std::array<BoundOperation, kMaxOps> operations;
     std::array<DecodedOperandShape, kMaxOps> operands;
     std::array<HandlerFunc, kMaxOps> replay_handlers;
     size_t covered = 0;
@@ -76,23 +83,24 @@ struct Plan {
 
 uint16_t HotThreshold(const EmuState& state);
 void InitializeOperationLookup();
-OpId FindOperation(const DecodedOp& op, bool exact);
+OpId FindOperation(const DecodedInstruction& op, const BoundScalarHandler& binding, bool exact);
 bool CanPromoteBlock(EmuState& state, BasicBlock& block);
 LLVMBlockExit FullBlockExit(const BasicBlock& block);
 
-template <typename Redecode>
-bool PlanBlock(std::span<const DecodedOp> ops, size_t sentinel, LLVMBlockExit full_exit, bool exact, Redecode redecode,
-               Plan& plan) {
+template <typename Ops, typename Redecode>
+bool PlanBlock(Ops&& ops, size_t sentinel, LLVMBlockExit full_exit, bool exact, Redecode redecode, Plan& plan) {
     plan.covered = 0;
     for (const auto& op : ops) {
         if (!CanPlanOp(op)) break;
-        DecodedOp generic;
+        DecodedInstruction generic;
         if (!redecode(op, generic)) return false;
-        const auto id = FindOperation(generic, exact);
+        const auto binding = BindScalarHandler(generic);
+        if (!binding.handler) break;
+        const auto id = FindOperation(generic, binding, exact);
         if (id == kInvalidOpId) break;
-        plan.operations[plan.covered] = id;
+        plan.operations[plan.covered] = {id, binding.shape};
         if (exact) plan.operands[plan.covered] = DecodedOperandShape::Read(&generic);
-        plan.replay_handlers[plan.covered++] = generic.handler;
+        plan.replay_handlers[plan.covered++] = binding.handler;
     }
     plan.exit = plan.covered == sentinel ? full_exit : LLVMBlockExit::Dispatch;
     return plan.covered > 1 || (plan.covered == 1 && plan.exit != LLVMBlockExit::Dispatch);

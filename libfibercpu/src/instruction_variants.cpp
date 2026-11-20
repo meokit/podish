@@ -31,10 +31,25 @@ struct TrainingOperation {
     uint32_t id;
     HandlerFunc handler;
     const char* name;
+    HandlerFunc slots[2];
 };
 constexpr TrainingOperation training_operations[] = {
 #include "training_scalar_handlers.inc"
 };
+
+const auto& ScalarBindings() {
+    static const auto bindings = [] {
+        ankerl::unordered_dense::map<HandlerFunc, const TrainingOperation*> result;
+        result.reserve(3 * std::size(training_operations));
+        for (const auto& op : training_operations) {
+            result.try_emplace(op.handler, &op);
+            result.try_emplace(op.slots[0], &op);
+            result.try_emplace(op.slots[1], &op);
+        }
+        return result;
+    }();
+    return bindings;
+}
 
 std::vector<X86_InstructionVariant>& MutableCatalog() {
     // Also safe during dispatch table initialization across translation units.
@@ -107,7 +122,7 @@ void RegisterInstructionVariants() {
         RegisterInstructionVariant(v.opcode, v.criteria, v.handler, v.logic, v.family, v.parent, v.bake, v.rank);
 }
 
-HandlerFunc FindGenericInstructionHandler(uint16_t opcode, const DecodedOp* op) {
+HandlerFunc FindGenericInstructionHandler(uint16_t opcode, const DecodedInstruction* op) {
     const auto first = std::ranges::lower_bound(semantic_variant_indices, opcode, {},
                                                 [](uint16_t index) { return variants[index].opcode; });
     const DeclaredInstructionVariant* best = nullptr;
@@ -122,7 +137,7 @@ HandlerFunc FindGenericInstructionHandler(uint16_t opcode, const DecodedOp* op) 
     }
     if (best) return best->handler;
     const auto fallback = std::ranges::lower_bound(generic_fallbacks, opcode, {}, &Fallback::opcode);
-    return fallback->opcode == opcode ? fallback->handler : nullptr;
+    return fallback != std::end(generic_fallbacks) && fallback->opcode == opcode ? fallback->handler : nullptr;
 }
 
 int FindGenericOpcodeIndex(HandlerFunc handler) {
@@ -132,15 +147,24 @@ int FindGenericOpcodeIndex(HandlerFunc handler) {
     return -1;
 }
 
+BoundScalarHandler BindScalarHandler(const DecodedInstruction& op) {
+    const auto shape = BoundOperandShape::Read(op);
+    const auto& bindings = ScalarBindings();
+    const auto it = bindings.find(op.handler);
+    if (it == bindings.end()) return {nullptr, 0, shape};
+    return {it->second->slots[shape.slots - 1], it->second->id, shape};
+}
+
+HandlerFunc CanonicalBoundHandler(HandlerFunc handler) {
+    const auto& bindings = ScalarBindings();
+    const auto it = bindings.find(handler);
+    return it == bindings.end() ? handler : it->second->handler;
+}
+
 uint32_t FindScalarTrainingId(HandlerFunc handler) {
-    static const auto ids = [] {
-        ankerl::unordered_dense::map<HandlerFunc, uint32_t> result;
-        result.reserve(std::size(training_operations));
-        for (const auto& op : training_operations) result.try_emplace(op.handler, op.id);
-        return result;
-    }();
-    const auto it = ids.find(handler);
-    return it == ids.end() ? 0 : it->second;
+    const auto& bindings = ScalarBindings();
+    const auto it = bindings.find(handler);
+    return it == bindings.end() ? 0 : it->second->id;
 }
 
 uint32_t TrainingOperationIdAt(uint32_t index) {

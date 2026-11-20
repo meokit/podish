@@ -6,8 +6,8 @@
 #include <llvm/ADT/SmallPtrSet.h>
 #include <llvm/ExecutionEngine/Orc/JITTargetMachineBuilder.h>
 #include <llvm/IR/Constants.h>
-#include <llvm/IR/PassManager.h>
 #include <llvm/IR/InstIterator.h>
+#include <llvm/IR/PassManager.h>
 #include <llvm/IR/Verifier.h>
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Support/TargetSelect.h>
@@ -19,15 +19,17 @@
 namespace fiberish {
 namespace {
 
-bool InlineLLVMKernel(llvm::CallInst& call, llvm::Function& kernel, const DecodedOperandShape* shape) {
+bool InlineLLVMKernel(llvm::CallInst& call, llvm::Function& kernel, BoundOperandShape binding,
+                      const DecodedOperandShape* shape) {
     if (kernel.isDeclaration() || kernel.getFunctionType() != call.getFunctionType()) return false;
     call.setCalledFunction(&kernel);
+    const auto bind = [&](unsigned arg, uint32_t value) {
+        call.setArgOperand(arg, llvm::ConstantInt::get(call.getArgOperand(arg)->getType(), value));
+    };
+    // The placeholder includes the four template operands followed by the
+    // logic ABI. ModRM is a constant in both generic and exact blocks.
+    bind(8, binding.modrm);
     if (shape) {
-        // The template ABI starts with the step index and three decoded fields,
-        // followed by LogicFuncParams, whose immediate is the fourth argument.
-        const auto bind = [&](unsigned arg, uint32_t value) {
-            call.setArgOperand(arg, llvm::ConstantInt::get(call.getArgOperand(arg)->getType(), value));
-        };
         bind(1, shape->encoding);
         bind(2, shape->ea_desc);
         bind(3, shape->displacement);
@@ -136,8 +138,9 @@ std::unique_ptr<llvm::Module> PrepareLLVMBlock(const LLVMOperandTemplates& templ
     if (!templates.IsValid()) return {};
     const bool exact = key.IsExact();
     llvm::SmallPtrSet<const llvm::GlobalValue*, 32> kernels;
-    for (auto id : key.operations) {
-        const auto* kernel = templates.Get(id, exact);
+    for (const auto& operation : key.operations) {
+        if (operation.shape.slots < 1 || operation.shape.slots > 2) return {};
+        const auto* kernel = templates.Get(operation.id, exact);
         if (!kernel) return {};
         kernels.insert(kernel);
     }
@@ -149,7 +152,8 @@ std::unique_ptr<llvm::Module> PrepareLLVMBlock(const LLVMOperandTemplates& templ
     const auto* placeholder = module->getFunction("FiberLLVMPlaceholder");
     const auto* use_step = module->getFunction("FiberLLVMUseStep");
     const auto* exit_kind = module->getFunction("FiberLLVMExit");
-    if (!entry || !placeholder || !use_step || !exit_kind) return {};
+    const auto* slot_count = module->getFunction("FiberLLVMSlotCount");
+    if (!entry || !placeholder || !use_step || !exit_kind || !slot_count) return {};
 
     std::vector<llvm::CallInst*> guards;
     llvm::CallInst* exit_site = nullptr;
@@ -171,9 +175,19 @@ std::unique_ptr<llvm::Module> PrepareLLVMBlock(const LLVMOperandTemplates& templ
     llvm::removeUnreachableBlocks(*entry);
 
     std::vector<llvm::CallInst*> sites;
+    std::vector<llvm::CallInst*> advances;
     for (auto& inst : llvm::instructions(*entry)) {
         auto* call = llvm::dyn_cast<llvm::CallInst>(&inst);
-        if (call && call->getCalledFunction() == placeholder) sites.push_back(call);
+        if (!call) continue;
+        if (call->getCalledFunction() == placeholder) sites.push_back(call);
+        if (call->getCalledFunction() == slot_count) advances.push_back(call);
+    }
+    for (auto* advance : advances) {
+        const auto* index = llvm::dyn_cast<llvm::ConstantInt>(advance->getArgOperand(0));
+        if (!index || index->getZExtValue() >= key.operations.size()) return {};
+        auto* slots = llvm::ConstantInt::get(advance->getType(), key.operations[index->getZExtValue()].shape.slots);
+        advance->replaceAllUsesWith(slots);
+        advance->eraseFromParent();
     }
     if (sites.size() != key.operations.size()) return {};
     llvm::SmallBitVector slots(key.operations.size());
@@ -182,9 +196,11 @@ std::unique_ptr<llvm::Module> PrepareLLVMBlock(const LLVMOperandTemplates& templ
         if (!index || index->getZExtValue() >= key.operations.size() || slots.test(index->getZExtValue())) return {};
         slots.set(index->getZExtValue());
         const auto slot = index->getZExtValue();
-        const auto* source = templates.Get(key.operations[slot], exact);
+        const auto& operation = key.operations[slot];
+        const auto* source = templates.Get(operation.id, exact);
         auto* target = llvm::dyn_cast_or_null<llvm::Function>(values.lookup(source));
-        if (!target || !InlineLLVMKernel(*call, *target, exact ? &key.operands[slot] : nullptr)) return {};
+        if (!target || !InlineLLVMKernel(*call, *target, operation.shape, exact ? &key.operands[slot] : nullptr))
+            return {};
     }
 
     entry->setName(entry_name);

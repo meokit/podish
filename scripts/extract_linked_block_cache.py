@@ -9,7 +9,7 @@ from pathlib import Path
 from gen_instruction_catalog import CATALOG, llvm_operation_fingerprint, llvm_operation_names, read_catalog
 
 
-MAGIC = b"FIBJLC02"
+MAGIC = b"FIBJLC03"
 MACHO_ARM64_OBJECT = (0xFEEDFACF, 0x0100000C, 0, 1)
 
 
@@ -27,20 +27,20 @@ def read_key(record, operation_count):
     if len(record) < 3:
         raise ValueError("truncated linked cache key")
     exit_kind, exact, count = record[:3]
-    if exit_kind > 2 or exact != 1 or not 1 <= count <= 64 or len(record) != 3 + 18 * count:
+    if exit_kind > 2 or exact != 1 or not 1 <= count <= 64 or len(record) != 3 + 20 * count:
         raise ValueError("invalid linked cache key header")
-    steps = tuple(struct.iter_unpack("<H4I", record[3:]))
-    operations = tuple(step[0] for step in steps)
-    if any(op >= operation_count for op in operations):
+    steps = tuple(struct.iter_unpack("<HBB4I", record[3:]))
+    operations = tuple(step[:3] for step in steps)
+    if any(op >= operation_count or slots not in (1, 2) for op, _, slots in operations):
         raise ValueError("linked cache refers to an unknown operation ID")
-    operands = tuple(step[1:] for step in steps)
+    operands = tuple(step[3:] for step in steps)
     return exit_kind, exact, operations, operands
 
 
 def read_bundle(path, abi, op_names):
     data = path.read_bytes()
     if not data.startswith(MAGIC):
-        raise ValueError("expected a version 2 linked cache; regenerate it with fibercpu_llvm_cache --linked")
+        raise ValueError("expected a version 3 linked cache; regenerate it with fibercpu_llvm_cache --linked")
     start = len(MAGIC)
     end = start + len(abi)
     if data[start:end] != abi.encode("ascii"):
@@ -80,12 +80,12 @@ def write_build_inputs(output, cpu, entries):
     for index, (key, obj) in enumerate(entries.items()):
         (output / f"block_{index}.o").write_bytes(obj)
         indexed_keys.append((key, index))
-    operations = ["constexpr block_recipe::OpId linked_cache_operations[] = {"]
+    operations = ["constexpr block_recipe::BoundOperation linked_cache_operations[] = {"]
     operands = ["constexpr DecodedOperandShape linked_cache_operands[] = {"]
     rows = ["constexpr LinkedBlockEntry linked_cache_entries[] = {"]
     offset = 0
     for (exit_kind, _, ops, shapes), index in sorted(indexed_keys):
-        operations.append("    " + ", ".join(f"block_recipe::OpId{{{op}}}" for op in ops) + ",")
+        operations.append("    " + ", ".join(f"{{block_recipe::OpId{{{op}}}, {{{modrm}, {slots}}}}}" for op, modrm, slots in ops) + ",")
         for shape in shapes:
             operands.append("    {" + ", ".join(f"0x{field:08x}u" for field in shape) + "},")
         count = len(ops)

@@ -238,16 +238,22 @@ constexpr SpecCriteria Criteria(Spec s) {
     if (s.mandatory_prefix != MandatoryPrefix::Dynamic) {
         switch (s.mandatory_prefix) {
             case MandatoryPrefix::P66:
-            case MandatoryPrefix::P66Only: c.prefix_val = prefix::OPSIZE; break;
+            case MandatoryPrefix::P66Only:
+                c.prefix_val = prefix::OPSIZE;
+                break;
             case MandatoryPrefix::F2:
-            case MandatoryPrefix::F2Only: c.prefix_val = prefix::REPNE; break;
+            case MandatoryPrefix::F2Only:
+                c.prefix_val = prefix::REPNE;
+                break;
             case MandatoryPrefix::F3:
-            case MandatoryPrefix::F3Only: c.prefix_val = prefix::REP; break;
-            default: break;
+            case MandatoryPrefix::F3Only:
+                c.prefix_val = prefix::REP;
+                break;
+            default:
+                break;
         }
-        c.prefix_mask = s.mandatory_prefix >= MandatoryPrefix::F3Only
-                            ? prefix::OPSIZE | prefix::REPNE | prefix::REP
-                            : c.prefix_val;
+        c.prefix_mask =
+            s.mandatory_prefix >= MandatoryPrefix::F3Only ? prefix::OPSIZE | prefix::REPNE | prefix::REP : c.prefix_val;
     }
     if (s.repeat_prefix != Repeat::Dynamic) {
         c.prefix_mask |= prefix::REP;
@@ -282,19 +288,25 @@ constexpr SpecCriteria Criteria(Spec s) {
 }
 
 template <class Family, Spec Shape>
-FORCE_INLINE void AssumeInstructionShape(const DecodedOp* op) {
+FORCE_INLINE void AssumeInstructionShape(const DecodedOp* op, uint8_t modrm) {
     // Block liveness is resolved after initial native handler selection.
     constexpr auto c = Criteria<Family>(Shape);
-    if constexpr (c.mod_mask) __builtin_assume(((op->modrm >> 6) & c.mod_mask) == c.mod_val);
-    if constexpr (c.reg_mask) __builtin_assume(((op->modrm >> 3) & c.reg_mask) == c.reg_val);
-    if constexpr (c.rm_mask) __builtin_assume((op->modrm & c.rm_mask) == c.rm_val);
-    if constexpr (c.prefix_mask) __builtin_assume((op->prefixes.all & c.prefix_mask) == c.prefix_val);
+    if constexpr (c.mod_mask || c.reg_mask || c.rm_mask || c.memory_only) {
+        if constexpr (c.mod_mask) __builtin_assume(((modrm >> 6) & c.mod_mask) == c.mod_val);
+        if constexpr (c.reg_mask) __builtin_assume(((modrm >> 3) & c.reg_mask) == c.reg_val);
+        if constexpr (c.rm_mask) __builtin_assume((modrm & c.rm_mask) == c.rm_val);
+        if constexpr (c.memory_only) __builtin_assume((modrm >> 6) != 3);
+    }
+    if constexpr (c.prefix_mask) {
+        const auto prefixes = GetPrefixes(op).all;
+        __builtin_assume((prefixes & c.prefix_mask) == c.prefix_val);
+    }
     if constexpr (c.memory_only) {
-        __builtin_assume(op->meta.flags.has_mem);
-        __builtin_assume((op->modrm >> 6) != 3);
+        const auto meta = GetMeta(op);
+        __builtin_assume(meta.flags.has_mem);
     }
     if constexpr (c.base_offset_mask || c.index_offset_mask || c.scale_mask || c.segment_mask) {
-        const auto ea = GetExt(op)->data.ea_desc;
+        const auto ea = GetAddressDescriptor(op);
         const auto base = memdesc::BaseOffset(ea);
         const auto index = memdesc::IndexOffset(ea);
         const auto scale = memdesc::Scale(ea);

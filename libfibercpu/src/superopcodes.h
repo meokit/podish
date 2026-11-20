@@ -8,25 +8,26 @@ namespace fiberish {
 using RegisterHandwrittenCallback = void (*)(void*, HandlerFunc, HandlerFunc, HandlerFunc, HandlerFunc, HandlerFunc,
                                              unsigned);
 void RegisterHandwrittenSuperOpcodes(void* context, RegisterHandwrittenCallback callback);
-HandlerFunc FindSuperOpcode(const DecodedOp* ops);
+HandlerFunc FindSuperOpcode(const DecodedInstruction* ops);
 uint32_t FindFusionTrainingId(HandlerFunc handler);
 #if FIBERCPU_HAVE_GENERATED_SUPEROPCODES
-HandlerFunc GeneratedFindSuperOpcode(const DecodedOp* ops);
+HandlerFunc GeneratedFindSuperOpcode(const DecodedInstruction* ops);
 #endif
-void ApplySuperOpcodesToBlockOps(DecodedOp* ops, uint32_t op_count, bool previously_lowered = false);
+void ApplySuperOpcodesToBlockOps(DecodedInstruction* ops, uint32_t op_count, bool previously_lowered = false);
 
-#define HANDLE_SUPEROPCODE_FLOW(flow, state, flow_op, instr_limit, utlb, utlb_tags, utlb_addend, branch, flags_cache)  \
+#define HANDLE_SUPEROPCODE_FLOW_WITH_POLICY(policy, flow, state, flow_op, instr_limit, utlb, utlb_tags, utlb_addend,   \
+                                            branch, flags_cache)                                                       \
     do {                                                                                                               \
         switch (flow) {                                                                                                \
             case LogicFlow::Continue:                                                                                  \
-                if (auto* next_op = NextOp(flow_op)) {                                                                 \
+                if (auto* next_op = OperandSpec::Advance<policy>(flow_op)) {                                           \
                     mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);                                              \
                     ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, \
                                                           flags_cache FIBERCPU_PIN_RELOAD);                            \
                 }                                                                                                      \
                 __builtin_unreachable();                                                                               \
             case LogicFlow::ContinueSkipOne:                                                                           \
-                if (auto* next_op = NextOp(NextOp(flow_op))) {                                                         \
+                if (auto* next_op = NextOp(OperandSpec::Advance<policy>(flow_op))) {                                   \
                     mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);                                              \
                     ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, \
                                                           flags_cache FIBERCPU_PIN_RELOAD);                            \
@@ -66,16 +67,22 @@ void ApplySuperOpcodesToBlockOps(DecodedOp* ops, uint32_t op_count, bool previou
         }                                                                                                              \
     } while (false)
 
-#define RUN_SUPEROPCODE_OP_IMM(target, state, cur_op, instr_limit, utlb, branch, flags_cache, imm)          \
-    do {                                                                                                    \
-        auto flow = target(state, cur_op, &utlb, imm, &branch, flags_cache, FIBERCPU_GPR_CACHE);            \
-        if (flow != LogicFlow::Continue) [[unlikely]] {                                                     \
-            HANDLE_SUPEROPCODE_FLOW(flow, state, cur_op, instr_limit, utlb, utlb_tags, utlb_addend, branch, \
-                                    flags_cache);                                                           \
-        }                                                                                                   \
+#define HANDLE_SUPEROPCODE_FLOW(flow, state, flow_op, instr_limit, utlb, utlb_tags, utlb_addend, branch, flags_cache) \
+    HANDLE_SUPEROPCODE_FLOW_WITH_POLICY(OperandSpec::Dynamic, flow, state, flow_op, instr_limit, utlb, utlb_tags,     \
+                                        utlb_addend, branch, flags_cache)
+
+#define RUN_SUPEROPCODE_OP_WITH_POLICY(policy, target, state, cur_op, instr_limit, utlb, branch, flags_cache) \
+    do {                                                                                                      \
+        policy::Assume(cur_op);                                                                               \
+        auto flow = target(state, cur_op, &utlb, policy::Immediate(cur_op), policy::ModRM(cur_op), &branch,   \
+                           flags_cache, FIBERCPU_GPR_CACHE);                                                  \
+        if (flow != LogicFlow::Continue) [[unlikely]] {                                                       \
+            HANDLE_SUPEROPCODE_FLOW_WITH_POLICY(policy, flow, state, cur_op, instr_limit, utlb, utlb_tags,    \
+                                                utlb_addend, branch, flags_cache);                            \
+        }                                                                                                     \
     } while (false)
 
 #define RUN_SUPEROPCODE_OP(target, state, cur_op, instr_limit, utlb, branch, flags_cache) \
-    RUN_SUPEROPCODE_OP_IMM(target, state, cur_op, instr_limit, utlb, branch, flags_cache, GetImm(cur_op))
+    RUN_SUPEROPCODE_OP_WITH_POLICY(OperandSpec::Dynamic, target, state, cur_op, instr_limit, utlb, branch, flags_cache)
 
 }  // namespace fiberish

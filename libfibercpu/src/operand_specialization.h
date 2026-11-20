@@ -8,10 +8,10 @@
 #include "dispatch.h"
 
 namespace fiberish {
-HandlerFunc LowerOperandHandler(const DecodedOp* op);
+HandlerFunc LowerOperandHandler(const DecodedInstruction* op);
 HandlerFunc CanonicalOperandHandler(HandlerFunc handler);
-bool AcceptFusionOperandShape(const DecodedOp* op, HandlerFunc handler);
-HandlerFunc LowerFusionOperandHandler(const DecodedOp* op, HandlerFunc handler);
+bool AcceptFusionOperandShape(const DecodedInstruction* op, HandlerFunc handler);
+HandlerFunc LowerFusionOperandHandler(const DecodedInstruction* op, HandlerFunc handler);
 template <typename Shape>
 struct BasicOperandShapeEntry {
     HandlerFunc original;
@@ -21,7 +21,7 @@ struct BasicOperandShapeEntry {
 };
 using OperandShapeEntry = BasicOperandShapeEntry<uint64_t>;
 using ProfileOperandShapeEntry = BasicOperandShapeEntry<DecodedOperandShape>;
-using RegisterOperandSelector = HandlerFunc (*)(const DecodedOp*);
+using RegisterOperandSelector = HandlerFunc (*)(const DecodedInstruction*);
 enum class PinOperandForm : uint8_t { Register, Opcode, Address };
 struct RegisterOperandEntry {
     HandlerFunc original;
@@ -30,7 +30,7 @@ struct RegisterOperandEntry {
 };
 
 template <LogicFunc Target, PinWriteRole Role, bool Byte, bool Group1>
-HandlerFunc SelectRegisterOperand(const DecodedOp* op) {
+HandlerFunc SelectRegisterOperand(const DecodedInstruction* op) {
     if constexpr (Role == PinWriteRole::None) {
         return DispatchWrapper<Target, OperandSpec::Register<PinWriteRole::None, PinWriteClass::Other, Byte>>;
     } else {
@@ -51,7 +51,7 @@ HandlerFunc SelectRegisterOperand(const DecodedOp* op) {
 }
 
 template <LogicFunc Target, PinWriteRole Role, bool Byte, bool OpcodeRegister>
-HandlerFunc SelectEncodedOperand(const DecodedOp* op) {
+HandlerFunc SelectEncodedOperand(const DecodedInstruction* op) {
     if constexpr (Role == PinWriteRole::None) {
         return DispatchWrapper<Target, OperandSpec::Encoded<Role, PinWriteClass::Other, Byte, OpcodeRegister>>;
     } else {
@@ -69,16 +69,19 @@ HandlerFunc SelectEncodedOperand(const DecodedOp* op) {
     }
 }
 
-FORCE_INLINE uint64_t OperandShape(const DecodedOp* op) {
+FORCE_INLINE uint64_t OperandShape(const DecodedInstruction* op) {
     const uint32_t ea = op->meta.flags.has_mem ? GetExt(op)->data.ea_desc : 0;
-    return op->modrm | (uint64_t(op->prefixes.all) << 8) | (uint64_t(ea) << 16);
+    // Encoding-only plans train the single-slot shape. Exact decoded plans
+    // can also select a two-slot handler using the full immediate and prefixes.
+    const uint64_t separate = compact_imm::NeedsSeparateSlot(*op);
+    return op->modrm | (uint64_t(op->prefixes.all) << 8) | (uint64_t(ea) << 16) | (separate << 48);
 }
 
 template <bool HasRegisters, bool HasEncoded = false, typename Shape = uint64_t>
 class OperandIndex {
     using Entry = BasicOperandShapeEntry<Shape>;
 
-    static FORCE_INLINE Shape ReadShape(const DecodedOp* op) {
+    static FORCE_INLINE Shape ReadShape(const DecodedInstruction* op) {
         if constexpr (std::is_same_v<Shape, uint64_t>) {
             return OperandShape(op);
         } else {
@@ -144,7 +147,7 @@ public:
     }
     // Key by the first operand shape as well as semantic identity. Misses must
     // not scan every observed shape of a common MOV/ALU handler during decode.
-    FORCE_INLINE HandlerFunc Find(const DecodedOp* op, HandlerFunc original = nullptr) const {
+    FORCE_INLINE HandlerFunc Find(const DecodedInstruction* op, HandlerFunc original = nullptr) const {
         const auto handler = original ? original : op->handler;
         const auto h = HandlerHash(handler);
         if (!(bits_[(h >> 6) & 15] & (uint64_t{1} << (h & 63)))) return nullptr;

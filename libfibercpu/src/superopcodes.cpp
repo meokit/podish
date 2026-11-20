@@ -39,14 +39,15 @@ namespace handwritten_superopcodes {
         __builtin_unreachable();                                                                                       \
     }
 
-#define RUN_HANDWRITTEN_SUPEROPCODE_OP_WITH_UNIFIED_EXIT(target, current_op, exit_flow, exit_op)                    \
-    do {                                                                                                            \
-        auto flow = target(state, current_op, &utlb, GetImm(current_op), &branch, flags_cache, FIBERCPU_GPR_CACHE); \
-        if (flow != LogicFlow::Continue) [[unlikely]] {                                                             \
-            exit_flow = flow;                                                                                       \
-            exit_op = current_op;                                                                                   \
-            goto superopcode_exit;                                                                                  \
-        }                                                                                                           \
+#define RUN_HANDWRITTEN_SUPEROPCODE_OP_WITH_UNIFIED_EXIT(target, current_op, exit_flow, exit_op)                     \
+    do {                                                                                                             \
+        auto flow = target(state, current_op, &utlb, GetImm(current_op), GetModRM(current_op), &branch, flags_cache, \
+                           FIBERCPU_GPR_CACHE);                                                                      \
+        if (flow != LogicFlow::Continue) [[unlikely]] {                                                              \
+            exit_flow = flow;                                                                                        \
+            exit_op = current_op;                                                                                    \
+            goto superopcode_exit;                                                                                   \
+        }                                                                                                            \
     } while (false)
 
 #define DEFINE_HANDWRITTEN_SUPEROPCODE_3(Name, Op0, Op1, Op2)                                                          \
@@ -109,7 +110,7 @@ namespace handwritten_superopcodes {
 #undef RUN_HANDWRITTEN_SUPEROPCODE_OP_WITH_UNIFIED_EXIT
 
 #if !FIBERCPU_GENERATED_WITH_HANDWRITTEN || defined(FIBERCPU_VALIDATE_SPECIALIZATION_INDEX)
-HandlerFunc FindHandWrittenSuperOpcode(const DecodedOp* ops) {
+HandlerFunc FindHandWrittenSuperOpcode(const DecodedInstruction* ops) {
     static const auto filter = [] {
         std::array<uint64_t, 16> bits{};
         for (const auto& fusion : kHandwrittenFusions) {
@@ -132,9 +133,14 @@ HandlerFunc FindHandWrittenSuperOpcode(const DecodedOp* ops) {
 #ifdef FIBERCPU_VALIDATE_SPECIALIZATION_INDEX
 bool ValidateHandwrittenSuperOpcodes() {
     for (const auto& fusion : kHandwrittenFusions) {
-        DecodedOp ops[4]{};
+        DecodedInstruction ops[4]{};
         for (unsigned i = 0; i < fusion.width; ++i) ops[i].handler = fusion.operations[i];
-        if (FindHandWrittenSuperOpcode(ops) != fusion.handler || FindSuperOpcode(ops) != fusion.handler) return false;
+        if (FindHandWrittenSuperOpcode(ops) != fusion.handler) return false;
+#if FIBERCPU_GENERATED_OWNS_FUSIONS
+        if (FindSuperOpcode(ops) == fusion.handler) return false;
+#else
+        if (FindSuperOpcode(ops) != fusion.handler) return false;
+#endif
         ops[fusion.width - 1].handler = nullptr;
         if (FindHandWrittenSuperOpcode(ops) == fusion.handler) return false;
     }
@@ -190,7 +196,7 @@ uint32_t FindFusionTrainingId(HandlerFunc handler) {
 #endif
 }
 
-HandlerFunc FindSuperOpcode(const DecodedOp* ops) {
+HandlerFunc FindSuperOpcode(const DecodedInstruction* ops) {
 #if FIBERCPU_STATIC_SPECIALIZATION && !FIBERCPU_GENERATED_WITH_HANDWRITTEN
     if (HandlerFunc handwritten = handwritten_superopcodes::FindHandWrittenSuperOpcode(ops)) {
         return handwritten;
@@ -206,12 +212,12 @@ HandlerFunc FindSuperOpcode(const DecodedOp* ops) {
 }
 
 #if FIBERCPU_ENABLE_SUPEROPCODES
-static std::vector<DecodedOp> BuildFusionLookupView(const DecodedOp* ops, uint32_t count) {
+static std::vector<DecodedInstruction> BuildFusionLookupView(const DecodedInstruction* ops, uint32_t count) {
     // Normalize the entire view so the matcher also sees overlapping base fusions.
     // Keep real slots intact for execution and memory-op replay.
-    std::vector<DecodedOp> view;
+    std::vector<DecodedInstruction> view;
     for (uint32_t i = 0; i < count; ++i) {
-        const auto fallback = FindFusionFallbackHandler(ops[i].handler);
+        const auto fallback = FindFusionFallbackHandler(CanonicalBoundHandler(ops[i].handler));
         if (fallback == ops[i].handler) continue;
         if (view.empty()) view.assign(ops, ops + count + 1);  // Include the block sentinel.
         view[i].handler = fallback;
@@ -220,12 +226,13 @@ static std::vector<DecodedOp> BuildFusionLookupView(const DecodedOp* ops, uint32
 }
 #endif
 
-void ApplySuperOpcodesToBlockOps(DecodedOp* ops, uint32_t op_count, bool previously_lowered) {
+void ApplySuperOpcodesToBlockOps(DecodedInstruction* ops, uint32_t op_count, bool previously_lowered) {
     if (!ops) return;
 #if (FIBERCPU_LOWER_OPERANDS && !FIBERCPU_OPERAND_FUSIONS_ONLY) || FIBERCPU_DYNAMIC_OPERANDS
     if (previously_lowered) {
         for (uint32_t i = 0; i < op_count; ++i) {
             auto& op = ops[i];
+            op.handler = CanonicalBoundHandler(op.handler);
             if (op.meta.flags.operand_lowered) {
 #if FIBERCPU_DYNAMIC_OPERANDS
                 op.handler = CanonicalDynamicOperandHandler(op.handler);

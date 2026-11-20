@@ -314,7 +314,7 @@ inline bool CheckCondition(uint64_t& flags_cache, uint8_t cond) {
 // ------------------------------------------------------------------------------------------------
 
 FORCE_INLINE uint32_t GetSegmentBase(EmuState* state, const DecodedOp* op) {
-    uint8_t seg = op->prefixes.flags.segment;
+    uint8_t seg = GetPrefixes(op).flags.segment;
     // 1=ES, 2=CS, 3=SS, 4=DS, 5=FS, 6=GS
     // Moffs, XLAT and string source operands default to DS. An explicit
     // override may select any of the six caller-provided segment bases.
@@ -324,21 +324,20 @@ FORCE_INLINE uint32_t GetSegmentBase(EmuState* state, const DecodedOp* op) {
 FORCE_INLINE uint32_t ComputeEA(EmuState* state, GprCache& gpr, const DecodedOp* op) {
     // Computes Effective Address (no segment base)
     // Branchless calculation using pre-calculated offsets to registers (or zero register)
-    const auto* ext = GetExt(op);
-    uint32_t ea_desc = ext->data.ea_desc;
+    uint32_t ea_desc = GetAddressDescriptor(op);
     uint32_t base = gpr.GetRegFromOffset(state, memdesc::BaseOffset(ea_desc));
     uint32_t index = gpr.GetRegFromOffset(state, memdesc::IndexOffset(ea_desc));
 
     // index is usually 0 if no index (pointing to zero reg)
     // base is usually 0 if no base (pointing to zero reg)
-    uint32_t offset = base + (index << memdesc::Scale(ea_desc)) + ext->data.disp;
+    uint32_t offset = base + (index << memdesc::Scale(ea_desc)) + GetDisplacement(op);
     // Address size controls offset arithmetic, independently of operand width.
     // Truncate before adding the segment base, including for LEA destinations.
-    return op->prefixes.flags.addrsize ? offset & 0xFFFFu : offset;
+    return GetPrefixes(op).flags.addrsize ? offset & 0xFFFFu : offset;
 }
 
 FORCE_INLINE uint32_t GetMemSegmentBase(EmuState* state, const DecodedOp* op) {
-    const uint8_t seg = memdesc::ResolvedSegment(GetExt(op)->data.ea_desc);
+    const uint8_t seg = memdesc::ResolvedSegment(GetAddressDescriptor(op));
     return state->ctx.seg_base[seg];
 }
 
@@ -435,10 +434,10 @@ enum class OpOnTLBMiss {
  * Supports uint8_t, uint16_t, uint32_t, and simde__m128.
  */
 template <typename T, OpOnTLBMiss Strategy, uint32_t Alignment = 1, AddrModeSpec Form = AddrModeSpec::Dynamic>
-FORCE_INLINE MemResult<T> ReadModRM(EmuState* state, GprCache& gpr, DecodedOp* op, mem::MicroTLB* utlb) {
-    uint8_t rm = op->modrm & 7;
+FORCE_INLINE MemResult<T> ReadModRM(EmuState* state, GprCache& gpr, DecodedOp* op, uint8_t modrm, mem::MicroTLB* utlb) {
+    uint8_t rm = modrm & 7;
 
-    if (OperandIsReg<Form>(op)) [[likely]] {
+    if (OperandIsReg<Form>(modrm)) [[likely]] {
         // Register Operand
         return ReadRegGeneric<T>(state, gpr, rm);
     } else {
@@ -463,7 +462,7 @@ FORCE_INLINE MemResult<T> ReadModRM(EmuState* state, GprCache& gpr, DecodedOp* o
                 // For Read, we always need to check pending if we want to restart
                 // If usage suggests Retry for Read, it likely implies prefetch which we don't support explicitly yet.
                 // Assuming Restart semantics for both Restart and Retry enums for Read to be safe.
-                value = state->request_read_and_check_pending<T>(addr, op->next_eip);
+                value = state->request_read_and_check_pending<T>(addr, op);
             }
             return value;
         }
@@ -475,10 +474,11 @@ FORCE_INLINE MemResult<T> ReadModRM(EmuState* state, GprCache& gpr, DecodedOp* o
  * Supports uint8_t, uint16_t, uint32_t, and simde__m128.
  */
 template <typename T, OpOnTLBMiss Strategy, uint32_t Alignment = 1, AddrModeSpec Form = AddrModeSpec::Dynamic>
-FORCE_INLINE MemResult<void> WriteModRM(EmuState* state, GprCache& gpr, DecodedOp* op, T val, mem::MicroTLB* utlb) {
-    uint8_t rm = op->modrm & 7;
+FORCE_INLINE MemResult<void> WriteModRM(EmuState* state, GprCache& gpr, DecodedOp* op, uint8_t modrm, T val,
+                                        mem::MicroTLB* utlb) {
+    uint8_t rm = modrm & 7;
 
-    if (OperandIsReg<Form>(op)) [[likely]] {
+    if (OperandIsReg<Form>(modrm)) [[likely]] {
         // Register Operand
         WriteRegGeneric<T>(state, gpr, rm, val);
         return {};
@@ -501,10 +501,10 @@ FORCE_INLINE MemResult<void> WriteModRM(EmuState* state, GprCache& gpr, DecodedO
             auto result = state->mmu.write<T, true>(addr, val, utlb, op);
             if (!result) [[unlikely]] {
                 if constexpr (Strategy == OpOnTLBMiss::Restart) {
-                    result = state->request_write_and_check_pending<T>(addr, val, op->next_eip);
+                    result = state->request_write_and_check_pending<T>(addr, val, op);
                 } else {
                     // Retry
-                    result = state->request_write_only<T>(addr, val, op->next_eip);
+                    result = state->request_write_only<T>(addr, val, op);
                 }
             }
             return result;
@@ -522,7 +522,7 @@ inline MemResult<T> ReadMem(EmuState* state, GprCache& gpr, uint32_t addr, mem::
     } else {
         auto value = state->mmu.read<T, true>(addr, utlb, op);
         if (!value) [[unlikely]] {
-            value = state->request_read_and_check_pending<T>(addr, op->next_eip);
+            value = state->request_read_and_check_pending<T>(addr, op);
         }
         return value;
     }
@@ -540,15 +540,48 @@ FORCE_INLINE MemResult<void> WriteMem(EmuState* state, GprCache& gpr, uint32_t a
         auto result = state->mmu.write<T, true>(addr, val, utlb, op);
         if (!result) [[unlikely]] {
             if constexpr (Strategy == OpOnTLBMiss::Restart) {
-                result = state->request_write_and_check_pending<T>(addr, val, op->next_eip);
+                result = state->request_write_and_check_pending<T>(addr, val, op);
             } else {
                 // Retry
-                result = state->request_write_only<T>(addr, val, op->next_eip);
+                result = state->request_write_only<T>(addr, val, op);
             }
         }
         return result;
     }
 }
+
+// Resolve the destination once for one attempt at a read-modify-write.
+// A restarted instruction constructs a new operand before consuming its pending read.
+template <AddrModeSpec Form = AddrModeSpec::Dynamic>
+class ModRMRmwOperand {
+public:
+    FORCE_INLINE ModRMRmwOperand(EmuState* state, GprCache& gpr, const DecodedOp* op, uint8_t modrm)
+        : modrm_(modrm), address_(IsRegister() ? 0 : ComputeLinearAddress(state, gpr, op)) {}
+
+    FORCE_INLINE bool IsRegister() const { return OperandIsReg<Form>(modrm_); }
+    FORCE_INLINE uint8_t Reg() const { return modrm_ & 7; }
+    FORCE_INLINE uint32_t Address() const { return address_; }
+
+    template <typename T, OpOnTLBMiss Strategy>
+    FORCE_INLINE MemResult<T> Read(EmuState* state, GprCache& gpr, const DecodedOp* op, mem::MicroTLB* utlb) const {
+        if (IsRegister()) return ReadRegGeneric<T>(state, gpr, Reg());
+        return ReadMem<T, Strategy>(state, gpr, Address(), utlb, op);
+    }
+
+    template <typename T, OpOnTLBMiss Strategy>
+    FORCE_INLINE MemResult<void> Write(EmuState* state, GprCache& gpr, const DecodedOp* op, T value,
+                                       mem::MicroTLB* utlb) const {
+        if (IsRegister()) {
+            WriteRegGeneric<T>(state, gpr, Reg(), value);
+            return {};
+        }
+        return WriteMem<T, Strategy>(state, gpr, Address(), value, utlb, op);
+    }
+
+private:
+    uint8_t modrm_;
+    uint32_t address_;
+};
 
 // ------------------------------------------------------------------------------------------------
 // Stack Operations (Refactored)
@@ -566,7 +599,7 @@ FORCE_INLINE MemResult<void> Push(EmuState* state, GprCache& gpr, T val, mem::Mi
     // Request a write and return
     if (!res && fail_on_tlb_miss) [[unlikely]] {
         // Push can satisfy "Retry" semantics (update ESP only on success)
-        res = state->request_write_and_check_pending<T>(ss_base + esp - size, val, op->next_eip);
+        res = state->request_write_and_check_pending<T>(ss_base + esp - size, val, op);
     }
 
     if (res) {
@@ -585,7 +618,7 @@ FORCE_INLINE MemResult<T> Pop(EmuState* state, GprCache& gpr, mem::MicroTLB* utl
     // Read from memory (ESP)
     auto res = ReadGuestMem<T, fail_on_tlb_miss>(state, gpr, ss_base + esp, utlb, op);
     if (!res && fail_on_tlb_miss) [[unlikely]] {
-        res = state->request_read_and_check_pending<T>(ss_base + esp, op->next_eip);
+        res = state->request_read_and_check_pending<T>(ss_base + esp, op);
     }
 
     if (res) {

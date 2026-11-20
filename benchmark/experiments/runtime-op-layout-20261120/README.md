@@ -1,7 +1,24 @@
 # Compact runtime op experiment
 
-The ARM64 build has a 32-byte, 16-aligned DecodedOp, a 48-byte block header, and
-one sentinel slot. Blocks eligible for compilation can also keep eight bytes of
+The published slot is 16 bytes, with a handler pointer followed by an
+eight-byte tagged operand payload. Block construction, specialization matching,
+fusion selection and JIT recipes use a separate transient decoded instruction.
+The native block snapshot still exports the fields required by the v3 profile.
+
+A block footer stores cumulative instruction lengths as 16-bit offsets. It
+also stores sparse EIP adjustments at noncontiguous concatenation boundaries
+and cached targets for taken edges. The owning block and the slot pointer
+identify the offset. The sentinel uses its payload for the cached fallthrough
+block. A memory displacement always stays inline. An instruction that also
+has a nonzero memory immediate reads it directly from the next physical slot.
+That slot forwards scalar dispatch without executing a guest instruction.
+Fusion, LLVM and profiling skip the data slot when they advance to the next
+logical operation. Blocks containing data slots keep a compact map between
+logical and physical positions for precise PC and edge recovery.
+
+The remainder of this document records the original 24-byte experiment. Its
+baseline was a 32-byte, 16-aligned slot with a 48-byte block header and one
+sentinel slot. Blocks eligible for compilation could also keep eight bytes of
 scalar handler pointer per instruction.
 
 ## Candidate layout

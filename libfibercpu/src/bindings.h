@@ -256,6 +256,31 @@ size_t X86_DebugHostPageSetUniqueCount(const void* const* host_pages, size_t cou
 size_t X86_GetBlockCount(EmuState* state);
 size_t X86_GetBlockList(EmuState* state, BasicBlock** buffer, size_t max_count);
 
+// Decoded fields exported for the training dump, independent of runtime storage.
+typedef struct {
+    uint64_t exec_count;
+    uint32_t start_eip;
+    uint32_t end_eip;
+    uint32_t inst_count;
+    uint32_t reserved;
+} X86_BlockDumpHeader;
+
+typedef struct {
+    uint64_t handler;
+    uint64_t packed_memory;
+    uint32_t next_eip;
+    uint32_t immediate;
+    uint8_t length;
+    uint8_t modrm;
+    uint8_t prefixes;
+    uint8_t meta;
+    uint32_t reserved;
+} X86_BlockDumpOp;
+
+// Block pointers have the same lifetime as those returned by X86_GetBlockList.
+// Returns 1 on success. The array must fit every instruction in the block.
+int X86_ReadBlockDump(const BasicBlock* block, X86_BlockDumpHeader* header, X86_BlockDumpOp* ops, uint32_t capacity);
+
 // Handler reflection APIs generated from fibercpu_core.
 // Immutable instruction catalog. Pointers remain valid for the lifetime of the library.
 typedef struct {

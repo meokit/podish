@@ -15,6 +15,8 @@ public class EngineMmuTransferTests
     private const uint CodeAddr = 0x00401000;
     private const uint CrossPageCodeAddr = CodeAddr + LinuxConstants.PageSize - 1;
     private const uint BudgetTestCodeBaseAddr = 0x00500000;
+    // Holds the source and successor, with pressure triggered by the concatenated block.
+    private const ulong DirectJmpConcatBudget = 288;
     private static readonly byte[] SimpleCode = [0x90, 0x90];
 
     [Fact]
@@ -347,7 +349,7 @@ public class EngineMmuTransferTests
         var runtime = new TestRuntimeFactory();
         using var engine = runtime.CreateEngine();
         InstallConcatDirectJmpCode(engine, BudgetTestCodeBaseAddr);
-        engine.SetCodeCacheBudgetBytesForTesting(320);
+        engine.SetCodeCacheBudgetBytesForTesting(DirectJmpConcatBudget);
 
         engine.Eip = BudgetTestCodeBaseAddr;
         engine.Run(BudgetTestCodeBaseAddr + 6, 32);
@@ -356,6 +358,7 @@ public class EngineMmuTransferTests
         Assert.Equal(BudgetTestCodeBaseAddr + 4, engine.Eip);
         var afterFirstRun = ReadCodeCacheStats(engine);
         Assert.Equal(0ul, afterFirstRun.CodeCacheFlushCount);
+        Assert.Equal(2, afterFirstRun.AllBlocksCount);
         Assert.True(afterFirstRun.BlockCacheSize > 0);
         Assert.True(afterFirstRun.CodeCacheBytesRequested <= afterFirstRun.CodeCacheLimitBytes);
         Assert.Equal(0ul, engine.GetBlockStats().BlockConcatSuccess);
@@ -373,7 +376,7 @@ public class EngineMmuTransferTests
         var runtime = new TestRuntimeFactory();
         using var engine = runtime.CreateEngine();
         InstallConcatDirectJmpCode(engine, BudgetTestCodeBaseAddr);
-        engine.SetCodeCacheBudgetBytesForTesting(320);
+        engine.SetCodeCacheBudgetBytesForTesting(DirectJmpConcatBudget);
         var resetInWarning = false;
         engine.LogHandler = (cpu, _, message) =>
         {

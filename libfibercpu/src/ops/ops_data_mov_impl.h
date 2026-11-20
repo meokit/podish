@@ -19,9 +19,8 @@ namespace fiberish {
 template <AddrIndexSpec IndexSpec = AddrIndexSpec::Dynamic, AddrBaseRegSpec BaseRegSpec = AddrBaseRegSpec::Dynamic,
           AddrSegmentSpec SegmentSpec = AddrSegmentSpec::Dynamic, AddrsizeSpec AddressSize = AddrsizeSpec::Dynamic>
 FORCE_INLINE uint32_t ComputeLinearAddressSpecialized(EmuState* state, GprCache& gpr, const DecodedOp* op) {
-    const auto* ext = GetExt(op);
-    const uint32_t ea_desc = ext->data.ea_desc;
-    uint32_t addr = ext->data.disp;
+    const uint32_t ea_desc = GetAddressDescriptor(op);
+    uint32_t addr = GetDisplacement(op);
 
     if constexpr (BaseRegSpec == AddrBaseRegSpec::Dynamic) {
         addr += gpr.GetRegFromOffset(state, memdesc::BaseOffset(ea_desc));
@@ -83,7 +82,7 @@ FORCE_INLINE LogicFlow OpMov_EvGv_Reg_Internal(LogicFuncParams) {
         else if constexpr (FixedSrc == 7)
             val = gpr.GetReg(state, 7);
     } else {
-        uint8_t src = (op->modrm >> 3) & 7;
+        uint8_t src = (operand_modrm >> 3) & 7;
         val = gpr.GetReg(state, src);
     }
 
@@ -107,7 +106,7 @@ FORCE_INLINE LogicFlow OpMov_EvGv_Reg_Internal(LogicFuncParams) {
         else if constexpr (FixedDst == 7)
             gpr.SetReg(state, 7, val);
     } else {
-        uint8_t dst = op->modrm & 7;
+        uint8_t dst = operand_modrm & 7;
         gpr.SetReg(state, dst, val);
     }
     return LogicFlow::Continue;
@@ -139,7 +138,7 @@ FORCE_INLINE LogicFlow OpMov_EvGv_Mem_Internal(LogicFuncParams) {
         else if constexpr (FixedReg == 7)
             val = gpr.GetReg(state, 7);
     } else {
-        uint8_t reg = (op->modrm >> 3) & 7;
+        uint8_t reg = (operand_modrm >> 3) & 7;
         val = gpr.GetReg(state, reg);
     }
 
@@ -175,7 +174,7 @@ FORCE_INLINE LogicFlow OpMov_GvEv_Reg_Internal(LogicFuncParams) {
         else if constexpr (FixedSrc == 7)
             val = gpr.GetReg(state, 7);
     } else {
-        uint8_t src = op->modrm & 7;
+        uint8_t src = operand_modrm & 7;
         val = gpr.GetReg(state, src);
     }
 
@@ -199,7 +198,7 @@ FORCE_INLINE LogicFlow OpMov_GvEv_Reg_Internal(LogicFuncParams) {
         else if constexpr (FixedDst == 7)
             gpr.SetReg(state, 7, val);
     } else {
-        uint8_t dst = (op->modrm >> 3) & 7;
+        uint8_t dst = (operand_modrm >> 3) & 7;
         gpr.SetReg(state, dst, val);
     }
     return LogicFlow::Continue;
@@ -245,7 +244,7 @@ FORCE_INLINE LogicFlow OpMov_GvEv_Mem_Internal(LogicFuncParams) {
         else if constexpr (FixedReg == 7)
             gpr.SetReg(state, 7, val);
     } else {
-        uint8_t reg = (op->modrm >> 3) & 7;
+        uint8_t reg = (operand_modrm >> 3) & 7;
         gpr.SetReg(state, reg, val);
     }
     return LogicFlow::Continue;
@@ -264,12 +263,13 @@ enum class MovDirection { ToRm, FromRm };
 template <typename T, MovDirection Direction, AddrModeSpec Form = AddrModeSpec::Dynamic,
           RmOperandSpec Register = RmOperandSpec::Dynamic>
 FORCE_INLINE LogicFlow OpMovModRM(LogicFuncParams) {
-    const unsigned reg = MovRegister<Register>((op->modrm >> 3) & 7);
+    const unsigned reg = MovRegister<Register>((operand_modrm >> 3) & 7);
     if constexpr (Direction == MovDirection::ToRm) {
         const auto value = ReadRegGeneric<T>(state, gpr, reg);
-        if (!WriteModRM<T, OpOnTLBMiss::Retry, 1, Form>(state, gpr, op, value, utlb)) return LogicFlow::RetryMemoryOp;
+        if (!WriteModRM<T, OpOnTLBMiss::Retry, 1, Form>(state, gpr, op, operand_modrm, value, utlb))
+            return LogicFlow::RetryMemoryOp;
     } else {
-        const auto value = ReadModRM<T, OpOnTLBMiss::Restart, 1, Form>(state, gpr, op, utlb);
+        const auto value = ReadModRM<T, OpOnTLBMiss::Restart, 1, Form>(state, gpr, op, operand_modrm, utlb);
         if (!value) return LogicFlow::RestartMemoryOp;
         WriteRegGeneric<T>(state, gpr, reg, *value);
     }
@@ -330,15 +330,16 @@ template <typename T, AddrModeSpec Form = AddrModeSpec::Dynamic>
 FORCE_INLINE LogicFlow OpXchgModRM(LogicFuncParams) {
     // A blocking store ensures the register is updated only after the store succeeds.
     constexpr auto read_policy = sizeof(T) == 1 ? OpOnTLBMiss::Restart : OpOnTLBMiss::Blocking;
-    const auto rm_value = ReadModRM<T, read_policy, 1, Form>(state, gpr, op, utlb);
+    const ModRMRmwOperand<Form> operand(state, gpr, op, operand_modrm);
+    const auto rm_value = operand.template Read<T, read_policy>(state, gpr, op, utlb);
     if (!rm_value) {
         if constexpr (read_policy == OpOnTLBMiss::Restart) return LogicFlow::RestartMemoryOp;
         return LogicFlow::ExitOnCurrentEIP;
     }
 
-    const unsigned reg = (op->modrm >> 3) & 7;
+    const unsigned reg = (operand_modrm >> 3) & 7;
     const T reg_value = ReadRegGeneric<T>(state, gpr, reg);
-    if (!WriteModRM<T, OpOnTLBMiss::Blocking, 1, Form>(state, gpr, op, reg_value, utlb))
+    if (!operand.template Write<T, OpOnTLBMiss::Blocking>(state, gpr, op, reg_value, utlb))
         return LogicFlow::ExitOnCurrentEIP;
     WriteRegGeneric<T>(state, gpr, reg, *rm_value);
     return LogicFlow::Continue;
@@ -354,7 +355,7 @@ FORCE_INLINE LogicFlow OpMov_GbEb(LogicFuncParams) {
 
 template <typename T, AddrModeSpec Form = AddrModeSpec::Dynamic>
 FORCE_INLINE LogicFlow OpMovImmediateModRM(LogicFuncParams) {
-    if (!WriteModRM<T, OpOnTLBMiss::Retry, 1, Form>(state, gpr, op, static_cast<T>(imm), utlb))
+    if (!WriteModRM<T, OpOnTLBMiss::Retry, 1, Form>(state, gpr, op, operand_modrm, static_cast<T>(imm), utlb))
         return LogicFlow::RetryMemoryOp;
     return LogicFlow::Continue;
 }
@@ -365,7 +366,7 @@ template <AddrIndexSpec IndexSpec = AddrIndexSpec::Dynamic, AddrBaseRegSpec Base
           AddrSegmentSpec SegmentSpec = AddrSegmentSpec::Dynamic>
 FORCE_INLINE LogicFlow OpMov_EvIz_Mem_Internal(LogicFuncParams) {
     const uint32_t addr = ComputeLinearAddressSpecialized<IndexSpec, BaseRegSpec, SegmentSpec>(state, gpr, op);
-    if (op->prefixes.flags.opsize) {
+    if (GetPrefixes(op).flags.opsize) {
         if (!WriteMem<uint16_t, OpOnTLBMiss::Retry>(state, gpr, addr, (uint16_t)imm, utlb, op))
             return LogicFlow::RetryMemoryOp;
     } else {
@@ -386,7 +387,7 @@ FORCE_INLINE LogicFlow OpMov_EvIz(LogicFuncParams) {
 
 template <typename T, RmOperandSpec Register = RmOperandSpec::Dynamic>
 FORCE_INLINE LogicFlow OpMovImmediateRegister(LogicFuncParams) {
-    const unsigned reg = MovRegister<Register>(op->modrm & 7);
+    const unsigned reg = MovRegister<Register>(operand_modrm & 7);
     WriteRegGeneric<T>(state, gpr, reg, static_cast<T>(imm));
     return LogicFlow::Continue;
 }
@@ -433,10 +434,10 @@ FORCE_INLINE LogicFlow OpMov_Moffs_Store_Word(LogicFuncParams) {
 template <AddrModeSpec Form = AddrModeSpec::Dynamic>
 FORCE_INLINE LogicFlow OpMov_Rm_Sreg_Internal(LogicFuncParams) {
     // The memory destination is always 16 bits; only a register destination is zero-extended.
-    if (OperandIsReg<Form>(op)) {
-        if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry, 1, Form>(state, gpr, op, 0, utlb))
+    if (OperandIsReg<Form>(operand_modrm)) {
+        if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry, 1, Form>(state, gpr, op, operand_modrm, 0, utlb))
             return LogicFlow::RetryMemoryOp;
-    } else if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry, 1, Form>(state, gpr, op, 0, utlb)) {
+    } else if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry, 1, Form>(state, gpr, op, operand_modrm, 0, utlb)) {
         return LogicFlow::RetryMemoryOp;
     }
     return LogicFlow::Continue;
@@ -447,7 +448,8 @@ FORCE_INLINE LogicFlow OpMov_Rm_Sreg(LogicFuncParams) { return OpMov_Rm_Sreg_Int
 template <AddrModeSpec Form = AddrModeSpec::Dynamic>
 FORCE_INLINE LogicFlow OpMov_Sreg_Rm_Internal(LogicFuncParams) {
     // Even though the emulator ignores the selector, the source read can fault.
-    if (!ReadModRM<uint16_t, OpOnTLBMiss::Restart, 1, Form>(state, gpr, op, utlb)) return LogicFlow::RestartMemoryOp;
+    if (!ReadModRM<uint16_t, OpOnTLBMiss::Restart, 1, Form>(state, gpr, op, operand_modrm, utlb))
+        return LogicFlow::RestartMemoryOp;
     return LogicFlow::Continue;
 }
 
@@ -457,9 +459,9 @@ template <typename Source, typename Destination, AddrModeSpec Form = AddrModeSpe
           RmOperandSpec Register = RmOperandSpec::Dynamic>
 FORCE_INLINE LogicFlow OpMovExtend(LogicFuncParams) {
     using ReadType = std::make_unsigned_t<Source>;
-    const auto value = ReadModRM<ReadType, OpOnTLBMiss::Restart, 1, Form>(state, gpr, op, utlb);
+    const auto value = ReadModRM<ReadType, OpOnTLBMiss::Restart, 1, Form>(state, gpr, op, operand_modrm, utlb);
     if (!value) return LogicFlow::RestartMemoryOp;
-    const unsigned reg = MovRegister<Register>((op->modrm >> 3) & 7);
+    const unsigned reg = MovRegister<Register>((operand_modrm >> 3) & 7);
     WriteRegGeneric<Destination>(state, gpr, reg, static_cast<Destination>(static_cast<Source>(*value)));
     return LogicFlow::Continue;
 }
@@ -515,7 +517,7 @@ FORCE_INLINE LogicFlow OpLea_Impl(LogicFuncParams) {
             uint32_t current = gpr.GetReg(state, FixedReg);
             gpr.SetReg(state, FixedReg, (current & 0xFFFF0000) | (offset & 0xFFFF));
         } else {
-            uint8_t reg = (op->modrm >> 3) & 7;
+            uint8_t reg = (operand_modrm >> 3) & 7;
             gpr.SetReg(state, reg, (gpr.GetReg(state, reg) & 0xFFFF0000) | (offset & 0xFFFF));
         }
     } else {
@@ -523,7 +525,7 @@ FORCE_INLINE LogicFlow OpLea_Impl(LogicFuncParams) {
             constexpr uint8_t FixedReg = (uint8_t)RegSpec - (uint8_t)RmOperandSpec::Reg0;
             gpr.SetReg(state, FixedReg, offset);
         } else {
-            uint8_t reg = (op->modrm >> 3) & 7;
+            uint8_t reg = (operand_modrm >> 3) & 7;
             gpr.SetReg(state, reg, offset);
         }
     }
@@ -536,7 +538,7 @@ FORCE_INLINE LogicFlow OpLea_Impl(LogicFuncParams) {
 
 FORCE_INLINE LogicFlow OpLea(LogicFuncParams) {
     // 8D: LEA r16/32, m
-    if (op->prefixes.flags.opsize) {
+    if (GetPrefixes(op).flags.opsize) {
         return OpLea_16(LogicPassParams);
     }
     return OpLea_32(LogicPassParams);
@@ -579,8 +581,8 @@ FORCE_INLINE LogicFlow OpPop_Reg_Internal(LogicFuncParams) {
 
 FORCE_INLINE LogicFlow OpPush_Reg(LogicFuncParams) {
     // Generic fallback; opcode-specialized handlers should handle the hot path.
-    uint8_t reg = op->modrm & 7;
-    if (op->prefixes.flags.opsize) {
+    uint8_t reg = operand_modrm & 7;
+    if (GetPrefixes(op).flags.opsize) {
         if (!Push<uint16_t, true>(state, gpr, static_cast<uint16_t>(gpr.GetReg(state, reg)), utlb, op))
             return LogicFlow::RestartMemoryOp;
     } else {
@@ -613,8 +615,8 @@ FORCE_INLINE LogicFlow OpPush_Imm8(LogicFuncParams) {
 
 FORCE_INLINE LogicFlow OpPop_Reg(LogicFuncParams) {
     // Generic fallback; opcode-specialized handlers should handle the hot path.
-    uint8_t reg = op->modrm & 7;
-    if (op->prefixes.flags.opsize) {
+    uint8_t reg = operand_modrm & 7;
+    if (GetPrefixes(op).flags.opsize) {
         auto val_res = Pop<uint16_t, true>(state, gpr, utlb, op);
         if (!val_res) return LogicFlow::RestartMemoryOp;
         gpr.SetReg(state, reg, (gpr.GetReg(state, reg) & 0xFFFF0000) | *val_res);
@@ -631,7 +633,8 @@ FORCE_INLINE LogicFlow OpPopModRM(LogicFuncParams) {
     const auto value = Pop<T, true>(state, gpr, utlb, op);
     if (!value) return LogicFlow::RestartMemoryOp;
     // Resolve the destination after the stack increment, including POP [ESP].
-    if (!WriteModRM<T, OpOnTLBMiss::Retry, 1, Form>(state, gpr, op, *value, utlb)) return LogicFlow::RetryMemoryOp;
+    if (!WriteModRM<T, OpOnTLBMiss::Retry, 1, Form>(state, gpr, op, operand_modrm, *value, utlb))
+        return LogicFlow::RetryMemoryOp;
     return LogicFlow::Continue;
 }
 
@@ -661,8 +664,8 @@ FORCE_INLINE LogicFlow PushaWithWidth(LogicFuncParams) {
 }
 
 FORCE_INLINE LogicFlow OpPusha(LogicFuncParams) {
-    return op->prefixes.flags.opsize ? PushaWithWidth<uint16_t>(LogicPassParams)
-                                     : PushaWithWidth<uint32_t>(LogicPassParams);
+    return GetPrefixes(op).flags.opsize ? PushaWithWidth<uint16_t>(LogicPassParams)
+                                        : PushaWithWidth<uint32_t>(LogicPassParams);
 }
 
 template <typename T>
@@ -685,8 +688,8 @@ FORCE_INLINE LogicFlow PopaWithWidth(LogicFuncParams) {
 }
 
 FORCE_INLINE LogicFlow OpPopa(LogicFuncParams) {
-    return op->prefixes.flags.opsize ? PopaWithWidth<uint16_t>(LogicPassParams)
-                                     : PopaWithWidth<uint32_t>(LogicPassParams);
+    return GetPrefixes(op).flags.opsize ? PopaWithWidth<uint16_t>(LogicPassParams)
+                                        : PopaWithWidth<uint32_t>(LogicPassParams);
 }
 
 template <typename T>
@@ -720,8 +723,8 @@ FORCE_INLINE LogicFlow EnterWithWidth(LogicFuncParams) {
 }
 
 FORCE_INLINE LogicFlow OpEnter(LogicFuncParams) {
-    return op->prefixes.flags.opsize ? EnterWithWidth<uint16_t>(LogicPassParams)
-                                     : EnterWithWidth<uint32_t>(LogicPassParams);
+    return GetPrefixes(op).flags.opsize ? EnterWithWidth<uint16_t>(LogicPassParams)
+                                        : EnterWithWidth<uint32_t>(LogicPassParams);
 }
 
 template <typename T>
@@ -769,7 +772,7 @@ FORCE_INLINE LogicFlow OpSahf(LogicFuncParams) {
 
 template <typename T, RmOperandSpec Register = RmOperandSpec::Dynamic>
 FORCE_INLINE LogicFlow OpXchgRegister(LogicFuncParams) {
-    const unsigned reg = MovRegister<Register>(op->modrm & 7);
+    const unsigned reg = MovRegister<Register>(operand_modrm & 7);
     if (reg == EAX) return LogicFlow::Continue;
     const T accum = ReadRegGeneric<T>(state, gpr, EAX);
     const T value = ReadRegGeneric<T>(state, gpr, reg);
@@ -850,7 +853,7 @@ FORCE_INLINE bool Helper_Movs(LogicFuncParams) {
         return true;
     };
 
-    if (op->prefixes.flags.rep) {
+    if (GetPrefixes(op).flags.rep) {
         while (GetStringCount(state, gpr, addr16) > 0) {
             if (!perform()) return false;
 
@@ -889,7 +892,7 @@ FORCE_INLINE LogicFlow OpStosWithShape(LogicFuncParams) {
         SetStringOffset(state, gpr, EDI, edi + step, addr16);
         return true;
     };
-    if (op->prefixes.flags.rep) {
+    if (GetPrefixes(op).flags.rep) {
         while (GetStringCount(state, gpr, addr16) > 0) {
             if (!perform()) return LogicFlow::ExitOnCurrentEIP;
             if (state->status != EmuStatus::Running) break;
@@ -933,7 +936,7 @@ FORCE_INLINE bool Helper_Lods(LogicFuncParams) {
         return true;
     };
 
-    if (op->prefixes.flags.rep) {
+    if (GetPrefixes(op).flags.rep) {
         while (GetStringCount(state, gpr, addr16) > 0) {
             if (!perform()) return false;
             if (state->status != EmuStatus::Running) return false;
@@ -986,7 +989,7 @@ FORCE_INLINE bool Helper_Scas(LogicFuncParams) {
         return true;
     };
 
-    if (op->prefixes.flags.rep || op->prefixes.flags.repne) {
+    if (GetPrefixes(op).flags.rep || GetPrefixes(op).flags.repne) {
         while (GetStringCount(state, gpr, addr16) > 0) {
             if (!perform()) return false;
             if (state->status != EmuStatus::Running) return false;
@@ -994,10 +997,10 @@ FORCE_INLINE bool Helper_Scas(LogicFuncParams) {
             SetStringCount(state, gpr, GetStringCount(state, gpr, addr16) - 1, addr16);
 
             bool zf = TestFlagBits(flags_cache, ZF_MASK);
-            if (op->prefixes.flags.rep) {
+            if (GetPrefixes(op).flags.rep) {
                 if (!zf) break;
             }  // REPE: Stop if ZF=0
-            else if (op->prefixes.flags.repne) {
+            else if (GetPrefixes(op).flags.repne) {
                 if (zf) break;
             }  // REPNE: Stop if ZF=1
         }
@@ -1047,7 +1050,7 @@ FORCE_INLINE bool Helper_Cmps(LogicFuncParams) {
         return true;
     };
 
-    if (op->prefixes.flags.rep || op->prefixes.flags.repne) {
+    if (GetPrefixes(op).flags.rep || GetPrefixes(op).flags.repne) {
         while (GetStringCount(state, gpr, addr16) > 0) {
             if (!perform()) return false;
             if (state->status != EmuStatus::Running) return false;
@@ -1055,10 +1058,10 @@ FORCE_INLINE bool Helper_Cmps(LogicFuncParams) {
             SetStringCount(state, gpr, GetStringCount(state, gpr, addr16) - 1, addr16);
 
             bool zf = TestFlagBits(flags_cache, ZF_MASK);
-            if (op->prefixes.flags.rep) {
+            if (GetPrefixes(op).flags.rep) {
                 if (!zf) break;
             }  // REPE: Stop if ZF=0
-            else if (op->prefixes.flags.repne) {
+            else if (GetPrefixes(op).flags.repne) {
                 if (zf) break;
             }  // REPNE: Stop if ZF=1
         }

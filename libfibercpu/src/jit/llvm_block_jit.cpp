@@ -127,8 +127,7 @@ void TrackWeightedBlock(EmuState& state, BasicBlock& block, BlockKeyView key) {
 }
 
 bool AcceptsJobs(uint64_t epoch) {
-    return !flush_requested.load(std::memory_order_acquire) &&
-           cache_epoch.load(std::memory_order_acquire) == epoch;
+    return !flush_requested.load(std::memory_order_acquire) && cache_epoch.load(std::memory_order_acquire) == epoch;
 }
 
 struct BlockKey {
@@ -140,7 +139,7 @@ struct BlockKey {
     operator BlockKeyView() const { return {exit, operations, operands}; }
 
     LLVMBlockExit exit;
-    std::vector<block_recipe::OpId> operations;
+    std::vector<block_recipe::BoundOperation> operations;
     std::vector<DecodedOperandShape> operands;
 };
 
@@ -151,7 +150,7 @@ struct BlockKeyHash {
     size_t operator()(BlockKeyView key) const {
         // IDs and operand shapes have no padding. Hashing their native byte
         // spans is local to this process; disk records are encoded separately.
-        static_assert(std::has_unique_object_representations_v<block_recipe::OpId>);
+        static_assert(std::has_unique_object_representations_v<block_recipe::BoundOperation>);
         static_assert(std::has_unique_object_representations_v<DecodedOperandShape>);
         const auto hash = [](auto span) {
             return llvm::xxh3_64bits({reinterpret_cast<const uint8_t*>(span.data()), span.size_bytes()});
@@ -275,7 +274,8 @@ JitMode RuntimeMode(const EmuState& state) {
         if (!value || !pthread_jit_write_protect_supported_np()) return JitMode::Off;
         if (std::strcmp(value, "1") == 0) return JitMode::Exact;
         if (std::strcmp(value, "generic") == 0) return JitMode::Generic;
-        if (std::strcmp(value, "profile") == 0 && std::getenv("FIBERCPU_LLVM_JIT_PROFILE")) return JitMode::LegacyProfile;
+        if (std::strcmp(value, "profile") == 0 && std::getenv("FIBERCPU_LLVM_JIT_PROFILE"))
+            return JitMode::LegacyProfile;
         return JitMode::Off;
     }();
     return mode;
@@ -479,7 +479,8 @@ public:
         // under the same lock that serializes the linker and arena reset.
         thread_local BlockIR worker_ir;
         std::unique_ptr<llvm::MemoryBuffer> object;
-        if (auto module = PrepareLLVMBlock(worker_ir.templates, key, name, /*prune_dead_globals=*/true, Options().pipeline)) {
+        if (auto module =
+                PrepareLLVMBlock(worker_ir.templates, key, name, /*prune_dead_globals=*/true, Options().pipeline)) {
             auto result = jit_->getIRCompileLayer().getCompiler()(*module);
             if (result)
                 object = std::move(*result);
@@ -517,8 +518,8 @@ public:
         compilation_done_.notify_all();
     }
 
-    static int BuildLinkedCache(std::span<const ProfileRecipe> recipes, llvm::raw_ostream& output,
-                                uint32_t limit, llvm::StringRef pipeline) {
+    static int BuildLinkedCache(std::span<const ProfileRecipe> recipes, llvm::raw_ostream& output, uint32_t limit,
+                                llvm::StringRef pipeline) {
         if (!InitializeLLVMTarget()) return -1;
         BlockIR ir;
         if (!ir.templates.IsValid()) return -1;
@@ -639,7 +640,7 @@ void CancelPendingLLVMBlockCompilations(LLVMAsyncState& state) {
 namespace {
 
 struct CompilationJob {
-    std::vector<DecodedOp> ops;
+    std::vector<DecodedInstruction> ops;
     std::vector<uint8_t> bytes;
     std::weak_ptr<AsyncResult> result;
     std::weak_ptr<AsyncSignals> signals;
@@ -652,7 +653,7 @@ struct CompilationJob {
         if (result.expired() || !AcceptsJobs(epoch)) return;
         block_recipe::Plan plan;
         auto input = std::span<const uint8_t>(bytes);
-        const auto redecode = [&](const DecodedOp& op, DecodedOp& generic) {
+        const auto redecode = [&](const DecodedInstruction& op, DecodedInstruction& generic) {
             const auto instruction = input.first(op.len);
             input = input.subspan(op.len);
             return RedecodeGenericInstruction(instruction, op, generic);
@@ -759,25 +760,22 @@ void QueueBlock(EmuState* state, BasicBlock* block, bool exact) {
         .bytes = {},
         .result = result,
         .signals = async->signals,
-        .sentinel = block->sentinel_slot_index,
+        .sentinel = block->inst_count(),
         .epoch = LLVMJitCacheEpoch(),
         .exit = block_recipe::FullBlockExit(*block),
         .exact = exact,
     };
-    const auto ops = std::span(block->FirstOp(), std::min(job.sentinel, kMaxOps));
-    job.ops.reserve(ops.size());
-    job.bytes.reserve(ops.size() * 15);
-    for (const auto& op : ops) {
+    const auto count = std::min(job.sentinel, kMaxOps);
+    job.ops.reserve(count);
+    job.bytes.reserve(count * 15);
+    for (size_t slot = 0; slot < count; ++slot) {
+        auto op = block->ReadOp(slot);
         if (!block_recipe::CanPlanOp(op)) break;
         const auto offset = job.bytes.size();
         job.bytes.resize(offset + op.len);
         if (!CopyDecodedInstructionBytes(state, op, std::span(job.bytes).subspan(offset))) return;
-        auto& captured = job.ops.emplace_back(op);
-        captured.handler = nullptr;
-        if (GetExtKind(&captured) == ExtKind::ControlFlow)
-            SetCachedTarget(&captured, nullptr);
-        else if (GetExtKind(&captured) == ExtKind::Link)
-            SetNextBlock(&captured, nullptr);
+        op.handler = nullptr;
+        job.ops.push_back(op);
     }
     if (job.ops.empty()) return;
     if (!Workers().Submit(std::move(job))) {
@@ -828,8 +826,8 @@ bool ConfigureLLVMBlockJit(const SharedJitOptions& settings, std::string& error)
         llvm::StringRef input(settings.pipeline->data(), settings.pipeline->size());
         llvm::StringRef level = input;
         level.consume_front("-");
-        const bool is_level = level == "O0" || level == "O1" || level == "O2" ||
-                              level == "O3" || level == "Os" || level == "Oz";
+        const bool is_level =
+            level == "O0" || level == "O1" || level == "O2" || level == "O3" || level == "Os" || level == "Oz";
         auto parsed = is_level ? ParseLLVMBlockPipeline(level, "") : ParseLLVMBlockPipeline("", input);
         if (!parsed) {
             error = "LlvmPipeline: " + llvm::toString(parsed.takeError());
@@ -984,8 +982,8 @@ void PollLLVMBlockCompilations(EmuState* state) {
     });
 }
 
-int BuildLinkedLLVMBlockCache(const char* profile_path, const char* cache_path, uint32_t limit,
-                              const char* opt_level, const char* pass_pipeline) {
+int BuildLinkedLLVMBlockCache(const char* profile_path, const char* cache_path, uint32_t limit, const char* opt_level,
+                              const char* pass_pipeline) {
     if (!profile_path || !cache_path) return -1;
     auto input = llvm::MemoryBuffer::getFile(profile_path);
     if (!input) return -1;

@@ -321,22 +321,6 @@ public unsafe partial class X86Native
     [LibraryImport(LibName, EntryPoint = "X86_GetLibAddress")]
     public static partial IntPtr GetLibAddress();
 
-    [StructLayout(LayoutKind.Explicit, Size = 32)]
-    public struct DecodedOp
-    {
-        [FieldOffset(0)] public IntPtr handler;
-        [FieldOffset(8)] public uint next_eip;
-        [FieldOffset(12)] public byte len;
-        [FieldOffset(13)] public byte modrm;
-        [FieldOffset(14)] public byte prefixes;
-        [FieldOffset(15)] public byte meta;
-        [FieldOffset(16)] public uint imm;
-        [FieldOffset(20)] public uint ea_desc;
-        [FieldOffset(24)] public uint disp;
-        [FieldOffset(28)] public uint reserved;
-        [FieldOffset(24)] public IntPtr ext_ptr;
-    }
-
     [StructLayout(LayoutKind.Sequential, Size = 8)]
     public struct BasicBlockChainPrefix
     {
@@ -372,21 +356,18 @@ public unsafe partial class X86Native
         }
     }
 
-    [StructLayout(LayoutKind.Sequential, Size = 48)]
+    [StructLayout(LayoutKind.Explicit, Size = 48)]
     public struct BasicBlock
     {
-        public BasicBlockChainPrefix chain;
-        public IntPtr entry;
-        public uint end_eip;
-        public uint slot_count;
-        public uint sentinel_slot_index;
-        public uint branch_target_eip;
-        public uint fallthrough_eip;
-        public byte terminal_kind_raw;
-        private byte block_padding0;
-        private ushort block_padding1;
-        public ulong exec_count;
-        // Native BasicBlock::slots is alignas(16), so decoded ops start at offset 48.
+        [FieldOffset(0)] public BasicBlockChainPrefix chain;
+        [FieldOffset(8)] public IntPtr entry;
+        [FieldOffset(16)] public uint end_eip;
+        [FieldOffset(20)] public byte slot_count; // Includes physical data slots and the sentinel.
+        [FieldOffset(21)] public byte sentinel_slot_index;
+        [FieldOffset(28)] public uint branch_target_eip;
+        [FieldOffset(32)] public uint fallthrough_eip;
+        [FieldOffset(36)] public byte terminal_kind_raw;
+        [FieldOffset(40)] public ulong exec_count;
 
         // Convenience properties for start_eip and inst_count
         public uint start_eip

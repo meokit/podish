@@ -17,7 +17,8 @@ enum class ShiftCountSource { Immediate, One, Cl };
 
 template <typename T, ShiftCountSource CountSource, GroupOpSpec SubOp, FlagsSpec Flags, AddrModeSpec Form>
 FORCE_INLINE LogicFlow OpGroup2_T_Internal(LogicFuncParams) {
-    const auto dest = ReadModRM<T, OpOnTLBMiss::Restart, 1, Form>(state, gpr, op, utlb);
+    const ModRMRmwOperand<Form> operand(state, gpr, op, operand_modrm);
+    const auto dest = operand.template Read<T, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!dest) return LogicFlow::RestartMemoryOp;
 
     uint8_t count = 1;
@@ -30,7 +31,7 @@ FORCE_INLINE LogicFlow OpGroup2_T_Internal(LogicFuncParams) {
 
     constexpr bool update_flags = Flags != FlagsSpec::Dead;
     T result;
-    switch (GroupOperation<SubOp>(op)) {
+    switch (GroupOperation<SubOp>(operand_modrm)) {
         case 0:
             result = AluRol<T, update_flags>(state, flags_cache, *dest, count);
             break;
@@ -38,11 +39,11 @@ FORCE_INLINE LogicFlow OpGroup2_T_Internal(LogicFuncParams) {
             result = AluRor<T, update_flags>(state, flags_cache, *dest, count);
             break;
         case 2:
-            return ExecuteCarryRmw<CarryRmwKind::Rcl, T, update_flags, Form>(state, gpr, op, *dest, count, utlb,
-                                                                             flags_cache);
+            return ExecuteCarryRmw<CarryRmwKind::Rcl, T, update_flags>(state, gpr, op, operand, *dest, count, utlb,
+                                                                       flags_cache);
         case 3:
-            return ExecuteCarryRmw<CarryRmwKind::Rcr, T, update_flags, Form>(state, gpr, op, *dest, count, utlb,
-                                                                             flags_cache);
+            return ExecuteCarryRmw<CarryRmwKind::Rcr, T, update_flags>(state, gpr, op, operand, *dest, count, utlb,
+                                                                       flags_cache);
         case 4:
         case 6:  // SAL alias
             result = AluShl<T, update_flags>(state, flags_cache, *dest, count);
@@ -57,7 +58,7 @@ FORCE_INLINE LogicFlow OpGroup2_T_Internal(LogicFuncParams) {
             __builtin_unreachable();  // The three-bit group extension is exhaustive.
     }
 
-    if (!WriteModRM<T, OpOnTLBMiss::Retry, 1, Form>(state, gpr, op, result, utlb)) return LogicFlow::RetryMemoryOp;
+    if (!operand.template Write<T, OpOnTLBMiss::Retry>(state, gpr, op, result, utlb)) return LogicFlow::RetryMemoryOp;
     return LogicFlow::Continue;
 }
 
@@ -93,10 +94,10 @@ FORCE_INLINE T ModifyBit(T value, unsigned offset, uint8_t subop) {
 template <GroupOpSpec Operation, OpsizeSpec Size = OpsizeSpec::Dynamic, AddrModeSpec Form = AddrModeSpec::Dynamic,
           FlagsSpec Flags = FlagsSpec::Dynamic>
 FORCE_INLINE LogicFlow OpBitRegister_Internal(LogicFuncParams) {
-    const uint32_t index = gpr.GetReg(state, (op->modrm >> 3) & 7);
+    const uint32_t index = gpr.GetReg(state, (operand_modrm >> 3) & 7);
     constexpr auto subop = static_cast<uint8_t>(Operation);
-    if (OperandIsReg<Form>(op)) {
-        const auto rm = op->modrm & 7;
+    if (OperandIsReg<Form>(operand_modrm)) {
+        const auto rm = operand_modrm & 7;
         const uint32_t value = gpr.GetReg(state, rm);
         const unsigned offset = index & (OperandIs16<Size>(op) ? 15 : 31);
         if constexpr (Flags != FlagsSpec::Dead) AssignCF(flags_cache, (value >> offset) & 1);
@@ -118,10 +119,10 @@ FORCE_INLINE LogicFlow OpBitRegister_Internal(LogicFuncParams) {
 // An immediate bit index wraps within the addressed word or dword.
 template <typename T, GroupOpSpec Operation, AddrModeSpec Form, FlagsSpec Flags>
 FORCE_INLINE LogicFlow OpGroup8_T_Internal(LogicFuncParams) {
-    const auto subop = GroupOperation<Operation>(op);
-    const auto rm = op->modrm & 7;
+    const auto subop = GroupOperation<Operation>(operand_modrm);
+    const auto rm = operand_modrm & 7;
     const unsigned offset = imm & (sizeof(T) * 8 - 1);
-    const bool memory = !OperandIsReg<Form>(op);
+    const bool memory = !OperandIsReg<Form>(operand_modrm);
     uint32_t address = 0;
     T value;
     if (memory) {
@@ -157,13 +158,13 @@ enum class BitScanOperation { Dynamic, Forward, Reverse, TrailingCount };
 
 template <typename T, BitScanOperation Operation, AddrModeSpec Form, FlagsSpec Flags>
 FORCE_INLINE LogicFlow OpBitScan_T_Internal(LogicFuncParams) {
-    const auto source = ReadModRM<T, OpOnTLBMiss::Restart, 1, Form>(state, gpr, op, utlb);
+    const auto source = ReadModRM<T, OpOnTLBMiss::Restart, 1, Form>(state, gpr, op, operand_modrm, utlb);
     if (!source) return LogicFlow::RestartMemoryOp;
-    const auto reg = (op->modrm >> 3) & 7;
+    const auto reg = (operand_modrm >> 3) & 7;
     constexpr bool update_flags = Flags != FlagsSpec::Dead;
 
     if constexpr (Operation == BitScanOperation::Dynamic || Operation == BitScanOperation::TrailingCount) {
-        if (Operation == BitScanOperation::TrailingCount || op->prefixes.flags.rep) {
+        if (Operation == BitScanOperation::TrailingCount || GetPrefixes(op).flags.rep) {
             const auto count = std::countr_zero(*source);
             if constexpr (update_flags) {
                 AssignCF(flags_cache, *source == 0);
@@ -193,7 +194,7 @@ FORCE_INLINE LogicFlow OpBitScan_Internal(LogicFuncParams) {
 template <RmOperandSpec Reg = RmOperandSpec::Dynamic>
 FORCE_INLINE LogicFlow OpBswap_Internal(LogicFuncParams) {
     const auto reg = Reg == RmOperandSpec::Dynamic
-                         ? op->modrm & 7
+                         ? operand_modrm & 7
                          : static_cast<uint8_t>(Reg) - static_cast<uint8_t>(RmOperandSpec::Reg0);
     gpr.SetReg(state, reg, __builtin_bswap32(gpr.GetReg(state, reg)));
     return LogicFlow::Continue;

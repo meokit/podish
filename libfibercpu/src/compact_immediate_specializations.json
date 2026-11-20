@@ -1,0 +1,22 @@
+[
+  {
+    "handlers": ["OpMov_EbIb", "OpMov_EvIz", "OpMov_EbIb_Mem", "OpMov_EvIz_Immediate_16Mem",
+                 "OpMov_EvIz_Immediate_32Mem", "OpMov_EvIz_EspBaseNoIndexNoSegment",
+                 "OpMov_EvIz_EaxBaseNoIndexNoSegment", "OpMov_EvIz_EsiBaseNoIndexNoSegment"],
+    "immediates": [1, 2, 3, 4, 5, 6, 8, 16, 255, 4294967295]
+  },
+  {
+    "handlers": ["OpGroup3_Eb_Test_Mem_Live", "OpGroup3_Ev_Test_16_Mem_Live", "OpGroup3_Ev_Test_32_Mem_Live"],
+    "immediates": [1, 2, 4, 8, 16, 24, 32, 64, 128]
+  },
+  {
+    "handlers": ["OpGroup1_EvIz_Cmp_32_Flags"],
+    "immediates": [1, 4, 64, 128, 255, 1040, 1051, 1060, 1092, 4095]
+  },
+  {
+    "handlers": ["OpGroup1_EbIb_Cmp_Flags", "OpGroup1_EvIb_Cmp_32_Flags", "OpGroup1_EvIb_Cmp_16_Flags",
+                 "OpGroup1_EvIb_Add_32_Flags", "OpGroup1_EvIb_Add_32_NoFlags",
+                 "OpGroup1_EvIb_Sub_32_Flags", "OpGroup1_EvIb_Sub_32_NoFlags"],
+    "immediates": [1, 2, 3, 4, 8, 16, 255]
+  }
+]

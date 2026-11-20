@@ -11,7 +11,8 @@ enum class DoubleShiftCount { Immediate, Cl };
 
 template <typename T, DoubleShiftDirection Direction, AddrModeSpec Form, FlagsSpec Flags>
 FORCE_INLINE LogicFlow OpDoubleShiftValue(LogicFuncParams, uint8_t count) {
-    const auto destination = ReadModRM<T, OpOnTLBMiss::Restart, 1, Form>(state, gpr, op, utlb);
+    const ModRMRmwOperand<Form> operand(state, gpr, op, operand_modrm);
+    const auto destination = operand.template Read<T, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
     if (!destination) return LogicFlow::RestartMemoryOp;
 
     constexpr unsigned width = sizeof(T) * 8;
@@ -22,7 +23,7 @@ FORCE_INLINE LogicFlow OpDoubleShiftValue(LogicFuncParams, uint8_t count) {
     constexpr bool left = Direction == DoubleShiftDirection::Left;
     constexpr T sign_bit = T{1} << (width - 1);
     const T dst = *destination;
-    const T src = ReadRegGeneric<T>(state, gpr, (op->modrm >> 3) & 7);
+    const T src = ReadRegGeneric<T>(state, gpr, (operand_modrm >> 3) & 7);
     const T result = left ? (dst << count) | (src >> (width - count)) : (dst >> count) | (src << (width - count));
     if constexpr (Flags != FlagsSpec::Dead) {
         uint32_t flags = GetFlags32(flags_cache) & ~(CF_MASK | PF_MASK | ZF_MASK | SF_MASK | OF_MASK);
@@ -34,7 +35,7 @@ FORCE_INLINE LogicFlow OpDoubleShiftValue(LogicFuncParams, uint8_t count) {
         SetFlags32AndSyncParityState(flags_cache, flags);
     }
 
-    if (!WriteModRM<T, OpOnTLBMiss::Retry, 1, Form>(state, gpr, op, result, utlb)) return LogicFlow::RetryMemoryOp;
+    if (!operand.template Write<T, OpOnTLBMiss::Retry>(state, gpr, op, result, utlb)) return LogicFlow::RetryMemoryOp;
     return LogicFlow::Continue;
 }
 

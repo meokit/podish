@@ -339,9 +339,13 @@ endif()
 
 # Older pair-only generated files do not include handwritten registrations.
 set(FIBERCPU_GENERATED_WITH_HANDWRITTEN OFF)
+set(FIBERCPU_GENERATED_OWNS_FUSIONS OFF)
 if(FIBERCPU_HAVE_GENERATED_SUPEROPCODES)
     file(READ "${FIBERCPU_GENERATED_SUPEROPCODES_FILE}" FIBERCPU_GENERATED_HEADER LIMIT 1024)
-    if(FIBERCPU_GENERATED_HEADER MATCHES "includes_handwritten_superopcodes")
+    if(FIBERCPU_GENERATED_HEADER MATCHES "owns_superopcode_selection")
+        set(FIBERCPU_GENERATED_OWNS_FUSIONS ON)
+    endif()
+    if(FIBERCPU_GENERATED_HEADER MATCHES "includes_handwritten_superopcodes|owns_superopcode_selection")
         set(FIBERCPU_GENERATED_WITH_HANDWRITTEN ON)
     endif()
 endif()
@@ -410,22 +414,23 @@ if(FIBERCPU_LOWER_OPERANDS)
     endif()
     set(_plan "${FIBERCPU_OPERAND_PLAN_FILE}")
     if(NOT _plan)
-        set(_plan_name operand-shapes-v1.json)
-        if(_full_operand_plan)
-            set(_plan_name operand-shapes-gnu-writeback-v1.json)
+        set(_plan_name coremark-fresh-operands-v3.json)
+        if(NOT FIBERCPU_ENABLE_SUPEROPCODES AND _full_operand_plan)
+            set(_plan_name coremark-nofusion-operands-v3.json)
         endif()
         set(_plan "${CMAKE_CURRENT_SOURCE_DIR}/../benchmark/optimization/manifests/${_plan_name}")
     endif()
     set(_operand_options "${CMAKE_CURRENT_BINARY_DIR}/generated/operand-options.txt")
     file(GENERATE OUTPUT "${_operand_options}" CONTENT
         "${_operand_source};${_plan};${FIBERCPU_OPERAND_MODE};${FIBERCPU_OPERAND_BUDGET};${FIBERCPU_PIN_SPECIALIZATION_MODE};${FIBERCPU_OPERAND_FUSIONS_ONLY};${FIBERCPU_GPR_PIN_MODE};${_pin_mask}\n")
+    set(_compact_immediates "${CMAKE_CURRENT_SOURCE_DIR}/src/compact_immediate_specializations.json")
     add_custom_command(OUTPUT "${_operand_output}"
         COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/gen_operand_specializations.py"
             --source "${_operand_source}" --plan "${_plan}"
-            --catalog "${_instruction_catalog}"
+            --catalog "${_instruction_catalog}" --compact-immediates "${_compact_immediates}"
             --output "${_operand_output}" --mode "${FIBERCPU_OPERAND_MODE}"
             --pin-specialization "${FIBERCPU_PIN_SPECIALIZATION_MODE}" --budget "${FIBERCPU_OPERAND_BUDGET}" --fused-only "$<BOOL:${FIBERCPU_OPERAND_FUSIONS_ONLY}>" --pin-mode "${FIBERCPU_GPR_PIN_MODE}" --pin-mask "${_pin_mask}"
-        DEPENDS "${_operand_source}" "${_plan}" "${_operand_options}" "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/gen_operand_specializations.py"
+        DEPENDS "${_operand_source}" "${_plan}" "${_operand_options}" "${_compact_immediates}" "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/gen_operand_specializations.py"
             "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/operand_specialization_data.py"
             ${_catalog_inputs} "${_catalog_generator}"
         VERBATIM)
@@ -616,7 +621,9 @@ set(FIBERCPU_FINAL_SOURCES
 add_library(fibercpu ${FIBERCPU_LIBRARY_TYPE} ${FIBERCPU_FINAL_SOURCES})
 target_compile_definitions(fibercpu PRIVATE FIBERCPU_SUPEROPCODE_SET_SHA256="${FIBERCPU_SUPEROPCODE_SET_SHA256}")
 target_compile_definitions(fibercpu_core PRIVATE FIBERCPU_SUPEROPCODE_SET_SHA256="${FIBERCPU_SUPEROPCODE_SET_SHA256}")
-target_compile_definitions(fibercpu_core PRIVATE FIBERCPU_GENERATED_WITH_HANDWRITTEN=$<BOOL:${FIBERCPU_GENERATED_WITH_HANDWRITTEN}>)
+target_compile_definitions(fibercpu_core PRIVATE
+    FIBERCPU_GENERATED_WITH_HANDWRITTEN=$<BOOL:${FIBERCPU_GENERATED_WITH_HANDWRITTEN}>
+    FIBERCPU_GENERATED_OWNS_FUSIONS=$<BOOL:${FIBERCPU_GENERATED_OWNS_FUSIONS}>)
 target_include_directories(fibercpu_core PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src")
 set_target_properties(fibercpu PROPERTIES POSITION_INDEPENDENT_CODE ON)
 if(WIN32 AND NOT FIBERCPU_BUILD_STATIC)

@@ -153,13 +153,21 @@ def build_bundle(args):
         if obj == b"-":
             reason = "llvm_shape_unsupported"
         else:
-            entry, words, helpers, data, constants, reason = MachO(args.objects, obj).handler("_FiberOperandStencil")
+            binding_bytes = 2 * item["width"]
+            binding = tuple(struct.iter_unpack("<BB", obj[:binding_bytes]))
+            if (len(binding) != item["width"] or any(
+                    modrm != operand["modrm"] or slots not in (1, 2)
+                    for (modrm, slots), operand in zip(binding, item["operands"]))):
+                raise ValueError(f"LLVM stencil record {index} disagrees with its runtime binding")
+            entry, words, helpers, data, constants, reason = MachO(args.objects, obj[binding_bytes:]).handler(
+                "_FiberOperandStencil")
         if reason:
             excluded[reason] += 1
             excluded_weight[reason] += item["dispatch_count"]
             continue
         fixed = tuple(word & ~immediate_mask(word) for word in words)
-        groups[item["original"], entry, fixed, helpers, data, constants].append((item, words))
+        groups[item["original"], tuple(item["llvm_operations"]), binding, entry, fixed, helpers, data, constants].append(
+            (item, words))
 
     # Keep an unmodified exemplar for each shape. Store only the fields that
     # vary within that shape, and compare every reconstructed body with Clang's.
@@ -170,7 +178,7 @@ def build_bundle(args):
     raw_words = accepted_weight = immediate_variants = 0
     variants_per_handler = Counter()
     templates_per_handler = Counter()
-    for (original, entry, _, helpers, data, constants), variants in groups.items():
+    for (original, _, _, entry, _, helpers, data, constants), variants in groups.items():
         exemplar = variants[0][1]
         fields = []
         for i, word in enumerate(exemplar):

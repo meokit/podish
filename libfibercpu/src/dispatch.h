@@ -92,10 +92,10 @@ FORCE_INLINE ATTR_PRESERVE_NONE int64_t ResolveBranchTargetInline(EmuState* REST
 
     BasicBlock* next_block;
     if constexpr (Kind == ExtKind::Link) {
-        next_block = GetNextBlock(op);
+        next_block = reinterpret_cast<BasicBlock*>(static_cast<uintptr_t>(op->payload));
     } else {
         static_assert(Kind == ExtKind::ControlFlow);
-        next_block = GetCachedTarget(op);
+        next_block = op->CachedBranchLink()->target;
     }
 
     auto header = *reinterpret_cast<const volatile __uint128_t*>(next_block);
@@ -134,7 +134,7 @@ FORCE_INLINE ATTR_PRESERVE_NONE int64_t OpExitBlockImpl(EmuState* RESTRICT state
     FIBERCPU_PIN_ASSUME;
     RecordBlockHandlersUntil(state, op);
     // Group 5's indirect target can use the full guest address range.
-    const uint32_t target_eip = UseBranch ? branch : op->next_eip;
+    const uint32_t target_eip = UseBranch ? branch : state->last_block->sentinel_eip;
     ATTR_MUSTTAIL return ResolveBranchTargetInline<ExtKind::Link>(state, op, instr_limit, utlb_tags, utlb_addend,
                                                                   target_eip, flags_cache FIBERCPU_PIN_RELOAD);
 }
@@ -153,7 +153,8 @@ ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState* RESTRICT state, DecodedOp* 
     mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
     OperandPolicy::Assume(op);
     // Execute Logic
-    auto flow = Target(state, op, &utlb, OperandPolicy::Immediate(op), &branch, flags_cache, FIBERCPU_GPR_CACHE);
+    auto flow = Target(state, op, &utlb, OperandPolicy::Immediate(op), OperandPolicy::ModRM(op), &branch, flags_cache,
+                       FIBERCPU_GPR_CACHE);
     mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
 
     switch (flow) {
@@ -161,18 +162,19 @@ ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState* RESTRICT state, DecodedOp* 
             // Direct Relative Dispatch
             // Note: We don't check for 0 here for speed, assuming well-formed blocks
             // (sentinel always valid)
-            if (auto* next_op = NextOp(op)) {
+            if (auto* next_op = op + (OperandPolicy::slots ? OperandPolicy::slots : 1)) {
 #ifdef FIBERCPU_ENABLE_SEQUENCE_PROFILE
-                if (next_op->len != 0) {
+                auto* logical_next = OperandSpec::Advance<OperandPolicy>(op);
+                if (logical_next != state->last_block->Sentinel()) {
                     state->sequence_counts[{reinterpret_cast<uintptr_t>(op->handler),
-                                            reinterpret_cast<uintptr_t>(next_op->handler)}]++;
+                                            reinterpret_cast<uintptr_t>(logical_next->handler)}]++;
                     const auto current = reinterpret_cast<uintptr_t>(op->handler);
-                    const auto next = reinterpret_cast<uintptr_t>(next_op->handler);
+                    const auto next = reinterpret_cast<uintptr_t>(logical_next->handler);
                     if (history_length >= 1) state->ngram_counts[{{history[1], current, next, 0}}]++;
                     if (history_length >= 2) state->ngram_counts[{{history[0], history[1], current, next}}]++;
                     state->sequence_history = {history[1], current};
                     state->sequence_history_length = static_cast<uint8_t>(std::min<int>(2, history_length + 1));
-                    state->sequence_expected_op = next_op;
+                    state->sequence_expected_op = logical_next;
                 }
 #endif
                 ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch,
@@ -180,7 +182,7 @@ ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState* RESTRICT state, DecodedOp* 
             }
             __builtin_unreachable();
         case LogicFlow::ContinueSkipOne:
-            if (auto* next_op = NextOp(NextOp(op))) {
+            if (auto* next_op = NextOp(OperandSpec::Advance<OperandPolicy>(op))) {
                 ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch,
                                                       flags_cache FIBERCPU_PIN_FORWARD(OperandPolicy));
             }

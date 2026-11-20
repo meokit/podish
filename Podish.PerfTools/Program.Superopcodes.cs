@@ -185,7 +185,7 @@ internal static partial class Program
         sb.AppendLine("}  // namespace");
         sb.AppendLine();
 
-        sb.AppendLine("__attribute__((used)) HandlerFunc GeneratedFindSuperOpcode(const DecodedOp* ops) {");
+        sb.AppendLine("__attribute__((used)) HandlerFunc GeneratedFindSuperOpcode(const DecodedInstruction* ops) {");
         sb.AppendLine("    if (!ops) return nullptr;");
         sb.AppendLine("    static std::atomic<GeneratedSuperOpcodeTable*> table_ptr{nullptr};");
         sb.AppendLine("    auto* table = table_ptr.load(std::memory_order_acquire);");

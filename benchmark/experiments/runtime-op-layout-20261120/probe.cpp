@@ -5,15 +5,20 @@
 
 using namespace fiberish;
 
-struct RuntimeOp24;
-using CompactHandler = int64_t(ATTR_PRESERVE_NONE*)(EmuState*, RuntimeOp24*, int64_t, mem::MicroTlbAbiWord,
-                                                    mem::MicroTlbAbiWord, uint32_t, uint64_t FIBERCPU_PIN_PARAMS);
+template <typename Op>
+using ProbeHandler = int64_t(ATTR_PRESERVE_NONE*)(EmuState*, Op*, int64_t, mem::MicroTlbAbiWord, mem::MicroTlbAbiWord,
+                                                  uint32_t, uint64_t FIBERCPU_PIN_PARAMS);
+
+struct alignas(16) RuntimeOp32 {
+    ProbeHandler<RuntimeOp32> handler;
+    std::byte operands[24];
+};
 
 // The mandatory operand policy supplies semantic prefix and metadata bits.
 // A direct conditional branch uses immediate for its relative displacement;
 // its cached target pointer is in the owning block's side state.
 struct RuntimeOp24 {
-    CompactHandler handler;
+    ProbeHandler<RuntimeOp24> handler;
     uint32_t next_eip;
     uint8_t len;
     uint8_t modrm;
@@ -22,7 +27,8 @@ struct RuntimeOp24 {
     uint32_t displacement;
 };
 
-static_assert(sizeof(DecodedOp) == 32 && alignof(DecodedOp) == 16);
+static_assert(sizeof(RuntimeOp32) == 32 && alignof(RuntimeOp32) == 16);
+static_assert(sizeof(DecodedOp) == 16 && alignof(DecodedOp) == 16);
 static_assert(sizeof(RuntimeOp24) == 24 && alignof(RuntimeOp24) == 8);
 
 constexpr uint16_t PackAddress(uint32_t ea) {
@@ -54,12 +60,17 @@ extern "C" ATTR_PRESERVE_NONE int64_t Dispatch24(EmuState* state, RuntimeOp24* o
 
 // Slot rank in a sparse per-block branch-cache table. The mask is empty for
 // blocks without a cached branch. Synthetic Step supplies its own context.
-extern "C" size_t EdgeIndex32(const DecodedOp* first, const DecodedOp* op, uint64_t mask) {
+extern "C" size_t EdgeIndex32(const RuntimeOp32* first, const RuntimeOp32* op, uint64_t mask) {
     const auto slot = op - first;
     return std::popcount(mask & ((uint64_t{1} << slot) - 1));
 }
 
 extern "C" size_t EdgeIndex24(const RuntimeOp24* first, const RuntimeOp24* op, uint64_t mask) {
+    const auto slot = op - first;
+    return std::popcount(mask & ((uint64_t{1} << slot) - 1));
+}
+
+extern "C" size_t EdgeIndex16(const DecodedOp* first, const DecodedOp* op, uint64_t mask) {
     const auto slot = op - first;
     return std::popcount(mask & ((uint64_t{1} << slot) - 1));
 }
@@ -79,12 +90,14 @@ int main() {
         }
     }
     RuntimeOp24 compact[64]{};
-    DecodedOp original[64]{};
+    RuntimeOp32 original[64]{};
+    DecodedOp current[64]{};
     const uint64_t mask = 0x8000000000000015;
     for (unsigned i = 0; i < 64; ++i)
-        if (EdgeIndex24(compact, compact + i, mask) != EdgeIndex32(original, original + i, mask))
+        if (EdgeIndex24(compact, compact + i, mask) != EdgeIndex32(original, original + i, mask) ||
+            EdgeIndex16(current, current + i, mask) != EdgeIndex32(original, original + i, mask))
             return 1;
-    std::printf("DecodedOp=%zu/%zu RuntimeOp24=%zu/%zu BasicBlockHeader=%zu RoundTrips=%u\n", sizeof(DecodedOp),
-                alignof(DecodedOp), sizeof(RuntimeOp24), alignof(RuntimeOp24), offsetof(BasicBlock, slots),
-                address_count);
+    std::printf("DecodedOp=%zu/%zu RuntimeOp24=%zu/%zu RuntimeOp32=%zu/%zu BasicBlockHeader=%zu RoundTrips=%u\n",
+                sizeof(DecodedOp), alignof(DecodedOp), sizeof(RuntimeOp24), alignof(RuntimeOp24), sizeof(RuntimeOp32),
+                alignof(RuntimeOp32), offsetof(BasicBlock, slots), address_count);
 }

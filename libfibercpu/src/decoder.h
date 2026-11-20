@@ -1,9 +1,12 @@
 #pragma once
+#include <array>
 #include <bit>
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
 #include <span>
 #include <type_traits>
+#include <utility>
 #include <vector>
 #include "common.h"
 #include "handler_abi.h"
@@ -56,6 +59,7 @@ namespace fiberish {
 struct EmuState;
 struct GprCache;
 struct DecodedOp;
+struct DecodedInstruction;
 
 // Handler Function (Preserve None ABI, functionality + dispatch)
 using HandlerFunc = int64_t(ATTR_PRESERVE_NONE*)(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
@@ -72,10 +76,10 @@ enum class LogicFlow : uint8_t {
     ExitToBranch = 6,
 };
 
-#define LogicFuncParams                                                                                    \
-    EmuState *RESTRICT state, DecodedOp *RESTRICT op, mem::MicroTLB *utlb, uint32_t imm, uint32_t *branch, \
-        uint64_t &flags_cache, GprCache gpr
-#define LogicPassParams state, op, utlb, imm, branch, flags_cache, gpr
+#define LogicFuncParams                                                                                         \
+    EmuState *RESTRICT state, DecodedOp *RESTRICT op, mem::MicroTLB *utlb, uint32_t imm, uint8_t operand_modrm, \
+        uint32_t *branch, uint64_t &flags_cache, GprCache gpr
+#define LogicPassParams state, op, utlb, imm, operand_modrm, branch, flags_cache, gpr
 
 // Logic Function (Standard ABI, implementation)
 // It may modify op and next_handler to control flow!
@@ -113,7 +117,9 @@ union Prefixes {
 };
 
 union Meta {
+    static constexpr uint8_t has_modrm_mask = 1 << 0;
     static constexpr uint8_t no_flags_mask = 1 << 4;
+    static constexpr uint8_t operand_lowered_mask = 1 << 5;
 
     uint8_t all;
     struct {
@@ -169,6 +175,12 @@ FORCE_INLINE constexpr uint8_t IndexOffset(uint32_t ea_desc) {
 
 FORCE_INLINE constexpr uint8_t Scale(uint32_t ea_desc) { return static_cast<uint8_t>((ea_desc >> kScaleShift) & 0x3); }
 
+FORCE_INLINE constexpr uint32_t CompactEA(uint32_t ea_desc) {
+    const auto base = BaseOffset(ea_desc) / sizeof(uint32_t);
+    const auto index = IndexOffset(ea_desc) / sizeof(uint32_t);
+    return base | ((index == 8 ? ESP : index) << 4) | (Scale(ea_desc) << 7);
+}
+
 FORCE_INLINE constexpr uint8_t Segment(uint32_t ea_desc) {
     return static_cast<uint8_t>((ea_desc >> kSegmentShift) & 0x7);
 }
@@ -178,16 +190,16 @@ FORCE_INLINE constexpr uint8_t ResolvedSegment(uint32_t ea_desc) {
 }
 }  // namespace memdesc
 
+enum class RelativeBranchWidth : uint8_t { None, Byte, Word, Dword };
+
 struct DecodedControlFlowData {
     uint32_t imm;
     uint32_t target_eip;
-    BasicBlock* cached_target;
-#if INTPTR_MAX == INT32_MAX
-    uint32_t cached_target_padding;
-#endif
+    RelativeBranchWidth relative_width;
+    std::byte reserved[7];
 };
 
-struct alignas(16) DecodedOp {
+struct alignas(16) DecodedInstruction {
     HandlerFunc handler;
 #if INTPTR_MAX == INT32_MAX
     uint32_t handler_padding;
@@ -216,19 +228,19 @@ struct alignas(16) DecodedOp {
 // Value-initialize individual decoded instructions with {}. Default
 // initialization is deliberately trivial so unused block slots stay untouched.
 struct alignas(16) DecodedInstTmp {
-    DecodedOp head;
+    DecodedInstruction head;
 };
 static_assert(std::is_trivially_default_constructible_v<DecodedInstTmp>);
 
-static_assert(sizeof(DecodedOp) == 32, "DecodedOp must be exactly 32 bytes");
+static_assert(sizeof(DecodedInstruction) == 32);
 static_assert(sizeof(DecodedMemData) == 16, "DecodedMemData must be exactly 16 bytes");
 static_assert(sizeof(DecodedInstTmp) == 32, "DecodedInstTmp must be exactly 32 bytes");
-static_assert(offsetof(DecodedOp, handler) == 0, "DecodedOp: handler must start at offset 0");
-static_assert(offsetof(DecodedOp, ext) == 16, "DecodedOp: ext must start at offset 16");
+static_assert(offsetof(DecodedInstruction, handler) == 0, "DecodedInstruction: handler must start at offset 0");
+static_assert(offsetof(DecodedInstruction, ext) == 16, "DecodedInstruction: ext must start at offset 16");
 
 static_assert(sizeof(DecodedControlFlowData) == 16, "DecodedControlFlowData must be exactly 16 bytes");
-static_assert(offsetof(DecodedOp, next_eip) == 8, "DecodedOp: next_eip must start at offset 8");
-static_assert(offsetof(DecodedOp, meta) == 15, "DecodedOp: meta must start at offset 15");
+static_assert(offsetof(DecodedInstruction, next_eip) == 8, "DecodedInstruction: next_eip must start at offset 8");
+static_assert(offsetof(DecodedInstruction, meta) == 15, "DecodedInstruction: meta must start at offset 15");
 
 template <typename OpT>
 FORCE_INLINE bool HasExt(const OpT* op) {
@@ -272,42 +284,197 @@ FORCE_INLINE uint32_t GetImm(const OpT* op) {
     return GetExt(op)->data.imm;
 }
 
-FORCE_INLINE const DecodedOp* NextOp(const DecodedOp* op) { return op + 1; }
+FORCE_INLINE uint32_t GetControlTargetEip(const DecodedInstruction* op) { return op->ext.control.target_eip; }
 
-FORCE_INLINE DecodedOp* NextOp(DecodedOp* op) { return op + 1; }
-
-template <typename OpT>
-FORCE_INLINE BasicBlock* GetNextBlock(const OpT* op) {
-    return GetExt(op)->link.next_block;
+FORCE_INLINE uint32_t RelativeBranchTarget(uint32_t next_eip, uint32_t immediate, RelativeBranchWidth width) {
+    switch (width) {
+        case RelativeBranchWidth::Byte:
+            return next_eip + static_cast<int8_t>(immediate);
+        case RelativeBranchWidth::Word:
+            return (next_eip + static_cast<int16_t>(immediate)) & 0xFFFFu;
+        case RelativeBranchWidth::Dword:
+            return next_eip + immediate;
+        case RelativeBranchWidth::None:
+            return 0;
+    }
+    return 0;
 }
 
-template <typename OpT>
-FORCE_INLINE void SetNextBlock(OpT* op, BasicBlock* block) {
-    SetExtKind(op, ExtKind::Link);
-    GetExt(op)->link.next_block = block;
+// Single-slot memory immediates. Keep small literals as their own codes and
+// reserve the rest for constants from the CoreMark and Webpack profiles.
+// These are raw x86 immediates: a sign-extended imm8 of -1 is encoded as 0xff.
+namespace compact_imm {
+constexpr uint8_t kCodeMask = 0x3f;
+constexpr uint8_t kLastLiteral = 16;
+constexpr std::array<uint32_t, kCodeMask - kLastLiteral> kConstants{
+    0x12,  0x13,  0x18,  0x1c,   0x20,    0x25,      0x2c,       0x2f,       0x3b,       0x3d,       0x3e,       0x40,
+    0x41,  0x42,  0x43,  0x5e,   0x60,    0x63,      0x66,       0x80,       0x85,       0xa4,       0xa9,       0xb5,
+    0xc4,  0xff,  0x100, 0x102,  0x112,   0x13f,     0x280,      0x3e7,      0x400,      0x410,      0x41b,      0x41c,
+    0x424, 0x444, 0xfff, 0xffff, 0x10000, 0x1000000, 0x7fffffff, 0x80000000, 0xcc9e2d51, 0xfffffffe, 0xffffffff,
+};
+
+constexpr uint8_t Encode(uint32_t immediate) {
+    if (immediate <= kLastLiteral) return uint8_t(immediate);
+    for (size_t i = 0; i < kConstants.size(); ++i) {
+        if (kConstants[i] == immediate) return uint8_t(kLastLiteral + 1 + i);
+    }
+    return 0;
 }
 
-template <typename OpT>
-FORCE_INLINE BasicBlock* GetCachedTarget(const OpT* op) {
-    return GetExt(op)->control.cached_target;
+constexpr uint32_t Decode(uint8_t code) { return code <= kLastLiteral ? code : kConstants[code - kLastLiteral - 1]; }
+
+constexpr bool NeedsSeparateSlot(bool memory, uint8_t prefixes, uint32_t immediate) {
+    return memory && immediate && ((prefixes & kCodeMask) || !Encode(immediate));
 }
 
-template <typename OpT>
-FORCE_INLINE uint32_t GetControlTargetEip(const OpT* op) {
-    return GetExt(op)->control.target_eip;
+FORCE_INLINE bool NeedsSeparateSlot(const DecodedInstruction& op) {
+    return NeedsSeparateSlot(HasMem(&op), op.prefixes.all, GetImm(&op));
 }
 
-template <typename OpT>
-FORCE_INLINE void SetControlTargetEip(OpT* op, uint32_t target_eip) {
-    SetExtKind(op, ExtKind::ControlFlow);
-    GetExt(op)->control.target_eip = target_eip;
+FORCE_INLINE bool HasFreePrefixBits(const DecodedInstruction& op) { return (op.prefixes.all & kCodeMask) == 0; }
+
+FORCE_INLINE uint8_t Code(const DecodedInstruction& op) {
+    if (!HasMem(&op) || !HasFreePrefixBits(op)) return 0;
+    return Encode(GetImm(&op));
+}
+}  // namespace compact_imm
+
+// Keep link offsets in eight-byte units on both 32- and 64-bit hosts.
+struct alignas(8) BlockBranchLink {
+    BasicBlock* target;
+};
+
+struct alignas(16) DecodedOp {
+    HandlerFunc handler;
+#if INTPTR_MAX == INT32_MAX
+    uint32_t handler_padding;
+#endif
+    uint64_t payload;
+
+    // The fields shared by handlers have fixed offsets in all operand forms.
+    // The primary value is an immediate, memory displacement or absolute
+    // branch target. Memory implies ModRM, so its redundant bit marks an
+    // immediate encoded in the otherwise zero low prefix bits. Other nonzero
+    // memory immediates use an adjacent data slot. Cached control-flow
+    // instructions use the unused high opcode bits for their tag and relative
+    // width, and the address bits for the link offset.
+    static constexpr unsigned kModRMShift = 32;
+    static constexpr unsigned kPrefixShift = 40;
+    static constexpr unsigned kMetaShift = 48;
+    static constexpr unsigned kAddressShift = 54;
+    static constexpr unsigned kBranchWidthShift = kModRMShift + 3;
+    static constexpr uint64_t kBranchTag = uint64_t{1} << (kModRMShift + 7);
+    static constexpr unsigned kBranchLinkBits = 9;
+    static constexpr uint64_t kHasMemory = uint64_t{2} << kMetaShift;
+    static constexpr uint64_t kHasModRM = uint64_t{Meta::has_modrm_mask} << kMetaShift;
+    static constexpr uint64_t kHasMemoryImmediate = uint64_t{1} << 63;
+
+    FORCE_INLINE uint32_t Primary() const { return uint32_t(payload); }
+    FORCE_INLINE uint8_t GetModRM() const {
+        const auto raw = uint8_t(payload >> kModRMShift);
+        return IsCachedBranch() ? raw & 7 : raw;
+    }
+    FORCE_INLINE uint8_t RawPrefixes() const { return uint8_t(payload >> kPrefixShift); }
+    FORCE_INLINE Prefixes GetPrefixes() const {
+        return {uint8_t(RawPrefixes() & (HasCompactImmediate() ? ~compact_imm::kCodeMask : 0xff))};
+    }
+    FORCE_INLINE bool HasMemory() const { return payload & kHasMemory; }
+    FORCE_INLINE bool HasMemoryImmediate() const { return payload & kHasMemoryImmediate; }
+    FORCE_INLINE bool HasCompactImmediate() const { return (payload & (kHasMemory | kHasModRM)) == kHasMemory; }
+    FORCE_INLINE bool IsCachedBranch() const { return (payload & (kBranchTag | kHasMemory | kHasModRM)) == kBranchTag; }
+    FORCE_INLINE ExtKind GetExtKind() const {
+        if (HasMemory()) return ExtKind::Data;
+        if (IsCachedBranch()) return ExtKind::ControlFlow;
+        return ExtKind((payload >> kAddressShift) & 3);
+    }
+    FORCE_INLINE Meta GetMeta() const {
+        const uint8_t meta = (payload >> kMetaShift) & 0x3f;
+        return {uint8_t(meta | ((meta >> 1) & Meta::has_modrm_mask) | (uint8_t(GetExtKind()) << 6))};
+    }
+
+    FORCE_INLINE uint32_t AddressDescriptor() const {
+        const auto address = uint16_t(payload >> kAddressShift);
+        const auto index = uint8_t((address >> 4) & 7);
+        return memdesc::PackEA((address & 15) * 4, (index == ESP ? 8 : index) * 4, (address >> 7) & 3,
+                               GetPrefixes().flags.segment);
+    }
+
+    FORCE_INLINE RelativeBranchWidth BranchWidth() const {
+        return RelativeBranchWidth((payload >> kBranchWidthShift) & 3);
+    }
+    FORCE_INLINE BlockBranchLink* CachedBranchLink() {
+        assert(IsCachedBranch());
+        constexpr auto mask = (1u << kBranchLinkBits) - 1;
+        const auto offset = (payload >> kAddressShift) & mask;
+        return reinterpret_cast<BlockBranchLink*>(reinterpret_cast<std::byte*>(this) +
+                                                  offset * sizeof(BlockBranchLink));
+    }
+    FORCE_INLINE void ClearOperandLowered() { payload &= ~(uint64_t{Meta::operand_lowered_mask} << kMetaShift); }
+};
+
+static_assert(sizeof(BlockBranchLink) == 8);
+static_assert(sizeof(DecodedOp) == 16, "DecodedOp must be exactly 16 bytes");
+static_assert(offsetof(DecodedOp, handler) == 0);
+static_assert(offsetof(DecodedOp, payload) == 8);
+
+FORCE_INLINE const DecodedOp* NextOp(const DecodedOp* op) { return op + 1 + op->HasMemoryImmediate(); }
+
+FORCE_INLINE DecodedOp* NextOp(DecodedOp* op) { return op + 1 + op->HasMemoryImmediate(); }
+
+ATTR_PRESERVE_NONE int64_t ForwardMemoryImmediateSlot(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
+                                                      int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags,
+                                                      mem::MicroTlbAbiWord utlb_addend, uint32_t branch,
+                                                      uint64_t flags_cache FIBERCPU_PIN_PARAMS);
+
+FORCE_INLINE const DecodedInstruction* NextOp(const DecodedInstruction* op) { return op + 1; }
+
+FORCE_INLINE ExtKind GetExtKind(const DecodedOp* op) { return op->GetExtKind(); }
+FORCE_INLINE bool HasMem(const DecodedOp* op) { return op->HasMemory(); }
+FORCE_INLINE bool HasImm(const DecodedOp* op) { return op->GetMeta().flags.has_imm; }
+FORCE_INLINE uint32_t GetSingleSlotMemoryImmediate(const DecodedOp* op) {
+    if (!op->HasCompactImmediate()) return 0;
+    return compact_imm::Decode(op->RawPrefixes() & compact_imm::kCodeMask);
 }
 
-template <typename OpT>
-FORCE_INLINE void SetCachedTarget(OpT* op, BasicBlock* block) {
-    SetExtKind(op, ExtKind::ControlFlow);
-    GetExt(op)->control.cached_target = block;
+// Relative control-flow handlers use GetControlTargetEip for their resolved
+// target. ReadOp restores the original relative immediate for decoding tools.
+FORCE_INLINE uint32_t GetImm(const DecodedOp* op) {
+    if (op->HasMemoryImmediate()) [[unlikely]]
+        return uint32_t((op + 1)->payload);
+    if (!op->HasMemory()) return op->Primary();
+    return GetSingleSlotMemoryImmediate(op);
 }
+
+FORCE_INLINE uint8_t GetModRM(const DecodedOp* op) { return op->GetModRM(); }
+FORCE_INLINE Prefixes GetPrefixes(const DecodedOp* op) { return op->GetPrefixes(); }
+FORCE_INLINE Meta GetMeta(const DecodedOp* op) { return op->GetMeta(); }
+FORCE_INLINE uint32_t GetAddressDescriptor(const DecodedOp* op) { return op->AddressDescriptor(); }
+FORCE_INLINE uint32_t GetDisplacement(const DecodedOp* op) { return op->Primary(); }
+
+FORCE_INLINE uint8_t GetModRM(const DecodedInstruction* op) { return op->modrm; }
+FORCE_INLINE Prefixes GetPrefixes(const DecodedInstruction* op) { return op->prefixes; }
+FORCE_INLINE Meta GetMeta(const DecodedInstruction* op) { return op->meta; }
+FORCE_INLINE uint32_t GetAddressDescriptor(const DecodedInstruction* op) { return op->ext.data.ea_desc; }
+FORCE_INLINE uint32_t GetDisplacement(const DecodedInstruction* op) { return op->ext.data.disp; }
+
+FORCE_INLINE uint32_t GetNextEip(const EmuState* state, const DecodedOp* op);
+FORCE_INLINE uint8_t GetOpLength(const EmuState* state, const DecodedOp* op);
+FORCE_INLINE uint32_t GetControlTargetEip(const DecodedOp* op) { return op->Primary(); }
+
+struct BlockSlotLayout {
+    uint8_t logical_slot_count;
+    uint8_t anchor_count;
+    uint8_t branch_count;
+    uint8_t data_slot_count;
+
+    constexpr size_t PhysicalSlotCount() const { return size_t(logical_slot_count) + data_slot_count; }
+    static BlockSlotLayout Inspect(uint32_t start_eip, std::span<const DecodedInstruction> ops);
+};
+
+struct BlockDataSlotMask {
+    uint64_t logical;
+    uint64_t physical[2];
+};
 
 struct BasicBlockChainPrefix {
     uint64_t start_eip : 32;
@@ -321,9 +488,15 @@ struct BasicBlockChainPrefix {
 struct alignas(16) BasicBlock {
     BasicBlockChainPrefix chain{};
     HandlerFunc entry = nullptr;
+#if INTPTR_MAX == INT32_MAX
+    uint32_t entry_padding = 0;
+#endif
     uint32_t end_eip;
-    uint32_t slot_count;           // Total decoded ops including sentinel
-    uint32_t sentinel_slot_index;  // Index where sentinel starts
+    uint8_t slot_count;  // Physical slots, including data and sentinel.
+    uint8_t sentinel_slot_index;
+    uint8_t anchor_count;
+    uint8_t branch_count;
+    uint32_t sentinel_eip;
     uint32_t branch_target_eip = 0;
     uint32_t fallthrough_eip = 0;
     uint8_t terminal_kind_raw = 0;
@@ -334,23 +507,115 @@ struct alignas(16) BasicBlock {
     // Flexible Array Member - fixed-size decoded op stream.
     alignas(16) std::byte slots[sizeof(DecodedOp)];
 
-    static size_t CalculateSize(size_t slot_count, bool retain_scalar_handlers = false) {
-        if (slot_count == 0) return sizeof(BasicBlock);
-        return offsetof(BasicBlock, slots) + sizeof(DecodedOp) * slot_count +
-               (retain_scalar_handlers ? sizeof(HandlerFunc) * (slot_count - 1) : 0);
+    static constexpr size_t AlignFooter(size_t offset) { return (offset + 7) & ~size_t{7}; }
+
+    static constexpr size_t BranchTableSize(uint8_t count) { return count * sizeof(BlockBranchLink); }
+
+    static constexpr size_t CalculateSize(BlockSlotLayout layout, bool retain_scalar_handlers = false) {
+        if (!layout.logical_slot_count) return sizeof(BasicBlock);
+        size_t size = offsetof(BasicBlock, slots) + sizeof(DecodedOp) * layout.PhysicalSlotCount() +
+                      BranchTableSize(layout.branch_count);
+        if (layout.data_slot_count) size = AlignFooter(size) + sizeof(BlockDataSlotMask);
+        size +=
+            (layout.logical_slot_count - 1) * (sizeof(uint16_t) + (retain_scalar_handlers ? sizeof(HandlerFunc) : 0));
+        if (layout.anchor_count) size = AlignFooter(size) + sizeof(uint64_t) + sizeof(uint32_t) * layout.anchor_count;
+        return size;
     }
 
     DecodedOp* FirstOp() { return reinterpret_cast<DecodedOp*>(slots); }
     const DecodedOp* FirstOp() const { return reinterpret_cast<const DecodedOp*>(slots); }
+    DecodedOp* Sentinel() { return FirstOp() + sentinel_slot_index; }
+    const DecodedOp* Sentinel() const { return FirstOp() + sentinel_slot_index; }
 
-    DecodedOp* Sentinel() { return reinterpret_cast<DecodedOp*>(slots + sentinel_slot_index * sizeof(DecodedOp)); }
-    const DecodedOp* Sentinel() const {
-        return reinterpret_cast<const DecodedOp*>(slots + sentinel_slot_index * sizeof(DecodedOp));
+    // Taken links immediately follow the slots. Each branch slot holds a
+    // relative offset to its link, filled in after the physical layout is known.
+    FORCE_INLINE size_t BranchOffset() const { return offsetof(BasicBlock, slots) + sizeof(DecodedOp) * slot_count; }
+
+    FORCE_INLINE BlockBranchLink* BranchLinks() {
+        return reinterpret_cast<BlockBranchLink*>(reinterpret_cast<std::byte*>(this) + BranchOffset());
     }
 
-    // The unfused native handlers allow concat and cache revalidation to reconstruct the original slots.
-    HandlerFunc* UnfusedHandlers() { return reinterpret_cast<HandlerFunc*>(FirstOp() + slot_count); }
-    const HandlerFunc* UnfusedHandlers() const { return reinterpret_cast<const HandlerFunc*>(FirstOp() + slot_count); }
+    FORCE_INLINE bool HasDataSlots() const { return slot_count > inst_count() + 1; }
+
+    size_t DataSlotMaskOffset() const { return AlignFooter(BranchOffset() + BranchTableSize(branch_count)); }
+    const BlockDataSlotMask* DataSlotMask() const {
+        return reinterpret_cast<const BlockDataSlotMask*>(reinterpret_cast<const std::byte*>(this) +
+                                                          DataSlotMaskOffset());
+    }
+
+    static FORCE_INLINE uint64_t SlotsBefore(size_t ordinal) {
+        return ordinal == 64 ? UINT64_MAX : (uint64_t{1} << ordinal) - 1;
+    }
+
+    FORCE_INLINE size_t LogicalIndex(const DecodedOp* op) const {
+        const size_t physical = op - FirstOp();
+        if (!HasDataSlots()) [[likely]]
+            return physical;
+        if (physical == sentinel_slot_index) return inst_count();
+        const auto* mask = DataSlotMask();
+        const auto word = physical / 64;
+        const auto earlier_words = word ? std::popcount(mask->physical[0]) : 0;
+        return physical - earlier_words - std::popcount(mask->physical[word] & SlotsBefore(physical % 64));
+    }
+
+    FORCE_INLINE const DecodedOp* LogicalOp(size_t slot) const {
+        if (HasDataSlots()) [[unlikely]]
+            slot += std::popcount(DataSlotMask()->logical & SlotsBefore(slot));
+        return FirstOp() + slot;
+    }
+    FORCE_INLINE DecodedOp* LogicalOp(size_t slot) {
+        return const_cast<DecodedOp*>(std::as_const(*this).LogicalOp(slot));
+    }
+
+    // Scalar handlers and PC offsets are indexed by guest instruction, never data slot.
+    HandlerFunc* UnfusedHandlers() { return const_cast<HandlerFunc*>(std::as_const(*this).UnfusedHandlers()); }
+    const HandlerFunc* UnfusedHandlers() const {
+        const size_t offset = HasDataSlots() ? DataSlotMaskOffset() + sizeof(BlockDataSlotMask)
+                                             : BranchOffset() + BranchTableSize(branch_count);
+        return reinterpret_cast<const HandlerFunc*>(reinterpret_cast<const std::byte*>(this) + offset);
+    }
+
+    const uint16_t* PCEnds() const {
+        return reinterpret_cast<const uint16_t*>(UnfusedHandlers() + (has_unfused_handlers ? inst_count() : 0));
+    }
+
+    size_t AnchorOffset() const {
+        return AlignFooter(reinterpret_cast<const std::byte*>(PCEnds() + inst_count()) -
+                           reinterpret_cast<const std::byte*>(this));
+    }
+
+    FORCE_INLINE BasicBlock* FallthroughLink() const {
+        return reinterpret_cast<BasicBlock*>(static_cast<uintptr_t>(Sentinel()->payload));
+    }
+    FORCE_INLINE void SetFallthroughLink(BasicBlock* target) {
+        Sentinel()->payload = reinterpret_cast<uintptr_t>(target);
+    }
+
+    FORCE_INLINE BasicBlock** BranchLink(DecodedOp* op) {
+        return op->IsCachedBranch() ? &op->CachedBranchLink()->target : nullptr;
+    }
+
+    FORCE_INLINE uint32_t PCAdjustment(size_t slot) const {
+        const auto* anchors =
+            reinterpret_cast<const uint64_t*>(reinterpret_cast<const std::byte*>(this) + AnchorOffset());
+        const auto mask = *anchors & (UINT64_MAX >> (63 - slot));
+        if (!mask) return 0;
+        const auto* adjustments = reinterpret_cast<const uint32_t*>(anchors + 1);
+        return adjustments[std::popcount(mask) - 1];
+    }
+    [[gnu::pure, gnu::noinline]] inline uint32_t GetNextEip(size_t slot) const {
+        if (slot == inst_count()) return sentinel_eip;
+        return start_eip() + PCEnds()[slot] + (anchor_count ? PCAdjustment(slot) : 0);
+    }
+    FORCE_INLINE uint32_t GetNextEip(const DecodedOp* op) const { return GetNextEip(LogicalIndex(op)); }
+    FORCE_INLINE uint8_t GetOpLength(size_t slot) const {
+        if (slot == inst_count()) return 0;
+        const auto* ends = PCEnds();
+        return uint8_t(ends[slot] - (slot ? ends[slot - 1] : 0));
+    }
+
+    void WriteOps(BlockSlotLayout layout, std::span<const DecodedInstruction> ops, BasicBlock* invalid);
+    DecodedInstruction ReadOp(size_t slot) const;
 
     BlockTerminalKind terminal_kind() const { return static_cast<BlockTerminalKind>(terminal_kind_raw); }
     void set_terminal_kind(BlockTerminalKind kind) { terminal_kind_raw = static_cast<uint8_t>(kind); }
@@ -375,11 +640,11 @@ static_assert(offsetof(BasicBlock, chain) == 0, "BasicBlock: chain must start at
 static_assert(offsetof(BasicBlock, entry) == 8, "BasicBlock: entry must start at offset 8");
 static_assert(sizeof(BasicBlockChainPrefix) == 8, "BasicBlockChainPrefix must be exactly 8 bytes");
 
-#if INTPTR_MAX == INT32_MAX
-static_assert(offsetof(BasicBlock, slots) == 48, "BasicBlock: slots must start at offset 48 on 32-bit");
-#else
+static_assert(offsetof(BasicBlock, end_eip) == 16);
+static_assert(offsetof(BasicBlock, slot_count) == 20);
+static_assert(offsetof(BasicBlock, branch_target_eip) == 28);
+static_assert(offsetof(BasicBlock, exec_count) == 40);
 static_assert(offsetof(BasicBlock, slots) == 48, "BasicBlock: slots must start at offset 48");
-#endif
 
 // Decoder Logic
 enum class InstructionDecodeResult : uint8_t { Success, NeedMoreBytes, Invalid, FetchFault };
@@ -397,13 +662,14 @@ InstructionDecodeResult FetchAndDecodeInstruction(EmuState* state, uint32_t eip,
                                                   uint16_t* handler_index, uint16_t* raw_opcode = nullptr,
                                                   DecodeHandlerMode mode = DecodeHandlerMode::Native);
 // Shared Step/block preparation, without dead-flags analysis.
-void FinalizeDecodedInstruction(EmuState* state, uint32_t eip, uint16_t handler_index, DecodedOp* op,
+void FinalizeDecodedInstruction(EmuState* state, uint32_t eip, uint16_t handler_index, DecodedInstruction* op,
                                 DecodeHandlerMode mode = DecodeHandlerMode::Native);
-bool RedecodeGenericInstruction(EmuState* state, const DecodedOp& published, DecodedOp& generic);
+bool RedecodeGenericInstruction(EmuState* state, const DecodedInstruction& published, DecodedInstruction& generic);
 // Snapshot a published slot, including any absorbed NOPs, without invoking
 // guest callbacks. Generic re-decode of those bytes can then run on a worker.
-bool CopyDecodedInstructionBytes(EmuState* state, const DecodedOp& published, std::span<uint8_t> bytes);
-bool RedecodeGenericInstruction(std::span<const uint8_t> bytes, const DecodedOp& published, DecodedOp& generic);
+bool CopyDecodedInstructionBytes(EmuState* state, const DecodedInstruction& published, std::span<uint8_t> bytes);
+bool RedecodeGenericInstruction(std::span<const uint8_t> bytes, const DecodedInstruction& published,
+                                DecodedInstruction& generic);
 
 // Start EIP, Limit EIP, Max Instructions -> Returns Pointer to allocated block or nullptr
 BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip, uint64_t max_insts,
