@@ -73,10 +73,10 @@ for base in range(0, 0x40, 8):
 for i in range(0x40, 0x50):
     set_op(i, OpInfo(DFE_TYPE_SIMPLE, 0, ALL_FLAGS & ~CF_MASK))
 
-# PUSH/POP (0x50 - 0x5F, 0x68, 0x6A, 0x58-0x5F) - No flags
-set_range(0x50, 0x5F, OpInfo(DFE_TYPE_SIMPLE, 0, 0))
-set_op(0x68, OpInfo(DFE_TYPE_SIMPLE, 0, 0))
-set_op(0x6A, OpInfo(DFE_TYPE_SIMPLE, 0, 0))
+# A fault on the implicit stack access can expose the incoming flags.
+set_range(0x50, 0x5F, OpInfo(DFE_TYPE_SIMPLE, ALL_FLAGS, 0))
+set_op(0x68, OpInfo(DFE_TYPE_SIMPLE, ALL_FLAGS, 0))
+set_op(0x6A, OpInfo(DFE_TYPE_SIMPLE, ALL_FLAGS, 0))
 
 # Jcc (0x70 - 0x7F)
 # Reads flags.
@@ -94,9 +94,12 @@ set_range(0xA8, 0xA9, OpInfo(DFE_TYPE_SIMPLE, 0, ALL_FLAGS))
 set_op(0x86, OpInfo(DFE_TYPE_SIMPLE, 0, 0))
 set_op(0x87, OpInfo(DFE_TYPE_SIMPLE, 0, 0))
 
-# MOV (0x88-0x8C, 0x8E, 0xA0-0xA3, 0xB0-0xBF, 0xC6, 0xC7) - No flags
+# MOV - No flag writes.
 set_range(0x88, 0x8E, OpInfo(DFE_TYPE_SIMPLE, 0, 0))
-set_range(0xA0, 0xA3, OpInfo(DFE_TYPE_SIMPLE, 0, 0))
+# Segment-register transfers and moffs accesses can expose flags on a fault.
+set_op(0x8C, OpInfo(DFE_TYPE_SIMPLE, ALL_FLAGS, 0))
+set_op(0x8E, OpInfo(DFE_TYPE_SIMPLE, ALL_FLAGS, 0))
+set_range(0xA0, 0xA3, OpInfo(DFE_TYPE_SIMPLE, ALL_FLAGS, 0))
 set_range(0xB0, 0xBF, OpInfo(DFE_TYPE_SIMPLE, 0, 0))
 set_op(0xC6, OpInfo(DFE_TYPE_SIMPLE, 0, 0))
 set_op(0xC7, OpInfo(DFE_TYPE_SIMPLE, 0, 0))
@@ -105,7 +108,7 @@ set_op(0xC7, OpInfo(DFE_TYPE_SIMPLE, 0, 0))
 set_range(0x90, 0x97, OpInfo(DFE_TYPE_SIMPLE, 0, 0))
 
 # SAHF (0x9E) - Write SF,ZF,AF,PF,CF
-set_op(0x9E, OpInfo(DFE_TYPE_SIMPLE, 0, ALL_FLAGS)) 
+set_op(0x9E, OpInfo(DFE_TYPE_SIMPLE, 0, ALL_FLAGS & ~OF_MASK))
 
 # LAHF (0x9F) - Read SF,ZF,AF,PF,CF
 set_op(0x9F, OpInfo(DFE_TYPE_SIMPLE, ALL_FLAGS, 0))
