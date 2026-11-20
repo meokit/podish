@@ -430,6 +430,13 @@ enum class OpOnTLBMiss {
     Retry
 };
 
+template <typename T>
+FORCE_INLINE MemResult<T> ReadMemForRestart(EmuState* state, uint32_t addr, mem::MicroTLB* utlb, const DecodedOp* op) {
+    if (auto value = state->mmu.read<T, true>(addr, utlb, op)) [[likely]]
+        return value;
+    return state->request_read_and_check_pending<T>(addr, op->next_eip);
+}
+
 /**
  * Reads a value from a Register or Memory based on the ModRM byte.
  * Supports uint8_t, uint16_t, uint32_t, and simde__m128.
@@ -457,15 +464,8 @@ FORCE_INLINE MemResult<T> ReadModRM(EmuState* state, GprCache& gpr, DecodedOp* o
         if constexpr (Strategy == OpOnTLBMiss::Blocking) {
             return ReadGuestMem<T, false>(state, gpr, addr, utlb, op);
         } else {
-            // Restart or Retry (though Retry for Read is unusual, treating as Restart)
-            auto value = state->mmu.read<T, true>(addr, utlb, op);
-            if (!value) [[unlikely]] {
-                // For Read, we always need to check pending if we want to restart
-                // If usage suggests Retry for Read, it likely implies prefetch which we don't support explicitly yet.
-                // Assuming Restart semantics for both Restart and Retry enums for Read to be safe.
-                value = state->request_read_and_check_pending<T>(addr, op->next_eip);
-            }
-            return value;
+            // A nonblocking read restarts on a miss, including with Retry.
+            return ReadMemForRestart<T>(state, addr, utlb, op);
         }
     }
 }
@@ -520,11 +520,7 @@ inline MemResult<T> ReadMem(EmuState* state, GprCache& gpr, uint32_t addr, mem::
     if constexpr (Strategy == OpOnTLBMiss::Blocking) {
         return ReadGuestMem<T, false>(state, gpr, addr, utlb, op);
     } else {
-        auto value = state->mmu.read<T, true>(addr, utlb, op);
-        if (!value) [[unlikely]] {
-            value = state->request_read_and_check_pending<T>(addr, op->next_eip);
-        }
-        return value;
+        return ReadMemForRestart<T>(state, addr, utlb, op);
     }
 }
 

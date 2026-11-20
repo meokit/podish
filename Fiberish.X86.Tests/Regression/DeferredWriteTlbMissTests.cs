@@ -9,6 +9,7 @@ public sealed class DeferredWriteTlbMissTests
 {
     [Theory]
     [InlineData("mov")]
+    [InlineData("add")]
     [InlineData("inc")]
     [InlineData("push")]
     [InlineData("cross-page")]
@@ -35,6 +36,7 @@ public sealed class DeferredWriteTlbMissTests
 
         byte[] code = form switch
         {
+            "add" => [0x8B, 0x1F, 0x01, 0x07, 0x8B, 0x4F, 4, 0x8B, 0x2F],
             "inc" => [0x8B, 0x1F, 0xFF, 0x07, 0x8B, 0x4F, 4, 0x8B, 0x2F],
             "push" => [0x8B, 0x1F, 0x50, 0x8B, 0x4F, 4, 0x8B, 0x2F],
             "cross-page" or "rejected" => [0x8B, 0x1F, 0x89, 0x07, 0x8B, 0x0F],
@@ -64,7 +66,12 @@ public sealed class DeferredWriteTlbMissTests
             {
                 Assert.Equal(EmuStatus.Stopped, cpu.Status);
                 Assert.Equal(CpuSandbox.CodeAddress + (uint)code.Length, cpu.Eip);
-                uint expected = form == "inc" ? oldValue + 1 : value;
+                uint expected = form switch
+                {
+                    "add" => oldValue + value,
+                    "inc" => oldValue + 1,
+                    _ => value
+                };
                 Assert.Equal(expected, BitConverter.ToUInt32(cpu.ReadMemory(address, 4)));
                 if (crossPage) Assert.Equal(value, cpu[Reg.ECX]);
                 else
@@ -74,7 +81,8 @@ public sealed class DeferredWriteTlbMissTests
                     if (form == "push") Assert.Equal(CpuSandbox.DataAddress, cpu[Reg.ESP]);
                 }
             }
-            if (form != "inc") Assert.Equal(0xAD7u & 0x8D5u, cpu.Eflags & 0x8D5u);
+            if (form == "add") Assert.Equal(0x94u, cpu.Eflags & 0x8D5u); // SF, AF, PF
+            else if (form != "inc") Assert.Equal(0xAD7u & 0x8D5u, cpu.Eflags & 0x8D5u);
         }
         finally
         {
