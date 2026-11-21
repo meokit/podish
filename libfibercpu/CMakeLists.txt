@@ -1,6 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 
 option(FIBERCPU_ENABLE_LLVM_JIT "Enable the experimental LLVM basic-block JIT" OFF)
+option(FIBERCPU_LLVM_SHARED_REGION_EXITS "Share exit code and flag packing within LLVM page regions" OFF)
 set(FIBERCPU_LINKED_BLOCK_CACHE_FILE "" CACHE FILEPATH "Offline LLVM block cache to link into the interpreter")
 # Keep native objects aligned with the NativeAOT macOS deployment target.
 if(APPLE AND NOT FIBERCPU_ENABLE_LLVM_JIT AND NOT FIBERCPU_LINKED_BLOCK_CACHE_FILE)
@@ -782,6 +783,7 @@ if(FIBERCPU_ENABLE_LLVM_JIT OR FIBERCPU_LINKED_BLOCK_CACHE_FILE)
                     USE_SOFTFLOAT ENABLE_TLB_STATS FIBERCPU_ENABLE_BLOCK_PROFILE
                     FIBERCPU_GPR_PIN_MODE _pin_registers FIBERCPU_PIN_SPECIALIZATION
                     FIBERCPU_ENABLE_HANDLER_PROFILE FIBERCPU_ENABLE_SEQUENCE_PROFILE
+                    FIBERCPU_LLVM_SHARED_REGION_EXITS
                     INSTRUCTION_CATALOG_SHA256)
         string(APPEND _linked_abi "
 ${setting}=${${setting}}")
@@ -862,6 +864,11 @@ if(FIBERCPU_DYNAMIC_OPERANDS OR FIBERCPU_ENABLE_LLVM_JIT)
     target_include_directories(fibercpu_llvm_codegen PRIVATE src $<TARGET_PROPERTY:fibercpu_core,INCLUDE_DIRECTORIES>)
     target_include_directories(fibercpu_llvm_codegen SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
     target_link_libraries(fibercpu_llvm_codegen PRIVATE unordered_dense::unordered_dense)
+
+    if(FIBERCPU_LLVM_SHARED_REGION_EXITS)
+        target_compile_definitions(fibercpu_block_ir PRIVATE FIBERCPU_LLVM_SHARED_REGION_EXITS=1)
+        target_compile_definitions(fibercpu_llvm_codegen PRIVATE FIBERCPU_LLVM_SHARED_REGION_EXITS=1)
+    endif()
 
     set(_llvm_dir "${CMAKE_CURRENT_BINARY_DIR}/generated")
     if(CMAKE_CONFIGURATION_TYPES)

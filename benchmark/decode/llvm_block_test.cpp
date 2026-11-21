@@ -1143,12 +1143,32 @@ bool VerifyCpuRunOptions(const char* path) {
 #endif
 
 #if FIBERCPU_LLVM_JIT
-bool VerifyPageRegion() {
+bool VerifyPageRegion(bool cross_page = false) {
     constexpr uint32_t first = code_address;
-    constexpr uint32_t second = first + 32;
+    constexpr uint32_t external = first + 4096;
+    constexpr uint32_t local_second = first + 32;
+    const uint32_t second = cross_page ? external - 15 : local_second;
     constexpr uint32_t relocated = 0x30000;
-    constexpr uint8_t a_code[] = {0x8b, 0x0a, 0x8d, 0x40, 1, 0xeb, uint8_t(second - first - 7)};
-    constexpr uint8_t b_code[] = {0x8d, 0x40, 2, 0xeb, uint8_t(first - second - 5)};
+    constexpr uint8_t local_a[] = {
+        0x8b, 0x0a, 0x8d, 0x40, 1, 0x85, 0xdb, 0xeb, 23,
+    }; // MOV ECX,[EDX]; LEA EAX,[EAX+1]; TEST EBX,EBX; JMP B.
+    constexpr uint8_t local_b[] = {
+        0x0f, 0x44, 0xf7, 0x8d, 0x40, 2, 0x83, 0xfb, 1, 0xeb, uint8_t(-43),
+    }; // CMOVZ ESI,EDI; LEA EAX,[EAX+2]; CMP EBX,1; JMP A.
+    constexpr uint8_t cross_a[] = {
+        0x8b, 0x0a, 0x8d, 0x40, 1, 0x85, 0xdb, 0xe9, 0xe5, 0x0f, 0, 0,
+    }; // MOV ECX,[EDX]; LEA EAX,[EAX+1]; TEST EBX,EBX; JMP B.
+    constexpr uint8_t cross_b[] = {
+        0x0f, 0x44, 0xf7, 0x8d, 0x40, 2, 0x83, 0xfb, 1, 0x0f, 0x85, 0, 0xf0, 0xff, 0xff,
+    }; // CMOVZ ESI,EDI; LEA EAX,[EAX+2]; CMP EBX,1; JNE A; otherwise fall into external.
+    constexpr uint8_t external_code[] = {0x0f, 0x44, 0xdf, 0xe9, 0xf8, 0xef, 0xff, 0xff};
+    // CMOVZ EBX,EDI; JMP A.
+    constexpr uint32_t flag_mask = 0x8d5 | 0x400;
+    constexpr uint32_t initial_flags = 0x480;
+    constexpr uint32_t test_flags = 0x444;
+    constexpr uint32_t cmp_flags = 0x495;
+    const auto a_code = cross_page ? std::span<const uint8_t>(cross_a) : std::span<const uint8_t>(local_a);
+    const auto b_code = cross_page ? std::span<const uint8_t>(cross_b) : std::span<const uint8_t>(local_b);
     alignas(4096) std::array<uint8_t, 4096> bytes{};
     std::copy(std::begin(a_code), std::end(a_code), bytes.begin());
     std::copy(std::begin(b_code), std::end(b_code), bytes.begin() + (second - first));
@@ -1156,54 +1176,84 @@ bool VerifyPageRegion() {
     if (!X86_InternalMapManagedPage(state.get(), first, bytes.data(), 5) ||
         !X86_InternalMapManagedPage(state.get(), relocated, bytes.data(), 5))
         return false;
+    if (cross_page) {
+        X86_MemMap(state.get(), external, 4096, 7);
+        X86_MemWrite(state.get(), external, external_code, sizeof(external_code));
+    }
     X86_MemMap(state.get(), data_address, 4096, 3);
     X86_RegWrite(state.get(), 2, data_address);
+    X86_RegWrite(state.get(), 7, 11);
 
-    const auto run = [&](uint32_t eip, uint64_t budget, uint32_t eax, uint32_t next) {
+    const auto run = [&](uint32_t eip, uint64_t budget, uint32_t eax, uint32_t next, uint32_t esi, uint32_t flags,
+                         uint32_t ebx = 0) {
         X86_SetEIP(state.get(), eip);
         X86_RegWrite(state.get(), 0, 0);
-        return X86_Run(state.get(), 0, budget) && X86_GetEIP(state.get()) == next && X86_RegRead(state.get(), 0) == eax;
+        X86_RegWrite(state.get(), 3, ebx);
+        X86_RegWrite(state.get(), 6, 7);
+        X86_SetEFLAGS(state.get(), initial_flags | 2);
+        return X86_Run(state.get(), 0, budget) && X86_GetEIP(state.get()) == next &&
+               X86_RegRead(state.get(), 0) == eax && X86_RegRead(state.get(), 6) == esi &&
+               (X86_GetEFLAGS(state.get()) & flag_mask) == flags;
     };
     const auto region_context = [](const BasicBlock* block) -> const void* {
-        if (!block || !block->chain.has_region_context) return nullptr;
+        if (!block || !block->chain.has_region_context)
+            return nullptr;
         const void* context;
-        std::memcpy(&context, reinterpret_cast<const std::byte*>(block) + block->RegionContextOffset(), sizeof(context));
+        std::memcpy(&context, reinterpret_cast<const std::byte*>(block) + block->RegionContextOffset(),
+                    sizeof(context));
         return context;
     };
     const auto warm = [&](uint32_t start) -> BasicBlock* {
         for (int attempt = 0; attempt < 150; ++attempt) {
-            if (!run(start, 10000, 6000, start)) return nullptr;
+            if (!run(start, 10000, 3750, start, 11, cmp_flags))
+                return nullptr;
             auto* a = FindCompiledBlock(state.get(), start);
             auto* b = FindCompiledBlock(state.get(), start + (second - first));
-            if (region_context(a) && region_context(a) == region_context(b) && a->entry != b->entry) return a;
+            if (region_context(a) && region_context(a) == region_context(b) && a->entry != b->entry)
+                return a;
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
         return nullptr;
     };
     const auto* a = warm(first);
+    if (cross_page) {
+        if (!a)
+            return false;
+        // A cold link and a cached link both pass CMP's zero flag to CMOVZ.
+        for (unsigned i = 0; i < 2; ++i) {
+            if (!run(second, 6, 2, first, 7, test_flags, 1) || X86_RegRead(state.get(), 3) != 11)
+                return false;
+        }
+        return true;
+    }
     const auto* alias = warm(relocated);
     if (!a || !alias || a->entry != alias->entry || region_context(a) == region_context(alias) ||
-        !run(first, 3, 1, second) || !run(second, 2, 2, first) || !run(second, 7, 5, first))
+        !run(first, 4, 1, second, 7, test_flags) || !run(second, 4, 2, first, 7, cmp_flags) ||
+        !run(second, 12, 5, first, 11, cmp_flags))
         return false;
 
     X86_MemUnmap(state.get(), data_address, 4096);
     struct Observer {
         uint8_t* bytes;
         bool called = false;
+        uint32_t flags = 0;
     } observer{bytes.data()};
     X86_SetFaultCallback(
         state.get(),
         +[](EmuState* s, uint32_t address, int write, void* userdata) -> int {
             auto& observer = *static_cast<Observer*>(userdata);
-            if (address != data_address || write || observer.called || !X86_IsExecuting(s)) return 0;
+            if (address != data_address || write || observer.called || !X86_IsExecuting(s))
+                return 0;
             observer.called = true;
-            observer.bytes[(second - first) + 2] = 9;
+            observer.flags = X86_GetEFLAGS(s);
+            observer.bytes[(local_second - first) + 5] = 9;
             X86_ResetCodeCacheByRange(s, first, 4096);
             X86_MemMap(s, data_address, 4096, 3);
             return 1;
         },
         &observer);
-    return run(first, 5, 10, first) && observer.called && !region_context(alias);
+    return run(first, 8, 10, first, 11, cmp_flags) && observer.called &&
+           (observer.flags & flag_mask) == initial_flags && !region_context(alias);
 }
 #endif
 
@@ -1285,7 +1335,8 @@ int main(int argc, char** argv) {
     }
 #if FIBERCPU_LLVM_JIT
     if (argc == 2 && std::strcmp(argv[1], "region") == 0) {
-        if (VerifyPageRegion()) return 0;
+        if (VerifyPageRegion() && VerifyPageRegion(true))
+            return 0;
         std::fprintf(stderr, "LLVM page region publication, relocation or memory restart mismatch\n");
         return 1;
     }

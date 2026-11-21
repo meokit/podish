@@ -1,9 +1,12 @@
 #include "jit/llvm_operand_ir.h"
+#include "exec_utils.h"
 #include "state.h"
 
+#include <array>
 #include <optional>
 #include <vector>
 
+#include <llvm/ADT/DenseMap.h>
 #include <llvm/ADT/SmallBitVector.h>
 #include <llvm/ADT/SmallPtrSet.h>
 #include <llvm/Analysis/SimplifyQuery.h>
@@ -223,7 +226,8 @@ void LowerBlockEipReads(llvm::Function& entry, block_recipe::BlockKeyView key, s
             if (!base_eip) {
                 llvm::IRBuilder<> builder(&*entry.getEntryBlock().getFirstInsertionPt());
                 if (member_offset) {
-                    auto placeholder = entry.getParent()->getOrInsertFunction("FiberLLVMRegionBase", builder.getInt32Ty());
+                    auto placeholder =
+                        entry.getParent()->getOrInsertFunction("FiberLLVMRegionBase", builder.getInt32Ty());
                     base_eip = builder.CreateAdd(builder.CreateCall(placeholder), builder.getInt32(*member_offset));
                 } else {
                     base_eip = LoadBlockEip(builder, first_op);
@@ -396,6 +400,137 @@ bool InlineLLVMKernel(llvm::CallInst& call, llvm::Function& kernel, BoundOperand
     return llvm::InlineFunction(call, info).isSuccess();
 }
 
+constexpr llvm::StringLiteral kWriteArithmeticFlags = "FiberLLVMWriteArithmeticFlags";
+constexpr llvm::StringLiteral kWriteLogicalFlags = "FiberLLVMWriteLogicalFlags";
+constexpr llvm::StringLiteral kReadFlag = "FiberLLVMReadFlag";
+#ifdef FIBERCPU_LLVM_SHARED_REGION_EXITS
+constexpr llvm::StringLiteral kPackRegionFlags = "FiberLLVMPackRegionFlags";
+#endif
+
+// Keep the arithmetic flag fields independent across control-flow joins.
+// Their positions are the same as in the ABI word, so packing is just an OR.
+constexpr uint64_t kFlagsBaseMask = ~(uint64_t(ARITHMETIC_FLAGS_MASK & ~PF_MASK) | FLAGS_CACHE_PF_STATE_MASK);
+constexpr std::array kFlagFields = {
+    kFlagsBaseMask,    uint64_t(CF_MASK), uint64_t(ZF_MASK),         uint64_t(SF_MASK),
+    uint64_t(OF_MASK), uint64_t(AF_MASK), FLAGS_CACHE_PF_STATE_MASK,
+};
+
+class DeferredFlags {
+public:
+    void Lower(llvm::Function& entry);
+
+private:
+    struct ValueFields {
+        llvm::CallInst* producer = nullptr;
+        std::array<llvm::Value*, kFlagFields.size()> values{};
+    };
+
+    llvm::Value* Field(llvm::Value* packed, size_t index, llvm::IRBuilder<>& builder);
+    llvm::Value* Pack(llvm::Value* packed, llvm::IRBuilder<>& builder);
+    llvm::DenseMap<llvm::Value*, ValueFields> fields_;
+};
+
+llvm::Value* DeferredFlags::Field(llvm::Value* packed, size_t index, llvm::IRBuilder<>& at_use) {
+    const uint64_t mask = kFlagFields[index];
+    auto found = fields_.find(packed);
+    if (found == fields_.end()) return at_use.CreateAnd(packed, at_use.getInt64(mask));
+    auto& fields = found->second;
+    auto*& cached = fields.values[index];
+    if (cached) return cached;
+
+    llvm::IRBuilder<> builder(llvm::cast<llvm::Instruction>(packed));
+    if (auto* phi = llvm::dyn_cast<llvm::PHINode>(packed)) {
+        auto* part = builder.CreatePHI(builder.getInt64Ty(), phi->getNumIncomingValues(), "flag");
+        cached = part;  // A loop may use this field on one of its own incoming edges.
+        for (auto [i, incoming] : llvm::enumerate(phi->incoming_values())) {
+            auto* predecessor = phi->getIncomingBlock(i);
+            llvm::IRBuilder<> edge(predecessor->getTerminator());
+            part->addIncoming(Field(incoming, index, edge), predecessor);
+        }
+    } else if (auto* choice = llvm::dyn_cast<llvm::SelectInst>(packed)) {
+        auto* yes = Field(choice->getTrueValue(), index, builder);
+        auto* no = Field(choice->getFalseValue(), index, builder);
+        cached = builder.CreateSelect(choice->getCondition(), yes, no);
+    } else {
+        auto& call = *fields.producer;
+        auto* value = call.getArgOperand(1);
+        const bool logical = call.getCalledFunction()->getName() == kWriteLogicalFlags;
+        if (mask == kFlagsBaseMask) {
+            auto* base = Field(call.getArgOperand(0), index, builder);
+            cached = builder.CreateAnd(base, builder.getInt64(~uint64_t(PF_MASK)));
+        } else if (mask == FLAGS_CACHE_PF_STATE_MASK) {
+            auto* parity = logical ? builder.CreateTrunc(value, builder.getInt8Ty()) : call.getArgOperand(2);
+            cached = builder.CreateShl(builder.CreateZExt(parity, builder.getInt64Ty()), FLAGS_CACHE_PF_STATE_SHIFT);
+        } else if (!logical) {
+            cached = builder.CreateZExt(builder.CreateAnd(value, uint32_t(mask)), builder.getInt64Ty());
+        } else if (mask == ZF_MASK) {
+            auto* zero = builder.CreateICmpEQ(value, builder.getInt32(0));
+            cached = builder.CreateSelect(zero, builder.getInt64(ZF_MASK), builder.getInt64(0));
+        } else if (mask == SF_MASK) {
+            // The bit width is a constant supplied by the C++ kernel.
+            auto* top = builder.CreateSub(call.getArgOperand(2), builder.getInt32(8));
+            auto* sign = builder.CreateAnd(builder.CreateLShr(value, top), SF_MASK);
+            cached = builder.CreateZExt(sign, builder.getInt64Ty());
+        } else {
+            cached = builder.getInt64(0);
+        }
+    }
+    return cached;
+}
+
+llvm::Value* DeferredFlags::Pack(llvm::Value* packed, llvm::IRBuilder<>& builder) {
+    llvm::Value* word = builder.getInt64(0);
+    for (size_t index = 0; index < kFlagFields.size(); ++index)
+        word = builder.CreateOr(word, Field(packed, index, builder));
+    return word;
+}
+
+void DeferredFlags::Lower(llvm::Function& entry) {
+    llvm::SmallVector<llvm::Value*, 16> deferred;
+    llvm::SmallVector<llvm::CallInst*, 16> reads;
+    for (auto& instruction : llvm::instructions(entry)) {
+        auto* call = llvm::dyn_cast<llvm::CallInst>(&instruction);
+        const auto* fn = call ? call->getCalledFunction() : nullptr;
+        if (!fn) continue;
+        if (fn->getName() == kWriteLogicalFlags || fn->getName() == kWriteArithmeticFlags) {
+            fields_[call].producer = call;
+            deferred.push_back(call);
+        } else if (fn->getName() == kReadFlag) {
+            reads.push_back(call);
+        }
+    }
+    for (size_t i = 0; i < deferred.size(); ++i) {
+        for (auto* user : deferred[i]->users()) {
+            if (llvm::isa<llvm::PHINode, llvm::SelectInst>(user) && user->getType()->isIntegerTy(64) &&
+                fields_.try_emplace(user).second)
+                deferred.push_back(user);
+        }
+    }
+
+    for (auto* call : reads) {
+        llvm::IRBuilder<> builder(call);
+        auto* packed = call->getArgOperand(0);
+        const auto mask = llvm::cast<llvm::ConstantInt>(call->getArgOperand(1))->getZExtValue();
+        const auto field = llvm::find(kFlagFields, mask);
+        assert(field != kFlagFields.end());
+        auto* part = Field(packed, field - kFlagFields.begin(), builder);
+        call->replaceAllUsesWith(builder.CreateICmpNE(part, builder.getInt64(0)));
+        call->eraseFromParent();
+    }
+
+    for (auto* value : deferred) {
+        for (auto& use : llvm::make_early_inc_range(value->uses())) {
+            auto* user = llvm::cast<llvm::Instruction>(use.getUser());
+            if (fields_.contains(user)) continue;
+            llvm::IRBuilder<> builder(user);
+            use.set(Pack(value, builder));
+        }
+    }
+    // Removing the original packed graph together handles cyclic PHIs.
+    for (auto* value : deferred) llvm::cast<llvm::Instruction>(value)->dropAllReferences();
+    for (auto* value : deferred) llvm::cast<llvm::Instruction>(value)->eraseFromParent();
+}
+
 bool OptimizeLLVMModule(llvm::Function& entry, bool prune_dead_globals, llvm::StringRef custom_pipeline,
                         bool fold_operand_loads) {
     llvm::LoopAnalysisManager loops;
@@ -408,6 +543,23 @@ bool OptimizeLLVMModule(llvm::Function& entry, bool prune_dead_globals, llvm::St
     passes.registerFunctionAnalyses(functions);
     passes.registerLoopAnalyses(loops);
     passes.crossRegisterProxies(loops, functions, call_graph, modules);
+    // Promote the C++ flags reference before lowering its symbolic producers.
+    llvm::FunctionPassManager promote;
+    promote.addPass(llvm::SROAPass(llvm::SROAOptions::ModifyCFG));
+    promote.addPass(llvm::SimplifyCFGPass());
+    promote.run(entry, functions);
+    DeferredFlags().Lower(entry);
+#ifdef FIBERCPU_LLVM_SHARED_REGION_EXITS
+    if (auto* pack = entry.getParent()->getFunction(kPackRegionFlags)) {
+        for (auto* user : llvm::make_early_inc_range(pack->users())) {
+            auto* call = llvm::cast<llvm::CallInst>(user);
+            call->replaceAllUsesWith(call->getArgOperand(0));
+            call->eraseFromParent();
+        }
+        pack->eraseFromParent();
+    }
+#endif
+    functions.clear(entry, entry.getName());
     llvm::ModulePassManager pipeline;
     // The copied kernels have already been inlined into the entry. Prune
     // unreachable definitions before spending optimization time on them.
@@ -499,7 +651,7 @@ bool LLVMOperandTemplates::IsTemplateGlobal(const llvm::GlobalValue* value) cons
 namespace {
 
 std::unique_ptr<llvm::Module> CloneBlockModule(const LLVMOperandTemplates& templates,
-                                              std::span<const BlockKeyView> keys) {
+                                               std::span<const BlockKeyView> keys) {
     if (!templates.IsValid()) return {};
     llvm::SmallPtrSet<const llvm::GlobalValue*, 32> kernels;
     for (const auto key : keys) {
@@ -597,6 +749,17 @@ bool SpecializeBlockEntry(const LLVMOperandTemplates& templates, llvm::Function&
         if (!target || !InlineLLVMKernel(*call, *target, operation.shape, exact ? &key.operands[slot] : nullptr))
             return false;
     }
+#ifdef FIBERCPU_LLVM_SHARED_REGION_EXITS
+    auto* share_exits = module.getFunction("FiberLLVMShareRegionExits");
+    if (share_exits) {
+        for (auto* user : llvm::make_early_inc_range(share_exits->users())) {
+            auto* call = llvm::cast<llvm::CallInst>(user);
+            if (call->getFunction() != &entry) continue;
+            call->replaceAllUsesWith(llvm::ConstantInt::getBool(entry.getContext(), member_offset.has_value()));
+            call->eraseFromParent();
+        }
+    }
+#endif
     LowerBlockEipReads(entry, key, std::span(slot_offsets).first(step_index), member_offset);
     if (fold_operand_loads) BakeLLVMOperandLoads(entry, key);
 
@@ -604,6 +767,9 @@ bool SpecializeBlockEntry(const LLVMOperandTemplates& templates, llvm::Function&
 }
 
 void RemoveBlockMarkers(llvm::Module& module) {
+#ifdef FIBERCPU_LLVM_SHARED_REGION_EXITS
+    if (auto* memory_exits = module.getNamedGlobal("FiberLLVMRegionMemoryExits")) memory_exits->eraseFromParent();
+#endif
     for (const auto name : {"FiberLLVMReadEip", "FiberLLVMRegionEdge", "FiberLLVMRegionExit"}) {
         auto* function = module.getFunction(name);
         if (!function) continue;
@@ -615,7 +781,7 @@ void RemoveBlockMarkers(llvm::Module& module) {
                 // Standalone compiled blocks retain the interpreter's chain cleanup.
                 llvm::IRBuilder<> builder(call);
                 auto* tag = builder.CreateGEP(builder.getInt8Ty(), call->getArgOperand(0),
-                                               builder.getInt64(offsetof(EmuState, mem_op_type)));
+                                              builder.getInt64(offsetof(EmuState, mem_op_type)));
                 builder.CreateAlignedStore(builder.getInt8(static_cast<uint8_t>(PendingMemOp::None)), tag,
                                            llvm::Align(alignof(PendingMemOp)));
             }
@@ -661,9 +827,10 @@ bool CanInlinePageMember(const llvm::Function& entry) {
         const auto name = callee->getName();
         // These calls cannot run a guest observer or invalidate the page.
         // GetNextEip receives the block itself, which is bound before inlining.
-        if (!callee->isIntrinsic() && name != "FiberLLVMRegionEdge" && name != "FiberLLVMRegionExit" &&
-            name != "FiberLLVMRegionBase" && name != "_ZNK8fiberish10BasicBlock10GetNextEipEm" &&
-            name != "memcpy" && name != "memmove" && name != "memset" && name != "memcmp")
+        if (!callee->isIntrinsic() && name != kWriteArithmeticFlags && name != kWriteLogicalFlags &&
+            name != kReadFlag && name != "FiberLLVMRegionEdge" && name != "FiberLLVMRegionExit" &&
+            name != "FiberLLVMRegionBase" && name != "_ZNK8fiberish10BasicBlock10GetNextEipEm" && name != "memcpy" &&
+            name != "memmove" && name != "memset" && name != "memcmp")
             return false;
     }
     return true;
@@ -676,6 +843,20 @@ llvm::Value* BlockPointerSlot(llvm::IRBuilder<>& builder, llvm::Value* state) {
 void BindCurrentBlock(llvm::Function& entry) {
     const auto& layout = entry.getParent()->getDataLayout();
     auto* state = entry.getArg(0);
+    // Template compilation may outline these EIP stores. Inline them first so
+    // their last_block loads can be rebound to the current region member.
+    llvm::SmallVector<llvm::CallInst*, 4> eip_stores;
+    for (auto& instruction : llvm::instructions(entry)) {
+        auto* call = llvm::dyn_cast<llvm::CallInst>(&instruction);
+        const auto* callee = call ? call->getCalledFunction() : nullptr;
+        if (callee && (callee->getName() == "_ZN8fiberish8EmuState20sync_eip_to_op_startEPKNS_9DecodedOpE" ||
+                       callee->getName() == "_ZN8fiberish8EmuState18sync_eip_to_op_endEPKNS_9DecodedOpE"))
+            eip_stores.push_back(call);
+    }
+    for (auto* call : eip_stores) {
+        llvm::InlineFunctionInfo info;
+        llvm::InlineFunction(*call, info);
+    }
     llvm::IRBuilder<> builder(&*entry.getEntryBlock().getFirstInsertionPt());
     auto* current = builder.CreateGEP(builder.getInt8Ty(), entry.getArg(1), builder.getInt64(-kFirstOpOffset));
     for (auto& instruction : llvm::instructions(entry)) {
@@ -729,6 +910,101 @@ struct RegionLabel {
     uint32_t budget;
 };
 
+#ifdef FIBERCPU_LLVM_SHARED_REGION_EXITS
+bool IsRegionChainExit(const llvm::CallInst& call) {
+    const auto* callee = call.getCalledFunction();
+    return callee &&
+           (callee->getName() == "FiberLLVMRegionChainSingle" || callee->getName() == "FiberLLVMRegionChainDouble");
+}
+
+void ShareRegionTailExits(llvm::Function& body, const llvm::DenseMap<llvm::CallInst*, llvm::Value*>& sources) {
+    auto& module = *body.getParent();
+    const auto* memory_exits = module.getNamedGlobal("FiberLLVMRegionMemoryExits");
+    const auto* memory = memory_exits ? memory_exits->getInitializer() : nullptr;
+    const std::array<const llvm::Value*, 5> targets = {
+        module.getFunction("FiberLLVMRegionChainSingle"),   module.getFunction("FiberLLVMRegionChainDouble"),
+        module.getFunction("FiberLLVMRegionReturn"),        memory ? memory->getAggregateElement(0u) : nullptr,
+        memory ? memory->getAggregateElement(1u) : nullptr,
+    };
+    std::array<llvm::SmallVector<llvm::CallInst*, 8>, targets.size()> groups;
+    for (auto& instruction : llvm::instructions(body)) {
+        auto* call = llvm::dyn_cast<llvm::CallInst>(&instruction);
+        const auto* callee = call ? call->getCalledFunction() : nullptr;
+        if (!callee || !call->isMustTailCall()) continue;
+        const auto target = llvm::find(targets, callee);
+        if (target != targets.end()) groups[target - targets.begin()].push_back(call);
+    }
+    for (auto& group : groups) {
+        if (group.empty()) continue;
+        auto* first = group.front();
+        const bool chain = IsRegionChainExit(*first);
+        const bool inline_chain = chain && llvm::all_of(group, [&](auto* call) { return sources.contains(call); });
+        auto* state = body.getArg(0);
+        const auto restore_source = [&](llvm::IRBuilder<>& builder, llvm::Value* record) {
+            auto* block = builder.CreateLoad(builder.getPtrTy(), record);
+            builder.CreateStore(block, BlockPointerSlot(builder, state));
+        };
+        if (chain && !inline_chain) {
+            for (auto* call : group) {
+                if (auto* record = sources.lookup(call)) {
+                    llvm::IRBuilder<> builder(call);
+                    restore_source(builder, record);
+                }
+            }
+        }
+        if (group.size() == 1 && !inline_chain) continue;
+        auto* callee = first->getCalledFunction();
+        auto* exit = llvm::BasicBlock::Create(body.getContext(), callee->getName() + ".shared", &body);
+        llvm::IRBuilder<> builder(exit);
+        llvm::SmallVector<llvm::PHINode*, 9> inputs;
+        for (auto& arg : first->args()) inputs.push_back(builder.CreatePHI(arg->getType(), group.size()));
+        auto* source = inline_chain ? builder.CreatePHI(builder.getPtrTy(), group.size()) : nullptr;
+        llvm::SmallVector<llvm::Value*, 9> arguments(inputs.begin(), inputs.end());
+        if (inline_chain) {
+            // Keep a single use of the symbolic flags even after expanding the
+            // resolver's link-hit and link-miss paths into this exit.
+            auto pack = module.getOrInsertFunction(kPackRegionFlags, builder.getInt64Ty(), builder.getInt64Ty());
+            arguments[6] = builder.CreateCall(pack, arguments[6]);
+        }
+        auto* tail = builder.CreateCall(first->getFunctionType(), callee, arguments);
+        tail->setCallingConv(first->getCallingConv());
+        tail->setTailCallKind(llvm::CallInst::TCK_MustTail);
+        builder.CreateRet(tail);
+
+        // The flags argument is still symbolic. DeferredFlags will split the
+        // PHI and pack the selected fields once at the shared ABI boundary.
+        for (auto* call : group) {
+            auto* predecessor = call->getParent();
+            for (auto [index, input] : llvm::enumerate(inputs))
+                input->addIncoming(call->getArgOperand(index), predecessor);
+            if (source) source->addIncoming(sources.lookup(call), predecessor);
+            auto* ret = llvm::cast<llvm::ReturnInst>(predecessor->getTerminator());
+            ret->eraseFromParent();
+            call->eraseFromParent();
+            builder.SetInsertPoint(predecessor);
+            builder.CreateBr(exit);
+        }
+
+        if (!inline_chain) continue;
+        llvm::InlineFunctionInfo info;
+        if (!llvm::InlineFunction(*tail, info).isSuccess()) {
+            builder.SetInsertPoint(tail);
+            restore_source(builder, source);
+            continue;
+        }
+        if (auto* restore = module.getFunction("FiberLLVMRegionExit")) {
+            for (auto* user : llvm::make_early_inc_range(restore->users())) {
+                auto* call = llvm::cast<llvm::CallInst>(user);
+                if (call->getFunction() != &body) continue;
+                builder.SetInsertPoint(call);
+                restore_source(builder, source);
+                call->eraseFromParent();
+            }
+        }
+    }
+}
+#endif
+
 }  // namespace
 
 std::unique_ptr<llvm::Module> PrepareLLVMPageRegion(const LLVMOperandTemplates& templates,
@@ -779,7 +1055,7 @@ std::unique_ptr<llvm::Module> PrepareLLVMPageRegion(const LLVMOperandTemplates& 
     if (members.size() < 2) return {};
 
     auto* body = llvm::Function::Create(members[0]->getFunctionType(), llvm::GlobalValue::InternalLinkage,
-                                       name + "_body", *module);
+                                        name + "_body", *module);
     body->setCallingConv(members[0]->getCallingConv());
     body->addFnAttr(llvm::Attribute::NoInline);
     auto& context = module->getContext();
@@ -824,7 +1100,7 @@ std::unique_ptr<llvm::Module> PrepareLLVMPageRegion(const LLVMOperandTemplates& 
             args.push_back(supplied);
         }
         label.member_record = builder.CreateGEP(builder.getInt8Ty(), table,
-            builder.getInt64(i * sizeof(mem::CodeCacheState::PageRegionFallback)));
+                                                builder.getInt64(i * sizeof(mem::CodeCacheState::PageRegionFallback)));
         auto* block = builder.CreateLoad(builder.getPtrTy(), label.member_record);
         args[1] = builder.CreateGEP(builder.getInt8Ty(), block, builder.getInt64(kFirstOpOffset));
         auto* call = builder.CreateCall(member, args);
@@ -856,16 +1132,29 @@ std::unique_ptr<llvm::Module> PrepareLLVMPageRegion(const LLVMOperandTemplates& 
             call->eraseFromParent();
         }
     }
+#ifdef FIBERCPU_LLVM_SHARED_REGION_EXITS
+    llvm::DenseMap<llvm::CallInst*, llvm::Value*> chain_sources;
+#endif
     for (auto [call, index] : exits) {
         builder.SetInsertPoint(call);
-        auto* block = builder.CreateLoad(builder.getPtrTy(), labels[index].member_record);
+        auto* record = labels[index].member_record;
+#ifdef FIBERCPU_LLVM_SHARED_REGION_EXITS
+        auto* ret = llvm::dyn_cast<llvm::ReturnInst>(call->getParent()->getTerminator());
+        auto* tail = ret ? llvm::dyn_cast_or_null<llvm::CallInst>(ret->getReturnValue()) : nullptr;
+        if (tail && tail->isMustTailCall() && IsRegionChainExit(*tail)) {
+            chain_sources.try_emplace(tail, record);
+            call->eraseFromParent();
+            continue;
+        }
+#endif
+        auto* block = builder.CreateLoad(builder.getPtrTy(), record);
         builder.CreateStore(block, BlockPointerSlot(builder, state));
         call->eraseFromParent();
     }
     for (auto* call : edges) {
         const auto known_offset = ConstantPageOffset(call->getArgOperand(5), page);
-        const auto known = known_offset ? std::ranges::find(labels, *known_offset, &RegionLabel::page_offset)
-                                        : labels.end();
+        const auto known =
+            known_offset ? std::ranges::find(labels, *known_offset, &RegionLabel::page_offset) : labels.end();
         if (!known_offset || known != labels.end()) {
             auto* predecessor = call->getParent();
             auto* external = predecessor->splitBasicBlock(call->getIterator(), "chain.external");
@@ -902,12 +1191,15 @@ std::unique_ptr<llvm::Module> PrepareLLVMPageRegion(const LLVMOperandTemplates& 
         // region and replays through the scalar handler before chaining again.
         call->eraseFromParent();
     }
+#ifdef FIBERCPU_LLVM_SHARED_REGION_EXITS
+    ShareRegionTailExits(*body, chain_sources);
+#endif
 
     for (auto [i, member] : llvm::enumerate(members)) {
         functions.clear(*member, member->getName());
         member->eraseFromParent();
         auto* wrapper = llvm::Function::Create(body->getFunctionType(), llvm::GlobalValue::ExternalLinkage,
-                                              name + "_" + llvm::Twine(i), *module);
+                                               name + "_" + llvm::Twine(i), *module);
         wrapper->setCallingConv(body->getCallingConv());
         builder.SetInsertPoint(llvm::BasicBlock::Create(context, "entry", wrapper));
         llvm::SmallVector<llvm::Value*, 9> args;
@@ -934,8 +1226,7 @@ std::unique_ptr<llvm::Module> PrepareLLVMPageRegion(const LLVMOperandTemplates& 
         if (function.isDeclaration()) continue;
         function.removeFnAttr(llvm::Attribute::UWTable);
         function.setDoesNotThrow();
-        if (!function.getName().starts_with(name))
-            function.setLinkage(llvm::GlobalValue::InternalLinkage);
+        if (!function.getName().starts_with(name)) function.setLinkage(llvm::GlobalValue::InternalLinkage);
     }
     const llvm::WeakTrackingVH page_base(page);
     if (llvm::verifyModule(*module) || !OptimizeLLVMModule(*body, true, pipeline, fold_operand_loads)) return {};

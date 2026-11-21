@@ -15,9 +15,20 @@ bool CaptureLLVMWeightedProfilePage(EmuState& state, BasicBlock& block);
 #endif
 #ifdef FIBERCPU_LLVM_BLOCK_TEMPLATE
 extern "C" void FiberLLVMRegionEdge(EmuState* state, DecodedOp* op, int64_t budget, mem::MicroTlbAbiWord tags,
-                                   mem::MicroTlbAbiWord addend, uint32_t eip,
-                                   uint64_t flags FIBERCPU_PIN_PARAMS) noexcept;
+                                    mem::MicroTlbAbiWord addend, uint32_t eip,
+                                    uint64_t flags FIBERCPU_PIN_PARAMS) noexcept;
 extern "C" void FiberLLVMRegionExit(EmuState* state) noexcept;
+#ifdef FIBERCPU_LLVM_SHARED_REGION_EXITS
+extern "C" [[gnu::const]] bool FiberLLVMShareRegionExits();
+#define FIBERCPU_REGION_EXIT_DECL(Name)                                                                              \
+    extern "C" ATTR_PRESERVE_NONE int64_t Name(EmuState* state, DecodedOp* op, int64_t instr_limit,                  \
+                                               mem::MicroTlbAbiWord tags, mem::MicroTlbAbiWord addend, uint32_t eip, \
+                                               uint64_t flags_cache FIBERCPU_PIN_PARAMS)
+FIBERCPU_REGION_EXIT_DECL(FiberLLVMRegionChainSingle);
+FIBERCPU_REGION_EXIT_DECL(FiberLLVMRegionChainDouble);
+FIBERCPU_REGION_EXIT_DECL(FiberLLVMRegionReturn);
+#undef FIBERCPU_REGION_EXIT_DECL
+#endif
 #endif
 
 FORCE_INLINE void RestoreLLVMBlockOnExit(EmuState* state) {
@@ -95,7 +106,25 @@ FORCE_INLINE void CountLLVMBlockEntry(EmuState* state, BasicBlock* block, BasicB
 #endif
 }
 
-template <unsigned LinkSlot>
+FORCE_INLINE ATTR_PRESERVE_NONE int64_t ReturnFromBlock(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
+                                                        int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags,
+                                                        mem::MicroTlbAbiWord utlb_addend, uint32_t branch,
+                                                        uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+#if defined(FIBERCPU_LLVM_BLOCK_TEMPLATE) && defined(FIBERCPU_LLVM_SHARED_REGION_EXITS)
+    if (FiberLLVMShareRegionExits()) {
+        ATTR_MUSTTAIL return FiberLLVMRegionReturn(state, nullptr, instr_limit, 0, 0, 0, flags_cache FIBERCPU_PIN_ARGS);
+    }
+#endif
+    (void)op;
+    (void)utlb_tags;
+    (void)utlb_addend;
+    (void)branch;
+    FIBERCPU_PIN_COMMIT(state);
+    CommitFlagsCache(state, flags_cache);
+    return instr_limit;
+}
+
+template <unsigned LinkSlot, bool EmitRegionEdge = true>
 FORCE_INLINE ATTR_PRESERVE_NONE int64_t ResolveBranchTargetInline(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
                                                                   int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags,
                                                                   mem::MicroTlbAbiWord utlb_addend, uint32_t target_eip,
@@ -105,19 +134,30 @@ FORCE_INLINE ATTR_PRESERVE_NONE int64_t ResolveBranchTargetInline(EmuState* REST
     (void)utlb_tags;
     (void)utlb_addend;
 #ifdef FIBERCPU_LLVM_BLOCK_TEMPLATE
-    FiberLLVMRegionEdge(state, op, instr_limit, utlb_tags, utlb_addend, target_eip, flags_cache FIBERCPU_PIN_RELOAD);
+    if constexpr (EmitRegionEdge)
+        FiberLLVMRegionEdge(state, op, instr_limit, utlb_tags, utlb_addend, target_eip,
+                            flags_cache FIBERCPU_PIN_RELOAD);
 #else
     state->clear_pending_mem_op();
 #endif
     if (instr_limit <= 0) {
         RestoreLLVMBlockOnExit(state);
-        FIBERCPU_PIN_COMMIT(state);
-        CommitFlagsCache(state, flags_cache);
         state->ctx.eip = target_eip;
-        return instr_limit;
+        ATTR_MUSTTAIL return ReturnFromBlock(state, op, instr_limit, utlb_tags, utlb_addend, target_eip,
+                                             flags_cache FIBERCPU_PIN_ARGS);
     }
 
     static_assert(LinkSlot <= 1);
+#if defined(FIBERCPU_LLVM_BLOCK_TEMPLATE) && defined(FIBERCPU_LLVM_SHARED_REGION_EXITS)
+    if constexpr (EmitRegionEdge) {
+        if (FiberLLVMShareRegionExits()) {
+            RestoreLLVMBlockOnExit(state);
+            constexpr auto exit = LinkSlot == 0 ? FiberLLVMRegionChainSingle : FiberLLVMRegionChainDouble;
+            ATTR_MUSTTAIL return exit(state, op, instr_limit, utlb_tags, utlb_addend, target_eip,
+                                      flags_cache FIBERCPU_PIN_RELOAD);
+        }
+    }
+#endif
     BasicBlock* next_block = (op + LinkSlot)->LoadBlockLink();
 
     auto header = *reinterpret_cast<const volatile __uint128_t*>(next_block);

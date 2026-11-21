@@ -153,6 +153,16 @@ constexpr uint64_t FLAGS_CACHE_PF_STATE_MASK = 0xFFull << FLAGS_CACHE_PF_STATE_S
 constexpr uint8_t FLAGS_CACHE_PF_KNOWN_TRUE = 0;
 constexpr uint8_t FLAGS_CACHE_PF_KNOWN_FALSE = 1;
 
+constexpr uint32_t ARITHMETIC_FLAGS_MASK = CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK;
+
+#ifdef FIBERCPU_LLVM_BLOCK_TEMPLATE
+// These calls express flag producers and reads in the bitcode templates.
+// Block assembly lowers them before the resulting code is emitted.
+extern "C" uint64_t FiberLLVMWriteArithmeticFlags(uint64_t, uint32_t, uint8_t) __attribute__((const));
+extern "C" uint64_t FiberLLVMWriteLogicalFlags(uint64_t, uint32_t, unsigned) __attribute__((const));
+extern "C" bool FiberLLVMReadFlag(uint64_t, unsigned) __attribute__((const));
+#endif
+
 FORCE_INLINE uint8_t EncodeKnownParityState(bool pf_set) {
     return pf_set ? FLAGS_CACHE_PF_KNOWN_TRUE : FLAGS_CACHE_PF_KNOWN_FALSE;
 }
@@ -224,11 +234,19 @@ FORCE_INLINE void ClearFlagBits(uint64_t& flags_cache, uint32_t mask) {
 }
 
 FORCE_INLINE bool TestFlagBits(uint64_t flags_cache, uint32_t mask) { return (GetFlags32(flags_cache) & mask) != 0; }
-FORCE_INLINE bool ReadCF(uint64_t flags_cache) { return TestFlagBits(flags_cache, CF_MASK); }
-FORCE_INLINE bool ReadZF(uint64_t flags_cache) { return TestFlagBits(flags_cache, ZF_MASK); }
-FORCE_INLINE bool ReadSF(uint64_t flags_cache) { return TestFlagBits(flags_cache, SF_MASK); }
-FORCE_INLINE bool ReadOF(uint64_t flags_cache) { return TestFlagBits(flags_cache, OF_MASK); }
-FORCE_INLINE bool ReadAF(uint64_t flags_cache) { return TestFlagBits(flags_cache, AF_MASK); }
+template <uint32_t Mask>
+FORCE_INLINE bool ReadArithmeticFlag(uint64_t flags_cache) {
+#ifdef FIBERCPU_LLVM_BLOCK_TEMPLATE
+    return FiberLLVMReadFlag(flags_cache, Mask);
+#else
+    return TestFlagBits(flags_cache, Mask);
+#endif
+}
+FORCE_INLINE bool ReadCF(uint64_t flags_cache) { return ReadArithmeticFlag<CF_MASK>(flags_cache); }
+FORCE_INLINE bool ReadZF(uint64_t flags_cache) { return ReadArithmeticFlag<ZF_MASK>(flags_cache); }
+FORCE_INLINE bool ReadSF(uint64_t flags_cache) { return ReadArithmeticFlag<SF_MASK>(flags_cache); }
+FORCE_INLINE bool ReadOF(uint64_t flags_cache) { return ReadArithmeticFlag<OF_MASK>(flags_cache); }
+FORCE_INLINE bool ReadAF(uint64_t flags_cache) { return ReadArithmeticFlag<AF_MASK>(flags_cache); }
 FORCE_INLINE void SetCF(uint64_t& flags_cache) { SetFlagBits(flags_cache, CF_MASK); }
 FORCE_INLINE void ClearCF(uint64_t& flags_cache) { ClearFlagBits(flags_cache, CF_MASK); }
 FORCE_INLINE void AssignCF(uint64_t& flags_cache, bool value) { value ? SetCF(flags_cache) : ClearCF(flags_cache); }
@@ -245,7 +263,14 @@ FORCE_INLINE void SetAF(uint64_t& flags_cache) { SetFlagBits(flags_cache, AF_MAS
 FORCE_INLINE void ClearAF(uint64_t& flags_cache) { ClearFlagBits(flags_cache, AF_MASK); }
 FORCE_INLINE void AssignAF(uint64_t& flags_cache, bool value) { value ? SetAF(flags_cache) : ClearAF(flags_cache); }
 FORCE_INLINE uint32_t BuildArithmeticFlagsBase(uint64_t flags_cache) {
-    return GetFlags32NoPF(flags_cache) & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
+    return GetFlags32NoPF(flags_cache) & ~ARITHMETIC_FLAGS_MASK;
+}
+FORCE_INLINE void WriteArithmeticFlags(uint64_t& flags_cache, uint32_t flags, uint8_t parity_state) {
+#ifdef FIBERCPU_LLVM_BLOCK_TEMPLATE
+    flags_cache = FiberLLVMWriteArithmeticFlags(flags_cache, flags, parity_state);
+#else
+    SetFlags32AndParityState(flags_cache, BuildArithmeticFlagsBase(flags_cache) | flags, parity_state);
+#endif
 }
 FORCE_INLINE void ClearArithmeticFlags(uint64_t& flags_cache) {
     SetFlags32(flags_cache, GetFlags32NoPF(flags_cache) & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK));
@@ -737,34 +762,34 @@ FORCE_INLINE T AluSub(EmuState* state, uint64_t& flags_cache, T dest, T src) {
             const uint32_t d = dest;
             const uint32_t s = src;
             const uint32_t r = res;
-            uint32_t flags = BuildArithmeticFlagsBase(flags_cache);
+            uint32_t flags = 0;
             if (r == 0) flags |= ZF_MASK;
             flags |= r & SF_MASK;
             if (d < s) flags |= CF_MASK;
             if ((((d ^ s) & (d ^ r)) & SF_MASK) != 0) flags |= OF_MASK;
             if (((d ^ s ^ r) & AF_MASK) != 0) flags |= AF_MASK;
-            SetFlags32AndParityState(flags_cache, flags, static_cast<uint8_t>(r));
+            WriteArithmeticFlags(flags_cache, flags, static_cast<uint8_t>(r));
         } else if constexpr (sizeof(T) == 2) {
             // The same subtraction yields the result and the unsigned borrow.
             // Keep the high bits until flags have been produced.
             const uint32_t sign_changes = (dest ^ src) & (dest ^ difference);
-            uint32_t flags = BuildArithmeticFlagsBase(flags_cache);
+            uint32_t flags = 0;
             if (difference == 0) flags |= ZF_MASK;
             flags |= (difference >> 8) & SF_MASK;
             flags |= (difference >> 16) & CF_MASK;
             flags |= (sign_changes >> 4) & OF_MASK;
             flags |= (dest ^ src ^ difference) & AF_MASK;
-            SetFlags32AndParityState(flags_cache, flags, static_cast<uint8_t>(difference));
+            WriteArithmeticFlags(flags_cache, flags, static_cast<uint8_t>(difference));
         } else {
             uint32_t msb_idx = sizeof(T) * 8 - 1;
             T sign_mask = (T)1 << msb_idx;
-            uint32_t flags = BuildArithmeticFlagsBase(flags_cache);
+            uint32_t flags = 0;
             if (res == 0) flags |= ZF_MASK;
             if (((res >> msb_idx) & 1) != 0) flags |= SF_MASK;
             if (dest < src) flags |= CF_MASK;
             if (((dest ^ src) & sign_mask) && ((dest ^ res) & sign_mask)) flags |= OF_MASK;
             if (((dest ^ src ^ res) & AF_MASK) != 0) flags |= AF_MASK;
-            SetFlags32AndParityState(flags_cache, flags, static_cast<uint8_t>(res));
+            WriteArithmeticFlags(flags_cache, flags, static_cast<uint8_t>(res));
         }
     }
     return res;
@@ -820,14 +845,27 @@ FORCE_INLINE T AluSbb(EmuState* state, uint64_t& flags_cache, T dest, T src) {
     return res;
 }
 
-template <bool IncludeZero = true, typename T>
-FORCE_INLINE void SetLogicalResultFlags(uint64_t& flags_cache, T res) {
-    uint32_t flags = BuildArithmeticFlagsBase(flags_cache);
-    if constexpr (IncludeZero) {
-        if (res == 0) flags |= ZF_MASK;
+template <typename T>
+struct LogicalResultFlags {
+    T result;
+
+    FORCE_INLINE bool IsZero() const { return result == 0; }
+
+    FORCE_INLINE void Pack(uint64_t& flags_cache, bool zero) const {
+        uint32_t flags = zero ? ZF_MASK : 0;
+        if (((result >> (sizeof(T) * 8 - 1)) & 1) != 0) flags |= SF_MASK;
+        WriteArithmeticFlags(flags_cache, flags, static_cast<uint8_t>(result));
     }
-    if (((res >> (sizeof(T) * 8 - 1)) & 1) != 0) flags |= SF_MASK;
-    SetFlags32AndParityState(flags_cache, flags, static_cast<uint8_t>(res));
+};
+
+template <typename T>
+FORCE_INLINE void SetLogicalResultFlags(uint64_t& flags_cache, T res) {
+#ifdef FIBERCPU_LLVM_BLOCK_TEMPLATE
+    flags_cache = FiberLLVMWriteLogicalFlags(flags_cache, res, sizeof(T) * 8);
+#else
+    const LogicalResultFlags<T> flags{res};
+    flags.Pack(flags_cache, flags.IsZero());
+#endif
 }
 
 template <typename T, bool UpdateFlags = true>

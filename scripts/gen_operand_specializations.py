@@ -41,14 +41,14 @@ def generate(source, plan, catalog, budget, pin_mode, pin_mask):
         for position, (name, operand) in enumerate(zip(operations, operands)):
             if ends_with_test_branch and position == len(operations) - 2:
                 call = calls[position][0]
-                test = f"OpTest_EvGvForZeroBranch<SlotPolicy{position}>"
-                body = body.replace(call, "bool test_zero;\n    " + call[:-1].replace(f"op::{name}", test)
-                                    + ", test_zero)")
+                test = f"OpTest_EvGvDeferred<SlotPolicy{position}>"
+                body = body.replace(call, f"FusedTestResult<SlotPolicy{position}> test_flags;\n    "
+                                    + call[:-1].replace(f"op::{name}", test) + ", test_flags)")
             elif ends_with_test_branch and position == len(operations) - 1:
                 call = calls[position][0]
                 taken_on_zero = "true" if name.startswith("OpJcc_E_") else "false"
-                body = body.replace(call, call[:-1].replace(f"op::{name}", f"BranchOnTestZero<{taken_on_zero}>")
-                                    + ", test_zero)")
+                body = body.replace(call, call[:-1].replace(f"op::{name}", f"BranchOnTestResult<{taken_on_zero}>")
+                                    + ", test_flags)")
             elif supports_exact_operands(catalog, name, operand):
                 body = body.replace(f"(SlotPolicy{position}, op::{name},",
                                     f"(SlotPolicy{position}, baked_operand::{name}<SlotPolicy{position}>,")

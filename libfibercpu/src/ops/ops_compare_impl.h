@@ -86,29 +86,40 @@ FORCE_INLINE LogicFlow OpCmp_GvEv_Internal(LogicFuncParams, const Operands& oper
 // Specializations for OpTest_EvGv (85: TEST r/m16/32, r16/32)
 // ============================================================================
 
-template <typename T, AddrModeSpec Form, bool DeferZero>
-FORCE_INLINE LogicFlow OpTest_EvGvWidth(LogicFuncParams, bool* zero) {
+template <typename T, AddrModeSpec Form>
+FORCE_INLINE MemResult<T> ReadTest_EvGv(LogicFuncParams) {
     const auto dest = ReadCompareRm<T, Form>(state, gpr, op, operand_modrm, utlb);
-    if (!dest) return LogicFlow::RestartMemoryOp;
+    if (!dest) return dest;
     const T src = static_cast<T>(gpr.GetReg(state, (operand_modrm >> 3) & 7));
-    const T result = *dest & src;
-    SetLogicalResultFlags<!DeferZero>(flags_cache, result);
-    if constexpr (DeferZero) *zero = result == 0;
+    return static_cast<T>(*dest & src);
+}
+
+template <typename T, AddrModeSpec Form>
+FORCE_INLINE LogicFlow OpTest_EvGvWidth(LogicFuncParams) {
+    const auto result = ReadTest_EvGv<T, Form>(LogicPassParams);
+    if (!result) return LogicFlow::RestartMemoryOp;
+    SetLogicalResultFlags(flags_cache, *result);
     return LogicFlow::Continue;
 }
 
-template <OpsizeSpec Size = OpsizeSpec::Dynamic, AddrModeSpec Form = AddrModeSpec::Dynamic, bool DeferZero = false,
+template <OpsizeSpec Size = OpsizeSpec::Dynamic, AddrModeSpec Form = AddrModeSpec::Dynamic,
           class Operands = OperandSpec::Dynamic>
-FORCE_INLINE LogicFlow OpTest_EvGv_Internal(LogicFuncParams, const Operands& operands = {}, bool* zero = nullptr) {
+FORCE_INLINE LogicFlow OpTest_EvGv_Internal(LogicFuncParams, const Operands& operands = {}) {
     // 85: TEST r/m16/32, r16/32
-    if (OperandIs16<Size>(op, operands)) return OpTest_EvGvWidth<uint16_t, Form, DeferZero>(LogicPassParams, zero);
-    return OpTest_EvGvWidth<uint32_t, Form, DeferZero>(LogicPassParams, zero);
+    if (OperandIs16<Size>(op, operands)) return OpTest_EvGvWidth<uint16_t, Form>(LogicPassParams);
+    return OpTest_EvGvWidth<uint32_t, Form>(LogicPassParams);
 }
 
 template <class Policy>
-FORCE_INLINE LogicFlow OpTest_EvGvForZeroBranch(LogicFuncParams, bool& zero) {
-    return OpTest_EvGv_Internal<OpsizeSpec::Dynamic, AddrModeSpec::Dynamic, true>(LogicPassParams, Policy::operands,
-                                                                               &zero);
+using FusedTestResult = LogicalResultFlags<std::conditional_t<(Policy::prefixes & prefix::OPSIZE), uint16_t, uint32_t>>;
+
+template <class Policy, typename T>
+FORCE_INLINE LogicFlow OpTest_EvGvDeferred(LogicFuncParams, LogicalResultFlags<T>& flags) {
+    constexpr auto form = Policy::modrm >= 0xc0 ? AddrModeSpec::ModReg : AddrModeSpec::Memory;
+    const auto result = ReadTest_EvGv<T, form>(LogicPassParams);
+    if (!result) return LogicFlow::RestartMemoryOp;
+    flags.result = *result;
+    return LogicFlow::Continue;
 }
 
 // ============================================================================

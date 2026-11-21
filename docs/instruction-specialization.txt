@@ -168,6 +168,11 @@ the normal dispatcher. Publication validates the entire snapshot. A
 member invalidation revokes every entry of that page's region and restores
 the independent LLVM handlers with their scalar replay slots.
 
+Set FIBERCPU_LLVM_SHARED_REGION_EXITS=ON at CMake configure time to share
+flag packing and exit code among region edges with the same exit action.
+The default is OFF. This setting applies to online regions and to regions
+compiled by fibercpu_llvm_cache.
+
 Worker count, pipeline, operand load folding and JIT arena capacity are
 shared by the host process. Once initialized, an explicit conflicting value
 fails. A run with no override uses the shared setting.
@@ -258,6 +263,7 @@ independent cache active and skips region installation.
 
 Configure the interpreter using the same sources, compiler, target and VM
 layout settings as the producer, with the linked bundle as a build input.
+Use the same FIBERCPU_LLVM_SHARED_REGION_EXITS setting in both builds.
 
   cmake -S libfibercpu -B <consumer> -DFIBERCPU_ENABLE_LLVM_JIT=OFF \
     -DFIBERCPU_LINKED_BLOCK_CACHE_FILE=/absolute/path/blocks.linked

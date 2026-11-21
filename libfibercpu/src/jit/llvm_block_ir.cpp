@@ -25,6 +25,32 @@ extern "C" LLVMBlockExit FiberLLVMExit();
 extern "C" LogicFlow FiberLLVMPlaceholder(unsigned index, uint32_t encoding, uint32_t ea_desc, uint32_t displacement,
                                           LogicFuncParams);
 
+#ifdef FIBERCPU_LLVM_SHARED_REGION_EXITS
+extern "C"
+    [[gnu::noinline]] ATTR_PRESERVE_NONE int64_t FiberLLVMRegionReturn(EmuState* state, DecodedOp*, int64_t instr_limit,
+                                                                       mem::MicroTlbAbiWord, mem::MicroTlbAbiWord,
+                                                                       uint32_t,
+                                                                       uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_COMMIT(state);
+    CommitFlagsCache(state, flags_cache);
+    return instr_limit;
+}
+
+#define FIBERCPU_DEFINE_REGION_CHAIN(Name, LinkSlot)                                                                 \
+    extern "C" [[gnu::noinline]] ATTR_PRESERVE_NONE int64_t Name(                                                    \
+        EmuState* state, DecodedOp* op, int64_t instr_limit, mem::MicroTlbAbiWord tags, mem::MicroTlbAbiWord addend, \
+        uint32_t eip, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {                                                    \
+        __builtin_assume(instr_limit > 0);                                                                           \
+        ATTR_MUSTTAIL return ResolveBranchTargetInline<LinkSlot, false>(state, op, instr_limit, tags, addend, eip,   \
+                                                                        flags_cache FIBERCPU_PIN_ARGS);              \
+    }
+FIBERCPU_DEFINE_REGION_CHAIN(FiberLLVMRegionChainSingle, 0)
+FIBERCPU_DEFINE_REGION_CHAIN(FiberLLVMRegionChainDouble, 1)
+#undef FIBERCPU_DEFINE_REGION_CHAIN
+
+extern "C" const HandlerFunc FiberLLVMRegionMemoryExits[] = {&MemoryOpRestart, &MemoryOpRetry};
+#endif
+
 #define FIBERCPU_LLVM_OP(Id, Name, Exact, Requirements, Extensions)                                         \
     extern "C" LogicFlow FiberLLVMGeneric_##Name(unsigned, uint32_t, uint32_t, uint32_t, LogicFuncParams) { \
         return op::Name(LogicPassParams);                                                                   \
