@@ -330,6 +330,73 @@ static bool CheckDeadFlagsAcrossReplay() {
     return ok;
 }
 
+static bool CheckBoundScalarWidths() {
+    constexpr uint32_t code_address = 0x1000;
+    constexpr uint32_t data_address = 0x2000;
+    constexpr uint32_t initial = 0xa5a5a5a5;
+    constexpr uint8_t lea32[] = {0x8d, 0x43, 0x01};
+    constexpr uint8_t lea16[] = {0x66, 0x8d, 0x43, 0x01};
+    constexpr uint8_t mov_reg32[] = {0xc7, 0xc0, 0x78, 0x56, 0x34, 0x12};
+    constexpr uint8_t mov_reg16[] = {0x66, 0xc7, 0xc0, 0x78, 0x56};
+    constexpr uint8_t mov_mem32[] = {0xc7, 0x01, 0x78, 0x56, 0x34, 0x12};
+    constexpr uint8_t mov_mem16[] = {0x66, 0xc7, 0x01, 0x78, 0x56};
+    constexpr uint8_t mov_small32[] = {0xc7, 0x01, 0x04, 0x00, 0x00, 0x00};
+    constexpr uint8_t mov_small16[] = {0x66, 0xc7, 0x01, 0x04, 0x00};
+    struct Case {
+        std::span<const uint8_t> bytes;
+        uint32_t eax;
+        uint32_t memory;
+    };
+    const Case cases[] = {
+        {lea32, 0x12345678, initial},     {lea16, 0xa5a55678, initial},       {mov_reg32, 0x12345678, initial},
+        {mov_reg16, 0xa5a55678, initial}, {mov_mem32, initial, 0x12345678},   {mov_mem16, initial, 0xa5a55678},
+        {mov_small32, initial, 4},        {mov_small16, initial, 0xa5a50004},
+    };
+    std::unique_ptr<EmuState, decltype(&X86_Destroy)> state(X86_Create(), X86_Destroy);
+    X86_MemMap(state.get(), code_address, 4096, 7);
+    X86_MemMap(state.get(), data_address, 4096, 3);
+    HandlerFunc handler32 = nullptr;
+    for (unsigned i = 0; i < std::size(cases); ++i) {
+        const auto& test = cases[i];
+        const auto address = code_address + 16 * i;
+        const auto end = address + uint32_t(test.bytes.size());
+        X86_MemWrite(state.get(), address, test.bytes.data(), uint32_t(test.bytes.size()));
+        X86_MemWrite(state.get(), data_address, reinterpret_cast<const uint8_t*>(&initial), sizeof(initial));
+        X86_RegWrite(state.get(), EAX, initial);
+        X86_RegWrite(state.get(), EBX, 0x12345677);
+        X86_RegWrite(state.get(), ECX, data_address);
+        X86_SetEIP(state.get(), address);
+        if (!X86_Run(state.get(), end, 8) || X86_GetEIP(state.get()) != end) {
+            std::fprintf(stderr, "Width case %u stopped at %#x, expected %#x\n", i, X86_GetEIP(state.get()), end);
+            return false;
+        }
+        const auto* block = state->mmu.lookup_cached_block(address);
+        if (!block || block->inst_count() != 1) {
+            std::fprintf(stderr, "Width case %u failed to decode\n", i);
+            return false;
+        }
+        const auto handler = block->FirstOp()->handler;
+        if (CanonicalBoundHandler(handler) != g_Handlers[test.bytes[i % 2]]) {
+            std::fprintf(stderr, "Width case %u changed the canonical handler\n", i);
+            return false;
+        }
+        if (i % 2 == 0)
+            handler32 = handler;
+        else if (handler == handler32) {
+            std::fprintf(stderr, "Width case %u used the same handler for both widths\n", i);
+            return false;
+        }
+        uint32_t value = 0;
+        X86_MemRead(state.get(), data_address, reinterpret_cast<uint8_t*>(&value), sizeof(value));
+        if (X86_RegRead(state.get(), EAX) != test.eax || value != test.memory) {
+            std::fprintf(stderr, "Width case %u produced EAX=%#x memory=%#x, expected %#x %#x\n", i,
+                         X86_RegRead(state.get(), EAX), value, test.eax, test.memory);
+            return false;
+        }
+    }
+    return true;
+}
+
 static bool CheckMemoryFaultEip(bool write, bool single_step, bool concat = false) {
     constexpr uint32_t code_address = 0x1000;
     constexpr uint32_t data_address = 0x2000;
@@ -392,6 +459,10 @@ int main() {
     };
     bool ok = check(0, 0, 64, address + 64) && check(0, 1, 1, address + 1) &&
               check(address + 17, 0, 17, address + 17) && CheckCompactSlots(state);
+    if (!CheckBoundScalarWidths()) {
+        std::fprintf(stderr, "LEA or immediate MOV width binding failed\n");
+        ok = false;
+    }
     // Invalid 15-byte prefix sequence at the last available decoded-op slot.
     std::memset(page + 63, 0x66, 15);
     ok = check(0, 0, 64, address + 64) && ok;

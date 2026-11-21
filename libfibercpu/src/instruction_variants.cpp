@@ -201,6 +201,8 @@ BoundScalarHandler BindScalarHandler(const DecodedInstruction& op) {
         if (table.policies & kBindWidth) policy_key |= (op.prefixes.flags.opsize ? 1u : 2u) << 10;
         if (table.policies & kBindFlags) policy_key |= (op.meta.flags.no_flags ? 2u : 1u) << 12;
         executable = find(policy_key);
+        if (!executable && (table.policies & kRequireWidth))
+            executable = find((policy_key & 0xff00u) | kUnboundModRMKey);
     }
     if (!executable) executable = find(key);
     if (!executable) executable = table.fallback[shape.slots - 1];

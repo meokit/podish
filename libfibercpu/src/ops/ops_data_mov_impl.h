@@ -388,10 +388,18 @@ FORCE_INLINE LogicFlow OpMov_EvIz_Mem_Internal(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
+template <OpsizeSpec Size>
+FORCE_INLINE LogicFlow OpMovImmediateRmWidth(LogicFuncParams) {
+    static_assert(Size != OpsizeSpec::Dynamic);
+    using T = std::conditional_t<Size == OpsizeSpec::Opsize16, uint16_t, uint32_t>;
+    return OpMovImmediateModRM<T>(LogicPassParams);
+}
+
 template <class Operands>
 FORCE_INLINE LogicFlow OpMovImmediateRmWithOperands(LogicFuncParams, const Operands& operands) {
-    if (OperandIs16<OpsizeSpec::Dynamic>(op, operands)) return OpMovImmediateModRM<uint16_t>(LogicPassParams);
-    return OpMovImmediateModRM<uint32_t>(LogicPassParams);
+    if (OperandIs16<OpsizeSpec::Dynamic>(op, operands))
+        return OpMovImmediateRmWidth<OpsizeSpec::Opsize16>(LogicPassParams);
+    return OpMovImmediateRmWidth<OpsizeSpec::Opsize32>(LogicPassParams);
 }
 
 FORCE_INLINE LogicFlow OpMov_EvIz(LogicFuncParams) {

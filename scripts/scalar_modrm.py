@@ -9,6 +9,7 @@ from pathlib import Path
 from operand_specialization_data import instruction_targets
 
 SHARDS = 32
+UNBOUND_MODRM_KEY = 1 << 14
 OPCODE_ALIASES = {0x2bc: 0x1bc}
 REGISTERS = ("Eax", "Ecx", "Edx", "Ebx", "Esp", "Ebp", "Esi", "Edi")
 

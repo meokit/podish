@@ -10,7 +10,7 @@ from pathlib import Path
 from operand_specialization_data import (
     Operand, generated_fusions, instruction_targets, relative_control_operations, training_handlers, training_plan_match,
 )
-from scalar_modrm import SHARDS, load_baked_modrm, pin_keep, scalar_modrm_plans
+from scalar_modrm import SHARDS, UNBOUND_MODRM_KEY, load_baked_modrm, pin_keep, scalar_modrm_plans, scalar_policy_key
 
 
 CATALOG = Path(__file__).resolve().parents[1] / "libfibercpu/src/instruction_catalog.json"
@@ -314,6 +314,9 @@ def generate(catalog, output, fusion_source=None, pin_mode=0, pin_mask=0, modrm_
     training = training_handlers(catalog, fusions)
     scalar_plans = scalar_modrm_plans(catalog)
     scalar_policies = catalog.get("scalar_policies", {})
+    width_kernels = catalog.get("scalar_width_kernels", {})
+    if width_kernels.keys() - scalar_plans.keys() or width_kernels.keys() & scalar_policies.keys():
+        raise ValueError("required scalar width kernels must have a scalar identity and no optional policy")
     selected_modrm, selected_policies = load_baked_modrm(modrm_plan, scalar_plans, training, scalar_policies)
     exact_shapes = static_operand_shapes(static_operand_plan, catalog, training)
     keep_for = pin_keep(catalog, pin_mode, pin_mask)
@@ -368,14 +371,29 @@ def generate(catalog, output, fusion_source=None, pin_mode=0, pin_mask=0, modrm_
                     lines.extend([f"FORCE_INLINE LogicFlow {target}(LogicFuncParams) {{",
                                   f"    return {kernel}(LogicPassParams);", "}"])
                 targets[key] = target
+        width_fallbacks = []
+        if name in width_kernels:
+            assert not is_link_only_return
+            policies.extend(("kBindWidth", "kRequireWidth"))
+            targets.clear()
+            kernel = f"op::{identifier(width_kernels[name])}"
+            for width in (16, 32):
+                width_key = scalar_policy_key(width, None)
+                target = kernel_reference(kernel, [f"OpsizeSpec::Opsize{width}"])
+                targets.update((key | width_key, target) for key in keys)
+                for slots in sorted(plan.slot_counts):
+                    key = UNBOUND_MODRM_KEY | width_key | (slots << 8)
+                    width_fallbacks.append((key, target, slots))
         mask = " | ".join(policies) if policies else "0"
-        lines.append(f"constexpr std::array<ScalarBindingEntry, {len(targets)}> {entries} = {{{{")
+        lines.append(f"constexpr std::array<ScalarBindingEntry, {len(targets) + len(width_fallbacks)}> {entries} = {{{{")
         lines.extend(f"    MakeScalarBinding<{target}, 0x{key:04x}, {keep_for(name, key & 255)}>(),"
                      for key, target in sorted(targets.items()))
+        lines.extend(f"    {{0x{key:04x}, DispatchWrapper<{target}, OperandSpec::SlotBound<{slots}>>}},"
+                     for key, target, slots in sorted(width_fallbacks))
         link_slot = opcodes_for[name].issubset(branch_links)
         cold = ", ".join(
             f"DispatchWrapper<op::{name}, OperandSpec::SlotBound<{slots}{', false' if link_slot else ''}>>"
-            if slots in plan.slot_counts and not is_link_only_return else "nullptr"
+            if slots in plan.slot_counts and not is_link_only_return and not width_fallbacks else "nullptr"
             for slots in (1, 2)
         )
         lines.append("}};")

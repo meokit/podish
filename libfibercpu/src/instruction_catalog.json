@@ -9,6 +9,10 @@
     ]
   },
   "specialization_sources": ["llvm_kernel_policies.json"],
+  "scalar_width_kernels": {
+    "OpLea": "OpLea_Impl",
+    "OpMov_EvIz": "OpMovImmediateRmWidth"
+  },
   "families": {
     "Add_EvGv": {"opcode": 1, "layout": "RmReg", "extension": -1, "width_rule": "ScalarEv"},
     "Group1_EbIb_Cmp_080": {"opcode": 128, "layout": "RmOnly", "extension": 7, "width_rule": "Fixed8"},

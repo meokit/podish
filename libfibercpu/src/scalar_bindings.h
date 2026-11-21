@@ -26,9 +26,11 @@ struct ScalarBindingTable {
 enum ScalarBindingPolicy : uint8_t {
     kBindWidth = 1,
     kBindFlags = 2,
+    kRequireWidth = 4,
 };
 
 // Keep the bit positions in sync with scalar_policy_key in scalar_modrm.py.
+inline constexpr uint16_t kUnboundModRMKey = 1u << 14;
 
 template <LogicFunc Target, uint16_t Key, unsigned Keep>
 constexpr ScalarBindingEntry MakeScalarBinding() {
