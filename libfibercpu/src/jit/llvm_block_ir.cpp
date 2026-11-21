@@ -1,3 +1,4 @@
+#define FIBERCPU_LLVM_BLOCK_TEMPLATE
 #include "jit/llvm_block_jit.h"
 #include "llvm_op_ids.h"
 #include "ops/ops_alu_impl.h"
@@ -57,12 +58,12 @@ extern "C" const LLVMOperationTable FiberLLVMOperationTable = {
 #define FIBERCPU_LLVM_STEP(I)                                                                                          \
     do {                                                                                                               \
         if (!FiberLLVMUseStep(I)) goto dispatch_tail;                                                                  \
-        const auto layout = FiberLLVMOperandLayout(I);                                                               \
-        const auto slots = layout & 3;                                                                               \
-        const auto imm = layout == kLLVMBranchLinkSlot ? current->Primary()                                           \
-                         : slots == 2                   ? (current + 1)->Primary()                                    \
-                         : current->HasMemory()         ? GetSingleSlotMemoryImmediate(current)                       \
-                                                        : current->Primary();                                         \
+        const auto layout = FiberLLVMOperandLayout(I);                                                                 \
+        const auto slots = layout & 3;                                                                                 \
+        const auto imm = layout == kLLVMBranchLinkSlot ? current->Primary()                                            \
+                         : slots == 2                  ? (current + 1)->Primary()                                      \
+                         : current->HasMemory()        ? GetSingleSlotMemoryImmediate(current)                         \
+                                                       : current->Primary();                                                  \
         auto flow =                                                                                                    \
             FiberLLVMPlaceholder(I, 0, 0, 0, state, current, &utlb, imm, 0, &branch, flags_cache, FIBERCPU_GPR_CACHE); \
         if (flow != LogicFlow::Continue) {                                                                             \

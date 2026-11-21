@@ -483,7 +483,26 @@ FORCE_INLINE uint32_t GetDisplacement(const DecodedInstruction* op) { return op-
 
 FORCE_INLINE uint32_t GetNextEip(const EmuState* state, const DecodedOp* op);
 FORCE_INLINE uint8_t GetOpLength(const EmuState* state, const DecodedOp* op);
-FORCE_INLINE uint32_t GetControlTargetEip(const DecodedOp* op) { return op->Primary(); }
+
+enum class LLVMBlockEipField : uint8_t { Next, BranchTarget, Fallthrough };
+
+#ifdef FIBERCPU_LLVM_BLOCK_TEMPLATE
+extern "C" [[gnu::const]] uint32_t FiberLLVMReadEip(const DecodedOp* op, uint32_t fallback, LLVMBlockEipField field);
+#endif
+
+template <LLVMBlockEipField Field>
+FORCE_INLINE uint32_t BakeableBlockEip(const DecodedOp* op, uint32_t fallback) {
+#ifdef FIBERCPU_LLVM_BLOCK_TEMPLATE
+    return FiberLLVMReadEip(op, fallback, Field);
+#else
+    (void)op;
+    return fallback;
+#endif
+}
+
+FORCE_INLINE uint32_t GetControlTargetEip(const DecodedOp* op) {
+    return BakeableBlockEip<LLVMBlockEipField::BranchTarget>(op, op->Primary());
+}
 
 struct BlockSlotLayout {
     uint8_t logical_slot_count;

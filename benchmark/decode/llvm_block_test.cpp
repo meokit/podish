@@ -206,6 +206,32 @@ bool VerifyDirectBranch(bool enabled) {
     return enabled ? block && block->inst_count() == 4 : block == nullptr;
 }
 
+bool VerifyRelocatedWordBranch(bool enabled) {
+    // JMP rel16 with a negative displacement. The target wraps to 16 bits
+    // even when the same machine code is used at a different guest address.
+    constexpr uint8_t code[] = {0x66, 0xe9, 0xfb, 0xff};
+    auto state = LoadCode(code, sizeof(code));
+    constexpr uint32_t relocated = 0x13200;
+    X86_MemMap(state.get(), relocated & ~0xfffu, 4096, 7);
+    X86_MemWrite(state.get(), relocated, code, sizeof(code));
+    fiberish::HandlerFunc entry = nullptr;
+    for (auto start : {code_address, relocated}) {
+        const auto target = (start - 1) & 0xffffu;
+        X86_SetEIP(state.get(), start);
+        if (!X86_Run(state.get(), start + sizeof(code), 1) || X86_GetEIP(state.get()) != target) {
+            std::fprintf(stderr, "rel16 from %#x expected %#x got %#x fault %u\n", start, target,
+                         X86_GetEIP(state.get()), X86_GetFaultVector(state.get()));
+            return false;
+        }
+        const auto* block = FindCompiledBlock(state.get(), start);
+        if (bool(block) != enabled || (block && entry && entry != block->entry))
+            return false;
+        if (block)
+            entry = block->entry;
+    }
+    return true;
+}
+
 bool VerifyFlagConsumers(bool enabled) {
     constexpr uint8_t je[] = {0x85, 0xc0, 0x74, 5, 0xba, 5, 0, 0, 0}; // TEST EAX,EAX; JE end; MOV EDX,5
     constexpr uint8_t cmov[] = {0x85, 0xc0, 0x0f, 0x44, 0xd3};        // TEST EAX,EAX; CMOVZ EDX,EBX
@@ -1068,7 +1094,7 @@ bool VerifyCpuRunOptions(const char* path) {
     const auto check_weights = [](const std::string& file, std::initializer_list<uint64_t> expected) {
         std::ifstream stream(file, std::ios::binary);
         const std::string bytes((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
-        if (bytes.size() < 40 || !bytes.starts_with("FIBJPR07"))
+        if (bytes.size() < 40 || !bytes.starts_with("FIBJPR09"))
             return false;
         size_t offset = 40; // Eight-byte magic, then the 32-byte fingerprint.
         const auto read_le = [&](unsigned count) {
@@ -1087,7 +1113,28 @@ bool VerifyCpuRunOptions(const char* path) {
         }
         return offset == bytes.size();
     };
-    return check_weights(path, {7, 2}) && check_weights(std::string(path) + ".second", {9});
+    if (!check_weights(path, {7, 2}) || !check_weights(std::string(path) + ".second", {9}))
+        return false;
+
+    const auto page_profile =
+        configure({"JitMode=profile", "JitHotThreshold=2", "WeightedProfileSamePage=on", output + ".page"});
+    if (!page_profile)
+        return false;
+    auto page_state = LoadCode(code, sizeof(code), page_profile.get());
+    constexpr uint32_t neighbor = code_address + 32;
+    constexpr uint32_t late_neighbor = code_address + 64;
+    constexpr uint32_t other_page = code_address + 4096;
+    X86_MemMap(page_state.get(), other_page, 4096, 7);
+    const auto visit = [&](uint32_t address, uint8_t value) {
+        code[1] = value;
+        X86_MemWrite(page_state.get(), address, code, sizeof(code));
+        X86_SetEIP(page_state.get(), address);
+        return X86_Run(page_state.get(), address + sizeof(code), 16) &&
+               X86_RegRead(page_state.get(), 0) == unsigned(value) + 1;
+    };
+    return visit(neighbor, 3) && visit(other_page, 4) && run(page_state.get(), 2, 3) && visit(late_neighbor, 5) &&
+           X86_FinishRun(page_profile.get(), error, sizeof(error)) &&
+           check_weights(std::string(path) + ".page", {2, 1});
 }
 #endif
 
@@ -1214,7 +1261,8 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "LLVM MOV address width, segment or operand width mismatch\n");
         return 1;
     }
-    if (!VerifyDirectBranch(enabled) || !VerifyStringAndLoopPrefixes(enabled) || X86_GetLLVMJitLiveBlockCount() != 0) {
+    if (!VerifyDirectBranch(enabled) || !VerifyRelocatedWordBranch(enabled) || !VerifyStringAndLoopPrefixes(enabled) ||
+        X86_GetLLVMJitLiveBlockCount() != 0) {
         std::fprintf(stderr, "LLVM direct branch, REP string or counter width mismatch\n");
         return 1;
     }

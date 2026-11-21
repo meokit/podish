@@ -311,6 +311,7 @@ struct CodeCacheState {
     std::vector<BasicBlock*> all_blocks;
     BasicBlock dummy_invalid_block;
     ankerl::unordered_dense::map<uintptr_t, std::vector<PageBlockRef>> page_to_blocks;
+    ankerl::unordered_dense::map<BasicBlock*, uint16_t> pending_page_profile;
     size_t requested_block_bytes = 0;
     size_t block_budget_bytes = kDefaultBlockBudgetBytes;
     uint64_t flush_count = 0;

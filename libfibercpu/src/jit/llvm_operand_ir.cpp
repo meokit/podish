@@ -153,6 +153,75 @@ void BakeLLVMOperandLoads(llvm::Function& entry, block_recipe::BlockKeyView key)
     for (auto* load : dead_loads) load->eraseFromParent();
 }
 
+void LowerBlockEipReads(llvm::Function& entry, block_recipe::BlockKeyView key, std::span<const size_t> slot_offsets) {
+    auto* marker = entry.getParent()->getFunction("FiberLLVMReadEip");
+    if (!marker) return;
+    const auto& layout = entry.getParent()->getDataLayout();
+    const bool bake = !key.eips.empty() && layout.isLittleEndian();
+    auto* first_op = entry.getArg(1);
+    llvm::Value* base_eip = nullptr;
+    llvm::SmallVector<llvm::CallInst*, 8> markers;
+    for (auto* user : marker->users()) {
+        if (auto* call = llvm::dyn_cast<llvm::CallInst>(user)) markers.push_back(call);
+    }
+    for (auto* call : markers) {
+        auto* value = call->getArgOperand(1);
+        const auto field =
+            static_cast<LLVMBlockEipField>(llvm::cast<llvm::ConstantInt>(call->getArgOperand(2))->getZExtValue());
+        std::optional<uint32_t> delta;
+        bool wrap16 = false;
+        const bool in_entry = bake && call->getFunction() == &entry;
+        if (in_entry && field == LLVMBlockEipField::Fallthrough && key.exit == LLVMBlockExit::Fallthrough) {
+            // The sentinel next EIP is copied from the last decoded instruction.
+            delta = key.eips.back().next_offset;
+        } else if (in_entry && field != LLVMBlockEipField::Fallthrough) {
+            int64_t offset = 0;
+            if (llvm::GetPointerBaseWithConstantOffset(call->getArgOperand(0), offset, layout) == first_op &&
+                offset >= 0) {
+                const auto slot = std::ranges::lower_bound(slot_offsets, size_t(offset));
+                if (slot != slot_offsets.end() && *slot == size_t(offset)) {
+                    const auto i = size_t(slot - slot_offsets.begin());
+                    const auto& pc = key.eips[i];
+                    if (field == LLVMBlockEipField::Next) {
+                        delta = pc.next_offset;
+                    } else {
+                        const auto imm = key.operands[i].immediate;
+                        switch (RelativeBranchWidth(pc.branch_width)) {
+                            case RelativeBranchWidth::Byte:
+                                delta = pc.next_offset + int8_t(imm);
+                                break;
+                            case RelativeBranchWidth::Word:
+                                delta = pc.next_offset + int16_t(imm);
+                                wrap16 = true;
+                                break;
+                            case RelativeBranchWidth::Dword:
+                                delta = pc.next_offset + imm;
+                                break;
+                            case RelativeBranchWidth::None:
+                                break;
+                        }
+                    }
+                }
+            }
+        }
+        if (delta) {
+            if (!base_eip) {
+                llvm::IRBuilder<> builder(&*entry.getEntryBlock().getFirstInsertionPt());
+                // Installed handlers always receive BasicBlock::FirstOp().
+                const auto offset = int64_t(offsetof(BasicBlock, chain)) - int64_t(offsetof(BasicBlock, slots));
+                auto* header = builder.CreateGEP(builder.getInt8Ty(), first_op, builder.getInt64(offset));
+                base_eip = builder.CreateAlignedLoad(builder.getInt32Ty(), header, llvm::Align(alignof(uint32_t)),
+                                                     "guest.block.eip");
+            }
+            llvm::IRBuilder<> builder(call);
+            value = builder.CreateAdd(base_eip, builder.getInt32(*delta));
+            if (wrap16) value = builder.CreateAnd(value, builder.getInt32(0xffff));
+        }
+        call->replaceAllUsesWith(value);
+        call->eraseFromParent();
+    }
+}
+
 std::optional<bool> KnownBit(llvm::Value* value, unsigned bit, const llvm::SimplifyQuery& query) {
     const auto known = llvm::computeKnownBits(value, query);
     if (known.Zero[bit]) return false;
@@ -417,6 +486,7 @@ std::unique_ptr<llvm::Module> PrepareLLVMBlock(const LLVMOperandTemplates& templ
     if (!templates.IsValid() || key.operations.size() > block_recipe::kMaxOps) return {};
     const bool exact = key.IsExact();
     if (exact && key.operands.size() != key.operations.size()) return {};
+    if (!key.eips.empty() && (!exact || key.eips.size() != key.operations.size())) return {};
     fold_operand_loads &= exact;
     llvm::SmallPtrSet<const llvm::GlobalValue*, 32> kernels;
     std::array<size_t, block_recipe::kMaxOps> slot_offsets;
@@ -488,7 +558,7 @@ std::unique_ptr<llvm::Module> PrepareLLVMBlock(const LLVMOperandTemplates& templ
         const auto& operation = key.operations[slot];
         const auto* source = templates.Get(operation.id, exact);
         auto* target = llvm::dyn_cast_or_null<llvm::Function>(values.lookup(source));
-        if (fold_operand_loads) {
+        if (fold_operand_loads || !key.eips.empty()) {
             // A kernel runs only at its step. The running cursor also flows
             // into exits, so its incoming PHIs need not name that same slot.
             // Give the kernel a direct pointer before inlining its loads.
@@ -500,6 +570,7 @@ std::unique_ptr<llvm::Module> PrepareLLVMBlock(const LLVMOperandTemplates& templ
         if (!target || !InlineLLVMKernel(*call, *target, operation.shape, exact ? &key.operands[slot] : nullptr))
             return {};
     }
+    LowerBlockEipReads(*entry, key, std::span(slot_offsets).first(step_index));
     if (fold_operand_loads) BakeLLVMOperandLoads(*entry, key);
 
     entry->setName(entry_name);

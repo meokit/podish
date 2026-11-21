@@ -43,18 +43,25 @@ struct BoundOperation {
     auto operator<=>(const BoundOperation&) const = default;
 };
 
+struct StepEip {
+    uint32_t next_offset;  // Relative to the first guest instruction of the block.
+    uint32_t branch_width;
+    auto operator<=>(const StepEip&) const = default;
+};
+
 // The presence of operands distinguishes exact keys from generic keys.
 // Generic kernels still bake the mandatory runtime binding.
 struct BlockKeyView {
     LLVMBlockExit exit;
     std::span<const BoundOperation> operations;
     std::span<const DecodedOperandShape> operands;
+    std::span<const StepEip> eips = {};
 
     bool IsExact() const { return !operands.empty(); }
 
     bool operator==(const BlockKeyView& other) const {
         return exit == other.exit && std::ranges::equal(operations, other.operations) &&
-               std::ranges::equal(operands, other.operands);
+               std::ranges::equal(operands, other.operands) && std::ranges::equal(eips, other.eips);
     }
 
     // Keep this field order in sync with extract_linked_block_cache.py.
@@ -65,20 +72,27 @@ struct BlockKeyView {
                                                                 other.operations.begin(), other.operations.end());
             order != 0)
             return order;
-        return std::lexicographical_compare_three_way(operands.begin(), operands.end(), other.operands.begin(),
-                                                      other.operands.end());
+        if (auto order = std::lexicographical_compare_three_way(operands.begin(), operands.end(),
+                                                                other.operands.begin(), other.operands.end());
+            order != 0)
+            return order;
+        return std::lexicographical_compare_three_way(eips.begin(), eips.end(), other.eips.begin(), other.eips.end());
     }
 };
 
 struct Plan {
     std::array<BoundOperation, kMaxOps> operations;
     std::array<DecodedOperandShape, kMaxOps> operands;
+    std::array<StepEip, kMaxOps> eips;
     std::array<HandlerFunc, kMaxOps> replay_handlers;
     size_t covered = 0;
     LLVMBlockExit exit = LLVMBlockExit::Dispatch;
 
     BlockKeyView Key(bool exact) const {
-        return {exit, {operations.data(), covered}, {operands.data(), exact ? covered : 0}};
+        return {exit,
+                {operations.data(), covered},
+                {operands.data(), exact ? covered : 0},
+                {eips.data(), exact ? covered : 0}};
     }
     std::span<const HandlerFunc> ReplayHandlers() const { return {replay_handlers.data(), covered}; }
 };
@@ -90,7 +104,8 @@ bool CanPromoteBlock(EmuState& state, BasicBlock& block);
 LLVMBlockExit FullBlockExit(const BasicBlock& block);
 
 template <typename Ops, typename Redecode>
-bool PlanBlock(Ops&& ops, size_t sentinel, LLVMBlockExit full_exit, bool exact, Redecode redecode, Plan& plan) {
+bool PlanBlock(Ops&& ops, uint32_t start_eip, size_t sentinel, LLVMBlockExit full_exit, bool exact, Redecode redecode,
+               Plan& plan) {
     plan.covered = 0;
     for (const auto& op : ops) {
         if (!CanPlanOp(op)) break;
@@ -101,8 +116,13 @@ bool PlanBlock(Ops&& ops, size_t sentinel, LLVMBlockExit full_exit, bool exact, 
         const auto id = FindOperation(generic, binding, exact);
         if (id == kInvalidOpId) break;
         plan.operations[plan.covered] = {id, binding.shape};
-        // Linked block bundles already serialize the original relative offset.
-        if (exact) plan.operands[plan.covered] = DecodedOperandShape::Read(&generic, /*include_relative_offset=*/true);
+        if (exact) {
+            plan.operands[plan.covered] = DecodedOperandShape::Read(&generic, /*include_relative_offset=*/true);
+            plan.eips[plan.covered] = {
+                op.next_eip - start_eip,
+                GetExtKind(&generic) == ExtKind::ControlFlow ? uint32_t(generic.ext.control.relative_width) : 0,
+            };
+        }
         plan.replay_handlers[plan.covered++] = binding.handler;
     }
     plan.exit = plan.covered == sentinel ? full_exit : LLVMBlockExit::Dispatch;

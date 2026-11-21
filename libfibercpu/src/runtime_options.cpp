@@ -80,10 +80,22 @@ X86_RunContext* X86_CreateRun(const char* args, size_t size, char* error, size_t
 
     // Keep only the final value of each key before validating values. This is
     // also how a start-time value overrides an option saved by run.
-    enum Key { BlockSize, ArenaSize, Mode, Threshold, Workers, Pipeline, FoldOperands, ProfilePath, Count };
+    enum Key {
+        BlockSize,
+        ArenaSize,
+        Mode,
+        Threshold,
+        Workers,
+        Pipeline,
+        FoldOperands,
+        ProfilePath,
+        ProfileSamePage,
+        Count
+    };
     constexpr std::string_view names[] = {
-        "BlockCacheSize",       "JitArenaSize",        "JitMode", "JitHotThreshold", "JitWorkers", "LlvmPipeline",
-        "LlvmFoldOperandLoads", "WeightedProfilePath",
+        "BlockCacheSize",       "JitArenaSize",        "JitMode",
+        "JitHotThreshold",      "JitWorkers",          "LlvmPipeline",
+        "LlvmFoldOperandLoads", "WeightedProfilePath", "WeightedProfileSamePage",
     };
     static_assert(std::size(names) == Count);
     std::optional<std::string_view> values[Count];
@@ -153,6 +165,16 @@ X86_RunContext* X86_CreateRun(const char* args, size_t size, char* error, size_t
     }
     if (options->jit_mode == JitMode::Profile && !values[ProfilePath])
         return fail("JitMode=profile requires WeightedProfilePath");
+    bool profile_same_page = false;
+    if (values[ProfileSamePage]) {
+        const auto value = *values[ProfileSamePage];
+        if (value == "on" || value == "1")
+            profile_same_page = true;
+        else if (value != "off" && value != "0")
+            return fail("WeightedProfileSamePage requires on or off");
+        if (profile_same_page && !values[ProfilePath])
+            return fail("WeightedProfileSamePage requires WeightedProfilePath");
+    }
 
     const bool llvm_requested = (options->jit_mode && options->jit_mode != JitMode::Off) || options->hot_threshold ||
                                 shared.workers || shared.pipeline || shared.fold_operand_loads;
@@ -163,7 +185,7 @@ X86_RunContext* X86_CreateRun(const char* args, size_t size, char* error, size_t
         std::error_code ec;
         run->profile_path = std::filesystem::absolute(std::filesystem::path(*values[ProfilePath]), ec).string();
         if (ec) return fail("WeightedProfilePath: " + ec.message());
-        options->profile = CreateLLVMWeightedProfile();
+        options->profile = CreateLLVMWeightedProfile(profile_same_page);
     }
     if (shared.workers || shared.pipeline || shared.fold_operand_loads || shared.arena_bytes) {
         std::string diagnostic;

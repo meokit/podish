@@ -9,7 +9,7 @@ from pathlib import Path
 from gen_instruction_catalog import CATALOG, llvm_operation_fingerprint, llvm_operation_names, read_catalog
 
 
-MAGIC = b"FIBJLC03"
+MAGIC = b"FIBJLC04"
 MACHO_ARM64_OBJECT = (0xFEEDFACF, 0x0100000C, 0, 1)
 
 
@@ -27,20 +27,23 @@ def read_key(record, operation_count):
     if len(record) < 3:
         raise ValueError("truncated linked cache key")
     exit_kind, exact, count = record[:3]
-    if exit_kind > 2 or exact != 1 or not 1 <= count <= 64 or len(record) != 3 + 20 * count:
+    if exit_kind > 2 or exact != 1 or not 1 <= count <= 64 or len(record) != 3 + 28 * count:
         raise ValueError("invalid linked cache key header")
-    steps = tuple(struct.iter_unpack("<HBB4I", record[3:]))
+    steps = tuple(struct.iter_unpack("<HBB6I", record[3:]))
     operations = tuple(step[:3] for step in steps)
     if any(op >= operation_count or slots not in (1, 2) for op, _, slots in operations):
         raise ValueError("linked cache refers to an unknown operation ID")
-    operands = tuple(step[3:] for step in steps)
-    return exit_kind, exact, operations, operands
+    operands = tuple(step[3:7] for step in steps)
+    eips = tuple(step[7:] for step in steps)
+    if any(width > 3 for _, width in eips):
+        raise ValueError("linked cache has an invalid relative branch width")
+    return exit_kind, exact, operations, operands, eips
 
 
 def read_bundle(path, abi, op_names):
     data = path.read_bytes()
     if not data.startswith(MAGIC):
-        raise ValueError("expected a version 3 linked cache; regenerate it with fibercpu_llvm_cache --linked")
+        raise ValueError("expected a version 4 linked cache; regenerate it with fibercpu_llvm_cache --linked")
     start = len(MAGIC)
     end = start + len(abi)
     if data[start:end] != abi.encode("ascii"):
@@ -82,17 +85,21 @@ def write_build_inputs(output, cpu, entries):
         indexed_keys.append((key, index))
     operations = ["constexpr block_recipe::BoundOperation linked_cache_operations[] = {"]
     operands = ["constexpr DecodedOperandShape linked_cache_operands[] = {"]
+    eips = ["constexpr block_recipe::StepEip linked_cache_eips[] = {"]
     rows = ["constexpr LinkedBlockEntry linked_cache_entries[] = {"]
     offset = 0
-    for (exit_kind, _, ops, shapes), index in sorted(indexed_keys):
+    for (exit_kind, _, ops, shapes, steps), index in sorted(indexed_keys):
         operations.append("    " + ", ".join(f"{{block_recipe::OpId{{{op}}}, {{{modrm}, {slots}}}}}" for op, modrm, slots in ops) + ",")
         for shape in shapes:
             operands.append("    {" + ", ".join(f"0x{field:08x}u" for field in shape) + "},")
+        for next_offset, width in steps:
+            eips.append(f"    {{0x{next_offset:08x}u, {width}}},")
         count = len(ops)
         rows.append(f"    {{{{LLVMBlockExit{{{exit_kind}}}, {{linked_cache_operations + {offset}, {count}}}, "
-                    f"{{linked_cache_operands + {offset}, {count}}}}}, FiberCachedBlock_{index}}},")
+                    f"{{linked_cache_operands + {offset}, {count}}}, "
+                    f"{{linked_cache_eips + {offset}, {count}}}}}, FiberCachedBlock_{index}}},")
         offset += count
-    for block in (operations, operands, rows):
+    for block in (operations, operands, eips, rows):
         table.extend([*block, "};", ""])
     (output / "linked_block_cache.inc").write_text("\n".join(table), encoding="ascii")
 

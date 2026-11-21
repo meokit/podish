@@ -59,6 +59,9 @@ namespace fiberish {
 using RecipeWeights = ankerl::unordered_dense::map<std::string, uint64_t>;
 
 struct WeightedProfile {
+    explicit WeightedProfile(bool same_page) : same_page(same_page) {}
+
+    const bool same_page;
     std::mutex mutex;
     ankerl::unordered_dense::map<const BasicBlock*, std::string> blocks;
     RecipeWeights retired;
@@ -136,6 +139,26 @@ void TrackWeightedBlock(EmuState& state, BasicBlock& block, BlockKeyView key) {
     state.mmu.code_cache().has_weighted_profile = true;
 }
 
+void CollectPendingPageProfile(EmuState& state) {
+    auto* core = state.mmu.core_handle();
+    auto& pending = core->code_cache.pending_page_profile;
+    if (pending.empty()) return;
+    auto snapshot = std::exchange(pending, {});
+    auto& profile = *RunOptions(state)->profile;
+    block_recipe::Plan plan;
+    for (const auto& [block, revision] : snapshot) {
+        if (block->invalidation_revision != revision || !block_recipe::CanPromoteBlock(state, *block)) continue;
+        {
+            std::lock_guard lock(profile.mutex);
+            if (profile.blocks.contains(block)) continue;
+        }
+        const bool planned = block_recipe::PlanBlock(state, *block, true, plan);
+        if (state.mmu.core_handle() != core || core->code_cache.pending_flush) return;
+        if (planned && block->is_valid() && block->invalidation_revision == revision)
+            TrackWeightedBlock(state, *block, plan.Key(true));
+    }
+}
+
 bool AcceptsJobs(uint64_t epoch) {
     return !flush_requested.load(std::memory_order_acquire) && cache_epoch.load(std::memory_order_acquire) == epoch;
 }
@@ -144,13 +167,15 @@ struct BlockKey {
     explicit BlockKey(BlockKeyView key)
         : exit(key.exit),
           operations(key.operations.begin(), key.operations.end()),
-          operands(key.operands.begin(), key.operands.end()) {}
+          operands(key.operands.begin(), key.operands.end()),
+          eips(key.eips.begin(), key.eips.end()) {}
 
-    operator BlockKeyView() const { return {exit, operations, operands}; }
+    operator BlockKeyView() const { return {exit, operations, operands, eips}; }
 
     LLVMBlockExit exit;
     std::vector<block_recipe::BoundOperation> operations;
     std::vector<DecodedOperandShape> operands;
+    std::vector<block_recipe::StepEip> eips;
 };
 
 struct BlockKeyHash {
@@ -162,11 +187,12 @@ struct BlockKeyHash {
         // spans is local to this process; disk records are encoded separately.
         static_assert(std::has_unique_object_representations_v<block_recipe::BoundOperation>);
         static_assert(std::has_unique_object_representations_v<DecodedOperandShape>);
+        static_assert(std::has_unique_object_representations_v<block_recipe::StepEip>);
         const auto hash = [](auto span) {
             return llvm::xxh3_64bits({reinterpret_cast<const uint8_t*>(span.data()), span.size_bytes()});
         };
         return std::rotl(hash(key.operations), static_cast<int>(key.exit)) ^
-               (key.IsExact() ? std::rotl(hash(key.operands), 23) : 0);
+               (key.IsExact() ? std::rotl(hash(key.operands), 23) ^ std::rotl(hash(key.eips), 37) : 0);
     }
 };
 
@@ -747,7 +773,7 @@ struct CompilationJob {
             input = input.subspan(op.len);
             return RedecodeGenericInstruction(instruction, op, generic);
         };
-        const bool planned = block_recipe::PlanBlock(ops, sentinel, exit, exact, redecode, plan);
+        const bool planned = block_recipe::PlanBlock(ops, eip, sentinel, exit, exact, redecode, plan);
         if (!planned || result.expired() || !AcceptsJobs(epoch)) return nullptr;
         return Compiler().FindOrCompile(plan.Key(exact), epoch);
     }
@@ -860,6 +886,7 @@ QueueResult QueueBlock(EmuState* state, LLVMAsyncState& async, BasicBlock* block
         .epoch = LLVMJitCacheEpoch(),
         .exit = block_recipe::FullBlockExit(*block),
         .exact = exact,
+        .eip = block->start_eip(),
     };
     const auto count = std::min(job.sentinel, kMaxOps);
     job.ops.reserve(count);
@@ -1106,7 +1133,33 @@ bool LLVMWeightedProfileEnabled(const EmuState& state) {
     return options && options->profile;
 }
 
-std::shared_ptr<WeightedProfile> CreateLLVMWeightedProfile() { return std::make_shared<WeightedProfile>(); }
+std::shared_ptr<WeightedProfile> CreateLLVMWeightedProfile(bool same_page) {
+    return std::make_shared<WeightedProfile>(same_page);
+}
+
+bool CaptureLLVMWeightedProfilePage(EmuState& state, BasicBlock& hot) {
+    const auto* options = RunOptions(state);
+    if (!options || !options->profile || !options->profile->same_page) return false;
+
+    // Snapshot the membership at the threshold crossing. Recipe construction
+    // can fetch bytes and run callbacks, so leave it to the dispatch boundary.
+    auto& cache = state.mmu.code_cache();
+    auto& pending = cache.pending_page_profile;
+    pending.insert_or_assign(&hot, hot.invalidation_revision);
+    const auto host = state.mmu.try_get_host_page_base(hot.start_eip());
+    if (!host) return true;
+    const auto page = cache.page_to_blocks.find(*host);
+    if (page == cache.page_to_blocks.end()) return true;
+    for (const auto& ref : page->second) {
+        const auto& member = cache.block_entries[ref.block_index];
+        auto* block = member.block;
+        if (!block || !block->is_valid() || !block->has_unfused_handlers || member.cache_key.host_page_base != *host ||
+            (member.cache_key.guest_eip >> 12) != (hot.start_eip() >> 12))
+            continue;
+        pending.insert_or_assign(block, block->invalidation_revision);
+    }
+    return true;
+}
 
 void RetireLLVMWeightedProfile(const mem::CodeCacheState& cache) {
     auto& profile = *cache.run_options->profile;
@@ -1132,7 +1185,7 @@ bool WriteWeightedLLVMProfile(WeightedProfile& profile, const char* path, std::s
     std::vector<ProfileRecipe> recipes;
     recipes.reserve(weights.size());
     for (const auto& [key, weight] : weights) {
-        if (weight) recipes.push_back({key, weight});
+        if (weight || profile.same_page) recipes.push_back({key, std::max(weight, uint64_t{1})});
     }
     std::ranges::sort(recipes, [](const auto& a, const auto& b) {
         return a.weight != b.weight ? a.weight > b.weight : a.key < b.key;
@@ -1207,6 +1260,7 @@ void CompileHotLLVMBlock(EmuState* state, BasicBlock* block) {
 }
 
 void PollLLVMBlockCompilations(EmuState* state) {
+    CollectPendingPageProfile(*state);
     const auto& async = state->mmu.core_handle()->llvm_async;
     if (!async) return;
     if (async->signals->ready.exchange(false, std::memory_order_acquire)) {

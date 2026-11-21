@@ -78,7 +78,7 @@ bool PlanBlock(EmuState& state, const BasicBlock& block, bool exact, Plan& plan)
     const auto ops =
         std::views::iota(size_t{0}, count) | std::views::transform([&](size_t slot) { return block.ReadOp(slot); });
     return PlanBlock(
-        ops, block.inst_count(), FullBlockExit(block), exact,
+        ops, block.start_eip(), block.inst_count(), FullBlockExit(block), exact,
         [&](const DecodedInstruction& op, DecodedInstruction& generic) {
             return RedecodeGenericInstruction(&state, op, generic);
         },

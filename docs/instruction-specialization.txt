@@ -203,8 +203,19 @@ the same recipe are merged across guest MMUs and cache resets in the
 same run. Podish finalizes the run after the scheduler returns and native
 code writes the profile atomically.
 
+WeightedProfileSamePage=on also samples the valid registered blocks starting
+in the hot block's guest page in the same MMU when the threshold is reached.
+Recipe generation runs at the dispatch boundary. Members that can be
+compiled use the same entry counters, with an export weight of one for
+recipes that were registered but never entered. The offline tool still
+compiles independent blocks.
+
 A block key contains the exit and ordered catalog-assigned operation IDs.
-Exact keys include the decoded operand shape for each operation. LLVM
+Exact keys include decoded operand shapes and the relative guest EIP
+layout, including discontinuities introduced by concatenation. Compiled
+handlers derive their guest EIP base from the installed block, so identical
+recipes can share code across guest addresses. The profile and linked bundle
+must be regenerated for the relative EIP key format. LLVM
 templates are indexed by the same IDs. Weighted profiles store each key's
 64-bit entry count in little-endian order before its encoded record.
 The legacy unweighted format, produced using FIBERCPU_LLVM_JIT=profile

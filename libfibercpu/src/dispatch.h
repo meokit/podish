@@ -10,6 +10,10 @@
 
 namespace fiberish {
 
+#if FIBERCPU_LLVM_JIT && !defined(FIBERCPU_LLVM_BLOCK_TEMPLATE)
+bool CaptureLLVMWeightedProfilePage(EmuState& state, BasicBlock& block);
+#endif
+
 // External reference to handlers
 extern void* g_HandlerBase;
 extern HandlerFunc g_Handlers[1024];
@@ -58,9 +62,17 @@ FORCE_INLINE void CountLLVMBlockEntry(EmuState* state, BasicBlock* block, BasicB
     const auto count = chain.llvm_hot_count;
     if (count > 1) {
         block->chain.llvm_hot_count = count - 1;
-    } else if (count == 1 && !state->llvm_hot_block) {
-        block->chain.llvm_hot_count = 0;
-        state->llvm_hot_block = block;
+    } else if (count == 1) {
+#if FIBERCPU_LLVM_JIT && !defined(FIBERCPU_LLVM_BLOCK_TEMPLATE)
+        if (chain.weighted_profile && CaptureLLVMWeightedProfilePage(*state, *block)) {
+            block->chain.llvm_hot_count = 0;
+            return;
+        }
+#endif
+        if (!state->llvm_hot_block) {
+            block->chain.llvm_hot_count = 0;
+            state->llvm_hot_block = block;
+        }
     }
 #else
     (void)state;
@@ -125,7 +137,8 @@ FORCE_INLINE ATTR_PRESERVE_NONE int64_t OpExitBlockImpl(EmuState* RESTRICT state
     FIBERCPU_PIN_ASSUME;
     RecordBlockHandlersUntil(state, op);
     // Group 5's indirect target can use the full guest address range.
-    const uint32_t target_eip = UseBranch ? branch : state->last_block->sentinel_eip;
+    const uint32_t target_eip =
+        UseBranch ? branch : BakeableBlockEip<LLVMBlockEipField::Fallthrough>(op, state->last_block->sentinel_eip);
     ATTR_MUSTTAIL return ResolveBranchTargetInline<0>(state, op, instr_limit, utlb_tags, utlb_addend, target_eip,
                                                       flags_cache FIBERCPU_PIN_RELOAD);
 }
