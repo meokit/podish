@@ -96,6 +96,18 @@ and a block invalidation rejects results for its previous revision.
 FIBERCPU_LLVM_JIT_WORKERS selects 0–8 workers. Set it to 0 for synchronous
 promotion. Profile collection records block recipes synchronously.
 
+The asynchronous scheduler samples recent block visits from the existing
+entry countdown. It ranks a bounded candidate list by visit rate, expected
+dispatch savings over the installed static handlers, and estimated work.
+Older candidates age out before their instructions are copied. The shared
+pool allows an initial burst of 64 ms of compiler CPU and replenishes the
+budget at half of the configured workers' CPU capacity. Completed jobs
+reconcile their reservations with measured thread CPU time.
+
+FIBERCPU_LLVM_JIT_SCHEDULER_TRACE=/path/to/trace.csv
+captures accepted submissions, queue and compiler timings, and block visits
+between JIT installation and invalidation or cache retirement.
+
 Podish passes CPU options to libfibercpu
 ----------------------------------------
 Use -XX:Name=Value or repeat --cpu-opt Name=Value before the guest command.
@@ -118,8 +130,10 @@ such as k, m and g.
 spec with both old JIT limits migrates to the smaller nonzero size.
 
 JitMode selects off, exact, generic or profile for the run. JitHotThreshold
-sets its block admission count (1 through 65535). These options override
-the equivalent Host environment settings. JitWorkers accepts 0 through 8.
+sets the entry count before an asynchronous block is considered for ranking
+(1 through 65535). Synchronous compilation and profiling use it as the
+admission count. These options override the equivalent Host environment
+settings. JitWorkers accepts 0 through 8.
 LlvmPipeline accepts an LLVM IR optimization level (O0, O1, O2, O3, Os, Oz)
 or a textual pass pipeline. The default is O2 with dead template definitions
 removed early online. LlvmFoldOperandLoads=on enables extra folding of

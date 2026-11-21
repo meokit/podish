@@ -73,7 +73,7 @@ static int GetImmLength(uint8_t type, const DecodedInstruction* op) {
 static bool UsesControlFlowCacheStorage(uint16_t handler_index) {
     switch (handler_index) {
 #include "block_link_opcodes.inc"
-            return true;
+        return true;
         default:
             return false;
     }
@@ -1105,6 +1105,12 @@ DecodedInstruction BasicBlock::ReadOp(size_t slot) const {
 
 void BasicBlock::Invalidate() {
     if (!is_valid()) return;
+#if FIBERCPU_LLVM_JIT
+    if (chain.jit_execution_profile) {
+        TraceLLVMJitRetirement(*this);
+        chain.jit_execution_profile = false;
+    }
+#endif
     set_valid(false);
     ++invalidation_revision;
     // No unlinking needed because chained exits validate the cached block header on dispatch.

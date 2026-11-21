@@ -12,10 +12,13 @@
 #include <atomic>
 #include <bit>
 #include <charconv>
+#include <chrono>
 #include <cmath>
 #include <condition_variable>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <ctime>
 #include <deque>
 #include <limits>
 #include <memory>
@@ -47,6 +50,7 @@
 #include <strings.h>
 
 #include "float80.h"
+#include "operand_specialization.h"
 #include "ops.h"
 #include "ops/ops_control_impl.h"
 
@@ -579,9 +583,37 @@ BlockCompiler& Compiler() {
     return *storage.compiler;
 }
 
-constexpr size_t kMaxPendingPerCache = 32;
-constexpr size_t kMaxQueued = 64;
-constexpr uint16_t kRetryHotCount = 256;
+constexpr size_t kMaxCandidates = 128;
+constexpr uint16_t kCandidateCounter = UINT16_MAX;
+constexpr uint16_t kMinCandidateRetryCount = 1024;
+using JitClock = std::chrono::steady_clock;
+using namespace std::chrono_literals;
+constexpr auto kSampleInterval = 2ms;
+constexpr auto kCandidateExpiry = 60ms;
+
+uint64_t Ns(JitClock::duration duration) {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(duration).count();
+}
+
+std::atomic<uint64_t> traced_worker_cpu_ns{0};
+void ReportJitSchedulerTotals();
+
+FILE* JitSchedulerTrace() {
+    static FILE* trace = []() -> FILE* {
+        const char* path = std::getenv("FIBERCPU_LLVM_JIT_SCHEDULER_TRACE");
+        if (!path || !*path) return nullptr;
+        auto* file = std::fopen(path, "w");
+        if (!file) std::perror("LLVM JIT scheduler trace");
+        if (file) std::atexit(ReportJitSchedulerTotals);
+        return file;
+    }();
+    return trace;
+}
+
+void ReportJitSchedulerTotals() {
+    std::fprintf(JitSchedulerTrace(), "worker_cpu_ns,%llu\n",
+                 (unsigned long long)traced_worker_cpu_ns.load(std::memory_order_relaxed));
+}
 
 struct AsyncResult {
     std::atomic<bool> done{false};
@@ -594,6 +626,20 @@ struct PendingBlock {
     BasicBlock* block;
     uint32_t eip;
     uint16_t revision;
+};
+
+struct HotCandidate {
+    BasicBlock* block;
+    uint32_t eip;
+    uint16_t revision;
+    float benefit_per_cost;
+    JitClock::time_point sampled;
+    JitClock::time_point last_active;
+    uint16_t counter = kCandidateCounter;
+    float rate = 1;
+    bool sampled_once = false;
+
+    float Score() const { return rate * benefit_per_cost; }
 };
 
 class AsyncSignals {
@@ -629,6 +675,9 @@ public:
 struct LLVMAsyncState {
     std::shared_ptr<AsyncSignals> signals = std::make_shared<AsyncSignals>();
     std::vector<PendingBlock> pending;
+    std::vector<HotCandidate> candidates;
+    JitClock::time_point next_sample{};
+    unsigned poll_ticks = 0;
 
     ~LLVMAsyncState() {
         // Prevent publication and skip queued work. A final MMU release must
@@ -643,6 +692,8 @@ void CancelPendingLLVMBlockCompilations(LLVMAsyncState& state) {
     // Queued jobs hold weak result pointers. The same MMU's shutdown token
     // stays live so an eventual destroy can drain old and new in-flight jobs.
     state.pending.clear();
+    state.candidates.clear();
+    state.next_sample = {};
 }
 
 namespace {
@@ -656,10 +707,40 @@ struct CompilationJob {
     uint64_t epoch;
     LLVMBlockExit exit;
     bool exact;
+    JitClock::time_point queued{};
+    int64_t reserved_cpu_ns = 0;
+    uintptr_t mmu_identity = 0;
+    uint32_t eip = 0;
+    uint16_t revision = 0;
 
-    void Compile(AsyncSignals& control) {
-        if (result.expired() || !AcceptsJobs(epoch)) return;
+    uint64_t Run() {
+        auto control = signals.lock();
+        if (!control || !control->Begin()) return 0;
+        const bool tracing = queued != JitClock::time_point{};
+        const auto start = tracing ? JitClock::now() : JitClock::time_point{};
+        const auto cpu_start = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID);
         block_recipe::Plan plan;
+        const auto entry = Compile(plan);
+        const auto cpu_ns = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) - cpu_start;
+        if (tracing) {
+            traced_worker_cpu_ns.fetch_add(cpu_ns, std::memory_order_relaxed);
+            std::fprintf(JitSchedulerTrace(), "job,%llu,%u,%u,%llu,%llu,%llu,%zu\n", (unsigned long long)mmu_identity,
+                         eip, revision, (unsigned long long)Ns(start - queued),
+                         (unsigned long long)Ns(JitClock::now() - start), (unsigned long long)cpu_ns,
+                         entry ? plan.covered : 0);
+        }
+        if (auto output = result.lock()) {
+            output->entry = entry;
+            if (entry) output->replay.assign(plan.ReplayHandlers().begin(), plan.ReplayHandlers().end());
+            output->done.store(true, std::memory_order_release);
+            control->ready.store(true, std::memory_order_release);
+        }
+        control->End();
+        return cpu_ns;
+    }
+
+    HandlerFunc Compile(block_recipe::Plan& plan) {
+        if (result.expired() || !AcceptsJobs(epoch)) return nullptr;
         auto input = std::span<const uint8_t>(bytes);
         const auto redecode = [&](const DecodedInstruction& op, DecodedInstruction& generic) {
             const auto instruction = input.first(op.len);
@@ -667,21 +748,8 @@ struct CompilationJob {
             return RedecodeGenericInstruction(instruction, op, generic);
         };
         const bool planned = block_recipe::PlanBlock(ops, sentinel, exit, exact, redecode, plan);
-        if (result.expired() || !AcceptsJobs(epoch)) return;
-        const auto entry = planned ? Compiler().FindOrCompile(plan.Key(exact), epoch) : nullptr;
-        if (auto output = result.lock()) {
-            output->entry = entry;
-            if (entry) output->replay.assign(plan.ReplayHandlers().begin(), plan.ReplayHandlers().end());
-            output->done.store(true, std::memory_order_release);
-            control.ready.store(true, std::memory_order_release);
-        }
-    }
-
-    void Run() {
-        auto control = signals.lock();
-        if (!control || !control->Begin()) return;
-        Compile(*control);
-        control->End();
+        if (!planned || result.expired() || !AcceptsJobs(epoch)) return nullptr;
+        return Compiler().FindOrCompile(plan.Key(exact), epoch);
     }
 };
 
@@ -690,8 +758,23 @@ class CompilationPool {
     std::condition_variable queued_;
     std::deque<CompilationJob> jobs_;
     bool stopping_ = false;
+    const unsigned worker_count_;
+    // Spend half of the available worker CPU over time, while allowing a
+    // short burst to compile the first hot loop on both workers.
+    static constexpr int64_t kBurstNs = 64'000'000;
+    int64_t credit_ns_ = kBurstNs;
+    int64_t job_estimate_ns_ = 16'000'000;
+    JitClock::time_point budget_updated_ = JitClock::now();
     // Destroy these first so no worker can still touch the queue.
     std::vector<std::jthread> workers_;
+
+    bool HasCredit() {
+        const auto now = JitClock::now();
+        const auto refill = std::min<int64_t>(Ns(now - budget_updated_), kBurstNs * 2);
+        credit_ns_ = std::min(kBurstNs, credit_ns_ + refill * worker_count_ / 2);
+        budget_updated_ = now;
+        return credit_ns_ >= job_estimate_ns_ && jobs_.size() < worker_count_;
+    }
 
     void Run() {
         for (;;) {
@@ -703,12 +786,18 @@ class CompilationPool {
                 job = std::move(jobs_.front());
                 jobs_.pop_front();
             }
-            job.Run();
+            const auto cpu_ns = job.Run();
+            std::lock_guard lock(mutex_);
+            credit_ns_ = std::min(kBurstNs, credit_ns_ + job.reserved_cpu_ns - int64_t(cpu_ns));
+            if (cpu_ns) {
+                job_estimate_ns_ =
+                    std::clamp((7 * job_estimate_ns_ + int64_t(cpu_ns)) / 8, int64_t{1'000'000}, kBurstNs);
+            }
         }
     }
 
 public:
-    explicit CompilationPool(unsigned count) {
+    explicit CompilationPool(unsigned count) : worker_count_(count) {
         workers_.reserve(count);
         for (unsigned i = 0; i < count; ++i) workers_.emplace_back([this] { Run(); });
     }
@@ -721,14 +810,17 @@ public:
         queued_.notify_all();
     }
 
+    bool CanSubmit() {
+        std::unique_lock lock(mutex_, std::try_to_lock);
+        return lock.owns_lock() && HasCredit();
+    }
+
     bool Submit(CompilationJob job) {
         {
             std::unique_lock lock(mutex_, std::try_to_lock);
-            if (!lock.owns_lock()) return false;
-            if (jobs_.size() == kMaxQueued) {
-                std::erase_if(jobs_, [](const CompilationJob& queued) { return queued.result.expired(); });
-                if (jobs_.size() == kMaxQueued) return false;
-            }
+            if (!lock.owns_lock() || !HasCredit()) return false;
+            job.reserved_cpu_ns = job_estimate_ns_;
+            credit_ns_ -= job.reserved_cpu_ns;
             jobs_.push_back(std::move(job));
         }
         queued_.notify_one();
@@ -755,19 +847,15 @@ void FinishPendingFlush() {
     if (flush_requested.load(std::memory_order_acquire)) Compiler().ResetGeneration();
 }
 
-void QueueBlock(EmuState* state, BasicBlock* block, bool exact) {
-    auto& async = state->mmu.core_handle()->llvm_async;
-    if (!async) async = std::make_shared<LLVMAsyncState>();
-    if (async->pending.size() == kMaxPendingPerCache) {
-        block->chain.llvm_hot_count = kRetryHotCount;
-        return;
-    }
+enum class QueueResult { Submitted, Retry, Invalid };
+
+QueueResult QueueBlock(EmuState* state, LLVMAsyncState& async, BasicBlock* block, bool exact) {
     auto result = std::make_shared<AsyncResult>();
     CompilationJob job{
         .ops = {},
         .bytes = {},
         .result = result,
-        .signals = async->signals,
+        .signals = async.signals,
         .sentinel = block->inst_count(),
         .epoch = LLVMJitCacheEpoch(),
         .exit = block_recipe::FullBlockExit(*block),
@@ -781,16 +869,154 @@ void QueueBlock(EmuState* state, BasicBlock* block, bool exact) {
         if (!block_recipe::CanPlanOp(op)) break;
         const auto offset = job.bytes.size();
         job.bytes.resize(offset + op.len);
-        if (!CopyDecodedInstructionBytes(state, op, std::span(job.bytes).subspan(offset))) return;
+        if (!CopyDecodedInstructionBytes(state, op, std::span(job.bytes).subspan(offset))) return QueueResult::Invalid;
         op.handler = nullptr;
         job.ops.push_back(op);
     }
-    if (job.ops.empty()) return;
-    if (!Workers().Submit(std::move(job))) {
-        block->chain.llvm_hot_count = kRetryHotCount;
-        return;
+    if (job.ops.empty()) return QueueResult::Invalid;
+    auto* trace = JitSchedulerTrace();
+    if (trace) {
+        job.queued = JitClock::now();
+        job.mmu_identity = state->mmu.core_handle()->identity;
+        job.eip = block->start_eip();
+        job.revision = block->invalidation_revision;
     }
-    async->pending.push_back({std::move(result), block, block->start_eip(), block->invalidation_revision});
+    if (!Workers().Submit(std::move(job))) {
+        return QueueResult::Retry;
+    }
+    async.pending.push_back({std::move(result), block, block->start_eip(), block->invalidation_revision});
+    if (trace)
+        std::fprintf(trace, "submit,%llu,%u,%u\n", (unsigned long long)state->mmu.core_handle()->identity,
+                     block->start_eip(), block->invalidation_revision);
+    return QueueResult::Submitted;
+}
+
+float EstimateBenefit(const BasicBlock& block, bool exact) {
+    // Estimate from the published scalar identities. Native variants without
+    // LLVM kernels can still have a supported generic fallback.
+    static const auto generic_ids = [] {
+        ankerl::unordered_dense::map<HandlerFunc, uint32_t> ids;
+        for (const auto& variant : InstructionVariantCatalog()) {
+            if (!variant.is_fallback && variant.opcode < 512) {
+                ids.try_emplace(reinterpret_cast<HandlerFunc>(variant.handler),
+                                FindScalarTrainingId(g_Handlers[variant.opcode]));
+            }
+        }
+        return ids;
+    }();
+    unsigned covered = 0;
+    unsigned memory_ops = 0;
+    const auto* handlers = block.UnfusedHandlers();
+    for (; covered < block.inst_count(); ++covered) {
+        const auto decoded = block.ReadOp(covered);
+        if (!block_recipe::CanPlanOp(decoded)) break;
+        BoundScalarHandler binding{nullptr, FindScalarTrainingId(handlers[covered]), {}};
+        if (block_recipe::FindOperation(decoded, binding, exact) == block_recipe::kInvalidOpId) {
+            const auto alias = generic_ids.find(handlers[covered]);
+            if (alias == generic_ids.end()) break;
+            binding.id = alias->second;
+            if (block_recipe::FindOperation(decoded, binding, exact) == block_recipe::kInvalidOpId) break;
+        }
+        memory_ops += HasMem(&decoded);
+    }
+    unsigned dispatches = 0;
+    for (unsigned slot = 0; slot < covered;) {
+        unsigned width = 1;
+#if FIBERCPU_LOWER_OPERANDS
+        width = BakedFusionWidth(block.LogicalOp(slot)->handler);
+#endif
+        if (slot + width > covered) break;
+        ++dispatches;
+        slot += width;
+    }
+    const bool whole_block =
+        covered == block.inst_count() && block_recipe::FullBlockExit(block) != LLVMBlockExit::Dispatch;
+    const unsigned saved = dispatches - (dispatches && !whole_block);
+    // A small residual value permits wins from register/operand folding even
+    // when the static interpreter already has a single fused dispatch.
+    return float(1 + 4 * saved + covered / 4) / (8 + covered + 2 * memory_ops);
+}
+
+void RefreshCandidate(HotCandidate& candidate, JitClock::time_point now) {
+    const auto counter = candidate.block->chain.llvm_hot_count;
+    const auto visits = candidate.counter >= counter ? unsigned(candidate.counter) - counter : 0u;
+    candidate.counter = counter;
+    if (visits) candidate.last_active = now;
+    const auto window = std::max(1ms, std::chrono::duration_cast<std::chrono::milliseconds>(now - candidate.sampled));
+    const float current = float(visits) / window.count();
+    candidate.rate = 0.5f * (candidate.rate + current);
+    candidate.sampled = now;
+    candidate.sampled_once = true;
+}
+
+void ScheduleCandidates(EmuState* state, LLVMAsyncState& async, JitClock::time_point now) {
+    if (async.candidates.empty() || now < async.next_sample || state->mmu.code_cache_flush_pending()) return;
+    async.next_sample = now + kSampleInterval;
+    const auto retry = std::max(kMinCandidateRetryCount, LLVMJitHotThreshold(*state));
+    std::erase_if(async.candidates, [&](HotCandidate& candidate) {
+        auto* block = state->mmu.lookup_cached_block(candidate.eip);
+        if (block != candidate.block || !block->is_valid()) return true;
+        if (block->invalidation_revision != candidate.revision) {
+            if (block->entry == block->FirstOp()->handler) block->chain.llvm_hot_count = retry;
+            return true;
+        }
+        RefreshCandidate(candidate, now);
+        if (now - candidate.last_active < kCandidateExpiry) return false;
+        block->chain.llvm_hot_count = retry;
+        return true;
+    });
+
+    const bool exact = RuntimeMode(*state) == JitMode::Exact;
+    while (!async.candidates.empty() && async.pending.size() < WorkerCount() && Workers().CanSubmit()) {
+        auto best = std::ranges::max_element(async.candidates, {}, &HotCandidate::Score);
+        auto* block = best->block;
+        if (!block_recipe::CanPromoteBlock(*state, *block)) {
+            async.candidates.erase(best);
+            continue;
+        }
+        const auto result = QueueBlock(state, async, block, exact);
+        // The executable fetch may request a cache flush.
+        if (state->mmu.code_cache_flush_pending()) return;
+        if (result == QueueResult::Retry) break;
+        block->chain.llvm_hot_count = 0;
+        async.candidates.erase(best);
+    }
+}
+
+void ObserveHotBlock(EmuState* state, BasicBlock* block, bool exact) {
+    auto& async = state->mmu.core_handle()->llvm_async;
+    if (!async) async = std::make_shared<LLVMAsyncState>();
+    if (std::ranges::any_of(async->pending, [&](const PendingBlock& item) {
+            return item.block == block && item.revision == block->invalidation_revision;
+        }))
+        return;
+    const auto now = JitClock::now();
+    auto existing = std::ranges::find(async->candidates, block, &HotCandidate::block);
+    if (existing != async->candidates.end()) {
+        if (existing->revision == block->invalidation_revision) {
+            RefreshCandidate(*existing, now);
+            block->chain.llvm_hot_count = existing->counter = kCandidateCounter;
+            return;
+        }
+        async->candidates.erase(existing);
+    }
+    if (async->candidates.size() == kMaxCandidates) {
+        const auto retry = std::max(kMinCandidateRetryCount, LLVMJitHotThreshold(*state));
+        auto weakest = std::ranges::min_element(async->candidates, {}, &HotCandidate::Score);
+        // Give blocks that just arrived one window to establish a rate.
+        if (weakest->Score() > 1.f || !weakest->sampled_once) {
+            block->chain.llvm_hot_count = retry;
+            return;
+        }
+        auto* old = state->mmu.lookup_cached_block(weakest->eip);
+        if (old == weakest->block && old->is_valid() && old->invalidation_revision == weakest->revision)
+            old->chain.llvm_hot_count = retry;
+        async->candidates.erase(weakest);
+    }
+    block->chain.llvm_hot_count = kCandidateCounter;
+    async->candidates.push_back(
+        {block, block->start_eip(), block->invalidation_revision, EstimateBenefit(*block, exact), now, now});
+    ScheduleCandidates(state, *async, now);
 }
 
 }  // namespace
@@ -962,7 +1188,7 @@ void CompileHotLLVMBlock(EmuState* state, BasicBlock* block) {
     if (mode == JitMode::Off) return;
     const bool exact = mode != JitMode::Generic;
     if ((mode == JitMode::Exact || mode == JitMode::Generic) && WorkerCount()) {
-        QueueBlock(state, block, exact);
+        ObserveHotBlock(state, block, exact);
         return;
     }
     block_recipe::Plan plan;
@@ -982,18 +1208,41 @@ void CompileHotLLVMBlock(EmuState* state, BasicBlock* block) {
 
 void PollLLVMBlockCompilations(EmuState* state) {
     const auto& async = state->mmu.core_handle()->llvm_async;
-    if (!async || !async->signals->ready.exchange(false, std::memory_order_acquire)) return;
-    std::erase_if(async->pending, [&](const PendingBlock& candidate) {
-        if (!candidate.result->done.load(std::memory_order_acquire)) return false;
-        auto* block = state->mmu.lookup_cached_block(candidate.eip);
-        if (block != candidate.block) return true;
-        if (block->invalidation_revision != candidate.revision) {
-            if (block->entry == block->FirstOp()->handler) block->chain.llvm_hot_count = 1;
-        } else if (candidate.result->entry && block_recipe::CanPromoteBlock(*state, *block)) {
-            block_recipe::InstallBlockHandler(*block, candidate.result->replay, candidate.result->entry);
-        }
-        return true;
-    });
+    if (!async) return;
+    if (async->signals->ready.exchange(false, std::memory_order_acquire)) {
+        std::erase_if(async->pending, [&](const PendingBlock& candidate) {
+            if (!candidate.result->done.load(std::memory_order_acquire)) return false;
+            auto* trace = JitSchedulerTrace();
+            auto* block = state->mmu.lookup_cached_block(candidate.eip);
+            if (block != candidate.block) return true;
+            if (block->invalidation_revision != candidate.revision) {
+                if (block->entry == block->FirstOp()->handler) block->chain.llvm_hot_count = 1;
+            } else if (candidate.result->entry && block_recipe::CanPromoteBlock(*state, *block)) {
+                block_recipe::InstallBlockHandler(*block, candidate.result->replay, candidate.result->entry);
+                if (trace) {
+                    state->mmu.code_cache().has_jit_trace = true;
+                    block->chain.jit_execution_profile = true;
+                    std::fprintf(trace, "install,%p,%u,%u,%llu\n", static_cast<void*>(block), candidate.eip,
+                                 candidate.revision, (unsigned long long)block->exec_count);
+                }
+            }
+            return true;
+        });
+    }
+    if (!async->candidates.empty() && (++async->poll_ticks & 63) == 0)
+        ScheduleCandidates(state, *async, JitClock::now());
+}
+
+void TraceLLVMJitRetirement(const BasicBlock& block) {
+    if (auto* trace = JitSchedulerTrace())
+        std::fprintf(trace, "retire,%p,%u,%u,%llu\n", static_cast<const void*>(&block), block.canonical_start_eip(),
+                     block.invalidation_revision, (unsigned long long)block.exec_count);
+}
+
+void RetireLLVMJitTrace(const mem::CodeCacheState& cache) {
+    for (const auto* block : cache.all_blocks) {
+        if (block->chain.jit_execution_profile) TraceLLVMJitRetirement(*block);
+    }
 }
 
 int BuildLinkedLLVMBlockCache(const char* profile_path, const char* cache_path, uint32_t limit, const char* opt_level,

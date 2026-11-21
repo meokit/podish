@@ -17,7 +17,8 @@ extern HandlerFunc g_Handlers[1024];
 #ifdef FIBERCPU_ENABLE_HANDLER_PROFILE
 FORCE_INLINE void RecordBlockHandlersUntil(EmuState* state, const DecodedOp* stop_op) {
     if (!state->current_block_head) return;
-    for (const DecodedOp* current = state->current_block_head; current != stop_op; current = state->last_block->NextOp(current)) {
+    for (const DecodedOp* current = state->current_block_head; current != stop_op;
+         current = state->last_block->NextOp(current)) {
         state->handler_exec_counts[reinterpret_cast<uintptr_t>(current->handler)]++;
     }
 }
@@ -45,15 +46,14 @@ extern ATTR_PRESERVE_NONE int64_t ResolveBranchTargetSlowLink(EmuState* RESTRICT
                                                               mem::MicroTlbAbiWord utlb_addend, uint32_t branch,
                                                               uint64_t flags_cache FIBERCPU_PIN_PARAMS);
 extern ATTR_PRESERVE_NONE int64_t ResolveBranchTargetSlowDoubleSlot(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                                    int64_t instr_limit,
-                                                                    mem::MicroTlbAbiWord utlb_tags,
+                                                                    int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags,
                                                                     mem::MicroTlbAbiWord utlb_addend, uint32_t branch,
                                                                     uint64_t flags_cache FIBERCPU_PIN_PARAMS);
 
 FORCE_INLINE void CountLLVMBlockEntry(EmuState* state, BasicBlock* block, BasicBlockChainPrefix chain) {
 #if FIBERCPU_BLOCK_COMPILATION
 #if FIBERCPU_LLVM_JIT && !defined(FIBERCPU_ENABLE_BLOCK_PROFILE) && !defined(FIBERCPU_ENABLE_HANDLER_PROFILE)
-    if (chain.weighted_profile) ++block->exec_count;
+    if (chain.weighted_profile || chain.jit_execution_profile) ++block->exec_count;
 #endif
     const auto count = chain.llvm_hot_count;
     if (count > 1) {
@@ -113,7 +113,7 @@ FORCE_INLINE ATTR_PRESERVE_NONE int64_t ResolveBranchTargetInline(EmuState* REST
                                                          flags_cache FIBERCPU_PIN_RELOAD);
     } else {
         ATTR_MUSTTAIL return ResolveBranchTargetSlowDoubleSlot(state, op, instr_limit, utlb_tags, utlb_addend,
-                                                                target_eip, flags_cache FIBERCPU_PIN_RELOAD);
+                                                               target_eip, flags_cache FIBERCPU_PIN_RELOAD);
     }
 }
 
@@ -126,8 +126,8 @@ FORCE_INLINE ATTR_PRESERVE_NONE int64_t OpExitBlockImpl(EmuState* RESTRICT state
     RecordBlockHandlersUntil(state, op);
     // Group 5's indirect target can use the full guest address range.
     const uint32_t target_eip = UseBranch ? branch : state->last_block->sentinel_eip;
-    ATTR_MUSTTAIL return ResolveBranchTargetInline<0>(state, op, instr_limit, utlb_tags, utlb_addend,
-                                                                  target_eip, flags_cache FIBERCPU_PIN_RELOAD);
+    ATTR_MUSTTAIL return ResolveBranchTargetInline<0>(state, op, instr_limit, utlb_tags, utlb_addend, target_eip,
+                                                      flags_cache FIBERCPU_PIN_RELOAD);
 }
 
 template <LogicFunc Live, LogicFunc Dead>
@@ -225,12 +225,12 @@ ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState* RESTRICT state, DecodedOp* 
                                                flags_cache FIBERCPU_PIN_RELOAD);
         case LogicFlow::ExitToBranch:
             RecordBlockHandlersThrough(state, op);
-            ATTR_MUSTTAIL return ResolveBranchTargetInline<1>(
-                state, op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
+            ATTR_MUSTTAIL return ResolveBranchTargetInline<1>(state, op, instr_limit, utlb_tags, utlb_addend, branch,
+                                                              flags_cache FIBERCPU_PIN_RELOAD);
         case LogicFlow::ExitToBranchSingleSlot:
             RecordBlockHandlersThrough(state, op);
-            ATTR_MUSTTAIL return ResolveBranchTargetInline<0>(
-                state, op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
+            ATTR_MUSTTAIL return ResolveBranchTargetInline<0>(state, op, instr_limit, utlb_tags, utlb_addend, branch,
+                                                              flags_cache FIBERCPU_PIN_RELOAD);
         default:
             FIBERCPU_PIN_COMMIT(state);
             CommitFlagsCache(state, flags_cache);

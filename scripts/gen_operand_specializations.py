@@ -94,6 +94,10 @@ HandlerFunc UnfuseOperandHandler(HandlerFunc handler) {
     const auto* entry = FindBakedFusion(handler);
     return entry ? entry->first : handler;
 }
+unsigned BakedFusionWidth(HandlerFunc handler) {
+    const auto* entry = FindBakedFusion(handler);
+    return entry ? entry->width : 1;
+}
 }  // namespace fiberish
 """,
     ]

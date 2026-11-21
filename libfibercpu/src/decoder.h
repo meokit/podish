@@ -352,7 +352,8 @@ constexpr bool HasBranchLinkSlot(uint8_t metadata) {
 }
 
 constexpr bool HasExtraOperandSlot(uint8_t metadata, uint8_t prefixes, uint32_t immediate) {
-    return HasBranchLinkSlot(metadata) || compact_imm::NeedsSeparateSlot(metadata & Meta::has_mem_mask, prefixes, immediate);
+    return HasBranchLinkSlot(metadata) ||
+           compact_imm::NeedsSeparateSlot(metadata & Meta::has_mem_mask, prefixes, immediate);
 }
 
 struct alignas(16) DecodedOp {
@@ -402,7 +403,9 @@ struct alignas(16) DecodedOp {
     FORCE_INLINE bool HasMemory() const { return payload & kHasMemory; }
     FORCE_INLINE bool HasMemoryImmediate() const { return payload & kHasMemoryImmediate; }
     FORCE_INLINE bool HasCompactImmediate() const { return (payload & (kHasMemory | kHasModRM)) == kHasMemory; }
-    FORCE_INLINE bool HasBranchOperands() const { return (payload & (kBranchTag | kHasMemory | kHasModRM)) == kBranchTag; }
+    FORCE_INLINE bool HasBranchOperands() const {
+        return (payload & (kBranchTag | kHasMemory | kHasModRM)) == kBranchTag;
+    }
     FORCE_INLINE ExtKind GetExtKind() const {
         if (HasMemory()) return ExtKind::Data;
         if (HasBranchOperands()) return ExtKind::ControlFlow;
@@ -501,7 +504,8 @@ struct BasicBlockChainPrefix {
     uint64_t inst_count : 8;
     uint64_t valid : 1;
     uint64_t weighted_profile : 1;
-    uint64_t reserved : 6;
+    uint64_t jit_execution_profile : 1;
+    uint64_t reserved : 5;
     uint64_t llvm_hot_count : 16;
 };
 
@@ -590,15 +594,12 @@ struct alignas(16) BasicBlock {
         }
         return next;
     }
-    FORCE_INLINE DecodedOp* NextOp(DecodedOp* op) {
-        return const_cast<DecodedOp*>(std::as_const(*this).NextOp(op));
-    }
+    FORCE_INLINE DecodedOp* NextOp(DecodedOp* op) { return const_cast<DecodedOp*>(std::as_const(*this).NextOp(op)); }
 
     // Scalar handlers and PC offsets are indexed by guest instruction, never data slot.
     HandlerFunc* UnfusedHandlers() { return const_cast<HandlerFunc*>(std::as_const(*this).UnfusedHandlers()); }
     const HandlerFunc* UnfusedHandlers() const {
-        const size_t offset = HasDataSlots() ? DataSlotMaskOffset() + sizeof(BlockDataSlotMask)
-                                             : SlotsEndOffset();
+        const size_t offset = HasDataSlots() ? DataSlotMaskOffset() + sizeof(BlockDataSlotMask) : SlotsEndOffset();
         return reinterpret_cast<const HandlerFunc*>(reinterpret_cast<const std::byte*>(this) + offset);
     }
 

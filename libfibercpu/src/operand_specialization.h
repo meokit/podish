@@ -13,6 +13,7 @@ namespace fiberish {
 HandlerFunc CanonicalOperandHandler(HandlerFunc handler);
 HandlerFunc UnfuseOperandHandler(HandlerFunc handler);
 HandlerFunc LowerFusionOperandHandler(const DecodedInstruction* op, HandlerFunc handler);
+unsigned BakedFusionWidth(HandlerFunc handler);
 
 struct ProfileOperandShapeEntry {
     HandlerFunc original;
