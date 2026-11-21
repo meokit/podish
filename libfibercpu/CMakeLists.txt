@@ -1024,6 +1024,11 @@ if(FIBERCPU_TEST_SPECIALIZATION_INDEX)
         add_test(NAME llvm_block_async_folded COMMAND llvm_block_test async)
         set_tests_properties(llvm_block_async_folded PROPERTIES ENVIRONMENT
             "FIBERCPU_LLVM_JIT=1;FIBERCPU_LLVM_JIT_HOT_THRESHOLD=1;FIBERCPU_LLVM_JIT_WORKERS=2;FIBERCPU_LLVM_FOLD_OPERAND_LOADS=1")
+        foreach(_region_workers 0 2)
+            add_test(NAME llvm_page_region_${_region_workers} COMMAND llvm_block_test region)
+            set_tests_properties(llvm_page_region_${_region_workers} PROPERTIES ENVIRONMENT
+                "FIBERCPU_LLVM_JIT=region;FIBERCPU_LLVM_JIT_HOT_THRESHOLD=1;FIBERCPU_LLVM_JIT_WORKERS=${_region_workers};FIBERCPU_LLVM_FOLD_OPERAND_LOADS=1;FIBERCPU_LINKED_BLOCK_CACHE=0")
+        endforeach()
         set(_weighted_test_profile "${CMAKE_CURRENT_BINARY_DIR}/llvm-weighted-block-test.profile")
         add_test(NAME llvm_cpu_run_options COMMAND llvm_block_test options "${_weighted_test_profile}")
         set_tests_properties(llvm_cpu_run_options PROPERTIES FIXTURES_SETUP llvm_weighted_profile

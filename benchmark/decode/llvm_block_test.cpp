@@ -23,6 +23,10 @@
 
 #include <unistd.h>
 
+#if FIBERCPU_LLVM_JIT
+extern "C" int X86_InternalMapManagedPage(EmuState*, uint32_t, void*, uint8_t);
+#endif
+
 namespace {
 
 constexpr uint32_t code_address = 0x10000;
@@ -1138,6 +1142,71 @@ bool VerifyCpuRunOptions(const char* path) {
 }
 #endif
 
+#if FIBERCPU_LLVM_JIT
+bool VerifyPageRegion() {
+    constexpr uint32_t first = code_address;
+    constexpr uint32_t second = first + 32;
+    constexpr uint32_t relocated = 0x30000;
+    constexpr uint8_t a_code[] = {0x8b, 0x0a, 0x8d, 0x40, 1, 0xeb, uint8_t(second - first - 7)};
+    constexpr uint8_t b_code[] = {0x8d, 0x40, 2, 0xeb, uint8_t(first - second - 5)};
+    alignas(4096) std::array<uint8_t, 4096> bytes{};
+    std::copy(std::begin(a_code), std::end(a_code), bytes.begin());
+    std::copy(std::begin(b_code), std::end(b_code), bytes.begin() + (second - first));
+    State state{X86_CreateWithOptions(X86_CREATE_NO_FATAL_SIGNAL_HANDLERS), X86_Destroy};
+    if (!X86_InternalMapManagedPage(state.get(), first, bytes.data(), 5) ||
+        !X86_InternalMapManagedPage(state.get(), relocated, bytes.data(), 5))
+        return false;
+    X86_MemMap(state.get(), data_address, 4096, 3);
+    X86_RegWrite(state.get(), 2, data_address);
+
+    const auto run = [&](uint32_t eip, uint64_t budget, uint32_t eax, uint32_t next) {
+        X86_SetEIP(state.get(), eip);
+        X86_RegWrite(state.get(), 0, 0);
+        return X86_Run(state.get(), 0, budget) && X86_GetEIP(state.get()) == next && X86_RegRead(state.get(), 0) == eax;
+    };
+    const auto region_context = [](const BasicBlock* block) -> const void* {
+        if (!block || !block->chain.has_region_context) return nullptr;
+        const void* context;
+        std::memcpy(&context, reinterpret_cast<const std::byte*>(block) + block->RegionContextOffset(), sizeof(context));
+        return context;
+    };
+    const auto warm = [&](uint32_t start) -> BasicBlock* {
+        for (int attempt = 0; attempt < 150; ++attempt) {
+            if (!run(start, 10000, 6000, start)) return nullptr;
+            auto* a = FindCompiledBlock(state.get(), start);
+            auto* b = FindCompiledBlock(state.get(), start + (second - first));
+            if (region_context(a) && region_context(a) == region_context(b) && a->entry != b->entry) return a;
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        return nullptr;
+    };
+    const auto* a = warm(first);
+    const auto* alias = warm(relocated);
+    if (!a || !alias || a->entry != alias->entry || region_context(a) == region_context(alias) ||
+        !run(first, 3, 1, second) || !run(second, 2, 2, first) || !run(second, 7, 5, first))
+        return false;
+
+    X86_MemUnmap(state.get(), data_address, 4096);
+    struct Observer {
+        uint8_t* bytes;
+        bool called = false;
+    } observer{bytes.data()};
+    X86_SetFaultCallback(
+        state.get(),
+        +[](EmuState* s, uint32_t address, int write, void* userdata) -> int {
+            auto& observer = *static_cast<Observer*>(userdata);
+            if (address != data_address || write || observer.called || !X86_IsExecuting(s)) return 0;
+            observer.called = true;
+            observer.bytes[(second - first) + 2] = 9;
+            X86_ResetCodeCacheByRange(s, first, 4096);
+            X86_MemMap(s, data_address, 4096, 3);
+            return 1;
+        },
+        &observer);
+    return run(first, 5, 10, first) && observer.called && !region_context(alias);
+}
+#endif
+
 bool VerifyAsyncCompilations() {
     // Both blocks share a recipe initially. Replace one before the VM polls
     // for the first recipe and hard-reset the other's decoded code cache.
@@ -1215,6 +1284,11 @@ int main(int argc, char** argv) {
         return 1;
     }
 #if FIBERCPU_LLVM_JIT
+    if (argc == 2 && std::strcmp(argv[1], "region") == 0) {
+        if (VerifyPageRegion()) return 0;
+        std::fprintf(stderr, "LLVM page region publication, relocation or memory restart mismatch\n");
+        return 1;
+    }
     if (argc == 3 && std::strcmp(argv[1], "options") == 0) {
         if (VerifyCpuRunOptions(argv[2]))
             return 0;

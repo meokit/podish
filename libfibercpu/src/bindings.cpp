@@ -304,8 +304,10 @@ static BasicBlock* BuildBlockConcat(EmuState* state, const BasicBlock* a, const 
     }
 #endif
     const auto layout = BlockSlotLayout::Inspect(start_eip, ops);
+    const bool retain_region_context = a->chain.has_region_context && b->chain.has_region_context;
     void* mem =
-        state->mmu.try_allocate_block_bytes(BasicBlock::CalculateSize(layout, retain_scalar_handlers), start_eip);
+        state->mmu.try_allocate_block_bytes(
+            BasicBlock::CalculateSize(layout, retain_scalar_handlers, retain_region_context), start_eip);
     if (!mem) return nullptr;
     // Static scalar lowering depends on each instruction's original operands.
     // In this build the published slots already carry the correct handlers.
@@ -326,7 +328,9 @@ static BasicBlock* BuildBlockConcat(EmuState* state, const BasicBlock* a, const 
     concat->fallthrough_eip = b->fallthrough_eip;
     concat->set_terminal_kind(b->terminal_kind());
     concat->has_unfused_handlers = retain_scalar_handlers;
+    concat->chain.has_region_context = retain_region_context;
     concat->WriteOps(layout, ops, state->mmu.invalid_code_block(), preserve_handlers);
+    if (retain_region_context) concat->SetRegionContext(nullptr);
 
 #if FIBERCPU_BLOCK_COMPILATION
     if (retain_scalar_handlers) {

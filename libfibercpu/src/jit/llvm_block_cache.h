@@ -14,6 +14,7 @@ namespace fiberish::llvm_block_cache {
 inline constexpr std::string_view profile_magic = "FIBJPR08";
 inline constexpr std::string_view weighted_profile_magic = "FIBJPR09";
 inline constexpr std::string_view linked_magic = "FIBJLC04";
+inline constexpr uint8_t region_tag = 0xff;
 
 inline bool ReadU32(std::string_view& bytes, uint32_t& value) {
     if (bytes.size() < sizeof(value)) return false;
@@ -37,6 +38,12 @@ inline bool WriteRecord(llvm::raw_ostream& out, std::string_view record) {
     out.write(size, sizeof(size));
     out.write(record.data(), record.size());
     return true;
+}
+
+inline void WriteU32(llvm::raw_ostream& out, uint32_t value) {
+    char bytes[4];
+    llvm::support::endian::write32le(bytes, value);
+    out.write(bytes, sizeof(bytes));
 }
 
 // Key records encode the exit, exact bit and step count, followed by each

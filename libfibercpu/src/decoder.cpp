@@ -921,7 +921,11 @@ finalize:
 
     const std::span<const DecodedInstruction> final_ops(scalar_ops, slot_count);
     const auto layout = BlockSlotLayout::Inspect(start_eip, final_ops);
-    size_t alloc_size = BasicBlock::CalculateSize(layout, hot_count != 0);
+    bool retain_region_context = false;
+#if FIBERCPU_LLVM_JIT
+    retain_region_context = hot_count && LLVMPageRegionsEnabled(*state);
+#endif
+    size_t alloc_size = BasicBlock::CalculateSize(layout, hot_count != 0, retain_region_context);
     void* mem = state->mmu.try_allocate_block_bytes(alloc_size, start_eip);
     if (!mem) {
         if (use_single_step) *use_single_step = true;
@@ -943,8 +947,10 @@ finalize:
     block->chain.weighted_profile = hot_count && LLVMWeightedProfileEnabled(*state);
 #endif
     block->has_unfused_handlers = hot_count != 0;
+    block->chain.has_region_context = retain_region_context;
 
     block->WriteOps(layout, final_ops, state->mmu.invalid_code_block());
+    if (retain_region_context) block->SetRegionContext(nullptr);
 #if FIBERCPU_BLOCK_COMPILATION
     if (hot_count) std::copy_n(scalar_handlers.data(), decoded_inst_count, block->UnfusedHandlers());
 #endif

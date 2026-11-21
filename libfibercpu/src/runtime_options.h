@@ -9,7 +9,7 @@
 
 namespace fiberish {
 
-enum class JitMode { Off, Generic, Exact, LegacyProfile, Profile };
+enum class JitMode { Off, Generic, Exact, Region, LegacyProfile, Profile };
 struct WeightedProfile;
 
 struct CpuRunOptions {

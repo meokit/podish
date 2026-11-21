@@ -524,7 +524,8 @@ struct BasicBlockChainPrefix {
     uint64_t valid : 1;
     uint64_t weighted_profile : 1;
     uint64_t jit_execution_profile : 1;
-    uint64_t reserved : 5;
+    uint64_t has_region_context : 1;
+    uint64_t reserved : 4;
     uint64_t llvm_hot_count : 16;
 };
 
@@ -553,10 +554,12 @@ struct alignas(16) BasicBlock {
 
     static constexpr size_t AlignFooter(size_t offset) { return (offset + 7) & ~size_t{7}; }
 
-    static constexpr size_t CalculateSize(BlockSlotLayout layout, bool retain_scalar_handlers = false) {
+    static constexpr size_t CalculateSize(BlockSlotLayout layout, bool retain_scalar_handlers = false,
+                                          bool retain_region_context = false) {
         if (!layout.logical_slot_count) return sizeof(BasicBlock);
         size_t size = offsetof(BasicBlock, slots) + sizeof(DecodedOp) * layout.PhysicalSlotCount();
         if (layout.data_slot_count) size = AlignFooter(size) + sizeof(BlockDataSlotMask);
+        if (retain_region_context) size += sizeof(void*);
         size +=
             (layout.logical_slot_count - 1) * (sizeof(uint16_t) + (retain_scalar_handlers ? sizeof(HandlerFunc) : 0));
         if (layout.anchor_count) size = AlignFooter(size) + sizeof(uint64_t) + sizeof(uint32_t) * layout.anchor_count;
@@ -616,9 +619,19 @@ struct alignas(16) BasicBlock {
     FORCE_INLINE DecodedOp* NextOp(DecodedOp* op) { return const_cast<DecodedOp*>(std::as_const(*this).NextOp(op)); }
 
     // Scalar handlers and PC offsets are indexed by guest instruction, never data slot.
+    void SetRegionContext(const void* context) {
+        assert(chain.has_region_context);
+        auto* slot = reinterpret_cast<const void**>(reinterpret_cast<std::byte*>(this) + RegionContextOffset());
+        *slot = context;
+    }
+
+    size_t RegionContextOffset() const {
+        return HasDataSlots() ? DataSlotMaskOffset() + sizeof(BlockDataSlotMask) : SlotsEndOffset();
+    }
+
     HandlerFunc* UnfusedHandlers() { return const_cast<HandlerFunc*>(std::as_const(*this).UnfusedHandlers()); }
     const HandlerFunc* UnfusedHandlers() const {
-        const size_t offset = HasDataSlots() ? DataSlotMaskOffset() + sizeof(BlockDataSlotMask) : SlotsEndOffset();
+        const size_t offset = RegionContextOffset() + (chain.has_region_context ? sizeof(void*) : 0);
         return reinterpret_cast<const HandlerFunc*>(reinterpret_cast<const std::byte*>(this) + offset);
     }
 

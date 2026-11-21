@@ -13,6 +13,20 @@ namespace fiberish {
 #if FIBERCPU_LLVM_JIT && !defined(FIBERCPU_LLVM_BLOCK_TEMPLATE)
 bool CaptureLLVMWeightedProfilePage(EmuState& state, BasicBlock& block);
 #endif
+#ifdef FIBERCPU_LLVM_BLOCK_TEMPLATE
+extern "C" void FiberLLVMRegionEdge(EmuState* state, DecodedOp* op, int64_t budget, mem::MicroTlbAbiWord tags,
+                                   mem::MicroTlbAbiWord addend, uint32_t eip,
+                                   uint64_t flags FIBERCPU_PIN_PARAMS) noexcept;
+extern "C" void FiberLLVMRegionExit(EmuState* state) noexcept;
+#endif
+
+FORCE_INLINE void RestoreLLVMBlockOnExit(EmuState* state) {
+#ifdef FIBERCPU_LLVM_BLOCK_TEMPLATE
+    FiberLLVMRegionExit(state);
+#else
+    (void)state;
+#endif
+}
 
 // External reference to handlers
 extern void* g_HandlerBase;
@@ -90,8 +104,13 @@ FORCE_INLINE ATTR_PRESERVE_NONE int64_t ResolveBranchTargetInline(EmuState* REST
     (void)op;
     (void)utlb_tags;
     (void)utlb_addend;
+#ifdef FIBERCPU_LLVM_BLOCK_TEMPLATE
+    FiberLLVMRegionEdge(state, op, instr_limit, utlb_tags, utlb_addend, target_eip, flags_cache FIBERCPU_PIN_RELOAD);
+#else
     state->clear_pending_mem_op();
+#endif
     if (instr_limit <= 0) {
+        RestoreLLVMBlockOnExit(state);
         FIBERCPU_PIN_COMMIT(state);
         CommitFlagsCache(state, flags_cache);
         state->ctx.eip = target_eip;
@@ -120,6 +139,8 @@ FORCE_INLINE ATTR_PRESERVE_NONE int64_t ResolveBranchTargetInline(EmuState* REST
                                    std::numeric_limits<uint32_t>::max(), flags_cache FIBERCPU_PIN_RELOAD);
     }
 
+    // The successful chain above publishes its target. A miss still needs the source.
+    RestoreLLVMBlockOnExit(state);
     if constexpr (LinkSlot == 0) {
         ATTR_MUSTTAIL return ResolveBranchTargetSlowLink(state, op, instr_limit, utlb_tags, utlb_addend, target_eip,
                                                          flags_cache FIBERCPU_PIN_RELOAD);

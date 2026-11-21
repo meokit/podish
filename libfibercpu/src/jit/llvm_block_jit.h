@@ -26,6 +26,7 @@ uint64_t LLVMJitCacheEpoch();
 uint16_t LLVMJitHotThreshold(const EmuState& state);
 void CompileHotLLVMBlock(EmuState* state, BasicBlock* block);
 void PollLLVMBlockCompilations(EmuState* state);
+bool LLVMPageRegionsEnabled(const EmuState& state);
 void TraceLLVMJitRetirement(const BasicBlock& block);
 uint64_t LLVMJitBlockCount();
 uint64_t LLVMJitLiveBlockCount();

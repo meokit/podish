@@ -96,6 +96,7 @@ dispatch_tail:
         case LLVMBlockExit::Dispatch:
             break;
     }
+    RestoreLLVMBlockOnExit(state);
     ATTR_MUSTTAIL return current->handler(state, current, instr_limit, utlb_tags, utlb_addend, branch,
                                           flags_cache FIBERCPU_PIN_RELOAD);
 }

@@ -9,6 +9,7 @@
 #include <memory_resource>
 #include <new>
 #include <optional>
+#include <span>
 #include <vector>
 #include "../common.h"
 #include "../decoder.h"
@@ -305,6 +306,24 @@ struct CodeCacheState {
         std::vector<BlockHostPageRef> host_pages;
     };
 
+    struct PageRegionEntry {
+        uint32_t eip;
+        BasicBlock* block;
+        uint16_t revision;
+        HandlerFunc handler;
+        HandlerFunc fallback = nullptr;
+    };
+
+    struct PageRegionFallback {
+        BasicBlock* block;
+        HandlerFunc handler;
+    };
+
+    struct PageRegions {
+        ankerl::unordered_dense::map<uint32_t, std::vector<PageRegionFallback>> live;
+        uint64_t invalidation_epoch = 0;
+    };
+
     std::pmr::monotonic_buffer_resource block_pool;
     ankerl::unordered_dense::map<BlockCacheKey, uint32_t, BlockCacheKeyHash> block_cache;
     std::vector<BlockCacheEntry> block_entries;
@@ -312,6 +331,7 @@ struct CodeCacheState {
     BasicBlock dummy_invalid_block;
     ankerl::unordered_dense::map<uintptr_t, std::vector<PageBlockRef>> page_to_blocks;
     ankerl::unordered_dense::map<BasicBlock*, uint16_t> pending_page_profile;
+    std::unique_ptr<PageRegions> page_regions;
     size_t requested_block_bytes = 0;
     size_t block_budget_bytes = kDefaultBlockBudgetBytes;
     uint64_t flush_count = 0;
@@ -332,10 +352,28 @@ struct CodeCacheState {
 #endif
     }
 
+    void InvalidateBlock(BasicBlock& block) {
+        if (page_regions) {
+            auto& live = page_regions->live;
+            const auto region = live.find(block.start_eip() & ~PAGE_MASK);
+            if (region != live.end()) {
+                // A block may be revalidated individually. Restore every
+                // independently executable entry before any member can do that.
+                for (const auto& member : region->second) {
+                    member.block->entry = member.handler;
+                    if (member.block->chain.has_region_context) member.block->SetRegionContext(nullptr);
+                }
+                live.erase(region);
+            }
+        }
+        block.Invalidate();
+    }
+
     void InvalidateAll() {
+        if (page_regions) ++page_regions->invalidation_epoch;
         for (auto& entry : block_entries) {
             if (entry.block != nullptr) {
-                entry.block->Invalidate();
+                InvalidateBlock(*entry.block);
             }
         }
         block_cache.clear();
@@ -393,6 +431,44 @@ struct CodeCacheState {
         auto it = block_cache.find(key);
         return it == block_cache.end() ? nullptr : block_entries[it->second].block;
     }
+
+#if FIBERCPU_BLOCK_COMPILATION
+    bool InstallPageRegion(uint32_t guest_page, uintptr_t host_page, std::span<const PageRegionEntry> members) {
+        if (!page_regions || members.size() < 2 || page_regions->live.contains(guest_page)) return false;
+
+        std::vector<PageRegionFallback> fallback;
+        fallback.reserve(members.size());
+        std::optional<uint32_t> previous;
+        for (const auto& member : members) {
+            if ((member.eip & ~PAGE_MASK) != guest_page || (previous && member.eip <= *previous) ||
+                !member.block || !member.handler)
+                return false;
+            previous = member.eip;
+            const auto cached = block_cache.find(BlockCacheKey{host_page, member.eip});
+            if (cached == block_cache.end()) return false;
+            const auto& entry = block_entries[cached->second];
+            if (entry.block != member.block || entry.host_pages.size() != 1 ||
+                entry.host_pages.front().host_page_base != host_page)
+                return false;
+            const auto& block = *entry.block;
+            if (!block.is_valid() || block.start_eip() != member.eip ||
+                block.invalidation_revision != member.revision || !block.entry || !block.inst_count() ||
+                block.end_eip <= member.eip ||
+                ((block.end_eip - 1) & ~PAGE_MASK) != guest_page)
+                return false;
+            fallback.push_back({member.block, member.fallback ? member.fallback : block.entry});
+        }
+
+        // The scheduler owns publication. Workers supply code and immutable
+        // snapshots. No guest code or callback runs between these stores.
+        const auto installed = page_regions->live.emplace(guest_page, std::move(fallback)).first;
+        for (const auto& member : members) {
+            if (member.block->chain.has_region_context) member.block->SetRegionContext(installed->second.data());
+            member.block->entry = member.handler;
+        }
+        return true;
+    }
+#endif
 
     void EnsureBlockHostPagesRegistered(const BlockCacheKey& cache_key, const HostPageSet& host_page_bases,
                                         HostPageSet* affected_host_pages = nullptr) {
@@ -509,7 +585,8 @@ struct CodeCacheState {
         const uint32_t block_index = it->second;
         auto& entry = block_entries[block_index];
         if (entry.block != nullptr) {
-            entry.block->Invalidate();
+            if (page_regions) ++page_regions->invalidation_epoch;
+            InvalidateBlock(*entry.block);
         }
 
         RemoveBlockHostPagesByIndex(block_index, affected_host_pages);
@@ -530,6 +607,7 @@ struct CodeCacheState {
     }
 
     void InvalidateHostPage(uintptr_t host_page_base, HostPageSet* affected_host_pages = nullptr) {
+        if (page_regions && page_to_blocks.contains(host_page_base)) ++page_regions->invalidation_epoch;
         while (true) {
             auto it = page_to_blocks.find(host_page_base);
             if (it == page_to_blocks.end() || it->second.empty()) return;
@@ -537,7 +615,7 @@ struct CodeCacheState {
             const PageBlockRef block_ref = it->second.back();
             auto& entry = block_entries[block_ref.block_index];
             if (entry.block != nullptr) {
-                entry.block->Invalidate();
+                InvalidateBlock(*entry.block);
             }
             RemoveBlockHostPagesByIndex(block_ref.block_index, affected_host_pages);
         }
@@ -861,6 +939,17 @@ public:
             refresh_smc_armed_for_host_page(reinterpret_cast<HostAddr>(host_page_base));
         }
     }
+
+#if FIBERCPU_BLOCK_COMPILATION
+    void invalidate_code_before_permission_change(HostAddr page, Property old_perms, Property new_perms) {
+        if (!page || !code_cache().page_regions || !has_property(old_perms, Property::Exec)) return;
+        constexpr auto region_permissions = Property::Exec | Property::Write | Property::External;
+        if ((old_perms & region_permissions) == (new_perms & region_permissions))
+            return;
+        const auto backing = reinterpret_cast<uintptr_t>(page);
+        invalidate_code_cache_host_pages(&backing, 1);
+    }
+#endif
 
     void remap_external_alias(GuestAddr guest_page, HostAddr old_page, Property old_perms, HostAddr new_page,
                               Property new_perms) {
@@ -1401,6 +1490,38 @@ public:
         return BlockCacheKey{*host_page_base, guest_eip};
     }
 
+#if FIBERCPU_BLOCK_COMPILATION
+    struct PageRegionStamp {
+        uintptr_t mmu_identity;
+        uintptr_t host_page;
+        uint32_t guest_page;
+        uint64_t cache_generation;
+        uint64_t invalidation_epoch;
+        uint64_t arena_epoch;
+        bool operator==(const PageRegionStamp&) const = default;
+    };
+
+    [[nodiscard]] std::optional<PageRegionStamp> page_region_stamp(uint32_t eip) {
+        if (!core_ || code_cache_flush_pending()) return std::nullopt;
+        const auto perms = get_property(eip);
+        if (!has_property(perms, Property::Exec) || !has_property(perms, Property::External) ||
+            has_property(perms, Property::Write))
+            return std::nullopt;
+        const auto backing = try_get_host_page_base(eip);
+        if (!backing) return std::nullopt;
+        auto& cache = code_cache();
+        if (!cache.page_regions) cache.page_regions = std::make_unique<CodeCacheState::PageRegions>();
+        return PageRegionStamp{core_->identity, *backing, eip & ~uint32_t(PAGE_MASK), cache.generation,
+                               cache.page_regions->invalidation_epoch, cache.llvm_cache_epoch};
+    }
+
+    [[nodiscard]] bool publish_page_region(const PageRegionStamp& snapshot,
+                                           std::span<const CodeCacheState::PageRegionEntry> members) {
+        if (page_region_stamp(snapshot.guest_page) != snapshot) return false;
+        return code_cache().InstallPageRegion(snapshot.guest_page, snapshot.host_page, members);
+    }
+#endif
+
     [[nodiscard]] HostPageSet collect_host_page_bases_for_guest_range(uint32_t addr, uint32_t size) const {
         HostPageSet host_page_bases;
         if (size == 0) return host_page_bases;
@@ -1670,6 +1791,9 @@ public:
             Property preserved = Property::None;
             if (has_property(entry_perms, Property::External)) preserved = preserved | Property::External;
             if (has_property(entry_perms, Property::Dirty)) preserved = preserved | Property::Dirty;
+#if FIBERCPU_BLOCK_COMPILATION
+            invalidate_code_before_permission_change(page, old_perms, perms | preserved);
+#endif
             entry_perms = normalize_mapping_perms(perms | preserved);
             if (page && has_property(entry_perms, Property::External)) {
                 remap_external_alias(curr, page, old_perms, page, entry_perms);
@@ -1704,6 +1828,9 @@ public:
             Property preserved = Property::None;
             if (has_property(entry_perms, Property::External)) preserved = preserved | Property::External;
             if (has_property(entry_perms, Property::Dirty)) preserved = preserved | Property::Dirty;
+#if FIBERCPU_BLOCK_COMPILATION
+            invalidate_code_before_permission_change(page, old_perms, perms | preserved);
+#endif
             entry_perms = normalize_mapping_perms(perms | preserved);
             remap_external_alias(curr, page, old_perms, page, entry_perms);
         }
@@ -1735,6 +1862,9 @@ public:
             std::memset(chunk->pages[l2_idx], 0, PAGE_SIZE);
         }
 
+#if FIBERCPU_BLOCK_COMPILATION
+        invalidate_code_before_permission_change(chunk->pages[l2_idx], chunk->permissions[l2_idx], perms);
+#endif
         chunk->permissions[l2_idx] = normalize_mapping_perms(perms);
         tlb.flush_page(page_addr);
         publish_runtime_tlb_flush_deduped(page_addr);
@@ -1776,6 +1906,10 @@ public:
             code_cache().InvalidateHostPage(reinterpret_cast<uintptr_t>(old_page), &affected_host_pages);
             refresh_smc_armed_for_host_pages(affected_host_pages);
         }
+#if FIBERCPU_BLOCK_COMPILATION
+        if (old_page == external_page)
+            invalidate_code_before_permission_change(old_page, old_perms, perms | Property::External);
+#endif
 
         // Set external page (caller owns this memory)
         chunk->pages[l2_idx] = external_page;

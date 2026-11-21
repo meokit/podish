@@ -32,6 +32,7 @@
 #include <utility>
 #include <vector>
 
+#include <llvm/ADT/StringExtras.h>
 #include <llvm/Bitcode/BitcodeReader.h>
 #include <llvm/Config/llvm-config.h>
 #include <llvm/ExecutionEngine/Orc/CompileUtils.h>
@@ -310,6 +311,7 @@ JitMode RuntimeMode(const EmuState& state) {
         if (!value || !pthread_jit_write_protect_supported_np()) return JitMode::Off;
         if (std::strcmp(value, "1") == 0) return JitMode::Exact;
         if (std::strcmp(value, "generic") == 0) return JitMode::Generic;
+        if (std::strcmp(value, "region") == 0) return JitMode::Region;
         if (std::strcmp(value, "profile") == 0 && std::getenv("FIBERCPU_LLVM_JIT_PROFILE"))
             return JitMode::LegacyProfile;
         return JitMode::Off;
@@ -344,6 +346,22 @@ struct BlockIR {
     LLVMOperandTemplates templates{module.get()};
 };
 
+using PageRegionEntry = mem::CodeCacheState::PageRegionEntry;
+using PageRegionStamp = mem::Mmu::PageRegionStamp;
+
+struct CompiledPageRegion {
+    std::vector<size_t> included;
+    std::vector<HandlerFunc> entries;
+};
+
+constexpr size_t kMaxRegionMembers = 12;
+
+void WriteRegionMember(llvm::raw_ostream& out, const LLVMPageMember& member) {
+    llvm_block_cache::WriteU32(out, member.page_offset);
+    const auto key = llvm_block_cache::EncodeKey(member.key);
+    llvm_block_cache::WriteRecord(out, {key.data(), key.size()});
+}
+
 class BlockCompiler {
     std::unique_ptr<llvm::orc::LLJIT> jit_;
     BlockMemoryManager* memory_ = nullptr;
@@ -353,6 +371,7 @@ class BlockCompiler {
     std::condition_variable compilation_done_;
     ankerl::unordered_dense::map<BlockKey, HandlerFunc, BlockKeyHash, BlockKeyEqual> compiled_;
     BlockKeySet compiling_;
+    ankerl::unordered_dense::map<std::string, CompiledPageRegion> compiled_regions_;
     uint64_t next_symbol_ = 0;
 
     unsigned failed_links_ = 0;
@@ -362,7 +381,8 @@ class BlockCompiler {
         failed_links_ = 0;
     }
 
-    HandlerFunc Materialize(llvm::StringRef name, std::unique_ptr<llvm::MemoryBuffer> object) {
+    bool Materialize(std::span<const std::string> names, std::unique_ptr<llvm::MemoryBuffer> object,
+                     std::span<HandlerFunc> entries) {
         memory_->BeginLink();
         // Use a scratch tracker so a failed link cannot remove earlier
         // objects. Successful objects leave only the generation tracker live.
@@ -376,17 +396,20 @@ class BlockCompiler {
         if (auto error = jit_->addObjectFile(tracker, std::move(object))) {
             llvm::consumeError(std::move(error));
             fail_link();
-            return nullptr;
+            return false;
         }
-        auto code = jit_->lookup(name);
-        if (!code) {
-            llvm::consumeError(code.takeError());
-            fail_link();
-            return nullptr;
+        for (auto [i, name] : llvm::enumerate(names)) {
+            auto code = jit_->lookup(name);
+            if (!code) {
+                llvm::consumeError(code.takeError());
+                fail_link();
+                return false;
+            }
+            entries[i] = code->toPtr<HandlerFunc>();
         }
         if (!generation_tracker_) generation_tracker_ = jit_->getMainJITDylib().createResourceTracker();
         tracker->transferTo(*generation_tracker_);
-        return code->toPtr<HandlerFunc>();
+        return true;
     }
 
 public:
@@ -526,7 +549,10 @@ public:
         }
 
         std::lock_guard link_lock(link_mutex_);
-        auto entry = object && AcceptsJobs(epoch) ? Materialize(name, std::move(object)) : nullptr;
+        HandlerFunc entry = nullptr;
+        if (object && AcceptsJobs(epoch) &&
+            !Materialize(std::span(&name, 1), std::move(object), std::span(&entry, 1)))
+            entry = nullptr;
         lock.lock();
         auto recipe = compiling_.extract(key);
         if (entry) {
@@ -538,12 +564,56 @@ public:
         return entry;
     }
 
+    CompiledPageRegion FindOrCompileRegion(std::span<const LLVMPageMember> members, uint64_t epoch) {
+        if (!jit_ || !AcceptsJobs(epoch)) return {};
+        std::string key;
+        llvm::raw_string_ostream encoded(key);
+        for (const auto& member : members) {
+            const auto block = llvm_block_cache::EncodeKey(member.key);
+            const auto offset = uint16_t(member.page_offset);
+            encoded << char(offset) << char(offset >> 8);
+            llvm_block_cache::WriteRecord(encoded, llvm::StringRef(block.data(), block.size()));
+        }
+        std::string name;
+        {
+            std::lock_guard lock(mutex_);
+            if (const auto found = compiled_regions_.find(key); found != compiled_regions_.end()) return found->second;
+            name = "FiberJitPage_" + std::to_string(next_symbol_++);
+        }
+
+        thread_local BlockIR worker_ir;
+        CompiledPageRegion compiled;
+        const auto& options = Options();
+        auto module = PrepareLLVMPageRegion(worker_ir.templates, members, name, options.pipeline,
+                                            options.fold_operand_loads, compiled.included);
+        if (!module) return {};
+        auto object = jit_->getIRCompileLayer().getCompiler()(*module);
+        if (!object) {
+            llvm::consumeError(object.takeError());
+            return {};
+        }
+        std::vector<std::string> names;
+        names.reserve(compiled.included.size());
+        for (size_t i = 0; i < compiled.included.size(); ++i) names.push_back(name + "_" + std::to_string(i));
+        compiled.entries.resize(names.size());
+
+        std::lock_guard link_lock(link_mutex_);
+        std::lock_guard lock(mutex_);
+        if (!AcceptsJobs(epoch)) return {};
+        if (const auto found = compiled_regions_.find(key); found != compiled_regions_.end()) return found->second;
+        if (!Materialize(names, std::move(*object), compiled.entries)) return {};
+        live_blocks.fetch_add(compiled.entries.size(), std::memory_order_relaxed);
+        materializations.fetch_add(compiled.entries.size(), std::memory_order_relaxed);
+        return compiled_regions_.emplace(std::move(key), std::move(compiled)).first->second;
+    }
+
     void ResetGeneration() {
         std::lock_guard link_lock(link_mutex_);
         std::lock_guard lock(mutex_);
         // Invalidate idle MMU caches before releasing their entry addresses.
         cache_epoch.fetch_add(1, std::memory_order_release);
         compiled_.clear();
+        compiled_regions_.clear();
         if (generation_tracker_) {
             if (auto error = generation_tracker_->remove())
                 llvm::logAllUnhandledErrors(std::move(error), llvm::errs(), "JIT cache flush: ");
@@ -641,10 +711,36 @@ void ReportJitSchedulerTotals() {
                  (unsigned long long)traced_worker_cpu_ns.load(std::memory_order_relaxed));
 }
 
+struct RegionResult {
+    PageRegionStamp stamp;
+    std::string recipe;
+    std::vector<PageRegionEntry> entries;
+    std::vector<std::vector<HandlerFunc>> replay;
+};
+
+bool PublishRegion(EmuState& state, const RegionResult& result) {
+    if (!state.mmu.publish_page_region(result.stamp, result.entries)) return false;
+    for (auto [i, member] : llvm::enumerate(result.entries)) {
+        // Keep these replay slots installed when the region is revoked:
+        // the independent fallback was compiled for the same scalar slots.
+        block_recipe::InstallBlockHandler(*member.block, result.replay[i], member.handler);
+        member.block->chain.llvm_hot_count = 0;
+    }
+    if (auto* trace = JitSchedulerTrace()) {
+        std::fprintf(trace, "region_install,%llu,%u,%zu\n", (unsigned long long)result.stamp.mmu_identity,
+                     result.stamp.guest_page, result.entries.size());
+        const auto fingerprint = llvm::toHex(llvm::ArrayRef<uint8_t>(ProfileFingerprint()));
+        const auto recipe = llvm::toHex(result.recipe);
+        std::fprintf(trace, "region_recipe,%s,%s\n", fingerprint.c_str(), recipe.c_str());
+    }
+    return true;
+}
+
 struct AsyncResult {
     std::atomic<bool> done{false};
     HandlerFunc entry = nullptr;
     std::vector<HandlerFunc> replay;
+    std::optional<RegionResult> region;
 };
 
 struct PendingBlock {
@@ -724,19 +820,150 @@ void CancelPendingLLVMBlockCompilations(LLVMAsyncState& state) {
 
 namespace {
 
-struct CompilationJob {
+struct BlockInput {
     std::vector<DecodedInstruction> ops;
     std::vector<uint8_t> bytes;
+    size_t sentinel;
+    uint32_t eip;
+    LLVMBlockExit exit;
+
+    bool Plan(bool exact, block_recipe::Plan& plan) const {
+        auto input = std::span<const uint8_t>(bytes);
+        const auto redecode = [&](const DecodedInstruction& op, DecodedInstruction& generic) {
+            const auto instruction = input.first(op.len);
+            input = input.subspan(op.len);
+            return RedecodeGenericInstruction(instruction, op, generic);
+        };
+        return block_recipe::PlanBlock(ops, eip, sentinel, exit, exact, redecode, plan);
+    }
+};
+
+std::optional<BlockInput> CaptureBlock(EmuState& state, const BasicBlock& block) {
+    BlockInput input{{}, {}, block.inst_count(), block.start_eip(), block_recipe::FullBlockExit(block)};
+    const auto count = std::min(input.sentinel, kMaxOps);
+    input.ops.reserve(count);
+    input.bytes.reserve(count * 15);
+    for (size_t slot = 0; slot < count; ++slot) {
+        auto op = block.ReadOp(slot);
+        if (!block_recipe::CanPlanOp(op)) break;
+        const auto offset = input.bytes.size();
+        input.bytes.resize(offset + op.len);
+        if (!CopyDecodedInstructionBytes(&state, op, std::span(input.bytes).subspan(offset))) return std::nullopt;
+        op.handler = nullptr;
+        input.ops.push_back(op);
+    }
+    if (input.ops.empty()) return std::nullopt;
+    return input;
+}
+
+struct CapturedRegion {
+    PageRegionStamp stamp;
+
+    struct Member {
+        PageRegionEntry entry;
+        BlockInput input;
+    };
+    std::vector<Member> members;
+
+    std::optional<RegionResult> Compile(uint64_t epoch) const {
+        std::vector<block_recipe::Plan> plans(members.size());
+        std::vector<LLVMPageMember> keys;
+        std::vector<size_t> eligible;
+        for (auto [i, member] : llvm::enumerate(members)) {
+            auto& plan = plans[i];
+            if (!member.input.Plan(true, plan) || plan.exit == LLVMBlockExit::Dispatch) continue;
+            keys.push_back({plan.Key(true), member.entry.eip - stamp.guest_page});
+            eligible.push_back(i);
+        }
+        if (keys.size() < 2 || !AcceptsJobs(epoch)) return std::nullopt;
+        const auto compiled = Compiler().FindOrCompileRegion(keys, epoch);
+        if (compiled.entries.empty()) return std::nullopt;
+        RegionResult out{stamp, {}, {}, {}};
+        const bool tracing = JitSchedulerTrace() != nullptr;
+        llvm::raw_string_ostream encoded(out.recipe);
+        if (tracing) encoded << char(llvm_block_cache::region_tag);
+        for (auto [i, entry] : llvm::enumerate(compiled.entries)) {
+            const auto index = eligible[compiled.included[i]];
+            auto member = members[index].entry;
+            const auto& plan = plans[index];
+            member.handler = entry;
+            member.fallback = Compiler().FindOrCompile(plan.Key(true), epoch);
+            if (!member.fallback) return std::nullopt;
+            if (tracing) WriteRegionMember(encoded, keys[compiled.included[i]]);
+            out.entries.push_back(member);
+            out.replay.emplace_back(plan.ReplayHandlers().begin(), plan.ReplayHandlers().end());
+        }
+        return out;
+    }
+};
+
+std::optional<CapturedRegion> CapturePage(EmuState& state, BasicBlock& root) {
+    auto stamp = state.mmu.page_region_stamp(root.start_eip());
+    if (!stamp) return std::nullopt;
+    auto& cache = state.mmu.code_cache();
+    if (cache.page_regions->live.contains(stamp->guest_page)) return std::nullopt;
+    const auto page = cache.page_to_blocks.find(stamp->host_page);
+    if (page == cache.page_to_blocks.end()) return std::nullopt;
+
+    constexpr size_t max_members = kMaxRegionMembers;
+    constexpr size_t max_instructions = 192;
+    std::vector<BasicBlock*> available;
+    for (const auto& reference : page->second) {
+        const auto& item = cache.block_entries[reference.block_index];
+        auto* block = item.block;
+        if (block && block->is_valid() && block->chain.has_region_context && item.host_pages.size() == 1 &&
+            item.cache_key.host_page_base == stamp->host_page &&
+            (block->start_eip() & ~mem::PAGE_MASK) == stamp->guest_page &&
+            block->end_eip > block->start_eip() &&
+            ((block->end_eip - 1) & ~mem::PAGE_MASK) == stamp->guest_page)
+            available.push_back(block);
+    }
+    if (std::ranges::find(available, &root) == available.end()) return std::nullopt;
+    std::ranges::sort(available, {}, &BasicBlock::start_eip);
+    std::vector<BasicBlock*> selected{&root};
+    size_t instructions = root.inst_count();
+    const auto add = [&](BasicBlock* next) {
+        if (selected.size() == max_members || instructions + next->inst_count() > max_instructions ||
+            std::ranges::find(selected, next) != selected.end())
+            return;
+        selected.push_back(next);
+        instructions += next->inst_count();
+    };
+    for (size_t i = 0; i < selected.size() && selected.size() < max_members; ++i) {
+        auto* from = selected[i];
+        for (auto* candidate : available) {
+            if (candidate->start_eip() == from->branch_target_eip ||
+                candidate->start_eip() == from->fallthrough_eip ||
+                candidate->branch_target_eip == from->start_eip() ||
+                candidate->fallthrough_eip == from->start_eip())
+                add(candidate);
+        }
+    }
+    if (selected.size() < 2) return std::nullopt;
+    std::ranges::sort(selected, {}, &BasicBlock::start_eip);
+
+    CapturedRegion out{*stamp, {}};
+    for (auto* block : selected) {
+        const auto revision = block->invalidation_revision;
+        auto input = CaptureBlock(state, *block);
+        if (state.mmu.page_region_stamp(stamp->guest_page) != stamp) return std::nullopt;
+        if (input && input->ops.size() == input->sentinel)
+            out.members.push_back({{block->start_eip(), block, revision, nullptr}, std::move(*input)});
+    }
+    if (out.members.size() < 2) return std::nullopt;
+    return out;
+}
+
+struct CompilationJob {
+    BlockInput input;
     std::weak_ptr<AsyncResult> result;
     std::weak_ptr<AsyncSignals> signals;
-    size_t sentinel;
+    std::optional<CapturedRegion> region;
     uint64_t epoch;
-    LLVMBlockExit exit;
     bool exact;
     JitClock::time_point queued{};
     int64_t reserved_cpu_ns = 0;
     uintptr_t mmu_identity = 0;
-    uint32_t eip = 0;
     uint16_t revision = 0;
 
     uint64_t Run() {
@@ -746,17 +973,21 @@ struct CompilationJob {
         const auto start = tracing ? JitClock::now() : JitClock::time_point{};
         const auto cpu_start = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID);
         block_recipe::Plan plan;
+        auto output = result.lock();
+        auto compiled_region = output && region && AcceptsJobs(epoch) ? region->Compile(epoch) : std::nullopt;
+        output.reset();
         const auto entry = Compile(plan);
         const auto cpu_ns = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) - cpu_start;
         if (tracing) {
             traced_worker_cpu_ns.fetch_add(cpu_ns, std::memory_order_relaxed);
             std::fprintf(JitSchedulerTrace(), "job,%llu,%u,%u,%llu,%llu,%llu,%zu\n", (unsigned long long)mmu_identity,
-                         eip, revision, (unsigned long long)Ns(start - queued),
+                         input.eip, revision, (unsigned long long)Ns(start - queued),
                          (unsigned long long)Ns(JitClock::now() - start), (unsigned long long)cpu_ns,
                          entry ? plan.covered : 0);
         }
         if (auto output = result.lock()) {
             output->entry = entry;
+            output->region = std::move(compiled_region);
             if (entry) output->replay.assign(plan.ReplayHandlers().begin(), plan.ReplayHandlers().end());
             output->done.store(true, std::memory_order_release);
             control->ready.store(true, std::memory_order_release);
@@ -767,14 +998,7 @@ struct CompilationJob {
 
     HandlerFunc Compile(block_recipe::Plan& plan) {
         if (result.expired() || !AcceptsJobs(epoch)) return nullptr;
-        auto input = std::span<const uint8_t>(bytes);
-        const auto redecode = [&](const DecodedInstruction& op, DecodedInstruction& generic) {
-            const auto instruction = input.first(op.len);
-            input = input.subspan(op.len);
-            return RedecodeGenericInstruction(instruction, op, generic);
-        };
-        const bool planned = block_recipe::PlanBlock(ops, eip, sentinel, exit, exact, redecode, plan);
-        if (!planned || result.expired() || !AcceptsJobs(epoch)) return nullptr;
+        if (!input.Plan(exact, plan) || result.expired() || !AcceptsJobs(epoch)) return nullptr;
         return Compiler().FindOrCompile(plan.Key(exact), epoch);
     }
 };
@@ -877,35 +1101,25 @@ enum class QueueResult { Submitted, Retry, Invalid };
 
 QueueResult QueueBlock(EmuState* state, LLVMAsyncState& async, BasicBlock* block, bool exact) {
     auto result = std::make_shared<AsyncResult>();
+    auto input = CaptureBlock(*state, *block);
+    if (!input) return QueueResult::Invalid;
+    auto region = RuntimeMode(*state) == JitMode::Region &&
+                          !std::ranges::any_of(async.pending, [&](const PendingBlock& pending) {
+                              return (pending.eip & ~mem::PAGE_MASK) == (block->start_eip() & ~mem::PAGE_MASK);
+                          })
+                      ? CapturePage(*state, *block) : std::nullopt;
     CompilationJob job{
-        .ops = {},
-        .bytes = {},
+        .input = std::move(*input),
         .result = result,
         .signals = async.signals,
-        .sentinel = block->inst_count(),
+        .region = std::move(region),
         .epoch = LLVMJitCacheEpoch(),
-        .exit = block_recipe::FullBlockExit(*block),
         .exact = exact,
-        .eip = block->start_eip(),
     };
-    const auto count = std::min(job.sentinel, kMaxOps);
-    job.ops.reserve(count);
-    job.bytes.reserve(count * 15);
-    for (size_t slot = 0; slot < count; ++slot) {
-        auto op = block->ReadOp(slot);
-        if (!block_recipe::CanPlanOp(op)) break;
-        const auto offset = job.bytes.size();
-        job.bytes.resize(offset + op.len);
-        if (!CopyDecodedInstructionBytes(state, op, std::span(job.bytes).subspan(offset))) return QueueResult::Invalid;
-        op.handler = nullptr;
-        job.ops.push_back(op);
-    }
-    if (job.ops.empty()) return QueueResult::Invalid;
     auto* trace = JitSchedulerTrace();
     if (trace) {
         job.queued = JitClock::now();
         job.mmu_identity = state->mmu.core_handle()->identity;
-        job.eip = block->start_eip();
         job.revision = block->invalidation_revision;
     }
     if (!Workers().Submit(std::move(job))) {
@@ -993,7 +1207,7 @@ void ScheduleCandidates(EmuState* state, LLVMAsyncState& async, JitClock::time_p
         return true;
     });
 
-    const bool exact = RuntimeMode(*state) == JitMode::Exact;
+    const bool exact = RuntimeMode(*state) != JitMode::Generic;
     while (!async.candidates.empty() && async.pending.size() < WorkerCount() && Workers().CanSubmit()) {
         auto best = std::ranges::max_element(async.candidates, {}, &HotCandidate::Score);
         auto* block = best->block;
@@ -1050,7 +1264,7 @@ void ObserveHotBlock(EmuState* state, BasicBlock* block, bool exact) {
 
 ScopedLLVMJitExecution::ScopedLLVMJitExecution(const EmuState& state) {
     const auto mode = RuntimeMode(state);
-    if (mode != JitMode::Exact && mode != JitMode::Generic && mode != JitMode::Profile) return;
+    if (mode != JitMode::Exact && mode != JitMode::Generic && mode != JitMode::Region && mode != JitMode::Profile) return;
 
     for (;;) {
         FinishPendingFlush();
@@ -1127,6 +1341,8 @@ bool ConfigureLLVMBlockJit(const SharedJitOptions& settings, std::string& error)
     config.frozen = true;
     return true;
 }
+
+bool LLVMPageRegionsEnabled(const EmuState& state) { return RuntimeMode(state) == JitMode::Region; }
 
 bool LLVMWeightedProfileEnabled(const EmuState& state) {
     const auto* options = RunOptions(state);
@@ -1240,9 +1456,15 @@ void CompileHotLLVMBlock(EmuState* state, BasicBlock* block) {
     const auto mode = RuntimeMode(*state);
     if (mode == JitMode::Off) return;
     const bool exact = mode != JitMode::Generic;
-    if ((mode == JitMode::Exact || mode == JitMode::Generic) && WorkerCount()) {
+    if ((mode == JitMode::Exact || mode == JitMode::Generic || mode == JitMode::Region) && WorkerCount()) {
         ObserveHotBlock(state, block, exact);
         return;
+    }
+    if (mode == JitMode::Region) {
+        if (auto captured = CapturePage(*state, *block)) {
+            if (auto region = captured->Compile(LLVMJitCacheEpoch()); region && PublishRegion(*state, *region))
+                return;
+        }
     }
     block_recipe::Plan plan;
     if (!block_recipe::PlanBlock(*state, *block, exact, plan)) return;
@@ -1266,6 +1488,7 @@ void PollLLVMBlockCompilations(EmuState* state) {
     if (async->signals->ready.exchange(false, std::memory_order_acquire)) {
         std::erase_if(async->pending, [&](const PendingBlock& candidate) {
             if (!candidate.result->done.load(std::memory_order_acquire)) return false;
+            if (candidate.result->region && PublishRegion(*state, *candidate.result->region)) return true;
             auto* trace = JitSchedulerTrace();
             auto* block = state->mmu.lookup_cached_block(candidate.eip);
             if (block != candidate.block) return true;

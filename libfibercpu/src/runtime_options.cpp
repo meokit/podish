@@ -127,10 +127,12 @@ X86_RunContext* X86_CreateRun(const char* args, size_t size, char* error, size_t
             options->jit_mode = JitMode::Generic;
         else if (mode == "exact")
             options->jit_mode = JitMode::Exact;
+        else if (mode == "region")
+            options->jit_mode = JitMode::Region;
         else if (mode == "profile")
             options->jit_mode = JitMode::Profile;
         else
-            return fail("JitMode requires off, generic, exact or profile");
+            return fail("JitMode requires off, generic, exact, region or profile");
     }
     if (values[Threshold]) {
         uint16_t threshold = 0;
