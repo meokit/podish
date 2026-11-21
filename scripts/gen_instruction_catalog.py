@@ -7,7 +7,7 @@ import json
 import re
 from pathlib import Path
 
-from operand_specialization_data import generated_fusions, training_handlers
+from operand_specialization_data import generated_fusions, instruction_targets, training_handlers
 from scalar_modrm import SHARDS, load_baked_modrm, pin_keep, scalar_modrm_plans
 
 
@@ -275,6 +275,18 @@ def generate(catalog, output, fusion_source=None, pin_mode=0, pin_mask=0, modrm_
     scalar_policies = catalog.get("scalar_policies", {})
     selected_modrm, selected_policies = load_baked_modrm(modrm_plan, scalar_plans, training, scalar_policies)
     keep_for = pin_keep(catalog, pin_mode, pin_mask)
+    opcodes_for = instruction_targets(catalog)
+    branch_links = catalog["block_links"]["with_operands"]
+    ret = catalog["block_links"]["link_only_return"]
+    if len(set(branch_links + [ret])) != len(branch_links) + 1:
+        raise ValueError("duplicate block link encoding")
+    link_cases = [f"case 0x{opcode:03x}:" for opcode in sorted(branch_links + [ret])]
+    llvm_second_slots = ["true" if opcodes_for[name].issubset(branch_links) else "false" for name in llvm_ops]
+    llvm_op_ids[-1:-1] = [
+        "inline constexpr bool kHasBranchLinkSlot[] = {",
+        *("    " + ", ".join(llvm_second_slots[i:i + 12]) + "," for i in range(0, len(llvm_second_slots), 12)),
+        "};",
+    ]
     scalar_shards = [[] for _ in range(SHARDS)]
     shard_weights = [0] * SHARDS
     for name in sorted(scalar_plans, key=lambda name: (-len(selected_modrm.get(name, ())), name)):
@@ -286,6 +298,12 @@ def generate(catalog, output, fusion_source=None, pin_mode=0, pin_mask=0, modrm_
         lines = scalar_shards[shard]
         entries = f"{name}_entries"
         targets = {key: f"op::{name}" for key in keys}
+        is_link_only_return = opcodes_for[name] == {ret}
+        if is_link_only_return:
+            # There is no payload metadata once the native block pointer
+            # occupies the slot. Bind both legal stack operand widths.
+            low_opcode = ret & 7
+            targets.update({0x100 | low_opcode: f"op::{name}", 0x140 | low_opcode: f"op::{name}"})
         policies = []
         if variants:
             policy = scalar_policies[name]
@@ -311,8 +329,12 @@ def generate(catalog, output, fusion_source=None, pin_mode=0, pin_mask=0, modrm_
         lines.append(f"constexpr std::array<ScalarBindingEntry, {len(targets)}> {entries} = {{{{")
         lines.extend(f"    MakeScalarBinding<{target}, 0x{key:04x}, {keep_for(name, key & 255)}>(),"
                      for key, target in sorted(targets.items()))
-        cold = ", ".join(f"DispatchWrapper<op::{name}, OperandSpec::SlotBound<{slots}>>"
-                         if slots in plan.slot_counts else "nullptr" for slots in (1, 2))
+        link_slot = opcodes_for[name].issubset(branch_links)
+        cold = ", ".join(
+            f"DispatchWrapper<op::{name}, OperandSpec::SlotBound<{slots}{', false' if link_slot else ''}>>"
+            if slots in plan.slot_counts and not is_link_only_return else "nullptr"
+            for slots in (1, 2)
+        )
         lines.extend(["}};", f"extern constinit const ScalarBindingTable {name}_scalar = "
                       f"{{{entries}.data(), {entries}.size(), 0x{plan.memory_mask:02x}, {mask}, {{{cold}}}}};"])
     scalar_headers = ['#include "scalar_bindings.h"'] + [
@@ -335,6 +357,7 @@ def generate(catalog, output, fusion_source=None, pin_mode=0, pin_mask=0, modrm_
     for name, lines in (("instruction_families.h", families), ("instruction_catalog.inc", catalog_lines),
                         ("instruction_kernel_bindings.inc", bindings), ("llvm_block_operations.inc", llvm_operations),
                         ("llvm_block_entries.inc", llvm_entries), ("llvm_op_ids.h", llvm_op_ids),
+                        ("block_link_opcodes.inc", link_cases),
                         ("training_scalar_handlers.inc", scalar_training),
                         ("training_fusion_handlers.inc", fused_training)):
         path = output / name

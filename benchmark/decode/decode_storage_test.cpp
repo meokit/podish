@@ -57,7 +57,7 @@ static bool CheckCompactSlots(EmuState* state) {
     ops.back().next_eip = guest_pc;
     SetExtKind(&ops.back(), ExtKind::Link);
     constexpr uint8_t count = std::tuple_size_v<decltype(ops)>;
-    alignas(BasicBlock) std::byte storage[BasicBlock::CalculateSize({count, count, count, count})];
+    alignas(BasicBlock) std::byte storage[BasicBlock::CalculateSize({count, count, count})];
     auto* block = new (storage) BasicBlock;
     block->set_start_eip(start);
     block->WriteOps(BlockSlotLayout::Inspect(start, ops), ops, state->mmu.invalid_code_block());
@@ -67,7 +67,7 @@ static bool CheckCompactSlots(EmuState* state) {
         const auto& expected = ops[i];
         const auto binding = BindScalarHandler(expected);
         const auto handler = binding.handler ? binding.handler : expected.handler;
-        if (block->LogicalIndex(slot) != i || NextOp(slot) != block->LogicalOp(i + 1) ||
+        if (block->LogicalIndex(slot) != i || block->NextOp(slot) != block->LogicalOp(i + 1) ||
             slot->HasMemoryImmediate() != cases[i].separate_immediate || got.next_eip != expected.next_eip ||
             block->GetNextEip(slot) != expected.next_eip ||
             block->GetStartEip(slot) != expected.next_eip - expected.len || got.len != expected.len ||
@@ -84,11 +84,11 @@ static bool CheckCompactSlots(EmuState* state) {
             ((slot + 1)->handler != ForwardMemoryImmediateSlot || GetImm(slot) != GetImm(&expected)))
             return false;
         if (GetExtKind(&expected) == ExtKind::ControlFlow) {
-            auto** link = block->BranchLink(slot);
-            if (!link || *link != state->mmu.invalid_code_block() ||
+            auto* link = slot + 1;
+            if (block->NextOp(slot) != slot + 2 || link->LoadBlockLink() != state->mmu.invalid_code_block() ||
                 GetControlTargetEip(&got) != GetControlTargetEip(&expected))
                 return false;
-            *link = block;
+            link->StoreBlockLink(block);
         }
         slot->ClearOperandLowered();
         if (block->ReadOp(i).meta.flags.operand_lowered)
@@ -116,8 +116,7 @@ static bool CheckMaximalPhysicalSlots(EmuState* state, uint32_t address, std::by
             block->GetStartEip(slot) != address + i * sizeof(code) || block->GetOpLength(i) != sizeof(code))
             return false;
     }
-    // The leading branch must reach past 63 double-slot instructions and the
-    // sentinel. In eight-byte units that needs the ninth bit of its offset.
+    // The branch's second slot stays adjacent even in a full 129-slot block.
     std::array<DecodedInstruction, count + 1> ops;
     for (unsigned i = 0; i <= count; ++i)
         ops[i] = block->ReadOp(i);
@@ -137,8 +136,55 @@ static bool CheckMaximalPhysicalSlots(EmuState* state, uint32_t address, std::by
     with_branch->set_start_eip(address);
     with_branch->WriteOps(layout, ops, state->mmu.invalid_code_block());
     const auto* slot = with_branch->FirstOp();
-    return with_branch->BranchLink(with_branch->FirstOp()) == &with_branch->BranchLinks()[0].target &&
-           with_branch->LogicalOp(1) == slot + 1 && GetControlTargetEip(slot) == GetControlTargetEip(&branch.head);
+    return (slot + 1)->LoadBlockLink() == state->mmu.invalid_code_block() && with_branch->NextOp(slot) == slot + 2 &&
+           with_branch->LogicalOp(1) == slot + 2 && GetControlTargetEip(slot) == GetControlTargetEip(&branch.head);
+}
+
+static bool CheckReturnSlots(bool narrow, bool immediate) {
+    constexpr uint32_t code_address = 0x1000;
+    constexpr uint32_t target = 0x1200;
+    constexpr uint32_t stack_address = 0x2000;
+    constexpr uint16_t adjustment = 0x1234;
+    std::unique_ptr<EmuState, decltype(&X86_Destroy)> state(X86_Create(), X86_Destroy);
+    const auto cpu = state.get();
+    cpu->status = EmuStatus::Running;
+    auto* page = X86_AllocatePage(cpu, code_address, static_cast<uint8_t>(mem::Property::RX));
+    if (!page) return false;
+    X86_MemMap(cpu, stack_address, 4096, 3);
+    const std::array<uint8_t, 4> code{0x66, uint8_t(immediate ? 0xc2 : 0xc3), 0x34, 0x12};
+    const uint8_t* bytes = code.data() + !narrow;
+    const auto size = uint32_t(1 + narrow + (immediate ? 2 : 0));
+    std::memcpy(page, bytes, size);
+    const uint32_t stack_value = narrow ? 0xabcd0000 | target : target;
+    X86_MemWrite(cpu, stack_address, reinterpret_cast<const uint8_t*>(&stack_value), sizeof(stack_value));
+
+    auto* block = DecodeBlock(cpu, code_address, 0, 0);
+    if (!block || block->inst_count() != 1 || block->slot_count != (immediate ? 3 : 2)) {
+        std::fprintf(stderr, "RET decode failed (block=%p, count=%u, slots=%u)\n", (void*)block,
+                     block ? block->inst_count() : 0, block ? block->slot_count : 0);
+        return false;
+    }
+    auto* op = block->FirstOp();
+    auto* link = op + immediate;
+    if (link->LoadBlockLink() != cpu->mmu.invalid_code_block()) return false;
+    link->StoreBlockLink(block);
+    const auto restored = block->ReadOp(0);
+    if (restored.modrm != (immediate ? 2 : 3) || restored.prefixes.flags.opsize != narrow ||
+        GetExtKind(&restored) != ExtKind::ControlFlow || GetImm(&restored) != (immediate ? adjustment : 0) ||
+        block->NextOp(op) != block->Sentinel()) {
+        std::fprintf(stderr, "RET restore failed (opcode bits=%u, prefixes=%u, metadata=%u, imm=%x)\n",
+                     restored.modrm, restored.prefixes.all, restored.meta.all, GetImm(&restored));
+        return false;
+    }
+
+    X86_SetEIP(cpu, code_address);
+    X86_RegWrite(cpu, ESP, stack_address);
+    X86_Run(cpu, target, 8);
+    const auto esp = stack_address + (narrow ? 2 : 4) + (immediate ? adjustment : 0);
+    if (X86_GetEIP(cpu) == target && X86_RegRead(cpu, ESP) == esp) return true;
+    std::fprintf(stderr, "RET execution failed (eip=%x, esp=%x, expected esp=%x)\n",
+                 X86_GetEIP(cpu), X86_RegRead(cpu, ESP), esp);
+    return false;
 }
 
 static bool CheckPendingMemoryReplay(EmuState* state) {
@@ -330,6 +376,14 @@ int main() {
     const uint8_t imm32[] = {0xb8, 0x78, 0x56, 0x34, 0x12};
     ok = check_immediate(imm8, 1) && check_immediate(imm16, 2) && check_immediate(imm24, 3) &&
          check_immediate(imm32, 4) && CheckMaximalPhysicalSlots(state, address, page) && ok;
+    for (bool narrow : {false, true}) {
+        for (bool immediate : {false, true}) {
+            if (!CheckReturnSlots(narrow, immediate)) {
+                std::fprintf(stderr, "RET slot check failed (operand16=%d, immediate=%d)\n", narrow, immediate);
+                ok = false;
+            }
+        }
+    }
     ok = CheckPendingMemoryReplay(state) && CheckDeadFlagsAcrossReplay() && ok;
     ok = CheckMemoryFaultEip(false, false) && CheckMemoryFaultEip(true, false) && CheckMemoryFaultEip(false, true) &&
          CheckMemoryFaultEip(true, true) && CheckMemoryFaultEip(false, false, true) &&

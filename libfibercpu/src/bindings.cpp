@@ -845,7 +845,7 @@ static bool ExecuteSingleInstructionOnStack(EmuState* state) {
     ops.back().next_eip = inst.head.next_eip;
     SetExtKind(&ops.back(), ExtKind::Link);
 
-    alignas(BasicBlock) std::byte block_storage[BasicBlock::CalculateSize({2, 1, 1, 1})];
+    alignas(BasicBlock) std::byte block_storage[BasicBlock::CalculateSize({2, 1, 1})];
     auto* scratch = new (block_storage) BasicBlock;
     scratch->set_start_eip(state->ctx.eip);
     scratch->WriteOps(BlockSlotLayout::Inspect(state->ctx.eip, ops), ops, state->mmu.invalid_code_block());

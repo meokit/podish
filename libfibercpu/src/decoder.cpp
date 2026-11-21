@@ -71,11 +71,12 @@ static int GetImmLength(uint8_t type, const DecodedInstruction* op) {
 }
 
 static bool UsesControlFlowCacheStorage(uint16_t handler_index) {
-    if (handler_index == 0xE8 || handler_index == 0xE9 || handler_index == 0xEB || handler_index == 0xC2 ||
-        handler_index == 0xC3 || (handler_index >= 0xE0 && handler_index <= 0xE3)) {
-        return true;
+    switch (handler_index) {
+#include "block_link_opcodes.inc"
+            return true;
+        default:
+            return false;
     }
-    return (handler_index >= 0x70 && handler_index <= 0x7F) || (handler_index >= 0x180 && handler_index <= 0x18F);
 }
 
 static bool IsLockableOpcode(uint16_t opcode) {
@@ -979,13 +980,12 @@ uint64_t PackOperand(const DecodedInstruction& op) {
 
 BlockSlotLayout BlockSlotLayout::Inspect(uint32_t start_eip, std::span<const DecodedInstruction> ops) {
     assert(!ops.empty() && ops.size() <= 65);
-    BlockSlotLayout layout{static_cast<uint8_t>(ops.size()), 0, 0, 0};
+    BlockSlotLayout layout{static_cast<uint8_t>(ops.size()), 0, 0};
     auto expected = start_eip;
     for (const auto& op : ops.first(ops.size() - 1)) {
         if (op.next_eip - op.len != expected) ++layout.anchor_count;
         expected = op.next_eip;
-        if (GetExtKind(&op) == ExtKind::ControlFlow) ++layout.branch_count;
-        if (compact_imm::NeedsSeparateSlot(op)) ++layout.data_slot_count;
+        if (HasExtraOperandSlot(op.meta.all, op.prefixes.all, GetImm(&op))) ++layout.data_slot_count;
     }
     return layout;
 }
@@ -995,12 +995,11 @@ void BasicBlock::WriteOps(BlockSlotLayout layout, std::span<const DecodedInstruc
     slot_count = static_cast<uint8_t>(layout.PhysicalSlotCount());
     sentinel_slot_index = slot_count - 1;
     set_inst_count(layout.logical_slot_count - 1);
-    branch_count = layout.branch_count;
+    link_only_return_prefixes = 0;
     anchor_count = layout.anchor_count;
     sentinel_eip = ops.back().next_eip;
 
     const auto anchor_offset = AnchorOffset();
-    auto* branch_link = BranchLinks();
     auto* anchors =
         anchor_count ? reinterpret_cast<uint64_t*>(reinterpret_cast<std::byte*>(this) + anchor_offset) : nullptr;
     auto* adjustments = anchors ? reinterpret_cast<uint32_t*>(anchors + 1) : nullptr;
@@ -1022,32 +1021,34 @@ void BasicBlock::WriteOps(BlockSlotLayout layout, std::span<const DecodedInstruc
         ends[i] = offset;
         expected = op.next_eip;
         auto& slot = FirstOp()[physical_index++];
-        slot.payload = PackOperand(op);
-        const bool has_data_slot = slot.HasMemoryImmediate();
+        if (fiberish::IsLinkOnlyReturn(op.meta.all)) {
+            assert(i + 1 == inst_count() && !op.prefixes.flags.lock);
+            link_only_return_prefixes = op.prefixes.all | prefix::LOCK;
+            slot.StoreBlockLink(invalid);
+        } else {
+            slot.payload = PackOperand(op);
+        }
         slot.handler = op.handler;
         if (!preserve_handlers) {
             const auto binding = BindScalarHandler(op);
             if (binding.handler) slot.handler = binding.handler;
         }
-        if (GetExtKind(&op) == ExtKind::ControlFlow) {
-            const auto distance = reinterpret_cast<std::byte*>(branch_link) - reinterpret_cast<std::byte*>(&slot);
-            const auto units = distance / sizeof(BlockBranchLink);
-            assert(distance > 0 && distance % sizeof(BlockBranchLink) == 0 &&
-                   units < (1u << DecodedOp::kBranchLinkBits));
-            slot.payload |= uint64_t(units) << DecodedOp::kAddressShift;
-            (branch_link++)->target = invalid;
-        }
-        assert(compact_imm::NeedsSeparateSlot(op) == has_data_slot);
-        if (has_data_slot) {
+        const bool branch_link = HasBranchLinkSlot(op.meta.all);
+        const bool memory_immediate = compact_imm::NeedsSeparateSlot(op);
+        if (branch_link || memory_immediate) {
             data_mask->logical |= bit;
             data_mask->physical[physical_index / 64] |= uint64_t{1} << (physical_index % 64);
             auto& data = FirstOp()[physical_index++];
-            data.handler = ForwardMemoryImmediateSlot;
-            data.payload = GetImm(&op);
+            if (branch_link) {
+                data.handler = nullptr;
+                data.StoreBlockLink(invalid);
+            } else {
+                data.handler = ForwardMemoryImmediateSlot;
+                data.payload = GetImm(&op);
+            }
         }
     }
     assert(physical_index == sentinel_slot_index);
-    assert(branch_link == BranchLinks() + branch_count);
     Sentinel()->handler = ops.back().handler;
     entry = FirstOp()->handler;
     SetFallthroughLink(invalid);
@@ -1063,10 +1064,17 @@ DecodedInstruction BasicBlock::ReadOp(size_t slot) const {
         return result;
     }
     result.len = GetOpLength(slot);
+    if (IsLinkOnlyReturn(&op)) {
+        result.modrm = 0xC3 & 7;
+        result.prefixes.all = link_only_return_prefixes & ~prefix::LOCK;
+        result.meta.flags.is_control_flow = 1;
+        SetExtKind(&result, ExtKind::ControlFlow);
+        return result;
+    }
     // Runtime handlers get a bound constant. Only the decoded snapshot
     // needs the original encoding for concatenation, re-decode and export.
     result.modrm = uint8_t(op.payload >> DecodedOp::kModRMShift);
-    if (op.IsCachedBranch()) result.modrm &= 7;
+    if (op.HasBranchOperands()) result.modrm &= 7;
     result.prefixes = op.GetPrefixes();
     result.meta = op.GetMeta();
     if (GetExtKind(&result) == ExtKind::ControlFlow) {

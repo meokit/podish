@@ -1,5 +1,13 @@
 {
   "version": 1,
+  "block_links": {
+    "link_only_return": 195,
+    "with_operands": [
+      112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127,
+      194, 224, 225, 226, 227, 232, 233, 235,
+      384, 385, 386, 387, 388, 389, 390, 391, 392, 393, 394, 395, 396, 397, 398, 399
+    ]
+  },
   "specialization_sources": ["llvm_kernel_policies.json"],
   "families": {
     "Add_EvGv": {"opcode": 1, "layout": "RmReg", "extension": -1, "width_rule": "ScalarEv"},

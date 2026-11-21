@@ -7,6 +7,9 @@
 
 namespace fiberish {
 
+// The low two bits give the slot count. A branch link slot has no immediate.
+inline constexpr unsigned kLLVMBranchLinkSlot = 4 | 2;
+
 enum class LLVMBlockExit : uint8_t { Dispatch, Fallthrough, Branch };
 
 class ScopedLLVMJitExecution {

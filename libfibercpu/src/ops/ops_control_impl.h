@@ -129,7 +129,7 @@ FORCE_INLINE LogicFlow OpLoop_Internal(LogicFuncParams, const Operands& operands
 
 template <typename T>
 FORCE_INLINE LogicFlow OpCallRelative(LogicFuncParams) {
-    if (!Push<T, true>(state, gpr, static_cast<T>(GetCallReturnEip(state, op)), utlb, op))
+    if (!Push<T, true>(state, gpr, static_cast<T>(GetCallReturnEip<2>(state, op)), utlb, op))
         return LogicFlow::RestartMemoryOp;
     *branch = static_cast<T>(GetControlTargetEip(op));
     return LogicFlow::ExitToBranch;
@@ -152,9 +152,11 @@ FORCE_INLINE LogicFlow OpReturnNear(LogicFuncParams) {
     const auto target = Pop<T, true>(state, gpr, utlb, op);
     if (!target) return LogicFlow::RestartMemoryOp;
     *branch = *target;
-    if constexpr (Adjustment == RetStackAdjustment::Immediate)
+    if constexpr (Adjustment == RetStackAdjustment::Immediate) {
         gpr.SetReg(state, ESP, gpr.GetReg(state, ESP) + static_cast<uint16_t>(imm));
-    return LogicFlow::ExitToBranch;
+        return LogicFlow::ExitToBranch;
+    }
+    return LogicFlow::ExitToBranchSingleSlot;
 }
 
 template <RetStackAdjustment Adjustment, class Operands = OperandSpec::Dynamic>
@@ -164,7 +166,8 @@ FORCE_INLINE LogicFlow OpReturnNearWithOperands(LogicFuncParams, const Operands&
 }
 
 FORCE_INLINE LogicFlow OpRet(LogicFuncParams) {
-    return OpReturnNearWithOperands<RetStackAdjustment::None>(LogicPassParams);
+    if (operand_modrm & prefix::OPSIZE) return OpReturnNear<uint16_t, RetStackAdjustment::None>(LogicPassParams);
+    return OpReturnNear<uint32_t, RetStackAdjustment::None>(LogicPassParams);
 }
 
 FORCE_INLINE LogicFlow OpRet_Imm16(LogicFuncParams) {

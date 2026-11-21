@@ -45,8 +45,13 @@ void ApplySuperOpcodesToBlockOps(DecodedInstruction* ops, uint32_t op_count, boo
             case LogicFlow::ExitToBranch:                                                                             \
                 RecordBlockHandlersThrough(state, flow_op);                                                           \
                 mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);                                                 \
-                ATTR_MUSTTAIL return ResolveBranchTargetInline<ExtKind::ControlFlow>(                                 \
+                ATTR_MUSTTAIL return ResolveBranchTargetInline<1>(                                 \
                     state, flow_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);    \
+            case LogicFlow::ExitToBranchSingleSlot:                                                                    \
+                RecordBlockHandlersThrough(state, flow_op);                                                            \
+                mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);                                                    \
+                ATTR_MUSTTAIL return ResolveBranchTargetInline<0>(                                                     \
+                    state, flow_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);      \
             default:                                                                                                  \
                 FIBERCPU_PIN_COMMIT(state);                                                                           \
                 CommitFlagsCache(state, flags_cache);                                                                 \

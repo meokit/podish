@@ -31,7 +31,7 @@ bool ReadStep(llvm::StringRef& line, block_recipe::BoundOperation& operation, De
         if (operand.getAsInteger(10, *field)) return false;
         line = next;
     }
-    operation.shape = {uint8_t(shape.encoding), uint8_t(shape.SlotCount())};
+    operation.shape = shape.Binding();
     return true;
 }
 

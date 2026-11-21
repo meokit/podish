@@ -1005,7 +1005,7 @@ bool VerifyCpuRunOptions(const char* path) {
     const auto check_weights = [](const std::string& file, std::initializer_list<uint64_t> expected) {
         std::ifstream stream(file, std::ios::binary);
         const std::string bytes((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
-        if (bytes.size() < 40 || !bytes.starts_with("FIBJPR05"))
+        if (bytes.size() < 40 || !bytes.starts_with("FIBJPR07"))
             return false;
         size_t offset = 40; // Eight-byte magic, then the 32-byte fingerprint.
         const auto read_le = [&](unsigned count) {

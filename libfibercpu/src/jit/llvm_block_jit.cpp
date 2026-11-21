@@ -405,7 +405,7 @@ public:
             {"_ZN8fiberish15MemoryOpRestartE", MemoryOpRestart},
             {"_ZN8fiberish13MemoryOpRetryE", MemoryOpRetry},
             {"_ZN8fiberish27ResolveBranchTargetSlowLinkE", ResolveBranchTargetSlowLink},
-            {"_ZN8fiberish34ResolveBranchTargetSlowControlFlowE", ResolveBranchTargetSlowControlFlow},
+            {"_ZN8fiberish33ResolveBranchTargetSlowDoubleSlotE", ResolveBranchTargetSlowDoubleSlot},
         };
         for (const auto& function : *ir.module) {
             if (!function.isDeclaration()) continue;

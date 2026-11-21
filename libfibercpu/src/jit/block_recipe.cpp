@@ -91,8 +91,8 @@ void InstallBlockHandler(BasicBlock& block, std::span<const HandlerFunc> replay_
     auto* op = block.FirstOp();
     for (const auto handler : replay_handlers) {
         op->handler = handler;
-        op->ClearOperandLowered();
-        op = NextOp(op);
+        if (!block.IsLinkOnlyReturn(op)) op->ClearOperandLowered();
+        op = block.NextOp(op);
     }
     block.entry = entry;
 }

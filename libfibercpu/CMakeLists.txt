@@ -282,6 +282,7 @@ if(FIBERCPU_HAVE_GENERATED_SUPEROPCODES)
 endif()
 set(_catalog_products "${CMAKE_CURRENT_BINARY_DIR}/generated/instruction_families.h"
                       "${CMAKE_CURRENT_BINARY_DIR}/generated/instruction_catalog.inc"
+                      "${CMAKE_CURRENT_BINARY_DIR}/generated/block_link_opcodes.inc"
                       "${CMAKE_CURRENT_BINARY_DIR}/generated/instruction_kernel_bindings.inc"
                       "${CMAKE_CURRENT_BINARY_DIR}/generated/llvm_block_operations.inc"
                       "${CMAKE_CURRENT_BINARY_DIR}/generated/llvm_block_entries.inc"

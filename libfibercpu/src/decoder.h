@@ -73,6 +73,7 @@ enum class LogicFlow : uint8_t {
     RestartMemoryOp = 4,
     RetryMemoryOp = 5,
     ExitToBranch = 6,
+    ExitToBranchSingleSlot,
 };
 
 #define LogicFuncParams                                                                                         \
@@ -117,6 +118,8 @@ union Prefixes {
 
 union Meta {
     static constexpr uint8_t has_modrm_mask = 1 << 0;
+    static constexpr uint8_t has_mem_mask = 1 << 1;
+    static constexpr uint8_t has_imm_mask = 1 << 2;
     static constexpr uint8_t no_flags_mask = 1 << 4;
     static constexpr uint8_t operand_lowered_mask = 1 << 5;
 
@@ -340,9 +343,17 @@ FORCE_INLINE bool NeedsSeparateSlot(const DecodedInstruction& op) {
 }  // namespace compact_imm
 
 // Keep link offsets in eight-byte units on both 32- and 64-bit hosts.
-struct alignas(8) BlockBranchLink {
-    BasicBlock* target;
-};
+constexpr bool IsLinkOnlyReturn(uint8_t metadata) {
+    return ExtKind(metadata >> 6) == ExtKind::ControlFlow && !(metadata & Meta::has_imm_mask);
+}
+
+constexpr bool HasBranchLinkSlot(uint8_t metadata) {
+    return ExtKind(metadata >> 6) == ExtKind::ControlFlow && (metadata & Meta::has_imm_mask);
+}
+
+constexpr bool HasExtraOperandSlot(uint8_t metadata, uint8_t prefixes, uint32_t immediate) {
+    return HasBranchLinkSlot(metadata) || compact_imm::NeedsSeparateSlot(metadata & Meta::has_mem_mask, prefixes, immediate);
+}
 
 struct alignas(16) DecodedOp {
     HandlerFunc handler;
@@ -356,15 +367,15 @@ struct alignas(16) DecodedOp {
     // branch target. Memory implies ModRM, so its redundant bit marks an
     // immediate encoded in the otherwise zero low prefix bits. Other nonzero
     // memory immediates use an adjacent data slot. Cached control-flow
-    // instructions use the unused high opcode bits for their tag and relative
-    // width, and the address bits for the link offset.
+    // instructions with operands use the unused high opcode bits for their
+    // tag and relative width. A terminal RET without operands stores only its
+    // mutable block link in payload.
     static constexpr unsigned kModRMShift = 32;
     static constexpr unsigned kPrefixShift = 40;
     static constexpr unsigned kMetaShift = 48;
     static constexpr unsigned kAddressShift = 54;
     static constexpr unsigned kBranchWidthShift = kModRMShift + 3;
     static constexpr uint64_t kBranchTag = uint64_t{1} << (kModRMShift + 7);
-    static constexpr unsigned kBranchLinkBits = 9;
     static constexpr uint64_t kHasMemory = uint64_t{2} << kMetaShift;
     static constexpr uint64_t kHasModRM = uint64_t{Meta::has_modrm_mask} << kMetaShift;
     static constexpr uint64_t kHasMemoryImmediate = uint64_t{1} << 63;
@@ -391,10 +402,10 @@ struct alignas(16) DecodedOp {
     FORCE_INLINE bool HasMemory() const { return payload & kHasMemory; }
     FORCE_INLINE bool HasMemoryImmediate() const { return payload & kHasMemoryImmediate; }
     FORCE_INLINE bool HasCompactImmediate() const { return (payload & (kHasMemory | kHasModRM)) == kHasMemory; }
-    FORCE_INLINE bool IsCachedBranch() const { return (payload & (kBranchTag | kHasMemory | kHasModRM)) == kBranchTag; }
+    FORCE_INLINE bool HasBranchOperands() const { return (payload & (kBranchTag | kHasMemory | kHasModRM)) == kBranchTag; }
     FORCE_INLINE ExtKind GetExtKind() const {
         if (HasMemory()) return ExtKind::Data;
-        if (IsCachedBranch()) return ExtKind::ControlFlow;
+        if (HasBranchOperands()) return ExtKind::ControlFlow;
         return ExtKind((payload >> kAddressShift) & 3);
     }
     FORCE_INLINE Meta GetMeta() const {
@@ -421,24 +432,16 @@ struct alignas(16) DecodedOp {
     FORCE_INLINE RelativeBranchWidth BranchWidth() const {
         return RelativeBranchWidth((payload >> kBranchWidthShift) & 3);
     }
-    FORCE_INLINE BlockBranchLink* CachedBranchLink() {
-        assert(IsCachedBranch());
-        constexpr auto mask = (1u << kBranchLinkBits) - 1;
-        const auto offset = (payload >> kAddressShift) & mask;
-        return reinterpret_cast<BlockBranchLink*>(reinterpret_cast<std::byte*>(this) +
-                                                  offset * sizeof(BlockBranchLink));
+    FORCE_INLINE BasicBlock* LoadBlockLink() const {
+        return reinterpret_cast<BasicBlock*>(static_cast<uintptr_t>(payload));
     }
+    FORCE_INLINE void StoreBlockLink(BasicBlock* target) { payload = reinterpret_cast<uintptr_t>(target); }
     FORCE_INLINE void ClearOperandLowered() { payload &= ~(uint64_t{Meta::operand_lowered_mask} << kMetaShift); }
 };
 
-static_assert(sizeof(BlockBranchLink) == 8);
 static_assert(sizeof(DecodedOp) == 16, "DecodedOp must be exactly 16 bytes");
 static_assert(offsetof(DecodedOp, handler) == 0);
 static_assert(offsetof(DecodedOp, payload) == 8);
-
-FORCE_INLINE const DecodedOp* NextOp(const DecodedOp* op) { return op + 1 + op->HasMemoryImmediate(); }
-
-FORCE_INLINE DecodedOp* NextOp(DecodedOp* op) { return op + 1 + op->HasMemoryImmediate(); }
 
 ATTR_PRESERVE_NONE int64_t ForwardMemoryImmediateSlot(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
                                                       int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags,
@@ -482,7 +485,6 @@ FORCE_INLINE uint32_t GetControlTargetEip(const DecodedOp* op) { return op->Prim
 struct BlockSlotLayout {
     uint8_t logical_slot_count;
     uint8_t anchor_count;
-    uint8_t branch_count;
     uint8_t data_slot_count;
 
     constexpr size_t PhysicalSlotCount() const { return size_t(logical_slot_count) + data_slot_count; }
@@ -513,7 +515,8 @@ struct alignas(16) BasicBlock {
     uint8_t slot_count;  // Physical slots, including data and sentinel.
     uint8_t sentinel_slot_index;
     uint8_t anchor_count;
-    uint8_t branch_count;
+    // LOCK is invalid for RET, leaving that bit free to mark a link-only tail.
+    uint8_t link_only_return_prefixes = 0;
     uint32_t sentinel_eip;
     uint32_t branch_target_eip = 0;
     uint32_t fallthrough_eip = 0;
@@ -527,12 +530,9 @@ struct alignas(16) BasicBlock {
 
     static constexpr size_t AlignFooter(size_t offset) { return (offset + 7) & ~size_t{7}; }
 
-    static constexpr size_t BranchTableSize(uint8_t count) { return count * sizeof(BlockBranchLink); }
-
     static constexpr size_t CalculateSize(BlockSlotLayout layout, bool retain_scalar_handlers = false) {
         if (!layout.logical_slot_count) return sizeof(BasicBlock);
-        size_t size = offsetof(BasicBlock, slots) + sizeof(DecodedOp) * layout.PhysicalSlotCount() +
-                      BranchTableSize(layout.branch_count);
+        size_t size = offsetof(BasicBlock, slots) + sizeof(DecodedOp) * layout.PhysicalSlotCount();
         if (layout.data_slot_count) size = AlignFooter(size) + sizeof(BlockDataSlotMask);
         size +=
             (layout.logical_slot_count - 1) * (sizeof(uint16_t) + (retain_scalar_handlers ? sizeof(HandlerFunc) : 0));
@@ -545,17 +545,14 @@ struct alignas(16) BasicBlock {
     DecodedOp* Sentinel() { return FirstOp() + sentinel_slot_index; }
     const DecodedOp* Sentinel() const { return FirstOp() + sentinel_slot_index; }
 
-    // Taken links immediately follow the slots. Each branch slot holds a
-    // relative offset to its link, filled in after the physical layout is known.
-    FORCE_INLINE size_t BranchOffset() const { return offsetof(BasicBlock, slots) + sizeof(DecodedOp) * slot_count; }
-
-    FORCE_INLINE BlockBranchLink* BranchLinks() {
-        return reinterpret_cast<BlockBranchLink*>(reinterpret_cast<std::byte*>(this) + BranchOffset());
-    }
-
     FORCE_INLINE bool HasDataSlots() const { return slot_count > inst_count() + 1; }
 
-    size_t DataSlotMaskOffset() const { return AlignFooter(BranchOffset() + BranchTableSize(branch_count)); }
+    FORCE_INLINE size_t SlotsEndOffset() const { return offsetof(BasicBlock, slots) + sizeof(DecodedOp) * slot_count; }
+    size_t DataSlotMaskOffset() const { return AlignFooter(SlotsEndOffset()); }
+
+    FORCE_INLINE bool IsLinkOnlyReturn(const DecodedOp* op) const {
+        return (link_only_return_prefixes & prefix::LOCK) && op + 1 == Sentinel();
+    }
     const BlockDataSlotMask* DataSlotMask() const {
         return reinterpret_cast<const BlockDataSlotMask*>(reinterpret_cast<const std::byte*>(this) +
                                                           DataSlotMaskOffset());
@@ -585,11 +582,23 @@ struct alignas(16) BasicBlock {
         return const_cast<DecodedOp*>(std::as_const(*this).LogicalOp(slot));
     }
 
+    FORCE_INLINE const DecodedOp* NextOp(const DecodedOp* op) const {
+        const auto* next = op + 1;
+        if (HasDataSlots() && next != Sentinel()) {
+            const auto physical = next - FirstOp();
+            next += (DataSlotMask()->physical[physical / 64] >> (physical % 64)) & 1;
+        }
+        return next;
+    }
+    FORCE_INLINE DecodedOp* NextOp(DecodedOp* op) {
+        return const_cast<DecodedOp*>(std::as_const(*this).NextOp(op));
+    }
+
     // Scalar handlers and PC offsets are indexed by guest instruction, never data slot.
     HandlerFunc* UnfusedHandlers() { return const_cast<HandlerFunc*>(std::as_const(*this).UnfusedHandlers()); }
     const HandlerFunc* UnfusedHandlers() const {
         const size_t offset = HasDataSlots() ? DataSlotMaskOffset() + sizeof(BlockDataSlotMask)
-                                             : BranchOffset() + BranchTableSize(branch_count);
+                                             : SlotsEndOffset();
         return reinterpret_cast<const HandlerFunc*>(reinterpret_cast<const std::byte*>(this) + offset);
     }
 
@@ -602,16 +611,8 @@ struct alignas(16) BasicBlock {
                            reinterpret_cast<const std::byte*>(this));
     }
 
-    FORCE_INLINE BasicBlock* FallthroughLink() const {
-        return reinterpret_cast<BasicBlock*>(static_cast<uintptr_t>(Sentinel()->payload));
-    }
-    FORCE_INLINE void SetFallthroughLink(BasicBlock* target) {
-        Sentinel()->payload = reinterpret_cast<uintptr_t>(target);
-    }
-
-    FORCE_INLINE BasicBlock** BranchLink(DecodedOp* op) {
-        return op->IsCachedBranch() ? &op->CachedBranchLink()->target : nullptr;
-    }
+    FORCE_INLINE BasicBlock* FallthroughLink() const { return Sentinel()->LoadBlockLink(); }
+    FORCE_INLINE void SetFallthroughLink(BasicBlock* target) { Sentinel()->StoreBlockLink(target); }
 
     FORCE_INLINE uint32_t PCAdjustment(size_t slot) const {
         const auto* anchors =

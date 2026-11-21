@@ -13,8 +13,15 @@ struct BoundOperandShape {
 
     auto operator<=>(const BoundOperandShape&) const = default;
 
+    static constexpr BoundOperandShape From(uint8_t modrm, uint8_t prefixes, uint8_t metadata, uint32_t immediate) {
+        // Link-only RET has no ModRM. Its low opcode bits leave room to bind
+        // the stack operand width in both the scalar and generic LLVM keys.
+        if (IsLinkOnlyReturn(metadata)) modrm |= prefixes & prefix::OPSIZE;
+        return {modrm, uint8_t(1 + HasExtraOperandSlot(metadata, prefixes, immediate))};
+    }
+
     static FORCE_INLINE BoundOperandShape Read(const DecodedInstruction& op) {
-        return {op.modrm, uint8_t(1 + compact_imm::NeedsSeparateSlot(op))};
+        return From(op.modrm, op.prefixes.all, op.meta.all, GetImm(&op));
     }
 };
 
@@ -27,12 +34,13 @@ struct Dynamic {
     static FORCE_INLINE void Assume(const DecodedOp*) {}
     static FORCE_INLINE uint32_t Immediate(const DecodedOp* op) { return GetImm(op); }
 };
-template <unsigned Slots>
+template <unsigned Slots, bool SecondSlotImmediate = (Slots == 2)>
 struct SlotBound : Dynamic {
     static_assert(Slots == 1 || Slots == 2);
     static constexpr unsigned slots = Slots;
     static FORCE_INLINE uint32_t Immediate(const DecodedOp* op) {
-        if constexpr (Slots == 2) return (op + 1)->Primary();
+        if constexpr (SecondSlotImmediate) return (op + 1)->Primary();
+        if constexpr (Slots == 2) return op->Primary();
         return op->HasMemory() ? GetSingleSlotMemoryImmediate(op) : op->Primary();
     }
 };
@@ -81,9 +89,12 @@ struct DecodedOperandShape {
 
     static constexpr bool HasMemoryAddress(uint8_t metadata) { return (metadata & 0xc2) == 2; }
 
-    constexpr unsigned SlotCount() const {
-        return 1 + compact_imm::NeedsSeparateSlot((encoding >> 16) & 2, uint8_t(encoding >> 8), immediate);
+    constexpr BoundOperandShape Binding() const {
+        return BoundOperandShape::From(uint8_t(encoding), uint8_t(encoding >> 8), uint8_t(encoding >> 16),
+                                       immediate);
     }
+
+    constexpr unsigned SlotCount() const { return Binding().slots; }
 
     auto operator<=>(const DecodedOperandShape&) const = default;
 
@@ -116,7 +127,7 @@ template <DecodedOperandShape Shape, unsigned Keep = 0>
 struct Profile {
     static constexpr unsigned keep_mask = Keep;
     static constexpr unsigned slots = Shape.SlotCount();
-    static constexpr uint8_t modrm = uint8_t(Shape.encoding);
+    static constexpr uint8_t modrm = Shape.Binding().modrm;
     static constexpr uint8_t ModRM(const DecodedOp*) { return modrm; }
     static constexpr uint8_t metadata = uint8_t(Shape.encoding >> 16);
     static constexpr uint8_t prefixes = uint8_t(Shape.encoding >> 8);
@@ -124,8 +135,10 @@ struct Profile {
     static constexpr const BakedAddress* baked_address =
         DecodedOperandShape::HasMemoryAddress(metadata) ? &address : nullptr;
     static FORCE_INLINE void Assume(const DecodedOp* op) {
-        const auto decoded_prefixes = GetPrefixes(op).all;
-        __builtin_assume(decoded_prefixes == prefixes);
+        if constexpr (!IsLinkOnlyReturn(metadata)) {
+            const auto decoded_prefixes = GetPrefixes(op).all;
+            __builtin_assume(decoded_prefixes == prefixes);
+        }
     }
     static constexpr uint32_t Immediate(const DecodedOp*) { return Shape.immediate; }
 };

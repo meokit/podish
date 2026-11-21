@@ -11,8 +11,8 @@
 
 namespace fiberish::llvm_block_cache {
 
-inline constexpr std::string_view profile_magic = "FIBJPR04";
-inline constexpr std::string_view weighted_profile_magic = "FIBJPR05";
+inline constexpr std::string_view profile_magic = "FIBJPR06";
+inline constexpr std::string_view weighted_profile_magic = "FIBJPR07";
 inline constexpr std::string_view linked_magic = "FIBJLC03";
 
 inline bool ReadU32(std::string_view& bytes, uint32_t& value) {
@@ -87,7 +87,7 @@ inline bool DecodeKey(std::string_view bytes, block_recipe::Plan& plan, bool& ex
             auto& shape = plan.operands[i];
             if (!ReadU32(bytes, shape.encoding) || !ReadU32(bytes, shape.ea_desc) ||
                 !ReadU32(bytes, shape.displacement) || !ReadU32(bytes, shape.immediate) ||
-                binding.modrm != uint8_t(shape.encoding) || binding.slots != shape.SlotCount())
+                binding != shape.Binding())
                 return false;
         }
     }

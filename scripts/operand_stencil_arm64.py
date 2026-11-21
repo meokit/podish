@@ -10,8 +10,7 @@ HELPERS = (
     "MemoryOpRestart",
     "MemoryOpRetry",
     "ResolveBranchTargetSlowLink",
-    "ResolveBranchTargetSlowControlFlow",
-    "ResolveBranchTarget",
+    "ResolveBranchTargetSlowDoubleSlot",
 )
 HELPER_SYMBOLS = {f"__ZN8fiberish{len(name)}{name}E": name for name in HELPERS}
 BRANCH26, PAGE21, PAGEOFF12, GOT_LOAD_PAGE21, GOT_LOAD_PAGEOFF12 = range(2, 7)

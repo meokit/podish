@@ -101,7 +101,7 @@ void ApplySuperOpcodesToBlockOps(DecodedInstruction* ops, uint32_t op_count, boo
 #endif
         // Fusion matching only looks forward, so lowering this entry cannot
         // hide the canonical identities needed at the next offset.
-        if (op.len) {
+        if (op.len && !IsLinkOnlyReturn(op.meta.all)) {
 #if FIBERCPU_DYNAMIC_OPERANDS
             auto original = op.handler;
 #if FIBERCPU_LOWER_OPERANDS

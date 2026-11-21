@@ -17,14 +17,14 @@ extern HandlerFunc g_Handlers[1024];
 #ifdef FIBERCPU_ENABLE_HANDLER_PROFILE
 FORCE_INLINE void RecordBlockHandlersUntil(EmuState* state, const DecodedOp* stop_op) {
     if (!state->current_block_head) return;
-    for (const DecodedOp* current = state->current_block_head; current != stop_op; current = NextOp(current)) {
+    for (const DecodedOp* current = state->current_block_head; current != stop_op; current = state->last_block->NextOp(current)) {
         state->handler_exec_counts[reinterpret_cast<uintptr_t>(current->handler)]++;
     }
 }
 
 FORCE_INLINE void RecordBlockHandlersThrough(EmuState* state, const DecodedOp* stop_op) {
     if (!state->current_block_head) return;
-    for (const DecodedOp* current = state->current_block_head;; current = NextOp(current)) {
+    for (const DecodedOp* current = state->current_block_head;; current = state->last_block->NextOp(current)) {
         state->handler_exec_counts[reinterpret_cast<uintptr_t>(current->handler)]++;
         if (current == stop_op) break;
     }
@@ -44,15 +44,11 @@ extern ATTR_PRESERVE_NONE int64_t ResolveBranchTargetSlowLink(EmuState* RESTRICT
                                                               int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags,
                                                               mem::MicroTlbAbiWord utlb_addend, uint32_t branch,
                                                               uint64_t flags_cache FIBERCPU_PIN_PARAMS);
-extern ATTR_PRESERVE_NONE int64_t ResolveBranchTargetSlowControlFlow(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                                     int64_t instr_limit,
-                                                                     mem::MicroTlbAbiWord utlb_tags,
-                                                                     mem::MicroTlbAbiWord utlb_addend, uint32_t branch,
-                                                                     uint64_t flags_cache FIBERCPU_PIN_PARAMS);
-extern ATTR_PRESERVE_NONE int64_t ResolveBranchTarget(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                      int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags,
-                                                      mem::MicroTlbAbiWord utlb_addend, uint32_t branch,
-                                                      uint64_t flags_cache FIBERCPU_PIN_PARAMS);
+extern ATTR_PRESERVE_NONE int64_t ResolveBranchTargetSlowDoubleSlot(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
+                                                                    int64_t instr_limit,
+                                                                    mem::MicroTlbAbiWord utlb_tags,
+                                                                    mem::MicroTlbAbiWord utlb_addend, uint32_t branch,
+                                                                    uint64_t flags_cache FIBERCPU_PIN_PARAMS);
 
 FORCE_INLINE void CountLLVMBlockEntry(EmuState* state, BasicBlock* block, BasicBlockChainPrefix chain) {
 #if FIBERCPU_BLOCK_COMPILATION
@@ -73,7 +69,7 @@ FORCE_INLINE void CountLLVMBlockEntry(EmuState* state, BasicBlock* block, BasicB
 #endif
 }
 
-template <ExtKind Kind>
+template <unsigned LinkSlot>
 FORCE_INLINE ATTR_PRESERVE_NONE int64_t ResolveBranchTargetInline(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
                                                                   int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags,
                                                                   mem::MicroTlbAbiWord utlb_addend, uint32_t target_eip,
@@ -90,13 +86,8 @@ FORCE_INLINE ATTR_PRESERVE_NONE int64_t ResolveBranchTargetInline(EmuState* REST
         return instr_limit;
     }
 
-    BasicBlock* next_block;
-    if constexpr (Kind == ExtKind::Link) {
-        next_block = reinterpret_cast<BasicBlock*>(static_cast<uintptr_t>(op->payload));
-    } else {
-        static_assert(Kind == ExtKind::ControlFlow);
-        next_block = op->CachedBranchLink()->target;
-    }
+    static_assert(LinkSlot <= 1);
+    BasicBlock* next_block = (op + LinkSlot)->LoadBlockLink();
 
     auto header = *reinterpret_cast<const volatile __uint128_t*>(next_block);
     auto header_ptr = reinterpret_cast<const BasicBlock*>(&header);
@@ -117,11 +108,11 @@ FORCE_INLINE ATTR_PRESERVE_NONE int64_t ResolveBranchTargetInline(EmuState* REST
                                    std::numeric_limits<uint32_t>::max(), flags_cache FIBERCPU_PIN_RELOAD);
     }
 
-    if constexpr (Kind == ExtKind::Link) {
+    if constexpr (LinkSlot == 0) {
         ATTR_MUSTTAIL return ResolveBranchTargetSlowLink(state, op, instr_limit, utlb_tags, utlb_addend, target_eip,
                                                          flags_cache FIBERCPU_PIN_RELOAD);
     } else {
-        ATTR_MUSTTAIL return ResolveBranchTargetSlowControlFlow(state, op, instr_limit, utlb_tags, utlb_addend,
+        ATTR_MUSTTAIL return ResolveBranchTargetSlowDoubleSlot(state, op, instr_limit, utlb_tags, utlb_addend,
                                                                 target_eip, flags_cache FIBERCPU_PIN_RELOAD);
     }
 }
@@ -135,7 +126,7 @@ FORCE_INLINE ATTR_PRESERVE_NONE int64_t OpExitBlockImpl(EmuState* RESTRICT state
     RecordBlockHandlersUntil(state, op);
     // Group 5's indirect target can use the full guest address range.
     const uint32_t target_eip = UseBranch ? branch : state->last_block->sentinel_eip;
-    ATTR_MUSTTAIL return ResolveBranchTargetInline<ExtKind::Link>(state, op, instr_limit, utlb_tags, utlb_addend,
+    ATTR_MUSTTAIL return ResolveBranchTargetInline<0>(state, op, instr_limit, utlb_tags, utlb_addend,
                                                                   target_eip, flags_cache FIBERCPU_PIN_RELOAD);
 }
 
@@ -228,7 +219,11 @@ ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState* RESTRICT state, DecodedOp* 
                                                flags_cache FIBERCPU_PIN_RELOAD);
         case LogicFlow::ExitToBranch:
             RecordBlockHandlersThrough(state, op);
-            ATTR_MUSTTAIL return ResolveBranchTargetInline<ExtKind::ControlFlow>(
+            ATTR_MUSTTAIL return ResolveBranchTargetInline<1>(
+                state, op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
+        case LogicFlow::ExitToBranchSingleSlot:
+            RecordBlockHandlersThrough(state, op);
+            ATTR_MUSTTAIL return ResolveBranchTargetInline<0>(
                 state, op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
         default:
             FIBERCPU_PIN_COMMIT(state);

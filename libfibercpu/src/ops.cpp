@@ -114,7 +114,7 @@ ATTR_PRESERVE_NONE int64_t MemoryOpGeneric(EmuState* RESTRICT state, DecodedOp* 
     }
 
     state->clear_pending_mem_op();
-    DecodedOp* next_op = NextOp(op);
+    DecodedOp* next_op = state->last_block->NextOp(op);
     ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch,
                                           flags_cache FIBERCPU_PIN_RESUME);
 }
@@ -166,7 +166,7 @@ static FORCE_INLINE ATTR_PRESERVE_NONE int64_t ChainToKnownBlock(EmuState* RESTR
                                            std::numeric_limits<uint32_t>::max(), flags_cache FIBERCPU_PIN_RELOAD);
 }
 
-template <ExtKind Kind>
+template <unsigned LinkSlot>
 static ATTR_PRESERVE_NONE int64_t ResolveBranchTargetSlowImpl(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
                                                               int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags,
                                                               mem::MicroTlbAbiWord utlb_addend, uint32_t branch,
@@ -183,11 +183,7 @@ static ATTR_PRESERVE_NONE int64_t ResolveBranchTargetSlowImpl(EmuState* RESTRICT
         return instr_limit;
     }
 
-    if constexpr (Kind == ExtKind::Link) {
-        state->last_block->SetFallthroughLink(next_block);
-    } else if (auto** cached = state->last_block->BranchLink(op)) {
-        *cached = next_block;
-    }
+    (op + LinkSlot)->StoreBlockLink(next_block);
 
     state->last_block = next_block;
     ATTR_MUSTTAIL return ChainToKnownBlock(state, op, instr_limit, utlb_tags, utlb_addend, branch,
@@ -199,25 +195,17 @@ ATTR_PRESERVE_NONE int64_t ResolveBranchTargetSlowLink(EmuState* RESTRICT state,
                                                        mem::MicroTlbAbiWord utlb_addend, uint32_t branch,
                                                        uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
     FIBERCPU_PIN_ASSUME;
-    ATTR_MUSTTAIL return ResolveBranchTargetSlowImpl<ExtKind::Link>(state, op, instr_limit, utlb_tags, utlb_addend,
+    ATTR_MUSTTAIL return ResolveBranchTargetSlowImpl<0>(state, op, instr_limit, utlb_tags, utlb_addend,
                                                                     branch, flags_cache FIBERCPU_PIN_RELOAD);
 }
 
-ATTR_PRESERVE_NONE int64_t ResolveBranchTargetSlowControlFlow(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
+ATTR_PRESERVE_NONE int64_t ResolveBranchTargetSlowDoubleSlot(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
                                                               int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags,
                                                               mem::MicroTlbAbiWord utlb_addend, uint32_t branch,
                                                               uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
     FIBERCPU_PIN_ASSUME;
-    ATTR_MUSTTAIL return ResolveBranchTargetSlowImpl<ExtKind::ControlFlow>(
+    ATTR_MUSTTAIL return ResolveBranchTargetSlowImpl<1>(
         state, op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
-}
-
-ATTR_PRESERVE_NONE int64_t ResolveBranchTarget(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
-                                               mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-                                               uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
-    FIBERCPU_PIN_ASSUME;
-    ATTR_MUSTTAIL return ResolveBranchTargetInline<ExtKind::ControlFlow>(state, op, instr_limit, utlb_tags, utlb_addend,
-                                                                         branch, flags_cache FIBERCPU_PIN_RELOAD);
 }
 
 // Scalar handlers use physical next-slot dispatch. The data slot only forwards the

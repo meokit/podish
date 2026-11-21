@@ -19,7 +19,7 @@
 namespace fiberish {
 
 extern "C" bool FiberLLVMUseStep(unsigned index);
-extern "C" unsigned FiberLLVMSlotCount(unsigned index);
+extern "C" unsigned FiberLLVMOperandLayout(unsigned index);
 extern "C" LLVMBlockExit FiberLLVMExit();
 extern "C" LogicFlow FiberLLVMPlaceholder(unsigned index, uint32_t encoding, uint32_t ea_desc, uint32_t displacement,
                                           LogicFuncParams);
@@ -63,10 +63,12 @@ extern "C" const LLVMOperationTable FiberLLVMOperationTable = {
 #define FIBERCPU_LLVM_STEP(I)                                                                                          \
     do {                                                                                                               \
         if (!FiberLLVMUseStep(I)) goto dispatch_tail;                                                                  \
-        const auto slots = FiberLLVMSlotCount(I);                                                                      \
-        const auto imm = slots == 2             ? (current + 1)->Primary()                                             \
-                         : current->HasMemory() ? GetSingleSlotMemoryImmediate(current)                                \
-                                                : current->Primary();                                                  \
+        const auto layout = FiberLLVMOperandLayout(I);                                                               \
+        const auto slots = layout & 3;                                                                               \
+        const auto imm = layout == kLLVMBranchLinkSlot ? current->Primary()                                           \
+                         : slots == 2                   ? (current + 1)->Primary()                                    \
+                         : current->HasMemory()         ? GetSingleSlotMemoryImmediate(current)                       \
+                                                        : current->Primary();                                         \
         auto flow =                                                                                                    \
             FiberLLVMPlaceholder(I, 0, 0, 0, state, current, &utlb, imm, 0, &branch, flags_cache, FIBERCPU_GPR_CACHE); \
         if (flow != LogicFlow::Continue) {                                                                             \

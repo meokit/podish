@@ -209,8 +209,7 @@ HandlerFunc LowerDynamicOperandHandler(const DecodedInstruction* op, HandlerFunc
         auto entry = std::ranges::lower_bound(keys, order(shape), {},
                                               [&](const DynamicOperandEntry& key) { return order(key.shape); });
         for (; entry != keys.end() && entry->shape == shape; ++entry) {
-            if (baseline.modrm != uint8_t(entry->shape.encoding) || baseline.slots != entry->shape.SlotCount())
-                continue;
+            if (baseline != entry->shape.Binding()) continue;
             bool match = true;
             for (unsigned i = 1; i < family.width; ++i) {
                 if (DecodedOperandShape::Read(op + i) != kTailShapes[entry->tail + i - 1]) {

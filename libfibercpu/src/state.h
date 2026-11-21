@@ -257,10 +257,11 @@ FORCE_INLINE uint32_t GetNextEip(const EmuState* state, const DecodedOp* op) {
     return state->last_block->GetNextEip(op);
 }
 
+template <unsigned Slots = 1>
 FORCE_INLINE uint32_t GetCallReturnEip(const EmuState* state, const DecodedOp* op) {
     // Calls end decoding. Concatenation can prepend a block to a call, but
     // only a relative jump or a conditional branch can be an internal edge.
-    assert(op + 1 == state->last_block->Sentinel());
+    assert(op + Slots == state->last_block->Sentinel());
     return state->last_block->sentinel_eip;
 }
 

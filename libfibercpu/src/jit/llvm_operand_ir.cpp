@@ -42,8 +42,8 @@ KnownPayload EncodeKnownPayload(const DecodedOperandShape& operand) {
                 : header | operand.immediate;
         return {value, ~lowered};
     }
-    if (kind == ExtKind::ControlFlow) {
-        // The absolute target, link offset and branch width are not in the key.
+    if (HasBranchLinkSlot(metadata)) {
+        // The absolute target and branch width are not in the key.
         constexpr uint64_t width_bits = uint64_t{3} << DecodedOp::kBranchWidthShift;
         constexpr uint64_t mask =
             ((uint64_t{1} << DecodedOp::kAddressShift) - (uint64_t{1} << 32)) & ~(lowered | width_bits);
@@ -117,7 +117,10 @@ void BakeLLVMOperandLoads(llvm::Function& entry, block_recipe::BlockKeyView key)
     for (size_t i = 0; i < key.operations.size(); ++i) {
         const auto& operand = key.operands[i];
         payloads.push_back(EncodeKnownPayload(operand));
-        if (key.operations[i].shape.slots == 2) payloads.push_back({operand.immediate, UINT64_MAX});
+        if (operand.SlotCount() == 2) {
+            const auto metadata = uint8_t(operand.encoding >> 16);
+            payloads.push_back(HasBranchLinkSlot(metadata) ? KnownPayload{} : KnownPayload{operand.immediate, UINT64_MAX});
+        }
     }
 
     const auto* ops = entry.getArg(1);
@@ -289,8 +292,8 @@ std::unique_ptr<llvm::Module> PrepareLLVMBlock(const LLVMOperandTemplates& templ
     const auto* placeholder = module->getFunction("FiberLLVMPlaceholder");
     const auto* use_step = module->getFunction("FiberLLVMUseStep");
     const auto* exit_kind = module->getFunction("FiberLLVMExit");
-    const auto* slot_count = module->getFunction("FiberLLVMSlotCount");
-    if (!entry || !placeholder || !use_step || !exit_kind || !slot_count) return {};
+    const auto* operand_layout = module->getFunction("FiberLLVMOperandLayout");
+    if (!entry || !placeholder || !use_step || !exit_kind || !operand_layout) return {};
 
     std::vector<llvm::CallInst*> guards;
     llvm::CallInst* exit_site = nullptr;
@@ -317,13 +320,16 @@ std::unique_ptr<llvm::Module> PrepareLLVMBlock(const LLVMOperandTemplates& templ
         auto* call = llvm::dyn_cast<llvm::CallInst>(&inst);
         if (!call) continue;
         if (call->getCalledFunction() == placeholder) sites.push_back(call);
-        if (call->getCalledFunction() == slot_count) advances.push_back(call);
+        if (call->getCalledFunction() == operand_layout) advances.push_back(call);
     }
     for (auto* advance : advances) {
         const auto* index = llvm::dyn_cast<llvm::ConstantInt>(advance->getArgOperand(0));
         if (!index || index->getZExtValue() >= key.operations.size()) return {};
-        auto* slots = llvm::ConstantInt::get(advance->getType(), key.operations[index->getZExtValue()].shape.slots);
-        advance->replaceAllUsesWith(slots);
+        const auto& operation = key.operations[index->getZExtValue()];
+        const auto id = static_cast<size_t>(operation.id);
+        const auto layout = block_recipe::kHasBranchLinkSlot[id] ? kLLVMBranchLinkSlot : operation.shape.slots;
+        assert((layout & 3) == operation.shape.slots);
+        advance->replaceAllUsesWith(llvm::ConstantInt::get(advance->getType(), layout));
         advance->eraseFromParent();
     }
     if (sites.size() != key.operations.size()) return {};

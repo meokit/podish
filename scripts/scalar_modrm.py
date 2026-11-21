@@ -78,6 +78,7 @@ def scalar_modrm_plans(catalog):
         family = catalog["families"][row["family"]]
         sources[row["logic"]].append((family["opcode"], *constraints(family, row["spec"])))
 
+    branch_links = set(catalog["block_links"]["with_operands"])
     plans = {}
     for name, targets in sorted(sources.items()):
         if name == catalog["fallbacks"]["267"]:  # The decoder uses UD2 for all absent opcodes.
@@ -89,7 +90,7 @@ def scalar_modrm_plans(catalog):
         if normalize_mem and any(form != "reg" and rm is not None for _, form, _, rm in extended):
             mem_mask |= 7
         keys = set()
-        slot_counts = {1}
+        slot_counts = {2} if all(opcode in branch_links for opcode, _, _, _ in targets) else {1}
         for opcode, form, reg, rm in extended:
             if not 0 <= opcode < 512:
                 raise ValueError(f"no decoder row for handler {name} at {opcode:#x}")
