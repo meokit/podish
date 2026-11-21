@@ -81,6 +81,8 @@ const TrainingOperation* FindScalarBinding(HandlerFunc handler) {
                 if (fallback) result.emplace(fallback, &operation);
             for (const auto& entry : std::span(operation.scalar->entries, operation.scalar->count))
                 result.emplace(entry.handler, &operation);
+            for (const auto& entry : operation.scalar->exact)
+                result.emplace(entry.handler, &operation);
         }
         return result;
     }();
@@ -179,6 +181,12 @@ BoundScalarHandler BindScalarHandler(const DecodedInstruction& op) {
     const auto* binding = FindScalarBinding(op.handler);
     if (!binding) return {nullptr, 0, shape};
     const auto& table = *binding->scalar;
+    if (!table.exact.empty()) {
+        const auto decoded = DecodedOperandShape::Read(&op);
+        const auto selected = std::ranges::lower_bound(table.exact, decoded, {}, &ExactScalarBinding::shape);
+        if (selected != table.exact.end() && selected->shape == decoded)
+            return {selected->handler, binding->id, shape};
+    }
     const uint8_t modrm = shape.modrm < 0xc0 || !table.memory_mask ? shape.modrm & table.memory_mask : shape.modrm;
     const uint16_t key = (uint16_t(shape.slots) << 8) | modrm;
     const auto entries = std::span(table.entries, table.count);

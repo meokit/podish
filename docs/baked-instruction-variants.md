@@ -1,18 +1,17 @@
 # Baked instruction variants
 
-The 16-byte interpreter takes scalar native specializations from
-[the checked-in ModRM table](../libfibercpu/src/generated/modrm-specializations.json).
-CMake runs the Python catalog generator and compiles the table's entries into
-libfibercpu. Each entry fixes the canonical training ID's ModRM byte and slot
-count. The decoder normalizes memory ModRM where the kernel already uses the
-decoded effective address. The table contains numerical IDs and the generator
-rejects unknown IDs, duplicate keys and illegal encodings.
+CMake generates native scalar handlers for the 16-byte interpreter from the
+[ModRM table](../libfibercpu/src/generated/modrm-specializations.json) and the
+[exact operand plan](../benchmark/optimization/manifests/baked-scalar-operands-v3.json).
+The exact plan binds prefixes, flag liveness, effective addresses and immediates
+for selected shapes. Scalar and fused C++ handlers use the same catalog kernel
+expressions as the exact LLVM path. The C++ path works without LLVM enabled.
 
-An unlisted shape uses the instruction's architectural handler with its slot
-count bound at decode time. That handler obtains ModRM from the 16-byte op
-payload. Two-slot instructions keep their adjacent immediate slot in both
-paths. Mandatory-prefix decoding such as MMX versus SSE stays in the
-architectural catalog. It is needed to execute the instruction correctly.
+The decoder first matches the exact scalar shape. It then tries the ModRM and
+width/flags tables, which can normalize memory ModRM when the kernel uses the
+decoded effective address. Remaining shapes use the architectural handler with
+its slot count bound at decode time. Mandatory-prefix decoding such as MMX
+versus SSE stays in the architectural catalog.
 
 Fusions also come from recorded profiles. The checked-in sequence manifest
 contains canonical instruction IDs. A fusion is selected only when all of its
@@ -81,15 +80,18 @@ against the decoded prefix and current flag-liveness result. A missing policy
 uses the ModRM-only variant or the architectural handler with its slot count
 bound. Existing plans can omit `scalar_policies`.
 
-An unfused suite build also writes candidate `baked-fusions-v3.json` and
-`baked-fusion-operands-v3.json` files alongside the ModRM plan. The collector
+An unfused suite build also writes candidate `baked-fusions-v3.json`,
+`baked-fusion-operands-v3.json`, and `baked-scalar-operands-v3.json` files
+alongside the ModRM plan. The scalar collector takes up to 1,024 shapes from
+fast-deep-equal, 384 from each CoreMark build, and 256 from each GNU workload,
+then deduplicates the union. The collector
 ranks exact operands and their canonical sequence together. A candidate's
 score is its estimated dispatch savings divided by guest instruction visits,
 summed across workloads. The collector replays each capture with the same
 longest-first matching as the decoder and keeps an operand shape only when
 it increases the estimated savings. The operand plan records estimated
 dispatch savings per workload for review. The default training budget is
-128 sequences and 256 exact shapes. `BASE` uses the first 32 sequences.
+384 sequences and 768 exact shapes. `BASE` uses the first 32 sequences.
 
 Use the same offline collector to refresh the manifests from existing
 unfused profiles:
@@ -114,7 +116,10 @@ decoded operand representation. Build the candidate, run the native and
 PerfTools tests, and validate the workloads before replacing the default.
 Use `FIBERCPU_GENERATED_SUPEROPCODES_FILE` and `FIBERCPU_OPERAND_PLAN_FILE`
 to build with the candidate source and its matching operand plan without
-changing the checked-in tables.
+changing the checked-in tables. Copy the suite's scalar plan to the checked-in
+manifest when updating the defaults. Use `FIBERCPU_STATIC_OPERAND_PLAN_FILE`
+to select a candidate scalar plan or pass an empty value to use ModRM-only
+scalar binding.
 
 ## Code generation review
 
@@ -122,7 +127,7 @@ Inspect the emitted machine code as part of a table update.
 
 | Path | Expected generated code |
 | --- | --- |
-| Baked scalar | The fixed ModRM operand reaches the kernel as a literal. Register selection and the ModRM register-versus-memory decision disappear when the kernel uses them. The instruction advances one or two slots with a fixed displacement. A ModRM-only key leaves other operands dynamic. A matching scalar policy additionally fixes the width and omits updates to dead flags where specified. |
+| Baked scalar | An exact scalar shape passes fixed prefixes, effective address and immediate values to the shared kernel. The fixed ModRM operand reaches the kernel as a literal. Register selection and the ModRM register-versus-memory decision disappear when the kernel uses them. The instruction advances one or two slots with a fixed displacement. A ModRM-only key leaves other operands dynamic. A matching scalar policy additionally fixes the width and omits updates to dead flags where specified. |
 | Baked fusion | The exact operand records supply the ModRM, immediates and slot count of every constituent. The final handler performs one tail dispatch. Each memory operation retains its restart/retry exit. |
 | LLVM exact | The block compiler inlines the operation templates with their decoded operands before running the LLVM optimization pipeline. On the ordinary path, a baked memory immediate should appear as an instruction constant and the PC for replay should be a fixed offset from the original slot pointer. Branch targets and links still come from block runtime storage. |
 

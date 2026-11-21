@@ -24,12 +24,6 @@ extern "C" LLVMBlockExit FiberLLVMExit();
 extern "C" LogicFlow FiberLLVMPlaceholder(unsigned index, uint32_t encoding, uint32_t ea_desc, uint32_t displacement,
                                           LogicFuncParams);
 
-template <LogicFunc Live, LogicFunc Dead>
-FORCE_INLINE LogicFlow RunLLVMFlagPolicy(uint8_t metadata, LogicFuncParams) {
-    if (metadata & Meta::no_flags_mask) return Dead(LogicPassParams);
-    return Live(LogicPassParams);
-}
-
 #define FIBERCPU_LLVM_OP(Id, Name, Exact, Requirements, Extensions)                                         \
     extern "C" LogicFlow FiberLLVMGeneric_##Name(unsigned, uint32_t, uint32_t, uint32_t, LogicFuncParams) { \
         return op::Name(LogicPassParams);                                                                   \

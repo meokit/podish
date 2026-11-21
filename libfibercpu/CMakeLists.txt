@@ -43,6 +43,8 @@ option(FIBERCPU_ENABLE_HANDLER_PROFILE "Enable approximate per-handler execution
 option(FIBERCPU_STATIC_SPECIALIZATION "Build profile-baked native instruction variants" ON)
 set(FIBERCPU_MODRM_PLAN_FILE "${CMAKE_CURRENT_SOURCE_DIR}/src/generated/modrm-specializations.json"
     CACHE FILEPATH "Profile-baked ModRM specialization table")
+set(FIBERCPU_STATIC_OPERAND_PLAN_FILE "${CMAKE_CURRENT_SOURCE_DIR}/../benchmark/optimization/manifests/baked-scalar-operands-v3.json"
+    CACHE FILEPATH "Profile-baked exact scalar operand plan")
 option(FIBERCPU_ENABLE_SUPEROPCODES "Enable generated SuperOpcode matching and handlers" ON)
 option(FIBERCPU_ENABLE_SEQUENCE_PROFILE "Count actual unfused within-block Continue edges (training only)" OFF)
 if(NOT FIBERCPU_STATIC_SPECIALIZATION)
@@ -59,7 +61,7 @@ endif()
 # Independent compile-time choices; AUTO selects the production defaults for the target.
 set(FIBERCPU_FUSION_STRATEGY "AUTO" CACHE STRING "Baked fusion set (AUTO, BASE, EXTENDED)")
 set_property(CACHE FIBERCPU_FUSION_STRATEGY PROPERTY STRINGS AUTO BASE EXTENDED)
-set(FIBERCPU_OPERAND_BUDGET "256" CACHE STRING "Maximum baked fusion operand shapes (0..1024)")
+set(FIBERCPU_OPERAND_BUDGET "768" CACHE STRING "Maximum baked fusion operand shapes (0..1024)")
 set(FIBERCPU_OPERAND_PLAN_FILE "" CACHE FILEPATH "Override the baked fusion operand plan")
 set(FIBERCPU_DYNAMIC_OPERAND_PLAN_FILE "" CACHE FILEPATH "Decoded operand plan for runtime templates (macOS arm64)")
 option(FIBERCPU_ENABLE_DYNAMIC_SPECIALIZATION "Enable native runtime instruction specialization" ON)
@@ -208,7 +210,7 @@ if(FIBERCPU_GPR_PIN_MODE GREATER 0 AND NOT _can_pin_gprs)
     message(FATAL_ERROR "GPR pin requires a Clang target that supports the preserve_none tail-call handler ABI")
 endif()
 if(FIBERCPU_OPERAND_BUDGET STREQUAL "AUTO")
-    set(FIBERCPU_OPERAND_BUDGET "256")
+    set(FIBERCPU_OPERAND_BUDGET "768")
 endif()
 if(NOT FIBERCPU_OPERAND_BUDGET MATCHES "^[0-9]+$" OR FIBERCPU_OPERAND_BUDGET GREATER 1024)
     message(FATAL_ERROR "Invalid baked fusion operand budget")
@@ -297,17 +299,25 @@ endforeach()
 list(APPEND _catalog_products ${_scalar_bindings})
 set(_modrm_plan_args)
 set(_modrm_plan_input)
+set(_static_operand_args)
+set(_static_operand_input)
 if(FIBERCPU_STATIC_SPECIALIZATION)
     set(_modrm_plan_input "${FIBERCPU_MODRM_PLAN_FILE}")
     set(_modrm_plan_args --modrm-plan "${_modrm_plan_input}")
+    if(FIBERCPU_STATIC_OPERAND_PLAN_FILE)
+        set(_static_operand_input "${FIBERCPU_STATIC_OPERAND_PLAN_FILE}")
+        set(_static_operand_args --static-operand-plan "${_static_operand_input}")
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_static_operand_input}")
+        file(SHA256 "${_static_operand_input}" _static_operand_hash)
+    endif()
 endif()
 add_custom_command(OUTPUT ${_catalog_products}
     COMMAND "${Python3_EXECUTABLE}" "${_catalog_generator}" --catalog "${_instruction_catalog}"
         --output "${CMAKE_CURRENT_BINARY_DIR}/generated" --pin-mode "${FIBERCPU_PIN_SPECIALIZATION_MODE}"
-        --pin-mask "${_pin_mask}" ${_catalog_fusion_args} ${_modrm_plan_args}
+        --pin-mask "${_pin_mask}" ${_catalog_fusion_args} ${_modrm_plan_args} ${_static_operand_args}
     DEPENDS "${_catalog_generator}" "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/operand_specialization_data.py"
         "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/scalar_modrm.py" "${CMAKE_CURRENT_SOURCE_DIR}/src/decoder_lut.h"
-        ${_catalog_inputs} ${_catalog_fusion_input} ${_modrm_plan_input}
+        ${_catalog_inputs} ${_catalog_fusion_input} ${_modrm_plan_input} ${_static_operand_input}
     VERBATIM)
 add_custom_target(fibercpu_instruction_catalog DEPENDS ${_catalog_products})
 
@@ -393,6 +403,9 @@ if(_modrm_plan_input)
     file(SHA256 "${_modrm_plan_input}" _modrm_hash)
 endif()
 set(FIBERCPU_OPTIMIZATION_CONFIG "static=${FIBERCPU_STATIC_SPECIALIZATION};fusion=${FIBERCPU_FUSION_STRATEGY};enabled=${FIBERCPU_ENABLE_SUPEROPCODES};operand=${FIBERCPU_OPERAND_MODE};budget=${FIBERCPU_OPERAND_BUDGET};pin=${FIBERCPU_GPR_PIN};pins=${_pin_registers};coverage=${FIBERCPU_PIN_SPECIALIZATION};plan_source=${_operand_plan_source};plan=${_operand_plan_hash};modrm=${_modrm_hash}")
+if(_static_operand_input)
+    string(APPEND FIBERCPU_OPTIMIZATION_CONFIG ";scalar_operands=${_static_operand_hash}")
+endif()
 set(FIBERCPU_DYNAMIC_OPERANDS OFF)
 if(FIBERCPU_ENABLE_DYNAMIC_SPECIALIZATION AND FIBERCPU_DYNAMIC_OPERAND_PLAN_FILE)
     if(APPLE AND NOT CMAKE_CROSSCOMPILING AND CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL "arm64" AND
@@ -570,7 +583,8 @@ if(FIBERCPU_MODRM_TRAIN_PODISH OR FIBERCPU_MODRM_TRAIN_ROOTFS OR FIBERCPU_MODRM_
         if(NOT FIBERCPU_STATIC_SPECIALIZATION)
             list(APPEND _modrm_suite_args --bake-fusions)
             list(APPEND _modrm_suite_products "${_modrm_suite_output}/baked-fusions-v3.json"
-                                             "${_modrm_suite_output}/baked-fusion-operands-v3.json")
+                                             "${_modrm_suite_output}/baked-fusion-operands-v3.json"
+                                             "${_modrm_suite_output}/baked-scalar-operands-v3.json")
         endif()
         add_custom_target(fibercpu_train_modrm_suite
             COMMAND ${_modrm_training_command} --suite-rootfs "${FIBERCPU_MODRM_TRAIN_SUITE_ROOTFS}"

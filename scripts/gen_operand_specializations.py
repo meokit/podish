@@ -5,7 +5,7 @@ import argparse
 import json
 from pathlib import Path
 
-from gen_instruction_catalog import read_catalog
+from gen_instruction_catalog import read_catalog, supports_exact_operands
 from operand_specialization_data import (
     FUSION_CALL, Operand, generated_fusions, resolve_training_plan, specialize_fusion, training_plan_match,
 )
@@ -19,7 +19,8 @@ def generate(source, plan, catalog, budget, pin_mode, pin_mask):
     fusion_plan = {**plan, "entries": [row for row in plan["entries"] if row["kind"] == "fused"]}
     rows = resolve_training_plan(fusion_plan, catalog, fusions)
     keep_for = pin_keep(catalog, pin_mode, pin_mask)
-    code = ['// Generated fusion operand lowering.', '#include "operand_specialization.h"', 'namespace fiberish {']
+    code = ['// Generated fusion operand lowering.', '#include "operand_specialization.h"',
+            '#include "baked_operand_kernels.h"', 'namespace fiberish {']
     entries = []
     for index, row in enumerate(rows[:budget]):
         original = row["original"]
@@ -32,6 +33,10 @@ def generate(source, plan, catalog, budget, pin_mode, pin_mask):
         operations = [match[1] for match in FUSION_CALL.finditer(body)]
         policies = [f"OperandSpec::Profile<{shape}>" for shape in shapes]
         body = specialize_fusion(body, original, clone, policies)
+        for position, (name, operand) in enumerate(zip(operations, operands)):
+            if supports_exact_operands(catalog, name, operand):
+                body = body.replace(f"(SlotPolicy{position}, op::{name},",
+                                    f"(SlotPolicy{position}, baked_operand::{name}<SlotPolicy{position}>,")
         keep = (1 << pin_mask.bit_count()) - 1
         for name, operand in zip(operations, operands):
             keep &= keep_for(name, operand.modrm)
@@ -84,7 +89,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("source", "plan", "catalog", "output"):
         parser.add_argument(f"--{name}", type=Path, required=True)
-    parser.add_argument("--budget", type=int, choices=range(1025), default=256, metavar="0..1024")
+    parser.add_argument("--budget", type=int, choices=range(1025), default=768, metavar="0..1024")
     parser.add_argument("--pin-specialization", type=int, choices=range(3), default=0)
     parser.add_argument("--pin-mask", type=int, default=0)
     args = parser.parse_args()

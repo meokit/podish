@@ -130,6 +130,12 @@ FORCE_INLINE ATTR_PRESERVE_NONE int64_t OpExitBlockImpl(EmuState* RESTRICT state
                                                                   target_eip, flags_cache FIBERCPU_PIN_RELOAD);
 }
 
+template <LogicFunc Live, LogicFunc Dead>
+FORCE_INLINE LogicFlow RunFlagPolicy(uint8_t metadata, LogicFuncParams) {
+    if (metadata & Meta::no_flags_mask) return Dead(LogicPassParams);
+    return Live(LogicPassParams);
+}
+
 template <class OperandPolicy>
 FORCE_INLINE GprCache OperandGprCache(GprCache gpr) {
     if constexpr (requires { OperandPolicy::baked_address; }) gpr.baked_address = OperandPolicy::baked_address;

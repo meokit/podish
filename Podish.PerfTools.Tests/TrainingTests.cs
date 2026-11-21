@@ -15,7 +15,7 @@ public sealed class TrainingTests
         var generated = Path.Combine(root.FullName, "libfibercpu", "src", "generated");
         Assert.Equal(Tool.GenerateSuperopcodes(manifest, 32),
             File.ReadAllText(Path.Combine(generated, "superopcodes.generated.cpp")));
-        Assert.Equal(Tool.GenerateSuperopcodes(manifest, 64),
+        Assert.Equal(Tool.GenerateSuperopcodes(manifest, int.MaxValue),
             File.ReadAllText(Path.Combine(generated, "superopcodes.extended.generated.cpp")));
     }
 

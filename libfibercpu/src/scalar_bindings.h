@@ -9,12 +9,18 @@ struct ScalarBindingEntry {
     HandlerFunc handler;
 };
 
+struct ExactScalarBinding {
+    DecodedOperandShape shape;
+    HandlerFunc handler;
+};
+
 struct ScalarBindingTable {
     const ScalarBindingEntry* entries;
     size_t count;
     uint8_t memory_mask;
     uint8_t policies;
     std::array<HandlerFunc, 2> fallback;
+    std::span<const ExactScalarBinding> exact;
 };
 
 enum ScalarBindingPolicy : uint8_t {

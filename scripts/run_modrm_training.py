@@ -13,7 +13,7 @@ import time
 
 from collect_baked_fusions import bake
 from collect_modrm_hotness import DEFAULT_COVERAGE, collect_modrm_hotness, collect_workload_union, write_hotness
-from collect_operand_specializations import ROOT
+from collect_operand_specializations import ROOT, bake_scalar_workload_union
 
 
 def capture_suite(run, rootfs, workspace):
@@ -85,8 +85,10 @@ def train(args):
             if args.bake_fusions:
                 candidates = workspace / "baked-fusions-v3.json"
                 operands = workspace / "baked-fusion-operands-v3.json"
+                scalars = workspace / "baked-scalar-operands-v3.json"
                 bake(list(profiles.values()), candidates, operands)
-                for result in (candidates, operands):
+                bake_scalar_workload_union(profiles, scalars)
+                for result in (candidates, operands, scalars):
                     result.replace(output / result.name)
             for name, capture in profiles.items():
                 destination = output / name
@@ -108,7 +110,7 @@ def main():
         parser.add_argument(f"--{name}", type=Path, required=True)
     parser.add_argument("--fusions", type=Path)
     parser.add_argument("--suite-rootfs", type=Path, help="Also capture GNU tools and both CoreMark builds")
-    parser.add_argument("--bake-fusions", action="store_true", help="Bake exact fusion candidates from unfused captures")
+    parser.add_argument("--bake-fusions", action="store_true", help="Bake scalar operands and fusion candidates from unfused captures")
     try:
         train(parser.parse_args())
     except subprocess.CalledProcessError as error:

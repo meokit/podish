@@ -11,8 +11,8 @@ from collect_operand_specializations import blocks
 from gen_instruction_catalog import read_catalog
 from operand_specialization_data import fusion_training_id, training_handlers
 
-DEFAULT_TOP = 128
-DEFAULT_BUDGET = 256
+DEFAULT_TOP = 384
+DEFAULT_BUDGET = 768
 
 
 def sequences(ops, handlers):

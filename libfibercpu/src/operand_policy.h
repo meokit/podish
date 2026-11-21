@@ -131,9 +131,9 @@ struct Profile {
     static constexpr uint8_t ModRM(const DecodedOp*) { return modrm; }
     static constexpr uint8_t metadata = uint8_t(Shape.encoding >> 16);
     static constexpr uint8_t prefixes = uint8_t(Shape.encoding >> 8);
-    static constexpr BakedAddress address{Shape.ea_desc, Shape.displacement, (prefixes & prefix::ADDRSIZE) != 0};
+    static constexpr Baked operands{prefixes, Shape.ea_desc, Shape.displacement};
     static constexpr const BakedAddress* baked_address =
-        DecodedOperandShape::HasMemoryAddress(metadata) ? &address : nullptr;
+        DecodedOperandShape::HasMemoryAddress(metadata) ? &operands.address : nullptr;
     static FORCE_INLINE void Assume(const DecodedOp* op) {
         if constexpr (!IsLinkOnlyReturn(metadata)) {
             const auto decoded_prefixes = GetPrefixes(op).all;
