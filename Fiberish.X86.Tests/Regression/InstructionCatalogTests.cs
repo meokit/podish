@@ -19,8 +19,6 @@ public sealed unsafe class InstructionCatalogTests
     public void EveryDeclaredVariantHasAStableIdentityAndReflectedEntry()
     {
         var entries = Catalog();
-        Assert.Equal(411, entries.Count(x => x.is_fallback != 0));
-        Assert.Equal(1862, entries.Count(x => x.is_fallback == 0));
         Assert.Equal(entries.Length, entries.Select(x => x.variant_key).Distinct().Count());
         var staticSpecialization = !X86Native.GetOptimizationConfig().Contains("static=OFF;");
         foreach (var v in entries)
@@ -39,49 +37,49 @@ public sealed unsafe class InstructionCatalogTests
     }
 
     [Fact]
-    public void Group2HasADeclaredVariantForEveryCountSourceAndExtension()
+    public void Group2HasACanonicalHandlerForEveryCountSourceAndWidth()
     {
         var entries = Catalog();
-        foreach (var opcode in new uint[] { 0xc0, 0xc1, 0xd0, 0xd1, 0xd2, 0xd3 })
-        for (uint extension = 0; extension < 8; ++extension)
-            Assert.Contains(entries, v => v.opcode == opcode && v.is_fallback == 0 &&
-                v.constraints[2] == 7 && v.constraints[3] == extension);
+        (uint Opcode, string Logic)[] forms =
+        [
+            (0xc0, "OpGroup2_EbIb"), (0xc1, "OpGroup2_EvIb"),
+            (0xd0, "OpGroup2_Eb1"), (0xd1, "OpGroup2_Ev1"),
+            (0xd2, "OpGroup2_EbCl"), (0xd3, "OpGroup2_EvCl")
+        ];
+        foreach (var (opcode, logic) in forms)
+        {
+            var entry = Assert.Single(entries.Where(v => v.opcode == opcode));
+            Assert.NotEqual(0u, entry.is_fallback);
+            Assert.Equal("op::" + logic, entry.LogicName);
+        }
     }
 
     [Fact]
-    public void OperandRolesGroupExtensionAndMemoryShapesHaveIndependentConstraints()
+    public void MandatoryPrefixesSelectDistinctIdentitiesWithoutOperandConstraints()
     {
         var entries = Catalog();
-        var add = entries.Single(x => x.opcode == 0x83 && x.LogicName == "op::OpGroup1_EvIb_Add_32_NoFlags_Eax");
-        Assert.Equal(3u, add.constraints[0]);
-        Assert.Equal(3u, add.constraints[1]);
-        Assert.Equal(7u, add.constraints[2]); // /0 is the ADD extension.
-        Assert.Equal(0u, add.constraints[3]);
-        Assert.Equal(7u, add.constraints[4]); // EAX is the r/m destination.
-        Assert.Equal(0u, add.constraints[5]);
-        Assert.Equal(64u, add.constraints[6]);
-        Assert.Equal(0u, add.constraints[7]);
-        Assert.Equal(1u, add.constraints[8]);
-        var mov = entries.Single(x => x.LogicName == "op::OpMov_Load_Eax_EspBaseNoIndexNoSegment");
-        Assert.Equal(0u, mov.constraints[0]); // A memory shape must not imply Mod=3.
-        Assert.Equal(7u, mov.constraints[2]);
-        Assert.Equal(0u, mov.constraints[3]); // EAX is ModRM.reg for a load.
-        Assert.Equal(4u, mov.constraints[5]); // SIB encoding, not a guest ESP operand.
-        Assert.Equal(16u, mov.constraints[10]);
-        Assert.Equal(32u, mov.constraints[12]);
-        Assert.Equal(7u, mov.constraints[15]);
-        Assert.Equal(0u, mov.constraints[16]); // Default segment; actual base is still architectural state.
+        var aligned = entries.Single(x => x.opcode == 0x16f && x.LogicName == "op::OpMovdqa_Load");
+        var unaligned = entries.Single(x => x.opcode == 0x16f && x.LogicName == "op::OpMovdqu_Load");
+        Assert.Equal(64u, aligned.constraints[6]); // 0x66
+        Assert.Equal(64u, aligned.constraints[7]);
+        Assert.Equal(2u, unaligned.constraints[6]); // 0xf3
+        Assert.Equal(2u, unaligned.constraints[7]);
+        Assert.NotEqual(aligned.variant_key, unaligned.variant_key);
+        foreach (var variant in entries.Where(x => x.is_fallback == 0))
+            for (var i = 0; i < 19; ++i)
+                if (i != 6 && i != 7)
+                    Assert.Equal(0u, variant.constraints[i]);
     }
 
     [Fact]
-    public void DeclarationsMatchTheCapturedPreRefactorSelectionCatalog()
+    public void DeclarationsMatchTheCapturedArchitecturalSelectionCatalog()
     {
         var root = new DirectoryInfo(AppContext.BaseDirectory);
         while (root is not null && !File.Exists(Path.Combine(root.FullName, "Podish.slnx"))) root = root.Parent;
         Assert.NotNull(root);
         var file = Path.Combine(root.FullName, "Fiberish.X86.Tests", "Regression", "Fixtures", "instruction-selection-baseline.tsv");
         var expected = File.ReadAllLines(file).Where(x => !x.StartsWith('#')).ToArray();
-        var actual = Catalog().Take(expected.Length).Select(SelectionRow).ToArray();
+        var actual = Catalog().Select(SelectionRow).ToArray();
         Assert.Equal(expected, actual);
     }
 
@@ -89,7 +87,7 @@ public sealed unsafe class InstructionCatalogTests
     {
         var fields = new List<string> { v.is_fallback != 0 ? "F" : "V", v.opcode.ToString(CultureInfo.InvariantCulture), v.LogicName };
         if (v.is_fallback == 0)
-            for (var i = 0; i < 17; ++i) fields.Add(v.constraints[i].ToString(CultureInfo.InvariantCulture));
+            for (var i = 0; i < 19; ++i) fields.Add(v.constraints[i].ToString(CultureInfo.InvariantCulture));
         return string.Join('\t', fields);
     }
 

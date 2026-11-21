@@ -44,10 +44,6 @@ public sealed class ScalarPageBoundaryTests
         var head = Assert.Single(blocks.Where(p => ((X86Native.BasicBlock*)p)->start_eip == CpuSandbox.CodeAddress));
         var block = (X86Native.BasicBlock*)head;
         Assert.Equal(code.Length / 4, block->inst_count);
-        if ((X86Native.GetBuildFeatures() & 1) != 0)
-            Assert.Contains(loadFirst ? "HandWrittenSuperOpcode_MovssMulssRegAddssMovss"
-                    : "HandWrittenSuperOpcode_MulssAddssMovss",
-                X86Native.GetHandlerSymbolById(X86Native.GetHandlerId(block->entry)));
         if (loadFirst) Assert.Equal(SimdTestSupport.Lanes(32, 0x40000000), cpu.ReadXmm(4));
 
         cpu.MapMemory(missing, CpuSandbox.PageSize);
@@ -59,7 +55,7 @@ public sealed class ScalarPageBoundaryTests
     }
 
     [Fact]
-    public unsafe void FusedScalarStores_FaultingStraddleDoesNotPartiallyWriteOrReplayFirstStore()
+    public void ScalarStores_FaultingStraddleDoesNotPartiallyWriteOrReplayFirstStore()
     {
         using var cpu = SimdTestSupport.Create();
         const uint edge = CpuSandbox.DataAddress + CpuSandbox.PageSize;
@@ -90,16 +86,6 @@ public sealed class ScalarPageBoundaryTests
         Assert.Equal(CpuSandbox.CodeAddress + 4, cpu.Eip);
         SimdTestSupport.Bytes([0x11, 0x22, 0x33, 0x44, 0xA1, 0xA2, 0xA3, 0xA4],
             cpu.ReadMemory(edge - 4, 8), "only the first store committed");
-
-        if ((X86Native.GetBuildFeatures() & 1) != 0)
-        {
-            var count = X86Native.GetBlockCount(cpu.State);
-            var blocks = new IntPtr[count];
-            fixed (IntPtr* pointer = blocks) Assert.Equal(count, X86Native.GetBlockList(cpu.State, pointer, count));
-            var head = Assert.Single(blocks.Where(p => ((X86Native.BasicBlock*)p)->start_eip == CpuSandbox.CodeAddress));
-            Assert.Contains("HandWrittenSuperOpcode_StoreTwoMovss",
-                X86Native.GetHandlerSymbolById(X86Native.GetHandlerId(((X86Native.BasicBlock*)head)->entry)));
-        }
 
         cpu.ProtectMemory(edge, CpuSandbox.PageSize, 3);
         cpu.WriteMemory(edge - 4, [0xB1, 0xB2]); // Detect replay of the already-completed first store.

@@ -6,60 +6,56 @@ namespace Fiberish.X86.Tests.Regression;
 
 public sealed class SpecializedFusionBakingTests
 {
-    // SHR EAX/[EAX],3; MOV EDX,ESI; MOVZX EBX,byte[EDI+ESI*2]; MOV ECX,[EDI+ESI*2].
-    private static byte[] Code(bool memory) => [0xC1, memory ? (byte)0x28 : (byte)0xE8, 3,
-        0x89, 0xF2, 0x0F, 0xB6, 0x1C, 0x77, 0x8B, 0x0C, 0x77];
-
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void SpecializedRegisterAndGenericMemorySequencesKeepExactFusion(bool memory)
+    [InlineData(8, true)]
+    [InlineData(7, false)]
+    public void StockFusionRequiresTheBakedShiftImmediate(byte shift, bool baked)
     {
         using var cpu = new CpuSandbox();
-        cpu[Reg.EAX] = memory ? CpuSandbox.DataAddress + 8 : 0x80;
-        cpu[Reg.ESI] = 0;
-        cpu[Reg.EDI] = CpuSandbox.DataAddress;
-        cpu.WriteMemory(CpuSandbox.DataAddress, BitConverter.GetBytes(0x1234567au));
-        cpu.WriteMemory(CpuSandbox.DataAddress + 8, BitConverter.GetBytes(0x80u));
-        var code = Code(memory);
+        cpu[Reg.EAX] = 0x10000;
+        cpu[Reg.EDX] = 41;
+        cpu[Reg.ESI] = 0x5a;
+        // INC EDX; XOR ESI,EAX; SHR EAX,imm8; MOV ECX,ESI.
+        byte[] code = [0x42, 0x31, 0xC6, 0xC1, 0xE8, shift, 0x89, 0xF1];
         cpu.WriteCode(code);
         cpu.Run(CpuSandbox.CodeAddress + (uint)code.Length);
         Assert.Equal(EmuStatus.Stopped, cpu.Status);
-        Assert.Equal(memory ? CpuSandbox.DataAddress + 8 : 0x10u, cpu[Reg.EAX]);
-        Assert.Equal(memory ? 0x10u : 0x80u,
-            BitConverter.ToUInt32(cpu.ReadMemory(CpuSandbox.DataAddress + 8, 4)));
-        Assert.Equal(0u, cpu[Reg.EDX]);
-        Assert.Equal(0x7au, cpu[Reg.EBX]);
-        Assert.Equal(0x1234567au, cpu[Reg.ECX]);
-        AssertHead(cpu, memory);
+        Assert.Equal(0x10000u >> shift, cpu[Reg.EAX]);
+        Assert.Equal(42u, cpu[Reg.EDX]);
+        Assert.Equal(0x1005au, cpu[Reg.ECX]);
+        AssertHead(cpu, "OpInc_Reg__OpXor_EvGv__OpGroup2_EvIb__OpMov_EvGv", baked);
     }
 
     [Fact]
-    public void FaultInsideSpecializedFusionRestartsAtTheFaultWithoutRepeatingShift()
+    public void FaultInsideStockFusionRestartsAtTheStoreWithoutRepeatingCompletedOps()
     {
         using var cpu = new CpuSandbox();
-        const uint unmapped = 0x50000000;
-        cpu[Reg.EAX] = 0x80;
-        cpu[Reg.ESI] = 0;
-        cpu[Reg.EDI] = unmapped;
-        var code = Code(false);
+        const uint data = CpuSandbox.DataAddress;
+        cpu[Reg.ESI] = data;
+        cpu[Reg.ECX] = 0x11223344;
+        cpu.WriteMemory(data, BitConverter.GetBytes(0x12345678u));
+        cpu.ProtectMemory(data, CpuSandbox.PageSize, 1);
+        // MOV EDX,[ESI]; MOV [ESI],ECX; MOV ECX,ESI; TEST EDX,EDX.
+        byte[] code = [0x8B, 0x16, 0x89, 0x0E, 0x89, 0xF1, 0x85, 0xD2];
         cpu.WriteCode(code);
         cpu.Run(CpuSandbox.CodeAddress + (uint)code.Length);
         Assert.Equal(EmuStatus.Fault, cpu.Status);
         Assert.Equal(14, cpu.FaultVector);
-        Assert.Equal(CpuSandbox.CodeAddress + 5u, cpu.Eip);
-        Assert.Equal(0x10u, cpu[Reg.EAX]);
-        AssertHead(cpu, false);
-        cpu.MapMemory(unmapped, CpuSandbox.PageSize);
-        cpu.WriteMemory(unmapped, BitConverter.GetBytes(0x1234567au));
+        Assert.Equal(CpuSandbox.CodeAddress + 2u, cpu.Eip);
+        Assert.Equal(data, cpu.FaultAddress);
+        Assert.Equal(0x12345678u, cpu[Reg.EDX]);
+        Assert.Equal(0x12345678u, BitConverter.ToUInt32(cpu.ReadMemory(data, 4)));
+        AssertHead(cpu, "OpMov_GvEv__OpMov_EvGv__OpMov_EvGv__OpTest_EvGv");
+        cpu.ProtectMemory(data, CpuSandbox.PageSize, 3);
+        cpu.WriteMemory(data, BitConverter.GetBytes(0xdeadbeefu)); // Detect replay of the completed load.
         cpu.Run(CpuSandbox.CodeAddress + (uint)code.Length);
         Assert.Equal(EmuStatus.Stopped, cpu.Status);
-        Assert.Equal(0x10u, cpu[Reg.EAX]);
-        Assert.Equal(0x7au, cpu[Reg.EBX]);
-        Assert.Equal(0x1234567au, cpu[Reg.ECX]);
+        Assert.Equal(0x12345678u, cpu[Reg.EDX]);
+        Assert.Equal(data, cpu[Reg.ECX]);
+        Assert.Equal(0x11223344u, BitConverter.ToUInt32(cpu.ReadMemory(data, 4)));
     }
 
-    private static unsafe void AssertHead(CpuSandbox cpu, bool memory)
+    private static unsafe void AssertHead(CpuSandbox cpu, string operationSequence, bool baked = true)
     {
         // The functional and fault checks also run in the CI configuration
         // that disables superopcodes; only the handler assertion needs fusion.
@@ -72,9 +68,10 @@ public sealed class SpecializedFusionBakingTests
             var b = (X86Native.BasicBlock*)p;
             if (b->start_eip != CpuSandbox.CodeAddress) continue;
             string symbol = X86Native.GetHandlerSymbolById(X86Native.GetHandlerId(b->entry))!;
-            Assert.Contains("SuperOpcode_4_", symbol);
-            if (memory) Assert.DoesNotContain("Shr_ModReg", symbol);
-            else Assert.Contains("Shr_ModReg", symbol);
+            if (baked)
+                Assert.Contains(operationSequence, symbol);
+            else
+                Assert.DoesNotContain(operationSequence, symbol);
             return;
         }
         Assert.Fail("Root block not retained");
