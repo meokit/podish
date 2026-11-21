@@ -144,6 +144,11 @@ a linked cache. The pass uses the packed layout of single- and two-slot
 instructions and keeps branch targets, link offsets and mutable bits live.
 The existing exact-operand argument bindings apply in both settings.
 
+After inlining and optimization, the online compiler and linked cache builder
+trace single-bit tests in the block's LLVM SSA. Proven predicates can feed
+consumers such as Jcc and CMOVcc directly. Packed flags remain available at
+block exits and memory replay, and the pass leaves unproven reads in place.
+
   podish run -XX:JitMode=exact -XX:LlvmFoldOperandLoads=on IMAGE COMMAND
 
 Worker count, pipeline, operand load folding and JIT arena capacity are

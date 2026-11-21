@@ -206,6 +206,69 @@ bool VerifyDirectBranch(bool enabled) {
     return enabled ? block && block->inst_count() == 4 : block == nullptr;
 }
 
+bool VerifyFlagConsumers(bool enabled) {
+    constexpr uint8_t je[] = {0x85, 0xc0, 0x74, 5, 0xba, 5, 0, 0, 0}; // TEST EAX,EAX; JE end; MOV EDX,5
+    constexpr uint8_t cmov[] = {0x85, 0xc0, 0x0f, 0x44, 0xd3};        // TEST EAX,EAX; CMOVZ EDX,EBX
+    constexpr uint8_t stc[] = {0x85, 0xc0, 0xf9, 0x0f, 0x44, 0xd3};   // TEST EAX,EAX; STC; CMOVZ EDX,EBX
+    constexpr uint8_t inc[] = {0x85, 0xc0, 0x41, 0x0f, 0x44, 0xd3};   // TEST EAX,EAX; INC ECX; CMOVZ EDX,EBX
+    constexpr uint8_t cmp[] = {0x83, 0xf8, 0, 0x0f, 0x44, 0xd3};      // CMP EAX,0; CMOVZ EDX,EBX
+    constexpr uint32_t status_flags = 0x8d5;
+    constexpr uint32_t direction_flag = 0x400;
+    constexpr uint32_t initial_flags = status_flags | direction_flag | 2;
+    struct FlagCase {
+        const char* name;
+        std::span<const uint8_t> code;
+        std::array<uint32_t, 2> edx;
+        std::array<uint32_t, 2> flags;
+    };
+    const FlagCase cases[] = {
+        {"TEST; JE", je, {5, 7}, {0x84, 0x44}},          {"TEST; CMOVZ", cmov, {7, 5}, {0x84, 0x44}},
+        {"TEST; STC; CMOVZ", stc, {7, 5}, {0x85, 0x45}}, {"TEST; INC; CMOVZ", inc, {5, 7}, {0x54, 0}},
+        {"CMP; CMOVZ", cmp, {7, 5}, {0x84, 0x44}},
+    };
+    for (const auto& [name, code, edx, flags] : cases) {
+        for (const bool zero : {false, true}) {
+            auto state = LoadCode(code.data(), code.size());
+            const auto end = code_address + code.size();
+            X86_RegWrite(state.get(), 0, zero ? 0 : 0x80000003);
+            X86_RegWrite(state.get(), 1, zero ? 0 : UINT32_MAX);
+            X86_RegWrite(state.get(), 2, 7);
+            X86_RegWrite(state.get(), 3, 5);
+            X86_SetEFLAGS(state.get(), initial_flags);
+            // INC overwrites ZF while STC preserves it. Both results still
+            // have to publish the full status flags for the next block.
+            if (!X86_Run(state.get(), end, 16) || X86_GetEIP(state.get()) != end ||
+                X86_RegRead(state.get(), 2) != edx[zero] ||
+                (X86_GetEFLAGS(state.get()) & (status_flags | direction_flag)) != (flags[zero] | direction_flag) ||
+                HasCompiledEntry(state.get()) != enabled) {
+                std::fprintf(stderr, "%s (zero=%d): eip=%x edx=%x flags=%x compiled=%d\n", name, zero,
+                             X86_GetEIP(state.get()), X86_RegRead(state.get(), 2), X86_GetEFLAGS(state.get()),
+                             HasCompiledEntry(state.get()));
+                return false;
+            }
+        }
+    }
+
+    // A faulting TEST leaves the input flags intact. A memory-source CMOV
+    // must still fault on the source read when its condition is false.
+    constexpr uint8_t faulting[][5] = {{0x85, 0x01, 0x0f, 0x44, 0xd3}, {0x85, 0xc0, 0x0f, 0x44, 0x11}};
+    for (unsigned i = 0; i < std::size(faulting); ++i) {
+        auto state = LoadCode(faulting[i], sizeof(faulting[i]));
+        X86_RegWrite(state.get(), 0, 0x80000003);
+        X86_RegWrite(state.get(), 1, data_address);
+        X86_RegWrite(state.get(), 2, 7);
+        X86_SetEFLAGS(state.get(), initial_flags);
+        if (!X86_Run(state.get(), code_address + sizeof(faulting[i]), 16) || X86_GetFaultVector(state.get()) != 14 ||
+            X86_GetFaultAddress(state.get()) != data_address || X86_GetEIP(state.get()) != code_address + i * 2 ||
+            X86_RegRead(state.get(), 2) != 7 ||
+            (X86_GetEFLAGS(state.get()) & (status_flags | direction_flag)) !=
+                ((i ? 0x84 : status_flags) | direction_flag) ||
+            HasCompiledEntry(state.get()) != enabled)
+            return false;
+    }
+    return true;
+}
+
 bool VerifyGenericConcat(bool enabled) {
     // MOVSX EDX, CX; NOP; JMP past UD2; ADD EDX, -1; LEA EAX, [EDX+8]; MOVZX ESI, AL.
     constexpr uint8_t code[] = {0x0f, 0xbf, 0xd1, 0x90, 0xeb, 2,    0x0f, 0x0b, 0x83,
@@ -1153,6 +1216,10 @@ int main(int argc, char** argv) {
     }
     if (!VerifyDirectBranch(enabled) || !VerifyStringAndLoopPrefixes(enabled) || X86_GetLLVMJitLiveBlockCount() != 0) {
         std::fprintf(stderr, "LLVM direct branch, REP string or counter width mismatch\n");
+        return 1;
+    }
+    if (!VerifyFlagConsumers(enabled) || X86_GetLLVMJitLiveBlockCount() != 0) {
+        std::fprintf(stderr, "LLVM flag consumers, exit flags or memory replay mismatch\n");
         return 1;
     }
     if (!VerifyGenericConcat(enabled) || X86_GetLLVMJitLiveBlockCount() != 0) {
