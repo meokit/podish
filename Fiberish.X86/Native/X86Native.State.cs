@@ -4,6 +4,33 @@ namespace Fiberish.X86.Native;
 
 public unsafe partial class X86Native
 {
+    [StructLayout(LayoutKind.Sequential)]
+    public struct BlockDumpHeader
+    {
+        public ulong ExecCount;
+        public uint StartEip;
+        public uint EndEip;
+        public uint InstCount;
+        public uint Reserved;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct BlockDumpOp
+    {
+        public ulong Handler;
+        public ulong PackedMemory;
+        public uint NextEip;
+        public uint Immediate;
+        public byte Length;
+        public byte ModRm;
+        public byte Prefixes;
+        public byte Meta;
+        public uint Reserved;
+    }
+
+    [LibraryImport(LibName, EntryPoint = "X86_ReadBlockDump")]
+    public static partial int ReadBlockDump(IntPtr block, BlockDumpHeader* header, BlockDumpOp* ops, uint capacity);
+
     /// <summary>Creates an engine without process-wide signal handlers when options bit 0 is set.</summary>
     [LibraryImport(LibName, EntryPoint = "X86_CreateWithOptions")]
     public static partial IntPtr CreateWithOptions(uint options);

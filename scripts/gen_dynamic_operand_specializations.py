@@ -70,7 +70,6 @@ def emit_plan(args):
     fusions = generated_fusions(args.fusions.read_text()) if args.fusions else {}
     records, requests = [], [llvm_operation_fingerprint(op_names) + "\n"]
     missing, missing_weight = Counter(), Counter()
-    seen = set()
     source = json.loads(args.plan.read_text())
     if training_plan_match(source) != "decoded":
         raise ValueError("dynamic operand templates need a decoded version 3 operand plan")
@@ -79,9 +78,6 @@ def emit_plan(args):
         original, shapes = shape_key(item)
         if type(item["dispatch_count"]) is not int or item["dispatch_count"] < 0:
             raise ValueError("invalid dispatch count: " + original)
-        if (original, shapes) in seen:
-            raise ValueError("duplicate operand shape for " + original)
-        seen.add((original, shapes))
         if item["kind"] == "wrapper":
             match = WRAPPER.fullmatch(original)
             names = (match[1],) if match else ()
@@ -153,13 +149,21 @@ def build_bundle(args):
         if obj == b"-":
             reason = "llvm_shape_unsupported"
         else:
-            entry, words, helpers, data, constants, reason = MachO(args.objects, obj).handler("_FiberOperandStencil")
+            binding_bytes = 2 * item["width"]
+            binding = tuple(struct.iter_unpack("<BB", obj[:binding_bytes]))
+            if (len(binding) != item["width"] or any(
+                    modrm != operand["modrm"] or slots not in (1, 2)
+                    for (modrm, slots), operand in zip(binding, item["operands"]))):
+                raise ValueError(f"LLVM stencil record {index} disagrees with its runtime binding")
+            entry, words, helpers, data, constants, reason = MachO(args.objects, obj[binding_bytes:]).handler(
+                "_FiberOperandStencil")
         if reason:
             excluded[reason] += 1
             excluded_weight[reason] += item["dispatch_count"]
             continue
         fixed = tuple(word & ~immediate_mask(word) for word in words)
-        groups[item["original"], entry, fixed, helpers, data, constants].append((item, words))
+        groups[item["original"], tuple(item["llvm_operations"]), binding, entry, fixed, helpers, data, constants].append(
+            (item, words))
 
     # Keep an unmodified exemplar for each shape. Store only the fields that
     # vary within that shape, and compare every reconstructed body with Clang's.
@@ -170,7 +174,7 @@ def build_bundle(args):
     raw_words = accepted_weight = immediate_variants = 0
     variants_per_handler = Counter()
     templates_per_handler = Counter()
-    for (original, entry, _, helpers, data, constants), variants in groups.items():
+    for (original, _, _, entry, _, helpers, data, constants), variants in groups.items():
         exemplar = variants[0][1]
         fields = []
         for i, word in enumerate(exemplar):
@@ -253,11 +257,9 @@ def build_bundle(args):
     # Only canonical identities need a runtime index. The keys of each handler
     # are pre-sorted on disk for binary search with no per-key initialization.
     keys_by_handler = defaultdict(list)
-    sources_by_handler = defaultdict(set)
     for item, recipe in entries:
         original, shapes = shape_key(item)
         keys_by_handler[original].append((shapes, recipe))
-        sources_by_handler[original].update(item["llvm_operations"])
     entry_lines = []
     family_lines = []
     tails = []
@@ -269,7 +271,7 @@ def build_bundle(args):
             tails.extend(shapes[1:])
     emit_array(code_header, "kEntries", "DynamicOperandEntry", entry_lines)
     catalog = read_catalog(args.src / "instruction_catalog.json")
-    base_handlers = set(catalog["fallbacks"].values()) | set(catalog.get("generic_fallbacks", {}).values())
+    base_handlers = set(catalog["fallbacks"].values())
     variants = defaultdict(list)
     for row in catalog["variants"]:
         variants[row["logic"]].append(row)
@@ -288,13 +290,7 @@ def build_bundle(args):
         if name in base_handlers:
             dynamic_only.append(f"{{{original}, {first}, {count}, 1, {{.any_flags = true}}}}")
         for row in variants[name]:
-            if is_semantic_variant(row):
-                dynamic_only.append(f"{{{original}, {first}, {count}, 1, {variant_criteria(row)}}}")
-            else:
-                sources = sources_by_handler[original]
-                if len(sources) == 1:
-                    base, = sources
-                    dynamic_only.append(f"{{DispatchWrapper<op::{base}>, {first}, {count}, 1, {variant_criteria(row)}}}")
+            dynamic_only.append(f"{{{original}, {first}, {count}, 1, {variant_criteria(row)}}}")
     emit_array(code_header, "kFamilies", "OperandFamily", list(dict.fromkeys(dynamic_only)))
     code_header.append("constexpr size_t kFamilyCount = " + str(len(set(dynamic_only))) + ";")
     code_header.append("#endif")

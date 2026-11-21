@@ -37,25 +37,37 @@ enum class RmOperandSpec : uint8_t {
 
 template <OpsizeSpec Size>
 FORCE_INLINE bool OperandIs16(const DecodedOp* op) {
-    if constexpr (Size == OpsizeSpec::Dynamic) return op->prefixes.flags.opsize;
+    if constexpr (Size == OpsizeSpec::Dynamic) return GetPrefixes(op).flags.opsize;
+    return Size == OpsizeSpec::Opsize16;
+}
+
+template <OpsizeSpec Size, class Operands>
+FORCE_INLINE bool OperandIs16(const DecodedOp* op, const Operands& operands) {
+    if constexpr (Size == OpsizeSpec::Dynamic) return operands.ReadPrefixes(op).flags.opsize;
     return Size == OpsizeSpec::Opsize16;
 }
 
 template <AddrModeSpec Form>
-FORCE_INLINE bool OperandIsReg(const DecodedOp* op) {
-    if constexpr (Form == AddrModeSpec::Dynamic) return (op->modrm & 0xc0) == 0xc0;
+FORCE_INLINE bool OperandIsReg(uint8_t modrm) {
+    if constexpr (Form == AddrModeSpec::Dynamic) return (modrm & 0xc0) == 0xc0;
     return Form == AddrModeSpec::ModReg;
 }
 
 template <AddrsizeSpec Size>
 FORCE_INLINE bool AddressIs16(const DecodedOp* op) {
-    if constexpr (Size == AddrsizeSpec::Dynamic) return op->prefixes.flags.addrsize;
+    if constexpr (Size == AddrsizeSpec::Dynamic) return GetPrefixes(op).flags.addrsize;
+    return Size == AddrsizeSpec::Addr16;
+}
+
+template <AddrsizeSpec Size, class Operands>
+FORCE_INLINE bool AddressIs16(const DecodedOp* op, const Operands& operands) {
+    if constexpr (Size == AddrsizeSpec::Dynamic) return operands.ReadPrefixes(op).flags.addrsize;
     return Size == AddrsizeSpec::Addr16;
 }
 
 template <GroupOpSpec Operation>
-FORCE_INLINE uint8_t GroupOperation(const DecodedOp* op) {
-    if constexpr (Operation == GroupOpSpec::Dynamic) return (op->modrm >> 3) & 7;
+FORCE_INLINE uint8_t GroupOperation(uint8_t modrm) {
+    if constexpr (Operation == GroupOpSpec::Dynamic) return (modrm >> 3) & 7;
     return static_cast<uint8_t>(Operation);
 }
 

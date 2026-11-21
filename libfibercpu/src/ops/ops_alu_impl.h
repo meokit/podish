@@ -12,84 +12,52 @@
 
 namespace fiberish {
 
-template <FlagsSpec Flags = FlagsSpec::Dynamic, AddrModeSpec AddrMode = AddrModeSpec::Dynamic>
-FORCE_INLINE LogicFlow OpAdd_EbGb_Internal(LogicFuncParams) {
-    constexpr bool UpdateFlags = Flags != FlagsSpec::Dead;
-    // 00: ADD r/m8, r8
-    auto dest_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, utlb);
-    if (!dest_res) return LogicFlow::RestartMemoryOp;
-    uint8_t dest = *dest_res;
+template <typename T, AddrModeSpec Form, auto Calculate>
+FORCE_INLINE LogicFlow OpBinaryRmwValue(LogicFuncParams) {
+    const ModRMRmwOperand<Form> operand(state, gpr, op, operand_modrm);
+    const auto destination = operand.template Read<T, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
+    if (!destination) return LogicFlow::RestartMemoryOp;
 
-    uint8_t src = gpr.GetReg8(state, (op->modrm >> 3) & 7);
-    uint8_t res = AluAdd<uint8_t, UpdateFlags>(state, flags_cache, dest, src);
-
-    // retry on TLB miss
-    if (!WriteModRM<uint8_t, OpOnTLBMiss::Retry, 1, AddrMode>(state, gpr, op, res, utlb)) {
-        return LogicFlow::RetryMemoryOp;
-    }
+    const T source = ReadRegGeneric<T>(state, gpr, (operand_modrm >> 3) & 7);
+    const T result = Calculate(state, flags_cache, *destination, source);
+    if (!operand.template Write<T, OpOnTLBMiss::Retry>(state, gpr, op, result, utlb)) return LogicFlow::RetryMemoryOp;
     return LogicFlow::Continue;
 }
 
+template <CarryRmwKind Kind, typename T, bool UpdateFlags, AddrModeSpec Form>
+FORCE_INLINE LogicFlow OpBinaryCarryRmwValue(LogicFuncParams) {
+    const ModRMRmwOperand<Form> operand(state, gpr, op, operand_modrm);
+    const auto destination = operand.template Read<T, OpOnTLBMiss::Restart>(state, gpr, op, utlb);
+    if (!destination) return LogicFlow::RestartMemoryOp;
+
+    const T source = ReadRegGeneric<T>(state, gpr, (operand_modrm >> 3) & 7);
+    return ExecuteCarryRmw<Kind, T, UpdateFlags>(state, gpr, op, operand, *destination, source, utlb, flags_cache);
+}
+
+template <FlagsSpec Flags = FlagsSpec::Dynamic, AddrModeSpec AddrMode = AddrModeSpec::Dynamic>
+FORCE_INLINE LogicFlow OpAdd_EbGb_Internal(LogicFuncParams) {
+    constexpr bool update_flags = Flags != FlagsSpec::Dead;
+    return OpBinaryRmwValue<uint8_t, AddrMode, AluAdd<uint8_t, update_flags>>(LogicPassParams);
+}
+
 template <FlagsSpec Flags = FlagsSpec::Dynamic, OpsizeSpec Opsize = OpsizeSpec::Dynamic,
-          AddrModeSpec AddrMode = AddrModeSpec::Dynamic>
-FORCE_INLINE LogicFlow OpAdd_EvGv_Internal(LogicFuncParams) {
-    constexpr bool UpdateFlags = Flags != FlagsSpec::Dead;
-    // 01: ADD r/m16/32, r16/32
-    const bool opsize = OperandIs16<Opsize>(op);
-    if (opsize) {
-        uint8_t rm = op->modrm & 7;
-        uint16_t dest;
-        if constexpr (AddrMode == AddrModeSpec::ModReg) {
-            dest = static_cast<uint16_t>(gpr.GetReg(state, rm));
-        } else {
-            auto dest_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, utlb);
-            if (!dest_res) return LogicFlow::RestartMemoryOp;
-            dest = *dest_res;
-        }
-
-        uint16_t src = gpr.GetReg(state, (op->modrm >> 3) & 7) & 0xFFFF;
-        uint16_t res = AluAdd<uint16_t, UpdateFlags>(state, flags_cache, dest, src);
-
-        if constexpr (AddrMode == AddrModeSpec::ModReg) {
-            uint32_t reg = gpr.GetReg(state, rm);
-            gpr.SetReg(state, rm, (reg & 0xFFFF0000u) | res);
-        } else {
-            if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry, 1, AddrMode>(state, gpr, op, res, utlb))
-                return LogicFlow::RetryMemoryOp;
-        }
-    } else {
-        uint8_t rm = op->modrm & 7;
-        uint32_t dest;
-        if constexpr (AddrMode == AddrModeSpec::ModReg) {
-            dest = gpr.GetReg(state, rm);
-        } else {
-            auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, utlb);
-            if (!dest_res) return LogicFlow::RestartMemoryOp;
-            dest = *dest_res;
-        }
-
-        uint32_t src = gpr.GetReg(state, (op->modrm >> 3) & 7);
-        uint32_t res = AluAdd<uint32_t, UpdateFlags>(state, flags_cache, dest, src);
-
-        if constexpr (AddrMode == AddrModeSpec::ModReg) {
-            gpr.SetReg(state, rm, res);
-        } else {
-            if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry, 1, AddrMode>(state, gpr, op, res, utlb))
-                return LogicFlow::RetryMemoryOp;
-        }
-    }
-    return LogicFlow::Continue;
+          AddrModeSpec AddrMode = AddrModeSpec::Dynamic, class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpAdd_EvGv_Internal(LogicFuncParams, const Operands& operands = {}) {
+    constexpr bool update_flags = Flags != FlagsSpec::Dead;
+    if (OperandIs16<Opsize>(op, operands))
+        return OpBinaryRmwValue<uint16_t, AddrMode, AluAdd<uint16_t, update_flags>>(LogicPassParams);
+    return OpBinaryRmwValue<uint32_t, AddrMode, AluAdd<uint32_t, update_flags>>(LogicPassParams);
 }
 
 template <FlagsSpec Flags = FlagsSpec::Dynamic, AddrModeSpec AddrMode = AddrModeSpec::Dynamic>
 FORCE_INLINE LogicFlow OpAdd_GbEb_Internal(LogicFuncParams) {
     constexpr bool UpdateFlags = Flags != FlagsSpec::Dead;
     // 02: ADD r8, r/m8
-    auto src_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, utlb);
+    auto src_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, operand_modrm, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
     uint8_t src = *src_res;
 
-    uint8_t reg = (op->modrm >> 3) & 7;
+    uint8_t reg = (operand_modrm >> 3) & 7;
     uint8_t dest = gpr.GetReg8(state, reg);
     uint8_t res = AluAdd<uint8_t, UpdateFlags>(state, flags_cache, dest, src);
 
@@ -101,13 +69,13 @@ FORCE_INLINE LogicFlow OpAdd_GbEb_Internal(LogicFuncParams) {
 }
 
 template <FlagsSpec Flags = FlagsSpec::Dynamic, OpsizeSpec Opsize = OpsizeSpec::Dynamic,
-          AddrModeSpec AddrMode = AddrModeSpec::Dynamic>
-FORCE_INLINE LogicFlow OpAdd_GvEv_Internal(LogicFuncParams) {
+          AddrModeSpec AddrMode = AddrModeSpec::Dynamic, class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpAdd_GvEv_Internal(LogicFuncParams, const Operands& operands = {}) {
     constexpr bool UpdateFlags = Flags != FlagsSpec::Dead;
     // 03: ADD r16/32, r/m16/32
-    uint8_t reg = (op->modrm >> 3) & 7;
-    if (OperandIs16<Opsize>(op)) {
-        auto src_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, utlb);
+    uint8_t reg = (operand_modrm >> 3) & 7;
+    if (OperandIs16<Opsize>(op, operands)) {
+        auto src_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, operand_modrm, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         uint16_t src = *src_res;
 
@@ -115,7 +83,7 @@ FORCE_INLINE LogicFlow OpAdd_GvEv_Internal(LogicFuncParams) {
         uint16_t res = AluAdd<uint16_t, UpdateFlags>(state, flags_cache, dest, src);
         gpr.SetReg(state, reg, (gpr.GetReg(state, reg) & 0xFFFF0000) | res);
     } else {
-        auto src_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, utlb);
+        auto src_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, operand_modrm, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         uint32_t src = *src_res;
 
@@ -128,50 +96,27 @@ FORCE_INLINE LogicFlow OpAdd_GvEv_Internal(LogicFuncParams) {
 
 template <FlagsSpec Flags = FlagsSpec::Dynamic, AddrModeSpec AddrMode = AddrModeSpec::Dynamic>
 FORCE_INLINE LogicFlow OpAdc_EbGb_Internal(LogicFuncParams) {
-    constexpr bool UpdateFlags = Flags != FlagsSpec::Dead;
-    // 10: ADC r/m8, r8
-    auto dest_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, utlb);
-    if (!dest_res) return LogicFlow::RestartMemoryOp;
-    uint8_t dest = *dest_res;
-
-    uint8_t src = gpr.GetReg8(state, (op->modrm >> 3) & 7);
-    return ExecuteCarryRmw<CarryRmwKind::Adc, uint8_t, UpdateFlags, AddrMode>(state, gpr, op, dest, src, utlb,
-                                                                              flags_cache);
+    constexpr bool update_flags = Flags != FlagsSpec::Dead;
+    return OpBinaryCarryRmwValue<CarryRmwKind::Adc, uint8_t, update_flags, AddrMode>(LogicPassParams);
 }
 
 template <FlagsSpec Flags = FlagsSpec::Dynamic, OpsizeSpec Opsize = OpsizeSpec::Dynamic,
-          AddrModeSpec AddrMode = AddrModeSpec::Dynamic>
-FORCE_INLINE LogicFlow OpAdc_EvGv_Internal(LogicFuncParams) {
-    constexpr bool UpdateFlags = Flags != FlagsSpec::Dead;
-    // 11: ADC r/m16/32, r16/32
-    uint8_t reg = (op->modrm >> 3) & 7;
-    if (OperandIs16<Opsize>(op)) {
-        auto dest_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, utlb);
-        if (!dest_res) return LogicFlow::RestartMemoryOp;
-        uint16_t dest = *dest_res;
-
-        uint16_t src = gpr.GetReg(state, reg) & 0xFFFF;
-        return ExecuteCarryRmw<CarryRmwKind::Adc, uint16_t, UpdateFlags, AddrMode>(state, gpr, op, dest, src, utlb,
-                                                                                   flags_cache);
-    } else {
-        auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, utlb);
-        if (!dest_res) return LogicFlow::RestartMemoryOp;
-        uint32_t dest = *dest_res;
-
-        uint32_t src = gpr.GetReg(state, reg);
-        return ExecuteCarryRmw<CarryRmwKind::Adc, uint32_t, UpdateFlags, AddrMode>(state, gpr, op, dest, src, utlb,
-                                                                                   flags_cache);
-    }
+          AddrModeSpec AddrMode = AddrModeSpec::Dynamic, class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpAdc_EvGv_Internal(LogicFuncParams, const Operands& operands = {}) {
+    constexpr bool update_flags = Flags != FlagsSpec::Dead;
+    if (OperandIs16<Opsize>(op, operands))
+        return OpBinaryCarryRmwValue<CarryRmwKind::Adc, uint16_t, update_flags, AddrMode>(LogicPassParams);
+    return OpBinaryCarryRmwValue<CarryRmwKind::Adc, uint32_t, update_flags, AddrMode>(LogicPassParams);
 }
 
 template <FlagsSpec Flags = FlagsSpec::Dynamic, AddrModeSpec AddrMode = AddrModeSpec::Dynamic>
 FORCE_INLINE LogicFlow OpAdc_GbEb_Internal(LogicFuncParams) {
     constexpr bool UpdateFlags = Flags != FlagsSpec::Dead;
     // 12: ADC r8, r/m8
-    auto src_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, utlb);
+    auto src_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, operand_modrm, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
     uint8_t src = *src_res;
-    uint8_t reg = (op->modrm >> 3) & 7;
+    uint8_t reg = (operand_modrm >> 3) & 7;
     uint8_t dest = gpr.GetReg8(state, reg);
     uint8_t res = AluAdc<uint8_t, UpdateFlags>(state, flags_cache, dest, src);
 
@@ -184,13 +129,13 @@ FORCE_INLINE LogicFlow OpAdc_GbEb_Internal(LogicFuncParams) {
 }
 
 template <FlagsSpec Flags = FlagsSpec::Dynamic, OpsizeSpec Opsize = OpsizeSpec::Dynamic,
-          AddrModeSpec AddrMode = AddrModeSpec::Dynamic>
-FORCE_INLINE LogicFlow OpAdc_GvEv_Internal(LogicFuncParams) {
+          AddrModeSpec AddrMode = AddrModeSpec::Dynamic, class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpAdc_GvEv_Internal(LogicFuncParams, const Operands& operands = {}) {
     constexpr bool UpdateFlags = Flags != FlagsSpec::Dead;
     // 13: ADC r16/32, r/m16/32
-    uint8_t reg = (op->modrm >> 3) & 7;
-    if (OperandIs16<Opsize>(op)) {
-        auto src_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, utlb);
+    uint8_t reg = (operand_modrm >> 3) & 7;
+    if (OperandIs16<Opsize>(op, operands)) {
+        auto src_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, operand_modrm, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         uint16_t src = *src_res;
 
@@ -198,7 +143,7 @@ FORCE_INLINE LogicFlow OpAdc_GvEv_Internal(LogicFuncParams) {
         uint16_t res = AluAdc<uint16_t, UpdateFlags>(state, flags_cache, dest, src);
         gpr.SetReg(state, reg, (gpr.GetReg(state, reg) & 0xFFFF0000) | res);
     } else {
-        auto src_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, utlb);
+        auto src_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, operand_modrm, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         uint32_t src = *src_res;
 
@@ -210,134 +155,38 @@ FORCE_INLINE LogicFlow OpAdc_GvEv_Internal(LogicFuncParams) {
 }
 
 template <FlagsSpec Flags = FlagsSpec::Dynamic, OpsizeSpec Opsize = OpsizeSpec::Dynamic,
-          AddrModeSpec AddrMode = AddrModeSpec::Dynamic>
-FORCE_INLINE LogicFlow OpSub_EvGv_Internal(LogicFuncParams) {
-    constexpr bool UpdateFlags = Flags != FlagsSpec::Dead;
-    // 29: SUB r/m16/32, r16/32
-    uint8_t reg = (op->modrm >> 3) & 7;
-    const bool opsize = OperandIs16<Opsize>(op);
-    if (opsize) {
-        uint8_t rm = op->modrm & 7;
-        uint16_t dest;
-        if constexpr (AddrMode == AddrModeSpec::ModReg) {
-            dest = static_cast<uint16_t>(gpr.GetReg(state, rm));
-        } else {
-            auto dest_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, utlb);
-            if (!dest_res) return LogicFlow::RestartMemoryOp;
-            dest = *dest_res;
-        }
-
-        uint16_t src = gpr.GetReg(state, reg) & 0xFFFF;
-        uint16_t res = AluSub<uint16_t, UpdateFlags>(state, flags_cache, dest, src);
-
-        if constexpr (AddrMode == AddrModeSpec::ModReg) {
-            uint32_t reg_value = gpr.GetReg(state, rm);
-            gpr.SetReg(state, rm, (reg_value & 0xFFFF0000u) | res);
-        } else {
-            if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry, 1, AddrMode>(state, gpr, op, res, utlb))
-                return LogicFlow::RetryMemoryOp;
-        }
-    } else {
-        uint8_t rm = op->modrm & 7;
-        uint32_t dest;
-        if constexpr (AddrMode == AddrModeSpec::ModReg) {
-            dest = gpr.GetReg(state, rm);
-        } else {
-            auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, utlb);
-            if (!dest_res) return LogicFlow::RestartMemoryOp;
-            dest = *dest_res;
-        }
-
-        uint32_t src = gpr.GetReg(state, reg);
-        uint32_t res = AluSub<uint32_t, UpdateFlags>(state, flags_cache, dest, src);
-
-        if constexpr (AddrMode == AddrModeSpec::ModReg) {
-            gpr.SetReg(state, rm, res);
-        } else {
-            if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry, 1, AddrMode>(state, gpr, op, res, utlb))
-                return LogicFlow::RetryMemoryOp;
-        }
-    }
-    return LogicFlow::Continue;
+          AddrModeSpec AddrMode = AddrModeSpec::Dynamic, class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpSub_EvGv_Internal(LogicFuncParams, const Operands& operands = {}) {
+    constexpr bool update_flags = Flags != FlagsSpec::Dead;
+    if (OperandIs16<Opsize>(op, operands))
+        return OpBinaryRmwValue<uint16_t, AddrMode, AluSub<uint16_t, update_flags>>(LogicPassParams);
+    return OpBinaryRmwValue<uint32_t, AddrMode, AluSub<uint32_t, update_flags>>(LogicPassParams);
 }
 
 template <FlagsSpec Flags = FlagsSpec::Dynamic, AddrModeSpec AddrMode = AddrModeSpec::Dynamic>
 FORCE_INLINE LogicFlow OpAnd_EbGb_Internal(LogicFuncParams) {
-    constexpr bool UpdateFlags = Flags != FlagsSpec::Dead;
-    // 20: AND r/m8, r8
-    auto dest_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, utlb);
-    if (!dest_res) return LogicFlow::RestartMemoryOp;
-    uint8_t dest = *dest_res;
-
-    uint8_t src = gpr.GetReg8(state, (op->modrm >> 3) & 7);
-    uint8_t res = AluAnd<uint8_t, UpdateFlags>(state, flags_cache, dest, src);
-
-    if (!WriteModRM<uint8_t, OpOnTLBMiss::Retry, 1, AddrMode>(state, gpr, op, res, utlb))
-        return LogicFlow::RetryMemoryOp;
-    return LogicFlow::Continue;
+    constexpr bool update_flags = Flags != FlagsSpec::Dead;
+    return OpBinaryRmwValue<uint8_t, AddrMode, AluAnd<uint8_t, update_flags>>(LogicPassParams);
 }
 
 template <FlagsSpec Flags = FlagsSpec::Dynamic, OpsizeSpec Opsize = OpsizeSpec::Dynamic,
-          AddrModeSpec AddrMode = AddrModeSpec::Dynamic>
-FORCE_INLINE LogicFlow OpAnd_EvGv_Internal(LogicFuncParams) {
-    constexpr bool UpdateFlags = Flags != FlagsSpec::Dead;
-    // 21: AND r/m16/32, r16/32
-    uint8_t reg = (op->modrm >> 3) & 7;
-    const bool opsize = OperandIs16<Opsize>(op);
-    if (opsize) {
-        uint8_t rm = op->modrm & 7;
-        uint16_t dest;
-        if constexpr (AddrMode == AddrModeSpec::ModReg) {
-            dest = static_cast<uint16_t>(gpr.GetReg(state, rm));
-        } else {
-            auto dest_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, utlb);
-            if (!dest_res) return LogicFlow::RestartMemoryOp;
-            dest = *dest_res;
-        }
-
-        uint16_t src = gpr.GetReg(state, reg) & 0xFFFF;
-        uint16_t res = AluAnd<uint16_t, UpdateFlags>(state, flags_cache, dest, src);
-
-        if constexpr (AddrMode == AddrModeSpec::ModReg) {
-            uint32_t reg_value = gpr.GetReg(state, rm);
-            gpr.SetReg(state, rm, (reg_value & 0xFFFF0000u) | res);
-        } else {
-            if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry, 1, AddrMode>(state, gpr, op, res, utlb))
-                return LogicFlow::RetryMemoryOp;
-        }
-    } else {
-        uint8_t rm = op->modrm & 7;
-        uint32_t dest;
-        if constexpr (AddrMode == AddrModeSpec::ModReg) {
-            dest = gpr.GetReg(state, rm);
-        } else {
-            auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, utlb);
-            if (!dest_res) return LogicFlow::RestartMemoryOp;
-            dest = *dest_res;
-        }
-
-        uint32_t src = gpr.GetReg(state, reg);
-        uint32_t res = AluAnd<uint32_t, UpdateFlags>(state, flags_cache, dest, src);
-
-        if constexpr (AddrMode == AddrModeSpec::ModReg) {
-            gpr.SetReg(state, rm, res);
-        } else {
-            if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry, 1, AddrMode>(state, gpr, op, res, utlb))
-                return LogicFlow::RetryMemoryOp;
-        }
-    }
-    return LogicFlow::Continue;
+          AddrModeSpec AddrMode = AddrModeSpec::Dynamic, class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpAnd_EvGv_Internal(LogicFuncParams, const Operands& operands = {}) {
+    constexpr bool update_flags = Flags != FlagsSpec::Dead;
+    if (OperandIs16<Opsize>(op, operands))
+        return OpBinaryRmwValue<uint16_t, AddrMode, AluAnd<uint16_t, update_flags>>(LogicPassParams);
+    return OpBinaryRmwValue<uint32_t, AddrMode, AluAnd<uint32_t, update_flags>>(LogicPassParams);
 }
 
 template <FlagsSpec Flags = FlagsSpec::Dynamic, AddrModeSpec AddrMode = AddrModeSpec::Dynamic>
 FORCE_INLINE LogicFlow OpAnd_GbEb_Internal(LogicFuncParams) {
     constexpr bool UpdateFlags = Flags != FlagsSpec::Dead;
     // 22: AND r8, r/m8
-    auto src_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, utlb);
+    auto src_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, operand_modrm, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
     uint8_t src = *src_res;
 
-    uint8_t reg = (op->modrm >> 3) & 7;
+    uint8_t reg = (operand_modrm >> 3) & 7;
     uint8_t dest = gpr.GetReg8(state, reg);
     uint8_t res = AluAnd<uint8_t, UpdateFlags>(state, flags_cache, dest, src);
 
@@ -349,13 +198,13 @@ FORCE_INLINE LogicFlow OpAnd_GbEb_Internal(LogicFuncParams) {
 }
 
 template <FlagsSpec Flags = FlagsSpec::Dynamic, OpsizeSpec Opsize = OpsizeSpec::Dynamic,
-          AddrModeSpec AddrMode = AddrModeSpec::Dynamic>
-FORCE_INLINE LogicFlow OpAnd_GvEv_Internal(LogicFuncParams) {
+          AddrModeSpec AddrMode = AddrModeSpec::Dynamic, class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpAnd_GvEv_Internal(LogicFuncParams, const Operands& operands = {}) {
     constexpr bool UpdateFlags = Flags != FlagsSpec::Dead;
     // 23: AND r16/32, r/m16/32
-    uint8_t reg = (op->modrm >> 3) & 7;
-    if (OperandIs16<Opsize>(op)) {
-        auto src_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, utlb);
+    uint8_t reg = (operand_modrm >> 3) & 7;
+    if (OperandIs16<Opsize>(op, operands)) {
+        auto src_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, operand_modrm, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         uint16_t src = *src_res;
 
@@ -363,7 +212,7 @@ FORCE_INLINE LogicFlow OpAnd_GvEv_Internal(LogicFuncParams) {
         uint16_t res = AluAnd<uint16_t, UpdateFlags>(state, flags_cache, dest, src);
         gpr.SetReg(state, reg, (gpr.GetReg(state, reg) & 0xFFFF0000) | res);
     } else {
-        auto src_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, utlb);
+        auto src_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, operand_modrm, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         uint32_t src = *src_res;
 
@@ -375,122 +224,36 @@ FORCE_INLINE LogicFlow OpAnd_GvEv_Internal(LogicFuncParams) {
 }
 
 template <FlagsSpec Flags = FlagsSpec::Dynamic, OpsizeSpec Opsize = OpsizeSpec::Dynamic,
-          AddrModeSpec AddrMode = AddrModeSpec::Dynamic>
-FORCE_INLINE LogicFlow OpOr_EvGv_Internal(LogicFuncParams) {
-    constexpr bool UpdateFlags = Flags != FlagsSpec::Dead;
-    // 09: OR r/m16/32, r16/32
-    uint8_t reg = (op->modrm >> 3) & 7;
-    const bool opsize = OperandIs16<Opsize>(op);
-    if (opsize) {
-        uint8_t rm = op->modrm & 7;
-        uint16_t dest;
-        if constexpr (AddrMode == AddrModeSpec::ModReg) {
-            dest = static_cast<uint16_t>(gpr.GetReg(state, rm));
-        } else {
-            auto dest_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, utlb);
-            if (!dest_res) return LogicFlow::RestartMemoryOp;
-            dest = *dest_res;
-        }
-
-        uint16_t src = gpr.GetReg(state, reg) & 0xFFFF;
-        uint16_t res = AluOr<uint16_t, UpdateFlags>(state, flags_cache, dest, src);
-
-        if constexpr (AddrMode == AddrModeSpec::ModReg) {
-            uint32_t reg_value = gpr.GetReg(state, rm);
-            gpr.SetReg(state, rm, (reg_value & 0xFFFF0000u) | res);
-        } else {
-            if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry, 1, AddrMode>(state, gpr, op, res, utlb))
-                return LogicFlow::RetryMemoryOp;
-        }
-    } else {
-        uint8_t rm = op->modrm & 7;
-        uint32_t dest;
-        if constexpr (AddrMode == AddrModeSpec::ModReg) {
-            dest = gpr.GetReg(state, rm);
-        } else {
-            auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, utlb);
-            if (!dest_res) return LogicFlow::RestartMemoryOp;
-            dest = *dest_res;
-        }
-
-        uint32_t src = gpr.GetReg(state, reg);
-        uint32_t res = AluOr<uint32_t, UpdateFlags>(state, flags_cache, dest, src);
-
-        if constexpr (AddrMode == AddrModeSpec::ModReg) {
-            gpr.SetReg(state, rm, res);
-        } else {
-            if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry, 1, AddrMode>(state, gpr, op, res, utlb))
-                return LogicFlow::RetryMemoryOp;
-        }
-    }
-    return LogicFlow::Continue;
+          AddrModeSpec AddrMode = AddrModeSpec::Dynamic, class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpOr_EvGv_Internal(LogicFuncParams, const Operands& operands = {}) {
+    constexpr bool update_flags = Flags != FlagsSpec::Dead;
+    if (OperandIs16<Opsize>(op, operands))
+        return OpBinaryRmwValue<uint16_t, AddrMode, AluOr<uint16_t, update_flags>>(LogicPassParams);
+    return OpBinaryRmwValue<uint32_t, AddrMode, AluOr<uint32_t, update_flags>>(LogicPassParams);
 }
 
 template <FlagsSpec Flags = FlagsSpec::Dynamic, OpsizeSpec Opsize = OpsizeSpec::Dynamic,
-          AddrModeSpec AddrMode = AddrModeSpec::Dynamic>
-FORCE_INLINE LogicFlow OpXor_EvGv_Internal(LogicFuncParams) {
-    constexpr bool UpdateFlags = Flags != FlagsSpec::Dead;
-    // 31: XOR r/m16/32, r16/32
-    uint8_t reg = (op->modrm >> 3) & 7;
-    const bool opsize = OperandIs16<Opsize>(op);
-    if (opsize) {
-        uint8_t rm = op->modrm & 7;
-        uint16_t dest;
-        if constexpr (AddrMode == AddrModeSpec::ModReg) {
-            dest = static_cast<uint16_t>(gpr.GetReg(state, rm));
-        } else {
-            auto dest_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, utlb);
-            if (!dest_res) return LogicFlow::RestartMemoryOp;
-            dest = *dest_res;
-        }
-
-        uint16_t src = gpr.GetReg(state, reg) & 0xFFFF;
-        uint16_t res = AluXor<uint16_t, UpdateFlags>(state, flags_cache, dest, src);
-
-        if constexpr (AddrMode == AddrModeSpec::ModReg) {
-            uint32_t reg_value = gpr.GetReg(state, rm);
-            gpr.SetReg(state, rm, (reg_value & 0xFFFF0000u) | res);
-        } else {
-            if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry, 1, AddrMode>(state, gpr, op, res, utlb))
-                return LogicFlow::RetryMemoryOp;
-        }
-    } else {
-        uint8_t rm = op->modrm & 7;
-        uint32_t dest;
-        if constexpr (AddrMode == AddrModeSpec::ModReg) {
-            dest = gpr.GetReg(state, rm);
-        } else {
-            auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, utlb);
-            if (!dest_res) return LogicFlow::RestartMemoryOp;
-            dest = *dest_res;
-        }
-
-        uint32_t src = gpr.GetReg(state, reg);
-        uint32_t res = AluXor<uint32_t, UpdateFlags>(state, flags_cache, dest, src);
-
-        if constexpr (AddrMode == AddrModeSpec::ModReg) {
-            gpr.SetReg(state, rm, res);
-        } else {
-            if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry, 1, AddrMode>(state, gpr, op, res, utlb))
-                return LogicFlow::RetryMemoryOp;
-        }
-    }
-    return LogicFlow::Continue;
+          AddrModeSpec AddrMode = AddrModeSpec::Dynamic, class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpXor_EvGv_Internal(LogicFuncParams, const Operands& operands = {}) {
+    constexpr bool update_flags = Flags != FlagsSpec::Dead;
+    if (OperandIs16<Opsize>(op, operands))
+        return OpBinaryRmwValue<uint16_t, AddrMode, AluXor<uint16_t, update_flags>>(LogicPassParams);
+    return OpBinaryRmwValue<uint32_t, AddrMode, AluXor<uint32_t, update_flags>>(LogicPassParams);
 }
 
 template <FlagsSpec Flags = FlagsSpec::Dynamic, OpsizeSpec Opsize = OpsizeSpec::Dynamic,
-          RmOperandSpec FixedReg = RmOperandSpec::Dynamic>
-FORCE_INLINE LogicFlow OpInc_Reg_Internal(LogicFuncParams) {
+          RmOperandSpec FixedReg = RmOperandSpec::Dynamic, class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpInc_Reg_Internal(LogicFuncParams, const Operands& operands = {}) {
     constexpr bool UpdateFlags = Flags != FlagsSpec::Dead;
     // 40+rd: INC r16/32
     const uint8_t reg = FixedReg == RmOperandSpec::Dynamic
-                            ? op->modrm & 7
+                            ? operand_modrm & 7
                             : static_cast<uint8_t>(FixedReg) - static_cast<uint8_t>(RmOperandSpec::Reg0);
 
     // INC does not affect CF
     bool old_cf = ReadCF(flags_cache);
 
-    if (OperandIs16<Opsize>(op)) {
+    if (OperandIs16<Opsize>(op, operands)) {
         uint16_t val = (uint16_t)gpr.GetReg(state, reg);
         uint16_t res = AluAdd<uint16_t, UpdateFlags>(state, flags_cache, val, 1);
         if constexpr (UpdateFlags) AssignCF(flags_cache, old_cf);
@@ -505,18 +268,18 @@ FORCE_INLINE LogicFlow OpInc_Reg_Internal(LogicFuncParams) {
 }
 
 template <FlagsSpec Flags = FlagsSpec::Dynamic, OpsizeSpec Opsize = OpsizeSpec::Dynamic,
-          RmOperandSpec FixedReg = RmOperandSpec::Dynamic>
-FORCE_INLINE LogicFlow OpDec_Reg_Internal(LogicFuncParams) {
+          RmOperandSpec FixedReg = RmOperandSpec::Dynamic, class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpDec_Reg_Internal(LogicFuncParams, const Operands& operands = {}) {
     constexpr bool UpdateFlags = Flags != FlagsSpec::Dead;
     // 48+rd: DEC r16/32
     const uint8_t reg = FixedReg == RmOperandSpec::Dynamic
-                            ? op->modrm & 7
+                            ? operand_modrm & 7
                             : static_cast<uint8_t>(FixedReg) - static_cast<uint8_t>(RmOperandSpec::Reg0);
 
     // DEC does not affect CF
     bool old_cf = ReadCF(flags_cache);
 
-    if (OperandIs16<Opsize>(op)) {
+    if (OperandIs16<Opsize>(op, operands)) {
         uint16_t val = (uint16_t)gpr.GetReg(state, reg);
         uint16_t res = AluSub<uint16_t, UpdateFlags>(state, flags_cache, val, 1);
         if constexpr (UpdateFlags) AssignCF(flags_cache, old_cf);
@@ -545,11 +308,12 @@ FORCE_INLINE LogicFlow OpAdd_AlImm_Internal(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-template <FlagsSpec Flags = FlagsSpec::Dynamic, OpsizeSpec Opsize = OpsizeSpec::Dynamic>
-FORCE_INLINE LogicFlow OpAdd_EaxImm_Internal(LogicFuncParams) {
+template <FlagsSpec Flags = FlagsSpec::Dynamic, OpsizeSpec Opsize = OpsizeSpec::Dynamic,
+          class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpAdd_EaxImm_Internal(LogicFuncParams, const Operands& operands = {}) {
     constexpr bool UpdateFlags = Flags != FlagsSpec::Dead;
     // 05: ADD EAX, imm32
-    if (OperandIs16<Opsize>(op)) {
+    if (OperandIs16<Opsize>(op, operands)) {
         // ADD AX, imm16
         uint16_t dest = gpr.GetReg(state, EAX) & 0xFFFF;
         uint16_t src = (uint16_t)imm;
@@ -570,29 +334,19 @@ FORCE_INLINE LogicFlow OpAdd_EaxImm_Internal(LogicFuncParams) {
 
 template <FlagsSpec Flags = FlagsSpec::Dynamic, AddrModeSpec AddrMode = AddrModeSpec::Dynamic>
 FORCE_INLINE LogicFlow OpOr_EbGb_Internal(LogicFuncParams) {
-    constexpr bool UpdateFlags = Flags != FlagsSpec::Dead;
-    // 08: OR r/m8, r8
-    auto dest_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, utlb);
-    if (!dest_res) return LogicFlow::RestartMemoryOp;
-    uint8_t dest = *dest_res;
-
-    uint8_t src = gpr.GetReg8(state, (op->modrm >> 3) & 7);
-    uint8_t res = AluOr<uint8_t, UpdateFlags>(state, flags_cache, dest, src);
-
-    if (!WriteModRM<uint8_t, OpOnTLBMiss::Retry, 1, AddrMode>(state, gpr, op, res, utlb))
-        return LogicFlow::RetryMemoryOp;
-    return LogicFlow::Continue;
+    constexpr bool update_flags = Flags != FlagsSpec::Dead;
+    return OpBinaryRmwValue<uint8_t, AddrMode, AluOr<uint8_t, update_flags>>(LogicPassParams);
 }
 
 template <FlagsSpec Flags = FlagsSpec::Dynamic, AddrModeSpec AddrMode = AddrModeSpec::Dynamic>
 FORCE_INLINE LogicFlow OpOr_GbEb_Internal(LogicFuncParams) {
     constexpr bool UpdateFlags = Flags != FlagsSpec::Dead;
     // 0A: OR r8, r/m8
-    auto src_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, utlb);
+    auto src_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, operand_modrm, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
     uint8_t src = *src_res;
 
-    uint8_t reg = (op->modrm >> 3) & 7;
+    uint8_t reg = (operand_modrm >> 3) & 7;
     uint8_t dest = gpr.GetReg8(state, reg);
     uint8_t res = AluOr<uint8_t, UpdateFlags>(state, flags_cache, dest, src);
 
@@ -604,13 +358,13 @@ FORCE_INLINE LogicFlow OpOr_GbEb_Internal(LogicFuncParams) {
 }
 
 template <FlagsSpec Flags = FlagsSpec::Dynamic, OpsizeSpec Opsize = OpsizeSpec::Dynamic,
-          AddrModeSpec AddrMode = AddrModeSpec::Dynamic>
-FORCE_INLINE LogicFlow OpOr_GvEv_Internal(LogicFuncParams) {
+          AddrModeSpec AddrMode = AddrModeSpec::Dynamic, class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpOr_GvEv_Internal(LogicFuncParams, const Operands& operands = {}) {
     constexpr bool UpdateFlags = Flags != FlagsSpec::Dead;
     // 0B: OR r16/32, r/m16/32
-    uint8_t reg = (op->modrm >> 3) & 7;
-    if (OperandIs16<Opsize>(op)) {
-        auto src_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, utlb);
+    uint8_t reg = (operand_modrm >> 3) & 7;
+    if (OperandIs16<Opsize>(op, operands)) {
+        auto src_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, operand_modrm, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         uint16_t src = *src_res;
 
@@ -618,7 +372,7 @@ FORCE_INLINE LogicFlow OpOr_GvEv_Internal(LogicFuncParams) {
         uint16_t res = AluOr<uint16_t, UpdateFlags>(state, flags_cache, dest, src);
         gpr.SetReg(state, reg, (gpr.GetReg(state, reg) & 0xFFFF0000) | res);
     } else {
-        auto src_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, utlb);
+        auto src_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, operand_modrm, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         uint32_t src = *src_res;
 
@@ -643,11 +397,12 @@ FORCE_INLINE LogicFlow OpOr_AlImm_Internal(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-template <FlagsSpec Flags = FlagsSpec::Dynamic, OpsizeSpec Opsize = OpsizeSpec::Dynamic>
-FORCE_INLINE LogicFlow OpOr_EaxImm_Internal(LogicFuncParams) {
+template <FlagsSpec Flags = FlagsSpec::Dynamic, OpsizeSpec Opsize = OpsizeSpec::Dynamic,
+          class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpOr_EaxImm_Internal(LogicFuncParams, const Operands& operands = {}) {
     constexpr bool UpdateFlags = Flags != FlagsSpec::Dead;
     // 0D: OR EAX, imm32
-    if (OperandIs16<Opsize>(op)) {
+    if (OperandIs16<Opsize>(op, operands)) {
         uint16_t dest = gpr.GetReg(state, EAX) & 0xFFFF;
         uint16_t src = (uint16_t)imm;
         uint16_t res = AluOr<uint16_t, UpdateFlags>(state, flags_cache, dest, src);
@@ -677,11 +432,12 @@ FORCE_INLINE LogicFlow OpAdc_AlImm_Internal(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-template <FlagsSpec Flags = FlagsSpec::Dynamic, OpsizeSpec Opsize = OpsizeSpec::Dynamic>
-FORCE_INLINE LogicFlow OpAdc_EaxImm_Internal(LogicFuncParams) {
+template <FlagsSpec Flags = FlagsSpec::Dynamic, OpsizeSpec Opsize = OpsizeSpec::Dynamic,
+          class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpAdc_EaxImm_Internal(LogicFuncParams, const Operands& operands = {}) {
     constexpr bool UpdateFlags = Flags != FlagsSpec::Dead;
     // 15: ADC EAX, imm32
-    if (OperandIs16<Opsize>(op)) {
+    if (OperandIs16<Opsize>(op, operands)) {
         uint16_t dest = gpr.GetReg(state, EAX) & 0xFFFF;
         uint16_t src = (uint16_t)imm;
         uint16_t res = AluAdc<uint16_t, UpdateFlags>(state, flags_cache, dest, src);
@@ -699,51 +455,28 @@ FORCE_INLINE LogicFlow OpAdc_EaxImm_Internal(LogicFuncParams) {
 
 template <FlagsSpec Flags = FlagsSpec::Dynamic, AddrModeSpec AddrMode = AddrModeSpec::Dynamic>
 FORCE_INLINE LogicFlow OpSbb_EbGb_Internal(LogicFuncParams) {
-    constexpr bool UpdateFlags = Flags != FlagsSpec::Dead;
-    // 18: SBB r/m8, r8
-    auto dest_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, utlb);
-    if (!dest_res) return LogicFlow::RestartMemoryOp;
-    uint8_t dest = *dest_res;
-
-    uint8_t src = gpr.GetReg8(state, (op->modrm >> 3) & 7);
-    return ExecuteCarryRmw<CarryRmwKind::Sbb, uint8_t, UpdateFlags, AddrMode>(state, gpr, op, dest, src, utlb,
-                                                                              flags_cache);
+    constexpr bool update_flags = Flags != FlagsSpec::Dead;
+    return OpBinaryCarryRmwValue<CarryRmwKind::Sbb, uint8_t, update_flags, AddrMode>(LogicPassParams);
 }
 
 template <FlagsSpec Flags = FlagsSpec::Dynamic, OpsizeSpec Opsize = OpsizeSpec::Dynamic,
-          AddrModeSpec AddrMode = AddrModeSpec::Dynamic>
-FORCE_INLINE LogicFlow OpSbb_EvGv_Internal(LogicFuncParams) {
-    constexpr bool UpdateFlags = Flags != FlagsSpec::Dead;
-    // 19: SBB r/m16/32, r16/32
-    uint8_t reg = (op->modrm >> 3) & 7;
-    if (OperandIs16<Opsize>(op)) {
-        auto dest_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, utlb);
-        if (!dest_res) return LogicFlow::RestartMemoryOp;
-        uint16_t dest = *dest_res;
-
-        uint16_t src = gpr.GetReg(state, reg) & 0xFFFF;
-        return ExecuteCarryRmw<CarryRmwKind::Sbb, uint16_t, UpdateFlags, AddrMode>(state, gpr, op, dest, src, utlb,
-                                                                                   flags_cache);
-    } else {
-        auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, utlb);
-        if (!dest_res) return LogicFlow::RestartMemoryOp;
-        uint32_t dest = *dest_res;
-
-        uint32_t src = gpr.GetReg(state, reg);
-        return ExecuteCarryRmw<CarryRmwKind::Sbb, uint32_t, UpdateFlags, AddrMode>(state, gpr, op, dest, src, utlb,
-                                                                                   flags_cache);
-    }
+          AddrModeSpec AddrMode = AddrModeSpec::Dynamic, class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpSbb_EvGv_Internal(LogicFuncParams, const Operands& operands = {}) {
+    constexpr bool update_flags = Flags != FlagsSpec::Dead;
+    if (OperandIs16<Opsize>(op, operands))
+        return OpBinaryCarryRmwValue<CarryRmwKind::Sbb, uint16_t, update_flags, AddrMode>(LogicPassParams);
+    return OpBinaryCarryRmwValue<CarryRmwKind::Sbb, uint32_t, update_flags, AddrMode>(LogicPassParams);
 }
 
 template <FlagsSpec Flags = FlagsSpec::Dynamic, AddrModeSpec AddrMode = AddrModeSpec::Dynamic>
 FORCE_INLINE LogicFlow OpSbb_GbEb_Internal(LogicFuncParams) {
     constexpr bool UpdateFlags = Flags != FlagsSpec::Dead;
     // 1A: SBB r8, r/m8
-    auto src_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, utlb);
+    auto src_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, operand_modrm, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
     uint8_t src = *src_res;
 
-    uint8_t reg = (op->modrm >> 3) & 7;
+    uint8_t reg = (operand_modrm >> 3) & 7;
     uint8_t dest = gpr.GetReg8(state, reg);
     uint8_t res = AluSbb<uint8_t, UpdateFlags>(state, flags_cache, dest, src);
 
@@ -755,13 +488,13 @@ FORCE_INLINE LogicFlow OpSbb_GbEb_Internal(LogicFuncParams) {
 }
 
 template <FlagsSpec Flags = FlagsSpec::Dynamic, OpsizeSpec Opsize = OpsizeSpec::Dynamic,
-          AddrModeSpec AddrMode = AddrModeSpec::Dynamic>
-FORCE_INLINE LogicFlow OpSbb_GvEv_Internal(LogicFuncParams) {
+          AddrModeSpec AddrMode = AddrModeSpec::Dynamic, class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpSbb_GvEv_Internal(LogicFuncParams, const Operands& operands = {}) {
     constexpr bool UpdateFlags = Flags != FlagsSpec::Dead;
     // 1B: SBB r16/32, r/m16/32
-    uint8_t reg = (op->modrm >> 3) & 7;
-    if (OperandIs16<Opsize>(op)) {
-        auto src_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, utlb);
+    uint8_t reg = (operand_modrm >> 3) & 7;
+    if (OperandIs16<Opsize>(op, operands)) {
+        auto src_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, operand_modrm, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         uint16_t src = *src_res;
 
@@ -769,7 +502,7 @@ FORCE_INLINE LogicFlow OpSbb_GvEv_Internal(LogicFuncParams) {
         uint16_t res = AluSbb<uint16_t, UpdateFlags>(state, flags_cache, dest, src);
         gpr.SetReg(state, reg, (gpr.GetReg(state, reg) & 0xFFFF0000) | res);
     } else {
-        auto src_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, utlb);
+        auto src_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, operand_modrm, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         uint32_t src = *src_res;
 
@@ -793,11 +526,12 @@ FORCE_INLINE LogicFlow OpSbb_AlImm_Internal(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-template <FlagsSpec Flags = FlagsSpec::Dynamic, OpsizeSpec Opsize = OpsizeSpec::Dynamic>
-FORCE_INLINE LogicFlow OpSbb_EaxImm_Internal(LogicFuncParams) {
+template <FlagsSpec Flags = FlagsSpec::Dynamic, OpsizeSpec Opsize = OpsizeSpec::Dynamic,
+          class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpSbb_EaxImm_Internal(LogicFuncParams, const Operands& operands = {}) {
     constexpr bool UpdateFlags = Flags != FlagsSpec::Dead;
     // 1D: SBB EAX, imm32
-    if (OperandIs16<Opsize>(op)) {
+    if (OperandIs16<Opsize>(op, operands)) {
         uint16_t dest = gpr.GetReg(state, EAX) & 0xFFFF;
         uint16_t src = (uint16_t)imm;
         uint16_t res = AluSbb<uint16_t, UpdateFlags>(state, flags_cache, dest, src);
@@ -826,11 +560,12 @@ FORCE_INLINE LogicFlow OpAnd_AlImm_Internal(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-template <FlagsSpec Flags = FlagsSpec::Dynamic, OpsizeSpec Opsize = OpsizeSpec::Dynamic>
-FORCE_INLINE LogicFlow OpAnd_EaxImm_Internal(LogicFuncParams) {
+template <FlagsSpec Flags = FlagsSpec::Dynamic, OpsizeSpec Opsize = OpsizeSpec::Dynamic,
+          class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpAnd_EaxImm_Internal(LogicFuncParams, const Operands& operands = {}) {
     constexpr bool UpdateFlags = Flags != FlagsSpec::Dead;
     // 25: AND EAX, imm32
-    if (OperandIs16<Opsize>(op)) {
+    if (OperandIs16<Opsize>(op, operands)) {
         uint16_t dest = gpr.GetReg(state, EAX) & 0xFFFF;
         uint16_t src = (uint16_t)imm;
         uint16_t res = AluAnd<uint16_t, UpdateFlags>(state, flags_cache, dest, src);
@@ -848,29 +583,19 @@ FORCE_INLINE LogicFlow OpAnd_EaxImm_Internal(LogicFuncParams) {
 
 template <FlagsSpec Flags = FlagsSpec::Dynamic, AddrModeSpec AddrMode = AddrModeSpec::Dynamic>
 FORCE_INLINE LogicFlow OpSub_EbGb_Internal(LogicFuncParams) {
-    constexpr bool UpdateFlags = Flags != FlagsSpec::Dead;
-    // 28: SUB r/m8, r8
-    auto dest_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, utlb);
-    if (!dest_res) return LogicFlow::RestartMemoryOp;
-    uint8_t dest = *dest_res;
-
-    uint8_t src = gpr.GetReg8(state, (op->modrm >> 3) & 7);
-    uint8_t res = AluSub<uint8_t, UpdateFlags>(state, flags_cache, dest, src);
-
-    if (!WriteModRM<uint8_t, OpOnTLBMiss::Retry, 1, AddrMode>(state, gpr, op, res, utlb))
-        return LogicFlow::RetryMemoryOp;
-    return LogicFlow::Continue;
+    constexpr bool update_flags = Flags != FlagsSpec::Dead;
+    return OpBinaryRmwValue<uint8_t, AddrMode, AluSub<uint8_t, update_flags>>(LogicPassParams);
 }
 
 template <FlagsSpec Flags = FlagsSpec::Dynamic, AddrModeSpec AddrMode = AddrModeSpec::Dynamic>
 FORCE_INLINE LogicFlow OpSub_GbEb_Internal(LogicFuncParams) {
     constexpr bool UpdateFlags = Flags != FlagsSpec::Dead;
     // 2A: SUB r8, r/m8
-    auto src_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, utlb);
+    auto src_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, operand_modrm, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
     uint8_t src = *src_res;
 
-    uint8_t reg = (op->modrm >> 3) & 7;
+    uint8_t reg = (operand_modrm >> 3) & 7;
     uint8_t dest = gpr.GetReg8(state, reg);
     uint8_t res = AluSub<uint8_t, UpdateFlags>(state, flags_cache, dest, src);
 
@@ -882,13 +607,13 @@ FORCE_INLINE LogicFlow OpSub_GbEb_Internal(LogicFuncParams) {
 }
 
 template <FlagsSpec Flags = FlagsSpec::Dynamic, OpsizeSpec Opsize = OpsizeSpec::Dynamic,
-          AddrModeSpec AddrMode = AddrModeSpec::Dynamic>
-FORCE_INLINE LogicFlow OpSub_GvEv_Internal(LogicFuncParams) {
+          AddrModeSpec AddrMode = AddrModeSpec::Dynamic, class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpSub_GvEv_Internal(LogicFuncParams, const Operands& operands = {}) {
     constexpr bool UpdateFlags = Flags != FlagsSpec::Dead;
     // 2B: SUB r16/32, r/m16/32
-    uint8_t reg = (op->modrm >> 3) & 7;
-    if (OperandIs16<Opsize>(op)) {
-        auto src_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, utlb);
+    uint8_t reg = (operand_modrm >> 3) & 7;
+    if (OperandIs16<Opsize>(op, operands)) {
+        auto src_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, operand_modrm, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         uint16_t src = *src_res;
 
@@ -896,7 +621,7 @@ FORCE_INLINE LogicFlow OpSub_GvEv_Internal(LogicFuncParams) {
         uint16_t res = AluSub<uint16_t, UpdateFlags>(state, flags_cache, dest, src);
         gpr.SetReg(state, reg, (gpr.GetReg(state, reg) & 0xFFFF0000) | res);
     } else {
-        auto src_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, utlb);
+        auto src_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, operand_modrm, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         uint32_t src = *src_res;
 
@@ -920,11 +645,12 @@ FORCE_INLINE LogicFlow OpSub_AlImm_Internal(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-template <FlagsSpec Flags = FlagsSpec::Dynamic, OpsizeSpec Opsize = OpsizeSpec::Dynamic>
-FORCE_INLINE LogicFlow OpSub_EaxImm_Internal(LogicFuncParams) {
+template <FlagsSpec Flags = FlagsSpec::Dynamic, OpsizeSpec Opsize = OpsizeSpec::Dynamic,
+          class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpSub_EaxImm_Internal(LogicFuncParams, const Operands& operands = {}) {
     constexpr bool UpdateFlags = Flags != FlagsSpec::Dead;
     // 2D: SUB EAX, imm32
-    if (OperandIs16<Opsize>(op)) {
+    if (OperandIs16<Opsize>(op, operands)) {
         uint16_t dest = gpr.GetReg(state, EAX) & 0xFFFF;
         uint16_t src = (uint16_t)imm;
         uint16_t res = AluSub<uint16_t, UpdateFlags>(state, flags_cache, dest, src);
@@ -942,29 +668,19 @@ FORCE_INLINE LogicFlow OpSub_EaxImm_Internal(LogicFuncParams) {
 
 template <FlagsSpec Flags = FlagsSpec::Dynamic, AddrModeSpec AddrMode = AddrModeSpec::Dynamic>
 FORCE_INLINE LogicFlow OpXor_EbGb_Internal(LogicFuncParams) {
-    constexpr bool UpdateFlags = Flags != FlagsSpec::Dead;
-    // 30: XOR r/m8, r8
-    auto dest_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, utlb);
-    if (!dest_res) return LogicFlow::RestartMemoryOp;
-    uint8_t dest = *dest_res;
-
-    uint8_t src = gpr.GetReg8(state, (op->modrm >> 3) & 7);
-    uint8_t res = AluXor<uint8_t, UpdateFlags>(state, flags_cache, dest, src);
-
-    if (!WriteModRM<uint8_t, OpOnTLBMiss::Retry, 1, AddrMode>(state, gpr, op, res, utlb))
-        return LogicFlow::RetryMemoryOp;
-    return LogicFlow::Continue;
+    constexpr bool update_flags = Flags != FlagsSpec::Dead;
+    return OpBinaryRmwValue<uint8_t, AddrMode, AluXor<uint8_t, update_flags>>(LogicPassParams);
 }
 
 template <FlagsSpec Flags = FlagsSpec::Dynamic, AddrModeSpec AddrMode = AddrModeSpec::Dynamic>
 FORCE_INLINE LogicFlow OpXor_GbEb_Internal(LogicFuncParams) {
     constexpr bool UpdateFlags = Flags != FlagsSpec::Dead;
     // 32: XOR r8, r/m8
-    auto src_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, utlb);
+    auto src_res = ReadModRM<uint8_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, operand_modrm, utlb);
     if (!src_res) return LogicFlow::RestartMemoryOp;
     uint8_t src = *src_res;
 
-    uint8_t reg = (op->modrm >> 3) & 7;
+    uint8_t reg = (operand_modrm >> 3) & 7;
     uint8_t dest = gpr.GetReg8(state, reg);
     uint8_t res = AluXor<uint8_t, UpdateFlags>(state, flags_cache, dest, src);
     if (reg < 4)
@@ -975,13 +691,13 @@ FORCE_INLINE LogicFlow OpXor_GbEb_Internal(LogicFuncParams) {
 }
 
 template <FlagsSpec Flags = FlagsSpec::Dynamic, OpsizeSpec Opsize = OpsizeSpec::Dynamic,
-          AddrModeSpec AddrMode = AddrModeSpec::Dynamic>
-FORCE_INLINE LogicFlow OpXor_GvEv_Internal(LogicFuncParams) {
+          AddrModeSpec AddrMode = AddrModeSpec::Dynamic, class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpXor_GvEv_Internal(LogicFuncParams, const Operands& operands = {}) {
     constexpr bool UpdateFlags = Flags != FlagsSpec::Dead;
     // 33: XOR r16/32, r/m16/32
-    uint8_t reg = (op->modrm >> 3) & 7;
-    if (OperandIs16<Opsize>(op)) {
-        auto src_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, utlb);
+    uint8_t reg = (operand_modrm >> 3) & 7;
+    if (OperandIs16<Opsize>(op, operands)) {
+        auto src_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, operand_modrm, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         uint16_t src = *src_res;
 
@@ -989,7 +705,7 @@ FORCE_INLINE LogicFlow OpXor_GvEv_Internal(LogicFuncParams) {
         uint16_t res = AluXor<uint16_t, UpdateFlags>(state, flags_cache, dest, src);
         gpr.SetReg(state, reg, (gpr.GetReg(state, reg) & 0xFFFF0000) | res);
     } else {
-        auto src_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, utlb);
+        auto src_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart, 1, AddrMode>(state, gpr, op, operand_modrm, utlb);
         if (!src_res) return LogicFlow::RestartMemoryOp;
         uint32_t src = *src_res;
 
@@ -1013,11 +729,12 @@ FORCE_INLINE LogicFlow OpXor_AlImm_Internal(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-template <FlagsSpec Flags = FlagsSpec::Dynamic, OpsizeSpec Opsize = OpsizeSpec::Dynamic>
-FORCE_INLINE LogicFlow OpXor_EaxImm_Internal(LogicFuncParams) {
+template <FlagsSpec Flags = FlagsSpec::Dynamic, OpsizeSpec Opsize = OpsizeSpec::Dynamic,
+          class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpXor_EaxImm_Internal(LogicFuncParams, const Operands& operands = {}) {
     constexpr bool UpdateFlags = Flags != FlagsSpec::Dead;
     // 35: XOR EAX, imm32
-    if (OperandIs16<Opsize>(op)) {
+    if (OperandIs16<Opsize>(op, operands)) {
         uint16_t dest = gpr.GetReg(state, EAX) & 0xFFFF;
         uint16_t src = (uint16_t)imm;
         uint16_t res = AluXor<uint16_t, UpdateFlags>(state, flags_cache, dest, src);
@@ -1046,21 +763,22 @@ FORCE_INLINE LogicFlow OpTestAccumulatorValue(LogicFuncParams) {
     return LogicFlow::Continue;
 }
 
-template <AccumulatorTest Test, bool Byte, OpsizeSpec Size = OpsizeSpec::Dynamic, FlagsSpec Flags = FlagsSpec::Dynamic>
-FORCE_INLINE LogicFlow OpTestAccumulator_Internal(LogicFuncParams) {
+template <AccumulatorTest Test, bool Byte, OpsizeSpec Size = OpsizeSpec::Dynamic, FlagsSpec Flags = FlagsSpec::Dynamic,
+          class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpTestAccumulator_Internal(LogicFuncParams, const Operands& operands = {}) {
     if constexpr (Byte) {
         return OpTestAccumulatorValue<uint8_t, Test, Flags>(LogicPassParams);
     } else {
-        if (OperandIs16<Size>(op)) return OpTestAccumulatorValue<uint16_t, Test, Flags>(LogicPassParams);
+        if (OperandIs16<Size>(op, operands)) return OpTestAccumulatorValue<uint16_t, Test, Flags>(LogicPassParams);
         return OpTestAccumulatorValue<uint32_t, Test, Flags>(LogicPassParams);
     }
 }
 
 template <AddrModeSpec Form = AddrModeSpec::Dynamic, FlagsSpec Flags = FlagsSpec::Dynamic>
 FORCE_INLINE LogicFlow OpTest_EbGb_Internal(LogicFuncParams) {
-    const auto destination = ReadModRM<uint8_t, OpOnTLBMiss::Restart, 1, Form>(state, gpr, op, utlb);
+    const auto destination = ReadModRM<uint8_t, OpOnTLBMiss::Restart, 1, Form>(state, gpr, op, operand_modrm, utlb);
     if (!destination) return LogicFlow::RestartMemoryOp;
-    const uint8_t source = gpr.GetReg8(state, (op->modrm >> 3) & 7);
+    const uint8_t source = gpr.GetReg8(state, (operand_modrm >> 3) & 7);
     AluAnd<uint8_t, Flags != FlagsSpec::Dead>(state, flags_cache, *destination, source);
     return LogicFlow::Continue;
 }
@@ -1077,18 +795,19 @@ namespace op {
 // register-allocation/stack-frame requirements. Selected once during decoding.
 template <CarryRmwKind Kind, bool IsByte, bool UpdateFlags>
 FORCE_INLINE LogicFlow OpCarryRmw_ModReg_Internal(LogicFuncParams) {
-    const uint8_t rm = op->modrm & 7;
-    const uint8_t reg = (op->modrm >> 3) & 7;
+    const ModRMRmwOperand<AddrModeSpec::ModReg> operand(state, gpr, op, operand_modrm);
+    const uint8_t rm = operand.Reg();
+    const uint8_t reg = (operand_modrm >> 3) & 7;
     if constexpr (IsByte) {
-        return ExecuteCarryRmw<Kind, uint8_t, UpdateFlags, AddrModeSpec::ModReg>(
-            state, gpr, op, gpr.GetReg8(state, rm), gpr.GetReg8(state, reg), utlb, flags_cache);
-    } else if (op->prefixes.flags.opsize) {
-        return ExecuteCarryRmw<Kind, uint16_t, UpdateFlags, AddrModeSpec::ModReg>(
-            state, gpr, op, static_cast<uint16_t>(gpr.GetReg(state, rm)), static_cast<uint16_t>(gpr.GetReg(state, reg)),
-            utlb, flags_cache);
+        return ExecuteCarryRmw<Kind, uint8_t, UpdateFlags>(state, gpr, op, operand, gpr.GetReg8(state, rm),
+                                                           gpr.GetReg8(state, reg), utlb, flags_cache);
+    } else if (GetPrefixes(op).flags.opsize) {
+        return ExecuteCarryRmw<Kind, uint16_t, UpdateFlags>(
+            state, gpr, op, operand, static_cast<uint16_t>(gpr.GetReg(state, rm)),
+            static_cast<uint16_t>(gpr.GetReg(state, reg)), utlb, flags_cache);
     } else {
-        return ExecuteCarryRmw<Kind, uint32_t, UpdateFlags, AddrModeSpec::ModReg>(
-            state, gpr, op, gpr.GetReg(state, rm), gpr.GetReg(state, reg), utlb, flags_cache);
+        return ExecuteCarryRmw<Kind, uint32_t, UpdateFlags>(state, gpr, op, operand, gpr.GetReg(state, rm),
+                                                            gpr.GetReg(state, reg), utlb, flags_cache);
     }
 }
 
@@ -1289,13 +1008,14 @@ template <AddrModeSpec Form = AddrModeSpec::Dynamic>
 FORCE_INLINE LogicFlow OpArpl_Internal(LogicFuncParams) {
     // ARPL operates only on selector RPL bits; no descriptor lookup is needed.
     // Delay ZF and destination changes until the memory operation can complete.
-    auto destination = ReadModRM<uint16_t, OpOnTLBMiss::Blocking, 1, Form>(state, gpr, op, utlb);
+    const ModRMRmwOperand<Form> operand(state, gpr, op, operand_modrm);
+    const auto destination = operand.template Read<uint16_t, OpOnTLBMiss::Blocking>(state, gpr, op, utlb);
     if (!destination) return LogicFlow::ExitOnCurrentEIP;
-    const uint16_t source = static_cast<uint16_t>(gpr.GetReg(state, (op->modrm >> 3) & 7));
+    const uint16_t source = static_cast<uint16_t>(gpr.GetReg(state, (operand_modrm >> 3) & 7));
     const bool adjusted = (*destination & 3) < (source & 3);
     if (adjusted) {
         const uint16_t result = static_cast<uint16_t>((*destination & ~3u) | (source & 3));
-        if (!WriteModRM<uint16_t, OpOnTLBMiss::Blocking, 1, Form>(state, gpr, op, result, utlb))
+        if (!operand.template Write<uint16_t, OpOnTLBMiss::Blocking>(state, gpr, op, result, utlb))
             return LogicFlow::ExitOnCurrentEIP;
     }
     AssignZF(flags_cache, adjusted);

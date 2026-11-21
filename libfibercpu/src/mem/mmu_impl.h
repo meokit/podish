@@ -310,7 +310,7 @@ template <typename T>
 MemResult<T> Mmu::read_tlb_only(GuestAddr addr, MicroTLB* utlb) {
     const MicroTlbAccessGuard<T> guard{addr};
     if (guard.can_probe()) [[likely]] {
-        if (guard.matches(utlb->tag_r)) [[likely]] {
+        if (guard.matches(utlb->ReadTag())) [[likely]] {
 #ifdef ENABLE_TLB_STATS
             stats.l1_read_hits++;
             stats.total_reads++;
@@ -331,15 +331,14 @@ MemResult<T> Mmu::read_tlb_only(GuestAddr addr, MicroTLB* utlb) {
             T val;
             std::memcpy(&val, (const void*)(entry.addend + addr), sizeof(T));
 
-            utlb->tag_r = guard.tag;
-            utlb->addend = entry.addend;
             // Write fast-path eligibility must match TLB::fill: a clean (not Dirty)
             // page must take the slow path so the write can mark it dirty, otherwise
             // the store is invisible to file writeback/eviction.
-            utlb->tag_w = (has_property(entry.perm, Property::Write) && has_property(entry.perm, Property::Dirty) &&
-                           !has_property(entry.perm, Property::ForceWriteSlow))
-                              ? guard.tag
-                              : std::numeric_limits<decltype(utlb->tag_w)>::max();
+            const bool writable = has_property(entry.perm, Property::Write) &&
+                                  has_property(entry.perm, Property::Dirty) &&
+                                  !has_property(entry.perm, Property::ForceWriteSlow);
+            utlb->tags = PackMicroTlbTags(guard.tag, writable ? guard.tag : kInvalidMicroTlbTag);
+            utlb->addend = entry.addend;
             return val;
         }
     }
@@ -354,20 +353,33 @@ MemResult<T> Mmu::read_tlb_only(GuestAddr addr, MicroTLB* utlb) {
     return std::unexpected(FaultCode::PageFault);
 }
 
+template <typename T>
+FORCE_INLINE void StoreGuestValue(const EmuState* state, HostAddr host, const T& value) {
+#if defined(__has_builtin)
+#if __has_builtin(__builtin_assume_separate_storage)
+    // Guest backing, including caller-owned external pages, is allocated separately from the engine.
+    __builtin_assume_separate_storage(state, host);
+#endif
+#endif
+    (void)state;
+    std::memcpy(host, &value, sizeof(T));
+}
+
 template <typename T, bool Store, bool FlushOnMiss>
 MemResult<std::conditional_t<Store, void, HostAddr>> Mmu::write_tlb_impl(GuestAddr addr, T val, MicroTLB* utlb) {
     const MicroTlbAccessGuard<T> guard{addr};
     if (guard.can_probe()) [[likely]] {
-        if (guard.matches(utlb->tag_w)) [[likely]] {
+        if (guard.matches(utlb->WriteTag())) [[likely]] {
 #ifdef ENABLE_TLB_STATS
             stats.l1_write_hits++;
             stats.total_writes++;
 #endif
+            auto* host = reinterpret_cast<HostAddr>(utlb->addend + addr);
             if constexpr (Store) {
-                std::memcpy((void*)(utlb->addend + addr), &val, sizeof(T));
+                StoreGuestValue(get_state(), host, val);
                 return {};
             } else {
-                return reinterpret_cast<HostAddr>(utlb->addend + addr);
+                return host;
             }
         }
 
@@ -381,16 +393,16 @@ MemResult<std::conditional_t<Store, void, HostAddr>> Mmu::write_tlb_impl(GuestAd
 #endif
             // Preserve ordinary-store ordering. The RMW specialization only
             // obtains the target; Store is compile-time.
-            if constexpr (Store) std::memcpy((void*)(entry.addend + addr), &val, sizeof(T));
+            auto* host = reinterpret_cast<HostAddr>(entry.addend + addr);
+            if constexpr (Store) StoreGuestValue(get_state(), host, val);
 
-            utlb->tag_w = guard.tag;
+            const bool readable = has_property(entry.perm, Property::Read);
+            utlb->tags = PackMicroTlbTags(readable ? guard.tag : kInvalidMicroTlbTag, guard.tag);
             utlb->addend = entry.addend;
-            utlb->tag_r = has_property(entry.perm, Property::Read) ? guard.tag
-                                                                   : std::numeric_limits<decltype(utlb->tag_r)>::max();
             if constexpr (Store)
                 return {};
             else
-                return reinterpret_cast<HostAddr>(entry.addend + addr);
+                return host;
         }
     }
 
@@ -424,18 +436,26 @@ MemResult<void> Mmu::write_tlb_only(GuestAddr addr, T val, MicroTLB* utlb) {
 template <typename T, bool fail_on_tlb_miss>
 [[nodiscard]] FORCE_INLINE MemResult<T> Mmu::read(GuestAddr addr, MicroTLB* utlb, const DecodedOp* cur_op) {
     if (auto result = read_tlb_only<T>(addr, utlb)) return result;
-    get_state()->sync_eip_to_op_start(cur_op);
-    if constexpr (fail_on_tlb_miss) return std::unexpected(FaultCode::PageFault);
-    return read_slow<T>(addr);
+    // Nonblocking callers pass the op to the replay handler. Only blocking
+    // accesses can invoke observers before returning to the opcode.
+    if constexpr (fail_on_tlb_miss) {
+        return std::unexpected(FaultCode::PageFault);
+    } else {
+        get_state()->sync_eip_to_op_start(cur_op);
+        return read_slow<T>(addr);
+    }
 }
 
 // Write
 template <typename T, bool fail_on_tlb_miss>
 [[nodiscard]] FORCE_INLINE MemResult<void> Mmu::write(GuestAddr addr, T val, MicroTLB* utlb, const DecodedOp* cur_op) {
     if (auto result = write_tlb_impl<T, true, !fail_on_tlb_miss>(addr, val, utlb)) return result;
-    get_state()->sync_eip_to_op_start(cur_op);
-    if constexpr (fail_on_tlb_miss) return std::unexpected(FaultCode::PageFault);
-    return write_slow<T>(addr, val);
+    if constexpr (fail_on_tlb_miss) {
+        return std::unexpected(FaultCode::PageFault);
+    } else {
+        get_state()->sync_eip_to_op_start(cur_op);
+        return write_slow<T>(addr, val);
+    }
 }
 
 // Read Slow

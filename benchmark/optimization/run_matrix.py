@@ -30,8 +30,7 @@ ITERATIONS = dict(gzip=7, gunzip=33, sed=7, grep_fixed=79, grep_regex=51, sort=1
 def sha(data):
     return hashlib.sha256(data).hexdigest()
 
-def prepare(out, seed=987654, fixture_bytes=2 * 1024 * 1024):
-    work = out / 'rootfs/work/manual'
+def prepare_fixture(work, seed=987654, fixture_bytes=2 * 1024 * 1024):
     work.mkdir(parents=True, exist_ok=True)
     rng = random.Random(seed)
     lines, size = [], 0
@@ -57,7 +56,23 @@ def prepare(out, seed=987654, fixture_bytes=2 * 1024 * 1024):
         'grep_fixed': str(sum('needle' in line for line in lines))+'\n',
         'grep_regex': str(sum(re.search('group=(07|13|42)', line) is not None for line in lines))+'\n',
     }
+    return expected
+
+def prepare(out, seed=987654, fixture_bytes=2 * 1024 * 1024):
+    expected = prepare_fixture(out / 'rootfs/work/manual', seed, fixture_bytes)
     (out/'fixture.json').write_text(json.dumps(expected, indent=2)+'\n')
+
+def validate_gnu_output(work, case, expected):
+    if case == 'gzip': assert sha(gzip.decompress((work/'result.gz').read_bytes())) == expected['input_sha256']
+    elif case == 'gunzip': assert sha((work/'result.txt').read_bytes()) == expected['input_sha256']
+    elif case in ('sed', 'sort'): assert sha((work/'result.txt').read_bytes()) == expected[case]
+    elif case in ('grep_fixed', 'grep_regex'): assert (work/'result.txt').read_text() == expected[case]
+    elif case == 'sha256': assert (work/'result.txt').read_text().split()[0] == expected['input_sha256']
+    elif case == 'tar':
+        with tarfile.open(work/'result.tar') as archive:
+            members = [entry for entry in archive.getmembers() if entry.isfile()]
+            assert len(members) == 16
+            for entry in members: assert archive.extractfile(entry).read() == (work/entry.name).read_bytes()
 
 def run(out, case, variant, round_index, scale, core_iterations):
     root = out/'rootfs'
@@ -94,16 +109,7 @@ def run(out, case, variant, round_index, scale, core_iterations):
     else:
         assert start is not None and end is not None, output
         result['seconds'] = end-start
-        if case == 'gzip': assert sha(gzip.decompress((work/'result.gz').read_bytes())) == expected['input_sha256']
-        elif case == 'gunzip': assert sha((work/'result.txt').read_bytes()) == expected['input_sha256']
-        elif case in ('sed', 'sort'): assert sha((work/'result.txt').read_bytes()) == expected[case]
-        elif case in ('grep_fixed', 'grep_regex'): assert (work/'result.txt').read_text() == expected[case]
-        elif case == 'sha256': assert (work/'result.txt').read_text().split()[0] == expected['input_sha256']
-        elif case == 'tar':
-            with tarfile.open(work/'result.tar') as archive:
-                members = [entry for entry in archive.getmembers() if entry.isfile()]
-                assert len(members) == 16
-                for entry in members: assert archive.extractfile(entry).read() == (work/entry.name).read_bytes()
+        validate_gnu_output(work, case, expected)
     result['validated'] = True
     return result
 

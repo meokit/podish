@@ -22,6 +22,9 @@ struct GprCache {
 #undef FIBERCPU_CACHE_FIELD
 #endif
 
+    // Dispatch supplies this only for the current instruction's matched address.
+    const BakedAddress* baked_address = nullptr;
+
     FORCE_INLINE uint32_t GetReg(EmuState* state, unsigned index) const {
         const uint32_t value = state->ctx.regs[index];
 #if FIBERCPU_GPR_PIN_MODE == 4
@@ -30,6 +33,17 @@ struct GprCache {
 #undef FIBERCPU_CACHE_READ
 #else
         return value;
+#endif
+    }
+
+    FORCE_INLINE uint32_t GetAddressIndex(EmuState* state, unsigned index) const {
+        const uint32_t value = state->ctx.regs[index];
+#if FIBERCPU_GPR_PIN_MODE == 4
+#define FIBERCPU_CACHE_INDEX(id, reg, slot, ...) (id != ESP && index == id) ? reg:
+        return index == ESP ? 0 : FIBERCPU_FOR_EACH_PIN(FIBERCPU_CACHE_INDEX) value;
+#undef FIBERCPU_CACHE_INDEX
+#else
+        return index == ESP ? 0 : value;
 #endif
     }
 
@@ -102,7 +116,8 @@ FORCE_INLINE MemResult<T> ReadGuestMem(EmuState* state, GprCache& gpr, uint32_t 
                                        const DecodedOp* op) {
 #if FIBERCPU_GPR_PIN_MODE == 4
     if constexpr (!FailOnMiss) {
-        if (auto result = state->mmu.read<T, true>(addr, utlb, op)) return result;
+        if (auto result = state->mmu.read_tlb_only<T>(addr, utlb)) return result;
+        state->sync_eip_to_op_start(op);
         return gpr.WithCanonical(state, [&] { return state->mmu.read_slow<T>(addr); });
     }
 #endif
@@ -137,6 +152,16 @@ constexpr uint64_t FLAGS_CACHE_PF_STATE_SHIFT = 40;
 constexpr uint64_t FLAGS_CACHE_PF_STATE_MASK = 0xFFull << FLAGS_CACHE_PF_STATE_SHIFT;
 constexpr uint8_t FLAGS_CACHE_PF_KNOWN_TRUE = 0;
 constexpr uint8_t FLAGS_CACHE_PF_KNOWN_FALSE = 1;
+
+constexpr uint32_t ARITHMETIC_FLAGS_MASK = CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK;
+
+#ifdef FIBERCPU_LLVM_BLOCK_TEMPLATE
+// These calls express flag producers and reads in the bitcode templates.
+// Block assembly lowers them before the resulting code is emitted.
+extern "C" uint64_t FiberLLVMWriteArithmeticFlags(uint64_t, uint32_t, uint8_t) __attribute__((const));
+extern "C" uint64_t FiberLLVMWriteLogicalFlags(uint64_t, uint32_t, unsigned) __attribute__((const));
+extern "C" bool FiberLLVMReadFlag(uint64_t, unsigned) __attribute__((const));
+#endif
 
 FORCE_INLINE uint8_t EncodeKnownParityState(bool pf_set) {
     return pf_set ? FLAGS_CACHE_PF_KNOWN_TRUE : FLAGS_CACHE_PF_KNOWN_FALSE;
@@ -209,11 +234,19 @@ FORCE_INLINE void ClearFlagBits(uint64_t& flags_cache, uint32_t mask) {
 }
 
 FORCE_INLINE bool TestFlagBits(uint64_t flags_cache, uint32_t mask) { return (GetFlags32(flags_cache) & mask) != 0; }
-FORCE_INLINE bool ReadCF(uint64_t flags_cache) { return TestFlagBits(flags_cache, CF_MASK); }
-FORCE_INLINE bool ReadZF(uint64_t flags_cache) { return TestFlagBits(flags_cache, ZF_MASK); }
-FORCE_INLINE bool ReadSF(uint64_t flags_cache) { return TestFlagBits(flags_cache, SF_MASK); }
-FORCE_INLINE bool ReadOF(uint64_t flags_cache) { return TestFlagBits(flags_cache, OF_MASK); }
-FORCE_INLINE bool ReadAF(uint64_t flags_cache) { return TestFlagBits(flags_cache, AF_MASK); }
+template <uint32_t Mask>
+FORCE_INLINE bool ReadArithmeticFlag(uint64_t flags_cache) {
+#ifdef FIBERCPU_LLVM_BLOCK_TEMPLATE
+    return FiberLLVMReadFlag(flags_cache, Mask);
+#else
+    return TestFlagBits(flags_cache, Mask);
+#endif
+}
+FORCE_INLINE bool ReadCF(uint64_t flags_cache) { return ReadArithmeticFlag<CF_MASK>(flags_cache); }
+FORCE_INLINE bool ReadZF(uint64_t flags_cache) { return ReadArithmeticFlag<ZF_MASK>(flags_cache); }
+FORCE_INLINE bool ReadSF(uint64_t flags_cache) { return ReadArithmeticFlag<SF_MASK>(flags_cache); }
+FORCE_INLINE bool ReadOF(uint64_t flags_cache) { return ReadArithmeticFlag<OF_MASK>(flags_cache); }
+FORCE_INLINE bool ReadAF(uint64_t flags_cache) { return ReadArithmeticFlag<AF_MASK>(flags_cache); }
 FORCE_INLINE void SetCF(uint64_t& flags_cache) { SetFlagBits(flags_cache, CF_MASK); }
 FORCE_INLINE void ClearCF(uint64_t& flags_cache) { ClearFlagBits(flags_cache, CF_MASK); }
 FORCE_INLINE void AssignCF(uint64_t& flags_cache, bool value) { value ? SetCF(flags_cache) : ClearCF(flags_cache); }
@@ -230,7 +263,14 @@ FORCE_INLINE void SetAF(uint64_t& flags_cache) { SetFlagBits(flags_cache, AF_MAS
 FORCE_INLINE void ClearAF(uint64_t& flags_cache) { ClearFlagBits(flags_cache, AF_MASK); }
 FORCE_INLINE void AssignAF(uint64_t& flags_cache, bool value) { value ? SetAF(flags_cache) : ClearAF(flags_cache); }
 FORCE_INLINE uint32_t BuildArithmeticFlagsBase(uint64_t flags_cache) {
-    return GetFlags32NoPF(flags_cache) & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK);
+    return GetFlags32NoPF(flags_cache) & ~ARITHMETIC_FLAGS_MASK;
+}
+FORCE_INLINE void WriteArithmeticFlags(uint64_t& flags_cache, uint32_t flags, uint8_t parity_state) {
+#ifdef FIBERCPU_LLVM_BLOCK_TEMPLATE
+    flags_cache = FiberLLVMWriteArithmeticFlags(flags_cache, flags, parity_state);
+#else
+    SetFlags32AndParityState(flags_cache, BuildArithmeticFlagsBase(flags_cache) | flags, parity_state);
+#endif
 }
 FORCE_INLINE void ClearArithmeticFlags(uint64_t& flags_cache) {
     SetFlags32(flags_cache, GetFlags32NoPF(flags_cache) & ~(CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK));
@@ -313,38 +353,50 @@ inline bool CheckCondition(uint64_t& flags_cache, uint8_t cond) {
 // Effective Address Calculation
 // ------------------------------------------------------------------------------------------------
 
-FORCE_INLINE uint32_t GetSegmentBase(EmuState* state, const DecodedOp* op) {
-    uint8_t seg = op->prefixes.flags.segment;
+FORCE_INLINE uint32_t GetSegmentBase(EmuState* state, Prefixes prefixes) {
+    const uint8_t seg = prefixes.flags.segment;
     // 1=ES, 2=CS, 3=SS, 4=DS, 5=FS, 6=GS
     // Moffs, XLAT and string source operands default to DS. An explicit
     // override may select any of the six caller-provided segment bases.
     return state->ctx.seg_base[seg == 0 ? 4 : seg];
 }
 
-FORCE_INLINE uint32_t ComputeEA(EmuState* state, GprCache& gpr, const DecodedOp* op) {
-    // Computes Effective Address (no segment base)
-    // Branchless calculation using pre-calculated offsets to registers (or zero register)
-    const auto* ext = GetExt(op);
-    uint32_t ea_desc = ext->data.ea_desc;
-    uint32_t base = gpr.GetRegFromOffset(state, memdesc::BaseOffset(ea_desc));
-    uint32_t index = gpr.GetRegFromOffset(state, memdesc::IndexOffset(ea_desc));
-
-    // index is usually 0 if no index (pointing to zero reg)
-    // base is usually 0 if no base (pointing to zero reg)
-    uint32_t offset = base + (index << memdesc::Scale(ea_desc)) + ext->data.disp;
-    // Address size controls offset arithmetic, independently of operand width.
-    // Truncate before adding the segment base, including for LEA destinations.
-    return op->prefixes.flags.addrsize ? offset & 0xFFFFu : offset;
+FORCE_INLINE uint32_t GetSegmentBase(EmuState* state, const DecodedOp* op) {
+    return GetSegmentBase(state, GetPrefixes(op));
 }
 
-FORCE_INLINE uint32_t GetMemSegmentBase(EmuState* state, const DecodedOp* op) {
-    const uint8_t seg = memdesc::ResolvedSegment(GetExt(op)->data.ea_desc);
+template <class Operands>
+FORCE_INLINE uint32_t GetSegmentBase(EmuState* state, const DecodedOp* op, const Operands& operands) {
+    return GetSegmentBase(state, operands.ReadPrefixes(op));
+}
+
+FORCE_INLINE uint32_t ComputeEA(EmuState* state, GprCache& gpr, const DecodedOp* op) {
+    if (const auto* address = gpr.baked_address) {
+        const auto ea = address->descriptor;
+        const auto base_offset = memdesc::BaseOffset(ea);
+        const auto index_offset = memdesc::IndexOffset(ea);
+        const auto base = base_offset == kNoRegOffset ? 0 : gpr.GetRegFromOffset(state, base_offset);
+        const auto index = index_offset == kNoRegOffset ? 0 : gpr.GetRegFromOffset(state, index_offset);
+        const auto displacement = address->displacement_known ? address->displacement : GetDisplacement(op);
+        const auto offset = base + (index << memdesc::Scale(ea)) + displacement;
+        return address->address16 ? offset & 0xffffu : offset;
+    }
+    const uint32_t base = gpr.GetReg(state, op->AddressBase());
+    const uint32_t index = gpr.GetAddressIndex(state, op->AddressIndex());
+    const uint32_t offset = base + (index << op->AddressScale()) + GetDisplacement(op);
+    // Address width wraps the offset before the addition of the segment base.
+    return op->AddressIs16() ? offset & 0xffffu : offset;
+}
+
+FORCE_INLINE uint32_t GetMemSegmentBase(EmuState* state, const GprCache& gpr, const DecodedOp* op) {
+    const auto seg =
+        gpr.baked_address ? memdesc::ResolvedSegment(gpr.baked_address->descriptor) : op->ResolvedMemorySegment();
     return state->ctx.seg_base[seg];
 }
 
 FORCE_INLINE uint32_t ComputeLinearAddress(EmuState* state, GprCache& gpr, const DecodedOp* op) {
     uint32_t ea = ComputeEA(state, gpr, op);
-    return ea + GetMemSegmentBase(state, op);
+    return ea + GetMemSegmentBase(state, gpr, op);
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -435,10 +487,10 @@ enum class OpOnTLBMiss {
  * Supports uint8_t, uint16_t, uint32_t, and simde__m128.
  */
 template <typename T, OpOnTLBMiss Strategy, uint32_t Alignment = 1, AddrModeSpec Form = AddrModeSpec::Dynamic>
-FORCE_INLINE MemResult<T> ReadModRM(EmuState* state, GprCache& gpr, DecodedOp* op, mem::MicroTLB* utlb) {
-    uint8_t rm = op->modrm & 7;
+FORCE_INLINE MemResult<T> ReadModRM(EmuState* state, GprCache& gpr, DecodedOp* op, uint8_t modrm, mem::MicroTLB* utlb) {
+    uint8_t rm = modrm & 7;
 
-    if (OperandIsReg<Form>(op)) [[likely]] {
+    if (OperandIsReg<Form>(modrm)) [[likely]] {
         // Register Operand
         return ReadRegGeneric<T>(state, gpr, rm);
     } else {
@@ -463,7 +515,7 @@ FORCE_INLINE MemResult<T> ReadModRM(EmuState* state, GprCache& gpr, DecodedOp* o
                 // For Read, we always need to check pending if we want to restart
                 // If usage suggests Retry for Read, it likely implies prefetch which we don't support explicitly yet.
                 // Assuming Restart semantics for both Restart and Retry enums for Read to be safe.
-                value = state->request_read_and_check_pending<T>(addr, op->next_eip);
+                value = state->request_read_and_check_pending<T>(addr, op);
             }
             return value;
         }
@@ -475,10 +527,11 @@ FORCE_INLINE MemResult<T> ReadModRM(EmuState* state, GprCache& gpr, DecodedOp* o
  * Supports uint8_t, uint16_t, uint32_t, and simde__m128.
  */
 template <typename T, OpOnTLBMiss Strategy, uint32_t Alignment = 1, AddrModeSpec Form = AddrModeSpec::Dynamic>
-FORCE_INLINE MemResult<void> WriteModRM(EmuState* state, GprCache& gpr, DecodedOp* op, T val, mem::MicroTLB* utlb) {
-    uint8_t rm = op->modrm & 7;
+FORCE_INLINE MemResult<void> WriteModRM(EmuState* state, GprCache& gpr, DecodedOp* op, uint8_t modrm, T val,
+                                        mem::MicroTLB* utlb) {
+    uint8_t rm = modrm & 7;
 
-    if (OperandIsReg<Form>(op)) [[likely]] {
+    if (OperandIsReg<Form>(modrm)) [[likely]] {
         // Register Operand
         WriteRegGeneric<T>(state, gpr, rm, val);
         return {};
@@ -501,10 +554,10 @@ FORCE_INLINE MemResult<void> WriteModRM(EmuState* state, GprCache& gpr, DecodedO
             auto result = state->mmu.write<T, true>(addr, val, utlb, op);
             if (!result) [[unlikely]] {
                 if constexpr (Strategy == OpOnTLBMiss::Restart) {
-                    result = state->request_write_and_check_pending<T>(addr, val, op->next_eip);
+                    result = state->request_write_and_check_pending<T>(addr, val, op);
                 } else {
                     // Retry
-                    result = state->request_write_only<T>(addr, val, op->next_eip);
+                    result = state->request_write_only<T>(addr, val, op);
                 }
             }
             return result;
@@ -522,7 +575,7 @@ inline MemResult<T> ReadMem(EmuState* state, GprCache& gpr, uint32_t addr, mem::
     } else {
         auto value = state->mmu.read<T, true>(addr, utlb, op);
         if (!value) [[unlikely]] {
-            value = state->request_read_and_check_pending<T>(addr, op->next_eip);
+            value = state->request_read_and_check_pending<T>(addr, op);
         }
         return value;
     }
@@ -540,15 +593,48 @@ FORCE_INLINE MemResult<void> WriteMem(EmuState* state, GprCache& gpr, uint32_t a
         auto result = state->mmu.write<T, true>(addr, val, utlb, op);
         if (!result) [[unlikely]] {
             if constexpr (Strategy == OpOnTLBMiss::Restart) {
-                result = state->request_write_and_check_pending<T>(addr, val, op->next_eip);
+                result = state->request_write_and_check_pending<T>(addr, val, op);
             } else {
                 // Retry
-                result = state->request_write_only<T>(addr, val, op->next_eip);
+                result = state->request_write_only<T>(addr, val, op);
             }
         }
         return result;
     }
 }
+
+// Resolve the destination once for one attempt at a read-modify-write.
+// A restarted instruction constructs a new operand before consuming its pending read.
+template <AddrModeSpec Form = AddrModeSpec::Dynamic>
+class ModRMRmwOperand {
+public:
+    FORCE_INLINE ModRMRmwOperand(EmuState* state, GprCache& gpr, const DecodedOp* op, uint8_t modrm)
+        : modrm_(modrm), address_(IsRegister() ? 0 : ComputeLinearAddress(state, gpr, op)) {}
+
+    FORCE_INLINE bool IsRegister() const { return OperandIsReg<Form>(modrm_); }
+    FORCE_INLINE uint8_t Reg() const { return modrm_ & 7; }
+    FORCE_INLINE uint32_t Address() const { return address_; }
+
+    template <typename T, OpOnTLBMiss Strategy>
+    FORCE_INLINE MemResult<T> Read(EmuState* state, GprCache& gpr, const DecodedOp* op, mem::MicroTLB* utlb) const {
+        if (IsRegister()) return ReadRegGeneric<T>(state, gpr, Reg());
+        return ReadMem<T, Strategy>(state, gpr, Address(), utlb, op);
+    }
+
+    template <typename T, OpOnTLBMiss Strategy>
+    FORCE_INLINE MemResult<void> Write(EmuState* state, GprCache& gpr, const DecodedOp* op, T value,
+                                       mem::MicroTLB* utlb) const {
+        if (IsRegister()) {
+            WriteRegGeneric<T>(state, gpr, Reg(), value);
+            return {};
+        }
+        return WriteMem<T, Strategy>(state, gpr, Address(), value, utlb, op);
+    }
+
+private:
+    uint8_t modrm_;
+    uint32_t address_;
+};
 
 // ------------------------------------------------------------------------------------------------
 // Stack Operations (Refactored)
@@ -566,7 +652,7 @@ FORCE_INLINE MemResult<void> Push(EmuState* state, GprCache& gpr, T val, mem::Mi
     // Request a write and return
     if (!res && fail_on_tlb_miss) [[unlikely]] {
         // Push can satisfy "Retry" semantics (update ESP only on success)
-        res = state->request_write_and_check_pending<T>(ss_base + esp - size, val, op->next_eip);
+        res = state->request_write_and_check_pending<T>(ss_base + esp - size, val, op);
     }
 
     if (res) {
@@ -585,7 +671,7 @@ FORCE_INLINE MemResult<T> Pop(EmuState* state, GprCache& gpr, mem::MicroTLB* utl
     // Read from memory (ESP)
     auto res = ReadGuestMem<T, fail_on_tlb_miss>(state, gpr, ss_base + esp, utlb, op);
     if (!res && fail_on_tlb_miss) [[unlikely]] {
-        res = state->request_read_and_check_pending<T>(ss_base + esp, op->next_eip);
+        res = state->request_read_and_check_pending<T>(ss_base + esp, op);
     }
 
     if (res) {
@@ -665,35 +751,55 @@ FORCE_INLINE T AluAdd(EmuState* state, uint64_t& flags_cache, T dest, T src) {
     return res;
 }
 
-template <typename T, bool UpdateFlags = true>
-FORCE_INLINE T AluSub(EmuState* state, uint64_t& flags_cache, T dest, T src) {
-    T res = dest - src;
+template <typename T>
+struct SubtractionResultFlags {
+    using Difference = std::conditional_t<sizeof(T) == 2, uint32_t, T>;
+    T dest;
+    T src;
 
-    if constexpr (UpdateFlags) {
+    FORCE_INLINE Difference GetDifference() const { return Difference(dest) - Difference(src); }
+    FORCE_INLINE bool IsZero() const { return dest == src; }
+
+    FORCE_INLINE void Pack(uint64_t& flags_cache, bool zero) const {
+        const Difference difference = GetDifference();
+        const T res = static_cast<T>(difference);
+        uint32_t flags = zero ? ZF_MASK : 0;
         if constexpr (sizeof(T) == 1) {
             const uint32_t d = dest;
             const uint32_t s = src;
             const uint32_t r = res;
-            uint32_t flags = BuildArithmeticFlagsBase(flags_cache);
-            if (r == 0) flags |= ZF_MASK;
             flags |= r & SF_MASK;
             if (d < s) flags |= CF_MASK;
             if ((((d ^ s) & (d ^ r)) & SF_MASK) != 0) flags |= OF_MASK;
             if (((d ^ s ^ r) & AF_MASK) != 0) flags |= AF_MASK;
-            SetFlags32AndParityState(flags_cache, flags, static_cast<uint8_t>(r));
+            WriteArithmeticFlags(flags_cache, flags, static_cast<uint8_t>(r));
+        } else if constexpr (sizeof(T) == 2) {
+            // The same subtraction yields the result and the unsigned borrow.
+            // Keep the high bits until flags have been produced.
+            const uint32_t sign_changes = (dest ^ src) & (dest ^ difference);
+            flags |= (difference >> 8) & SF_MASK;
+            flags |= (difference >> 16) & CF_MASK;
+            flags |= (sign_changes >> 4) & OF_MASK;
+            flags |= (dest ^ src ^ difference) & AF_MASK;
+            WriteArithmeticFlags(flags_cache, flags, static_cast<uint8_t>(difference));
         } else {
             uint32_t msb_idx = sizeof(T) * 8 - 1;
             T sign_mask = (T)1 << msb_idx;
-            uint32_t flags = BuildArithmeticFlagsBase(flags_cache);
-            if (res == 0) flags |= ZF_MASK;
             if (((res >> msb_idx) & 1) != 0) flags |= SF_MASK;
             if (dest < src) flags |= CF_MASK;
             if (((dest ^ src) & sign_mask) && ((dest ^ res) & sign_mask)) flags |= OF_MASK;
             if (((dest ^ src ^ res) & AF_MASK) != 0) flags |= AF_MASK;
-            SetFlags32AndParityState(flags_cache, flags, static_cast<uint8_t>(res));
+            WriteArithmeticFlags(flags_cache, flags, static_cast<uint8_t>(res));
         }
     }
-    return res;
+};
+
+template <typename T, bool UpdateFlags = true>
+FORCE_INLINE T AluSub(EmuState* state, uint64_t& flags_cache, T dest, T src) {
+    const SubtractionResultFlags<T> flags{dest, src};
+    const auto difference = flags.GetDifference();
+    if constexpr (UpdateFlags) flags.Pack(flags_cache, difference == 0);
+    return static_cast<T>(difference);
 }
 
 template <typename T, bool UpdateFlags = true>
@@ -746,16 +852,33 @@ FORCE_INLINE T AluSbb(EmuState* state, uint64_t& flags_cache, T dest, T src) {
     return res;
 }
 
+template <typename T>
+struct LogicalResultFlags {
+    T result;
+
+    FORCE_INLINE bool IsZero() const { return result == 0; }
+
+    FORCE_INLINE void Pack(uint64_t& flags_cache, bool zero) const {
+        uint32_t flags = zero ? ZF_MASK : 0;
+        if (((result >> (sizeof(T) * 8 - 1)) & 1) != 0) flags |= SF_MASK;
+        WriteArithmeticFlags(flags_cache, flags, static_cast<uint8_t>(result));
+    }
+};
+
+template <typename T>
+FORCE_INLINE void SetLogicalResultFlags(uint64_t& flags_cache, T res) {
+#ifdef FIBERCPU_LLVM_BLOCK_TEMPLATE
+    flags_cache = FiberLLVMWriteLogicalFlags(flags_cache, res, sizeof(T) * 8);
+#else
+    const LogicalResultFlags<T> flags{res};
+    flags.Pack(flags_cache, flags.IsZero());
+#endif
+}
+
 template <typename T, bool UpdateFlags = true>
 FORCE_INLINE T AluAnd(EmuState* state, uint64_t& flags_cache, T dest, T src) {
-    T res = dest & src;
-
-    if constexpr (UpdateFlags) {
-        uint32_t flags = BuildArithmeticFlagsBase(flags_cache);
-        if (res == 0) flags |= ZF_MASK;
-        if (((res >> (sizeof(T) * 8 - 1)) & 1) != 0) flags |= SF_MASK;
-        SetFlags32AndParityState(flags_cache, flags, static_cast<uint8_t>(res));
-    }
+    const T res = dest & src;
+    if constexpr (UpdateFlags) SetLogicalResultFlags(flags_cache, res);
     return res;
 }
 
@@ -818,26 +941,38 @@ FORCE_INLINE T AluShl(EmuState* state, uint64_t& flags_cache, T dest, uint8_t co
     return res;
 }
 
+template <typename T>
+struct RightShiftResultFlags {
+    T result;
+    bool carry;
+    bool overflow;
+
+    FORCE_INLINE bool IsZero() const { return result == 0; }
+
+    FORCE_INLINE void Pack(uint64_t& flags_cache, bool zero) const {
+        ClearArithmeticFlags(flags_cache);
+        AssignZF(flags_cache, zero);
+        AssignSF(flags_cache, ((result >> (sizeof(T) * 8 - 1)) & 1) != 0);
+        AssignCF(flags_cache, carry);
+        AssignOF(flags_cache, overflow);
+        SetParityState(flags_cache, static_cast<uint8_t>(result));
+    }
+};
+
+// The caller has already masked the count and ruled out zero.
+template <typename T>
+FORCE_INLINE RightShiftResultFlags<T> CalculateRightShift(T dest, uint8_t count) {
+    return {static_cast<T>(dest >> count), ((dest >> (count - 1)) & 1) != 0,
+            count == 1 && ((dest >> (sizeof(T) * 8 - 1)) & 1) != 0};
+}
+
 template <typename T, bool UpdateFlags = true>
 FORCE_INLINE T AluShr(EmuState* state, uint64_t& flags_cache, T dest, uint8_t count) {
-    if (count == 0) return dest;
     count &= 0x1F;
     if (count == 0) return dest;
-
-    // CF: Last bit shifted out is bit (count-1)
-    bool cf = (dest >> (count - 1)) & 1;
-
-    T res = dest >> count;
-
-    if constexpr (UpdateFlags) {
-        ClearArithmeticFlags(flags_cache);
-        AssignZF(flags_cache, res == 0);
-        AssignSF(flags_cache, ((res >> (sizeof(T) * 8 - 1)) & 1) != 0);
-        AssignCF(flags_cache, cf);
-        if (count == 1) AssignOF(flags_cache, ((dest >> (sizeof(T) * 8 - 1)) & 1) != 0);
-        SetParityState(flags_cache, static_cast<uint8_t>(res));
-    }
-    return res;
+    const auto flags = CalculateRightShift(dest, count);
+    if constexpr (UpdateFlags) flags.Pack(flags_cache, flags.IsZero());
+    return flags.result;
 }
 
 template <typename T, bool UpdateFlags = true>

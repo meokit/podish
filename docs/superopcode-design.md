@@ -1,5 +1,7 @@
 # SuperOpcode Design Document
 
+See [Baked instruction variants](baked-instruction-variants.md) for the current training and generation workflow.
+
 ## Document Status
 
 - Owner: Fiberish Core Maintainers
@@ -223,7 +225,6 @@ Not all adjacent pairs of ops are suitable for merging. The first phase must be 
 
 ### 7.1 Combinations That Must Be Rejected
 
-- The first op may `ContinueSkipOne`
 - The first op or second op may depend on a special protocol where "current op must equal dispatch entry op"
 - The first op may change `op` pointer semantics after success
 - The second op has special boundary requirements for block profiler / debug hooks

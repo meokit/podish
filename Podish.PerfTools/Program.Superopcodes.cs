@@ -103,6 +103,7 @@ internal static partial class Program
         sb.AppendLine();
         sb.AppendLine("#include \"superopcodes.h\"");
         sb.AppendLine("#include \"ops.h\"");
+        sb.AppendLine("#include \"operand_specialization.h\"");
         foreach (var include in implIncludes)
             sb.AppendLine(include);
         sb.AppendLine();
@@ -134,7 +135,7 @@ internal static partial class Program
         sb.AppendLine("};");
         sb.AppendLine();
         sb.AppendLine("using GeneratedSuperOpcodeTable =");
-        sb.AppendLine("    ankerl::unordered_dense::map<GeneratedSuperOpcodeKey, HandlerFunc, GeneratedSuperOpcodeKeyHash>;");
+        sb.AppendLine("    ankerl::unordered_dense::map<GeneratedSuperOpcodeKey, const HandlerFunc*, GeneratedSuperOpcodeKeyHash>;");
         sb.AppendLine();
         sb.AppendLine("}  // namespace");
         sb.AppendLine();
@@ -145,20 +146,23 @@ internal static partial class Program
             var handlerName = $"SuperOpcode_{index:000}_{SanitizeName(c.Op0[4..])}__{SanitizeName(c.Op1[4..])}";
             sb.AppendLine(
                 $"// weighted_exec_count={c.Wec} occurrences={c.Occ} relation={c.Relation} anchor={c.Anchor} direction={c.Direction}");
+            sb.AppendLine("template <unsigned SlotMask>");
             sb.AppendLine("ATTR_PRESERVE_NONE int64_t " + handlerName +
                           "(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,");
             sb.AppendLine(
                 "                                          mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,");
             sb.AppendLine("                                          uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {");
+            sb.AppendLine("    using SlotPolicy0 = OperandSpec::FusionSlot<SlotMask, 0>;");
+            sb.AppendLine("    using SlotPolicy1 = OperandSpec::FusionSlot<SlotMask, 1>;");
             sb.AppendLine("    FIBERCPU_PIN_ASSUME;");
             sb.AppendLine("    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);");
-            sb.AppendLine($"    RUN_SUPEROPCODE_OP({c.Op0}, state, op, instr_limit, utlb, branch, flags_cache);");
+            sb.AppendLine($"    RUN_SUPEROPCODE_OP_WITH_POLICY(SlotPolicy0, {c.Op0}, state, op, instr_limit, utlb, branch, flags_cache);");
             sb.AppendLine();
-            sb.AppendLine("    DecodedOp* second_op = NextOp(op);");
+            sb.AppendLine("    DecodedOp* second_op = OperandSpec::Advance<SlotPolicy0>(op);");
             sb.AppendLine(
-                $"    RUN_SUPEROPCODE_OP({c.Op1}, state, second_op, instr_limit, utlb, branch, flags_cache);");
+                $"    RUN_SUPEROPCODE_OP_WITH_POLICY(SlotPolicy1, {c.Op1}, state, second_op, instr_limit, utlb, branch, flags_cache);");
             sb.AppendLine();
-            sb.AppendLine("    if (auto* next_op = NextOp(second_op)) {");
+            sb.AppendLine("    if (auto* next_op = OperandSpec::Advance<SlotPolicy1>(second_op)) {");
             sb.AppendLine(
                 "        mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);");
             sb.AppendLine(
@@ -166,6 +170,7 @@ internal static partial class Program
             sb.AppendLine("    }");
             sb.AppendLine("    __builtin_unreachable();");
             sb.AppendLine("}");
+            sb.AppendLine($"DEFINE_FUSION_HANDLERS({handlerName}, 2, true);");
             sb.AppendLine();
         }
 
@@ -178,14 +183,14 @@ internal static partial class Program
             var c = candidates[index];
             var handlerName = $"SuperOpcode_{index:000}_{SanitizeName(c.Op0[4..])}__{SanitizeName(c.Op1[4..])}";
             sb.AppendLine(
-                $"    table->emplace(GeneratedSuperOpcodeKey{{(HandlerFunc)DispatchWrapper<{c.Op0}>, (HandlerFunc)DispatchWrapper<{c.Op1}>}}, {handlerName});");
+                $"    table->emplace(GeneratedSuperOpcodeKey{{(HandlerFunc)DispatchWrapper<{c.Op0}>, (HandlerFunc)DispatchWrapper<{c.Op1}>}}, {handlerName}_handlers.data());");
         }
         sb.AppendLine("    return table;");
         sb.AppendLine("}");
         sb.AppendLine("}  // namespace");
         sb.AppendLine();
 
-        sb.AppendLine("__attribute__((used)) HandlerFunc GeneratedFindSuperOpcode(const DecodedOp* ops) {");
+        sb.AppendLine("__attribute__((used)) HandlerFunc GeneratedFindSuperOpcode(const DecodedInstruction* ops) {");
         sb.AppendLine("    if (!ops) return nullptr;");
         sb.AppendLine("    static std::atomic<GeneratedSuperOpcodeTable*> table_ptr{nullptr};");
         sb.AppendLine("    auto* table = table_ptr.load(std::memory_order_acquire);");
@@ -202,7 +207,10 @@ internal static partial class Program
         sb.AppendLine("    }");
         sb.AppendLine();
         sb.AppendLine("    auto it = table->find(GeneratedSuperOpcodeKey{ops[0].handler, ops[1].handler});");
-        sb.AppendLine("    return it != table->end() ? it->second : nullptr;");
+        sb.AppendLine("#if FIBERCPU_LOWER_OPERANDS");
+        sb.AppendLine("    if (it != table->end()) return LowerFusionOperandHandler(ops, it->second[0]);");
+        sb.AppendLine("#endif");
+        sb.AppendLine("    return nullptr;");
         sb.AppendLine("}");
         sb.AppendLine();
         sb.AppendLine("}  // namespace fiberish");

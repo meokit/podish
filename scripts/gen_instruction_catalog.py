@@ -7,7 +7,10 @@ import json
 import re
 from pathlib import Path
 
-from operand_specialization_data import generated_fusions, training_handlers
+from operand_specialization_data import (
+    Operand, generated_fusions, instruction_targets, relative_control_operations, training_handlers, training_plan_match,
+)
+from scalar_modrm import SHARDS, UNBOUND_MODRM_KEY, load_baked_modrm, pin_keep, scalar_modrm_plans, scalar_policy_key
 
 
 CATALOG = Path(__file__).resolve().parents[1] / "libfibercpu/src/instruction_catalog.json"
@@ -64,6 +67,8 @@ def read_catalog(path=CATALOG):
         if Path(source).name != source:
             raise ValueError(f"expected a catalog filename, got {source}")
         add_specializations(catalog, json.loads(path.with_name(source).read_text()))
+    if any(not is_semantic_variant(row) for row in catalog["variants"]):
+        raise ValueError("the architectural catalog accepts only mandatory-prefix variants")
     return catalog
 
 
@@ -83,39 +88,12 @@ def variant_criteria(row):
 
 
 def is_semantic_variant(row):
-    return "mandatory" in row["spec"] and not row.get("optimization_only", False)
-
-
-def variant_dispatch_base(catalog, row):
-    if is_semantic_variant(row):
-        return row["logic"]
-    family = catalog["families"][row["family"]]
-    return row.get("base", catalog["fallbacks"].get(str(family["opcode"])))
+    return set(row["spec"]) == {"mandatory"}
 
 
 def add_specializations(catalog, source):
-    generic = catalog.setdefault("generic_fallbacks", {})
-    for opcode, name in source.get("generic_fallbacks", {}).items():
-        if opcode not in catalog["fallbacks"] or generic.setdefault(opcode, name) != name:
-            raise ValueError(f"inconsistent generic fallback for opcode {opcode}")
-    families = catalog["families"]
-    for name, family in source.get("families", {}).items():
-        if families.setdefault(name, family) != family:
-            raise ValueError(f"inconsistent encoding family {name}")
-    bindings = catalog["bindings"]
     for section, rows in source.get("bindings", {}).items():
-        bindings.setdefault(section, []).extend(rows)
-    for row in source.get("variants", []):
-        name = row["logic"]
-        binding = {"name": name, "arguments": row.get("arguments", []), "shape": row}
-        if "kernel" in row:
-            binding["kernel"] = row["kernel"]
-        else:
-            binding["base"] = variant_dispatch_base(catalog, row)
-            if not binding["base"] or binding["base"] == name:
-                raise ValueError(f"missing base handler for {name}")
-        bindings.setdefault(row["section"], []).append(binding)
-        catalog["variants"].append(row)
+        catalog["bindings"].setdefault(section, []).extend(rows)
     policies = catalog.setdefault("llvm_policies", {})
     for entry in source.get("llvm", []):
         if isinstance(entry, str):
@@ -130,12 +108,20 @@ def add_specializations(catalog, source):
 def kernel_reference(name, arguments):
     if not all(re.fullmatch(r"(?:\w+::)*\w+", arg, re.ASCII) for arg in arguments):
         raise ValueError(f"invalid kernel argument for {name}")
-    return f"{identifier(name)}<{', '.join(arguments)}>"
+    qualified = "::".join(map(identifier, name.split("::")))
+    return f"{qualified}<{', '.join(arguments)}>"
 
 
-def llvm_flag_policy(kernel, *parameters):
+def llvm_flag_policy_call(live, dead, *, baked):
+    if baked:
+        return (f"(metadata & Meta::no_flags_mask ? {dead}(LogicPassParams, operands)"
+                f" : {live}(LogicPassParams, operands))")
+    return f"RunFlagPolicy<{live}, {dead}>(metadata, LogicPassParams)"
+
+
+def llvm_flag_policy(kernel, *parameters, baked=False):
     live, dead = (kernel_reference(kernel, [*parameters, f"FlagsSpec::{flags}"]) for flags in ("Live", "Dead"))
-    return f"RunLLVMFlagPolicy<{live}, {dead}>(metadata, LogicPassParams)"
+    return llvm_flag_policy_call(live, dead, baked=baked)
 
 
 def expand_shift_bit(catalog):
@@ -144,165 +130,79 @@ def expand_shift_bit(catalog):
         return
     bindings = []
     exact = {}
-    families = catalog["families"]
-    variants = catalog["variants"]
-    dynamic_shape = ["OpsizeSpec::Dynamic", "AddrModeSpec::Dynamic"]
+    dynamic_shape = ("OpsizeSpec::Dynamic", "AddrModeSpec::Dynamic")
 
-    def fallback(opcode):
-        return catalog["fallbacks"][str(opcode)]
-
-    def family(name, opcode, layout, extension, width):
-        if name in families:
-            raise ValueError(f"duplicate shift/bit family {name}")
-        families[name] = {"opcode": opcode, "layout": layout, "extension": extension, "width_rule": width}
-
-    def variant(name, encoding, fields):
-        row = {"logic": name, "family": encoding, "spec": fields, "priority": 0}
-        variants.append(row)
-        return row
-
-    def bind(name, kernel, arguments):
+    def bind(opcode, kernel, arguments, extra=(), *, use_flags=True):
+        name = catalog["fallbacks"][str(opcode)]
+        if name in exact:
+            return
         bindings.append({"name": name, "kernel": kernel, "arguments": arguments})
-
-    def typed_variant(row, kernel, parameters):
-        fields = row["spec"]
-        (width,) = fields.get("width", [None])
-        size = {None: "Dynamic", "W16": "Opsize16", "W32": "Opsize32"}[width]
-        form = "ModReg" if "regForm" in fields else "Memory" if "memoryForm" in fields else "Dynamic"
-        (flags,) = fields.get("flags", ["Live"])
-        arguments = [*parameters, f"OpsizeSpec::{size}", f"AddrModeSpec::{form}", f"FlagsSpec::{flags}"]
-        bind(row["logic"], kernel, arguments)
-
-    def shaped_variants(encoding, stem, width_rule, forms, dead_register, dead_memory=False, repeat=None):
-        for width in ([None] if width_rule == "Fixed8" else ["W16", "W32"]):
-            for form in forms:
-                dead = dead_register if form == "Reg" else dead_memory
-                for flags in (["Live", "Dead"] if dead else ["Live"]):
-                    fields = {"regForm" if form == "Reg" else "memoryForm": []}
-                    if width:
-                        fields["width"] = [width]
-                    if flags == "Dead":
-                        fields["flags"] = ["Dead"]
-                    if repeat:
-                        fields["repeat"] = [repeat]
-                    suffix = (f"_{width[1:]}" if width else "") + f"_{form}_{flags}"
-                    yield variant(f"{stem}{suffix}", encoding, fields)
+        exact[name] = (llvm_flag_policy(kernel, *arguments, *extra, *dynamic_shape, baked=True)
+                       if use_flags else f"op::{name}(LogicPassParams)")
 
     for opcode, width, count_source in config["group2_forms"]:
-        root = fallback(opcode)
         shift_width = "Byte" if width == "Fixed8" else "Scalar"
-        base = [f"ShiftWidth::{shift_width}", f"ShiftCountSource::{count_source}"]
-        bind(root, "OpGroup2_Internal", base)
-        exact[root] = llvm_flag_policy("OpGroup2_Internal", *base, "GroupOpSpec::Dynamic", *dynamic_shape)
-        for extension, mnemonic in enumerate(config["group2_extensions"]):
-            encoding = f"{root[2:]}_{mnemonic}"
-            family(encoding, opcode, "RmOnly", extension, width)
-            parameters = [*base, f"GroupOpSpec::Ext{extension}"]
-            old_rows = [row for row in variants if row["family"] == encoding]
-            # Keep the registered SHL/SHR/SAR shapes used by existing fusions.
-            # The old immediate register rotates leave their memory forms open.
-            forms = (["Reg", "Mem"] if not old_rows else
-                     ["Mem"] if all("regForm" in row["spec"] for row in old_rows) else [])
-            for row in [*old_rows, *shaped_variants(encoding, f"Op{encoding}", width, forms,
-                                                  count_source != "Cl", count_source != "Cl")]:
-                typed_variant(row, "OpGroup2_Internal", parameters)
-
-    for opcode, mnemonic, extension in config["register_bit_ops"]:
-        root = fallback(opcode)
-        encoding = f"{mnemonic}_EvGv"
-        operation = f"GroupOpSpec::Ext{extension}"
-        family(encoding, opcode, "RmReg", -1, "ScalarEv")
-        bind(root, "OpBitRegister_Internal", [operation])
-        exact[root] = llvm_flag_policy("OpBitRegister_Internal", operation, *dynamic_shape)
-        for row in shaped_variants(encoding, root, "ScalarEv", ["Reg", "Mem"], True):
-            typed_variant(row, "OpBitRegister_Internal", [operation])
-
-    opcode = config["group8_opcode"]
-    root = fallback(opcode)
-    bind(root, "OpGroup8_Internal", ["GroupOpSpec::Dynamic"])
-    exact[root] = llvm_flag_policy("OpGroup8_Internal", "GroupOpSpec::Dynamic", *dynamic_shape)
-    for extension, mnemonic in enumerate(config["group8_extensions"], 4):
-        encoding = f"Group8_EvIb_{mnemonic}"
-        family(encoding, opcode, "RmOnly", extension, "ScalarEv")
-        for row in shaped_variants(encoding, f"Op{encoding}", "ScalarEv", ["Reg", "Mem"], True):
-            typed_variant(row, "OpGroup8_Internal", [f"GroupOpSpec::Ext{extension}"])
-
-    for opcode, mnemonic, operation, repeat in config["scan_ops"]:
-        root = fallback(opcode)
-        encoding = f"{mnemonic}_GvEv"
-        family(encoding, opcode, "RegRm", -1, "ScalarEv")
+        arguments = [f"ShiftWidth::{shift_width}", f"ShiftCountSource::{count_source}"]
+        bind(opcode, "OpGroup2_Internal", arguments, ("GroupOpSpec::Dynamic",))
+        name = catalog["fallbacks"][str(opcode)]
+        size = "$width" if shift_width == "Scalar" else "OpsizeSpec::Dynamic"
+        catalog.setdefault("scalar_policies", {})[name] = {
+            "kernel": "OpGroup2_Internal",
+            "arguments": [*arguments, "GroupOpSpec::Dynamic", size, "AddrModeSpec::Dynamic", "$flags"],
+        }
+    for opcode, _, extension in config["register_bit_ops"]:
+        bind(opcode, "OpBitRegister_Internal", [f"GroupOpSpec::Ext{extension}"])
+    bind(config["group8_opcode"], "OpGroup8_Internal", ["GroupOpSpec::Dynamic"])
+    for opcode, _, operation, _ in config["scan_ops"]:
         generic = "Reverse" if operation == "Reverse" else "Dynamic"
-        if root not in exact:
-            bind(root, "OpBitScan_Internal", [f"BitScanOperation::{generic}"])
-            exact[root] = llvm_flag_policy("OpBitScan_Internal", f"BitScanOperation::{generic}", *dynamic_shape)
-        for row in shaped_variants(encoding, f"Op{encoding}", "ScalarEv", ["Reg", "Mem"], True, repeat=repeat):
-            typed_variant(row, "OpBitScan_Internal", [f"BitScanOperation::{operation}"])
-
-    for index, register in enumerate(config["bswap_registers"]):
-        opcode = config["bswap_first_opcode"] + index
-        root = fallback(opcode)
-        encoding = f"Bswap_{register}"
-        family(encoding, opcode, "OpcodeReg", -1, "Fixed32")
-        if root not in exact:
-            bind(root, "OpBswap_Internal", ["RmOperandSpec::Dynamic"])
-            exact[root] = f"op::{root}(LogicPassParams)"
-        row = variant(f"Op{encoding}", encoding, {"flags": ["Any"]})
-        bind(row["logic"], "OpBswap_Internal", [f"RmOperandSpec::Reg{register}"])
+        bind(opcode, "OpBitScan_Internal", [f"BitScanOperation::{generic}"])
+    bind(config["bswap_first_opcode"], "OpBswap_Internal", ["RmOperandSpec::Dynamic"], use_flags=False)
 
     catalog["bindings"]["FIBERCPU_BIND_SHIFT_BIT"] = bindings
     catalog["llvm_block_operations"].extend(exact)
     catalog["shift_bit_llvm_exact"] = exact
 
 
-def group1_bindings(catalog, forms):
-    bindings = {}
-
-    def add(name, *arguments):
-        binding = {"name": name, "kernel": "OpGroup1_Internal", "arguments": list(arguments)}
-        if name in bindings and bindings[name] != binding:
-            raise ValueError(f"inconsistent Group1 binding {name}")
-        bindings[name] = binding
-
-    for name, immediate in forms.items():
-        add(name, immediate)
-
-    for row in catalog["variants"]:
-        family = catalog["families"][row["family"]]
-        fallback = catalog["fallbacks"].get(str(family["opcode"]))
-        if fallback not in forms or "section" in row:
-            continue
-
-        name, fields = row["logic"], row["spec"]
-        immediate = forms[fallback]
-        if family["layout"] != "RmOnly" or family["extension"] < 0:
-            raise ValueError(f"invalid Group1 encoding for {name}")
-        if fields.keys() - {"width", "flags", "regForm", "dst", "dst8"} or {"dst", "dst8"} <= fields.keys():
-            raise ValueError(f"unsupported Group1 operand spec for {name}")
-        (width,) = fields.get("width", ["Dynamic"])
-        if immediate == "Group1Immediate::Byte":
-            if family["width_rule"] != "Fixed8" or width not in ("Dynamic", "W8"):
-                raise ValueError(f"invalid Group1 byte width for {name}")
-            size = "Dynamic"
-        else:
-            if family["width_rule"] != "ScalarEv" or width not in ("Dynamic", "W16", "W32"):
-                raise ValueError(f"invalid Group1 operand width for {name}")
-            size = {"Dynamic": "Dynamic", "W16": "Opsize16", "W32": "Opsize32"}[width]
-        (flags,) = fields.get("flags", ["Live"])
-        flags = {"Live": "Live", "Dead": "Dead", "Any": "Dynamic"}[flags]
-
-        rm = "ModReg" if "regForm" in fields else "Dynamic"
-        if "dst" in fields or "dst8" in fields:
-            register, lane = fields["dst8"] if "dst8" in fields else (*fields["dst"], "Low")
-            rm_index = ("Eax", "Ecx", "Edx", "Ebx", "Esp", "Ebp", "Esi", "Edi").index(register)
-            if lane == "High":
-                rm_index += 4
-            rm = f"Reg{rm_index}"
-        add(name, immediate, f"FlagsSpec::{flags}", f"GroupOpSpec::Ext{family['extension']}",
-            f"OpsizeSpec::{size}", f"RmOperandSpec::{rm}")
-    return bindings.values()
+def supports_exact_operands(catalog, name, operand):
+    if name not in catalog["llvm_block_operations"] or operand.prefixes & 1:
+        return False
+    policy = catalog.get("llvm_policies", {}).get(name, {})
+    requirements = policy.get("requires", ())
+    memory = operand.meta & 2
+    if "register" in requirements and (not operand.meta & 1 or operand.modrm < 0xc0):
+        return False
+    if memory and operand.meta >> 6 != 0:
+        return False
+    if "memory" in requirements and not memory:
+        return False
+    if "memory_with_66" in requirements and operand.prefixes & 0x40 and not memory:
+        return False
+    subop = (operand.modrm >> 3) & 7
+    if "extensions" in policy and (not operand.meta & 1 or subop not in policy["extensions"]):
+        return False
+    return True
 
 
-def generate(catalog, output, fusion_source=None):
+def static_operand_shapes(plan, catalog, training):
+    if not plan:
+        return {}
+    profile = json.loads(plan.read_text())
+    if training_plan_match(profile) != "decoded":
+        raise ValueError("expected a decoded version 3 scalar operand plan")
+    result = {}
+    relative = relative_control_operations(catalog)
+    for row in profile["entries"]:
+        handler = training.get(row["originalId"])
+        if handler is None or handler.kind != "wrapper" or row["kind"] != "wrapper" or row["width"] != 1:
+            raise ValueError("static scalar plans require a scalar training ID for each entry")
+        fields, = row["operands"]
+        operand = Operand(**fields).for_specialization(handler.name in relative)
+        if supports_exact_operands(catalog, handler.name, operand):
+            result.setdefault(handler.name, set()).add(operand)
+    return result
+
+
+def generate(catalog, output, fusion_source=None, pin_mode=0, pin_mask=0, modrm_plan=None, static_operand_plan=None):
     output.mkdir(parents=True, exist_ok=True)
     families = ['// Generated by gen_instruction_catalog.py', '#pragma once', '#include "instruction_spec.h"',
                 'namespace fiberish::spec::family {']
@@ -321,48 +221,16 @@ def generate(catalog, output, fusion_source=None):
         if not 0 <= opcode < 1024:
             raise ValueError("fallback index out of range")
         catalog_lines.append(f'    {{0x{opcode:03x}, DispatchWrapper<op::{identifier(logic)}>, "op::{logic}"}},')
-    catalog_lines += ["};", "static constexpr Fallback generic_fallbacks[] = {"]
-    for opcode, name in sorted(catalog.get("generic_fallbacks", {}).items(), key=lambda pair: int(pair[0])):
-        catalog_lines.append(f'    {{0x{int(opcode):03x}, DispatchWrapper<op::{identifier(name)}>, "op::{name}"}},')
-    catalog_lines += ["    {0xffff, nullptr, nullptr},", "};",
-                      "static constexpr DeclaredInstructionVariant variants[] = {"]
-    semantic_indices = []
-    for index, row in enumerate(catalog["variants"]):
+    catalog_lines += ["};", "static constexpr DeclaredInstructionVariant variants[] = {"]
+    for row in sorted(catalog["variants"], key=lambda row: catalog["families"][row["family"]]["opcode"]):
         name = identifier(row["logic"])
         family = identifier(row["family"])
-        catalog["families"][family]
         rank = row["priority"]
         if type(rank) is not int:
             raise ValueError(f"invalid priority for {name}")
-        parent = identifier(row.get("fusion_parent", name))
-        bake = "true" if "fusion_parent" in row else "false"
-        # Mandatory prefixes select different ISA operations (e.g. MMX vs SSE).
-        # Their semantic routing is required by the generic decoder too.
-        semantic = is_semantic_variant(row)
-        if semantic:
-            semantic_indices.append((catalog["families"][family]["opcode"], index))
-        if not semantic:
-            catalog_lines += ["#if FIBERCPU_STATIC_SPECIALIZATION", f"    #define FIBERCPU_VARIANT_{name} DispatchWrapper<op::{name}>",
-                              "#else", f"    #define FIBERCPU_VARIANT_{name} nullptr", "#endif"]
-        handler = f"DispatchWrapper<op::{name}>" if semantic else f"FIBERCPU_VARIANT_{name}"
         catalog_lines.append(f'    DeclareVariant<spec::family::{family}, {spec_expression(row["spec"])}>'
-                             f'({handler}, "op::{name}", "{family}", "op::{parent}", {bake}, {rank}),')
-        if not semantic:
-            catalog_lines.append(f"    #undef FIBERCPU_VARIANT_{name}")
+                             f'(DispatchWrapper<op::{name}>, "op::{name}", "{family}", "op::{name}", false, {rank}),')
     catalog_lines.append("};")
-    catalog_lines.append("static constexpr uint16_t semantic_variant_indices[] = {")
-    catalog_lines.extend(f"    {index}," for _, index in sorted(semantic_indices))
-    catalog_lines.append("};")
-    fused_handlers = {name for fused in catalog["handwritten_fusions"] for name in fused["operations"]}
-    if fusion_source:
-        fused_handlers.update(re.findall(r"DispatchWrapper<op::(\w+)>", fusion_source.read_text()))
-    aliases = {(row["logic"], variant_dispatch_base(catalog, row)) for row in catalog["variants"]
-               if "section" in row and not is_semantic_variant(row)}
-    catalog_lines += ["static constexpr FusionAlias fusion_aliases[] = {", "#if FIBERCPU_STATIC_SPECIALIZATION"]
-    for name, base in sorted((name, base) for name, base in aliases
-                             if base in fused_handlers and name not in fused_handlers):
-        catalog_lines.append(f"    {{DispatchWrapper<op::{identifier(name)}>, DispatchWrapper<op::{identifier(base)}>}},")
-    catalog_lines += ["#endif", "    {nullptr, nullptr},", "};"]
 
     group1_forms = {}
     for opcode, immediate in catalog["group1_immediates"].items():
@@ -374,49 +242,50 @@ def generate(catalog, output, fusion_source=None):
             raise ValueError(f"inconsistent Group1 immediate forms for {name}")
 
     bindings = ["// Generated by gen_instruction_catalog.py. Included at the kernel's declaration site."]
-    binding_groups = {**catalog["bindings"], "FIBERCPU_BIND_GROUP1": group1_bindings(catalog, group1_forms)}
+    group1_bindings = [{"name": name, "kernel": "OpGroup1_Internal", "arguments": [immediate]}
+                       for name, immediate in group1_forms.items()]
+    binding_groups = {**catalog["bindings"], "FIBERCPU_BIND_GROUP1": group1_bindings}
     seen = set()
     for group, rows in binding_groups.items():
         bindings.append(f"#if defined({identifier(group)})")
         for row in rows:
             name = identifier(row["name"])
             arguments = row["arguments"]
-            generic = row.get("generic_arguments")
             if name in seen:
                 raise ValueError(f"duplicate kernel binding {name}")
             seen.add(name)
+            entry = kernel_reference(row["kernel"], arguments)
             bindings.append(f"FORCE_INLINE LogicFlow {name}(LogicFuncParams) {{")
-            if shape := row.get("shape"):
-                bindings.append(f"    spec::AssumeInstructionShape<spec::family::{shape['family']}, "
-                                f"{spec_expression(shape['spec'])}>(op);")
-            if generic:
-                bindings.append("#if FIBERCPU_STATIC_SPECIALIZATION")
-            entry = identifier(row["base"]) if "base" in row else kernel_reference(row["kernel"], arguments)
             bindings.append(f"    return {entry}(LogicPassParams);")
-            if generic:
-                bindings += ["#else", f"    return {kernel_reference(row['kernel'], generic)}(LogicPassParams);", "#endif"]
             bindings.append("}")
         bindings.append("#endif")
 
     llvm_ops = llvm_operation_names(catalog)
     generic_handlers = {name for opcode, name in catalog["fallbacks"].items() if int(opcode) < 512}
-    generic_handlers.update(catalog.get("generic_fallbacks", {}).values())
     generic_handlers.update(row["logic"] for row in catalog["variants"] if is_semantic_variant(row))
     if set(llvm_ops) - generic_handlers:
         raise ValueError("LLVM templates require architectural fallback handlers: " +
                          ", ".join(sorted(set(llvm_ops) - generic_handlers)))
     llvm_operations = []
     shift_exact = catalog.get("shift_bit_llvm_exact", {})
-    requirements = {"register": 1, "memory": 2, "exact_only": 4}
+    requirements = {"register": 1, "memory": 2, "exact_only": 4, "memory_with_66": 8}
     for op_id, name in enumerate(llvm_ops):
         exact = shift_exact.get(name, f"op::{identifier(name)}(LogicPassParams)")
         if name in group1_forms:
-            exact = llvm_flag_policy("OpGroup1_Internal", group1_forms[name])
+            exact = llvm_flag_policy("OpGroup1_Internal", group1_forms[name], baked=True)
         policy = catalog.get("llvm_policies", {}).get(name, {})
+        baked = policy.get("baked")
         if "live" in policy or "dead" in policy:
+            if baked is not None and baked is not True:
+                raise ValueError(f"invalid baked flag policy for {name}")
             live, dead = (kernel_reference(policy[kind]["kernel"], policy[kind].get("arguments", []))
                           for kind in ("live", "dead"))
-            exact = f"RunLLVMFlagPolicy<{live}, {dead}>(metadata, LogicPassParams)"
+            exact = llvm_flag_policy_call(live, dead, baked=baked is True)
+        elif baked is not None:
+            if not isinstance(baked, dict):
+                raise ValueError(f"invalid baked operand policy for {name}")
+            kernel = kernel_reference(baked["kernel"], baked.get("arguments", []))
+            exact = f"op::{kernel}(LogicPassParams, operands)"
         modes = set(policy.get("requires", []))
         if {"register", "memory"} <= modes:
             raise ValueError(f"conflicting operand forms for {name}")
@@ -443,40 +312,127 @@ def generate(catalog, output, fusion_source=None):
 
     fusions = generated_fusions(fusion_source.read_text()) if fusion_source else {}
     training = training_handlers(catalog, fusions)
-    training_ids = {(handler.kind, handler.name): op_id for op_id, handler in training.items()}
-    always_available = set(catalog["fallbacks"].values()) | set(catalog.get("generic_fallbacks", {}).values())
-    always_available.update(row["logic"] for row in catalog["variants"] if is_semantic_variant(row))
+    scalar_plans = scalar_modrm_plans(catalog)
+    scalar_policies = catalog.get("scalar_policies", {})
+    width_kernels = catalog.get("scalar_width_kernels", {})
+    if width_kernels.keys() - scalar_plans.keys() or width_kernels.keys() & scalar_policies.keys():
+        raise ValueError("required scalar width kernels must have a scalar identity and no optional policy")
+    selected_modrm, selected_policies = load_baked_modrm(modrm_plan, scalar_plans, training, scalar_policies)
+    exact_shapes = static_operand_shapes(static_operand_plan, catalog, training)
+    keep_for = pin_keep(catalog, pin_mode, pin_mask)
+    opcodes_for = instruction_targets(catalog)
+    branch_links = catalog["block_links"]["with_operands"]
+    ret = catalog["block_links"]["link_only_return"]
+    if len(set(branch_links + [ret])) != len(branch_links) + 1:
+        raise ValueError("duplicate block link encoding")
+    link_cases = [f"case 0x{opcode:03x}:" for opcode in sorted(branch_links + [ret])]
+    llvm_second_slots = ["true" if opcodes_for[name].issubset(branch_links) else "false" for name in llvm_ops]
+    llvm_op_ids[-1:-1] = [
+        "inline constexpr bool kHasBranchLinkSlot[] = {",
+        *("    " + ", ".join(llvm_second_slots[i:i + 12]) + "," for i in range(0, len(llvm_second_slots), 12)),
+        "};",
+    ]
+    scalar_shards = [[] for _ in range(SHARDS)]
+    shard_weights = [0] * SHARDS
+    for name in sorted(scalar_plans, key=lambda name: (-len(selected_modrm.get(name, ())) - len(exact_shapes.get(name, ())), name)):
+        plan = scalar_plans[name]
+        keys = selected_modrm.get(name, ())
+        variants = selected_policies.get(name, {})
+        shapes = sorted(exact_shapes.get(name, ()), key=lambda s: (s.encoding, s.ea_desc, s.disp, s.imm))
+        shard = min(range(SHARDS), key=shard_weights.__getitem__)
+        shard_weights[shard] += len(keys) + len(variants) + len(shapes) + 1
+        lines = scalar_shards[shard]
+        entries = f"{name}_entries"
+        targets = {key: f"op::{name}" for key in keys}
+        is_link_only_return = opcodes_for[name] == {ret}
+        if is_link_only_return:
+            # There is no payload metadata once the native block pointer
+            # occupies the slot. Bind both legal stack operand widths.
+            low_opcode = ret & 7
+            targets.update({0x100 | low_opcode: f"op::{name}", 0x140 | low_opcode: f"op::{name}"})
+        policies = []
+        if variants:
+            policy = scalar_policies[name]
+            if "$width" in policy["arguments"]:
+                policies.append("kBindWidth")
+            if "$flags" in policy["arguments"]:
+                policies.append("kBindFlags")
+            declarations = set()
+            for key, (width, flags) in sorted(variants.items()):
+                suffix = f"{width or ''}{'_' + flags.title() if flags else ''}"
+                target = f"{name}_Baked{suffix}"
+                if target not in declarations:
+                    declarations.add(target)
+                    modes = {
+                        "$width": f"OpsizeSpec::Opsize{width}",
+                        "$flags": "FlagsSpec::Dead" if flags == "dead" else "FlagsSpec::Live",
+                    }
+                    kernel = kernel_reference(policy["kernel"], [modes.get(arg, arg) for arg in policy["arguments"]])
+                    lines.extend([f"FORCE_INLINE LogicFlow {target}(LogicFuncParams) {{",
+                                  f"    return {kernel}(LogicPassParams);", "}"])
+                targets[key] = target
+        width_fallbacks = []
+        if name in width_kernels:
+            assert not is_link_only_return
+            policies.extend(("kBindWidth", "kRequireWidth"))
+            targets.clear()
+            kernel = f"op::{identifier(width_kernels[name])}"
+            for width in (16, 32):
+                width_key = scalar_policy_key(width, None)
+                target = kernel_reference(kernel, [f"OpsizeSpec::Opsize{width}"])
+                targets.update((key | width_key, target) for key in keys)
+                for slots in sorted(plan.slot_counts):
+                    key = UNBOUND_MODRM_KEY | width_key | (slots << 8)
+                    width_fallbacks.append((key, target, slots))
+        mask = " | ".join(policies) if policies else "0"
+        lines.append(f"constexpr std::array<ScalarBindingEntry, {len(targets) + len(width_fallbacks)}> {entries} = {{{{")
+        lines.extend(f"    MakeScalarBinding<{target}, 0x{key:04x}, {keep_for(name, key & 255)}>(),"
+                     for key, target in sorted(targets.items()))
+        lines.extend(f"    {{0x{key:04x}, DispatchWrapper<{target}, OperandSpec::SlotBound<{slots}>>}},"
+                     for key, target, slots in sorted(width_fallbacks))
+        link_slot = opcodes_for[name].issubset(branch_links)
+        cold = ", ".join(
+            f"DispatchWrapper<op::{name}, OperandSpec::SlotBound<{slots}{', false' if link_slot else ''}>>"
+            if slots in plan.slot_counts and not is_link_only_return and not width_fallbacks else "nullptr"
+            for slots in (1, 2)
+        )
+        lines.append("}};")
+        exact = "{}"
+        if shapes:
+            exact = f"{name}_exact"
+            lines.append(f"constexpr std::array<ExactScalarBinding, {len(shapes)}> {exact} = {{{{")
+            for shape in shapes:
+                key = shape.cpp()
+                policy = f"OperandSpec::Profile<{key}, {keep_for(name, shape.modrm)}>"
+                handler = f"DispatchWrapper<baked_operand::{name}<{policy}>, {policy}>"
+                lines.append(f"    {{{key}, {handler}}},")
+            lines.append("}};")
+        lines.append(f"extern constinit const ScalarBindingTable {name}_scalar = "
+                     f"{{{entries}.data(), {entries}.size(), 0x{plan.memory_mask:02x}, {mask}, {{{cold}}}, {exact}}};")
+    scalar_headers = ['#include "scalar_bindings.h"'] + [
+        f'#include "ops/{header.name}"' for header in sorted(CATALOG.with_name("ops").glob("*_impl.h"))
+    ]
+    if exact_shapes:
+        scalar_headers.append('#include "baked_operand_kernels.h"')
+    for index, lines in enumerate(scalar_shards):
+        path = output / f"scalar_bindings_{index}.cpp"
+        content = "\n".join([*scalar_headers, "namespace fiberish {", *lines, "}  // namespace fiberish", ""])
+        if not path.exists() or path.read_text() != content:
+            path.write_text(content)
     scalar_training = ["// Generated scalar training IDs."]
     fused_training = ["// Generated fusion training IDs."]
     for op_id, handler in sorted(training.items()):
         name = identifier(handler.name)
         if handler.kind == "wrapper":
-            if name not in always_available:
-                scalar_training.append("#if FIBERCPU_STATIC_SPECIALIZATION")
-            scalar_training.append(f'    {{0x{op_id:08x}u, DispatchWrapper<op::{name}>, "op::{name}"}},')
-            if name not in always_available:
-                scalar_training.append("#endif")
+            scalar_training.append(f'FIBERCPU_SCALAR({name}, 0x{op_id:08x}u)')
         elif handler.kind == "fused":
-            fused_training.append(f"FIBERCPU_TRAINING_FUSION({name}, 0x{op_id:08x}u)")
-
-    handwritten = []
-    patterns = []
-    for row in catalog["handwritten_fusions"]:
-        name = identifier(row["name"])
-        ops = [f"op::{identifier(op)}" for op in row["operations"]]
-        if len(ops) not in (2, 3, 4):
-            raise ValueError(f"invalid fusion width for {name}")
-        handwritten.append(f"DEFINE_HANDWRITTEN_SUPEROPCODE_{len(ops)}({name}, {', '.join(ops)})")
-        handlers = ", ".join(f"DispatchWrapper<{op}>" for op in ops)
-        op_id = training_ids["handwritten", name]
-        patterns.append(f"    {{{{{handlers}}}, {name}, {len(ops)}, 0x{op_id:08x}u}},")
-    handwritten += ["struct HandwrittenFusion { HandlerFunc operations[4]; HandlerFunc handler; unsigned width; uint32_t training_id; };",
-                    "constexpr HandwrittenFusion kHandwrittenFusions[] = {", *patterns, "};"]
+            fused_training.append(f"FIBERCPU_TRAINING_FUSION({name}, 0x{op_id:08x}u, {len(handler.operations)})")
 
     for name, lines in (("instruction_families.h", families), ("instruction_catalog.inc", catalog_lines),
                         ("instruction_kernel_bindings.inc", bindings), ("llvm_block_operations.inc", llvm_operations),
                         ("llvm_block_entries.inc", llvm_entries), ("llvm_op_ids.h", llvm_op_ids),
-                        ("handwritten_fusions.inc", handwritten), ("training_scalar_handlers.inc", scalar_training),
+                        ("block_link_opcodes.inc", link_cases),
+                        ("training_scalar_handlers.inc", scalar_training),
                         ("training_fusion_handlers.inc", fused_training)):
         path = output / name
         content = "\n".join(lines) + "\n"
@@ -488,6 +444,11 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--catalog", type=Path, default=CATALOG)
     parser.add_argument("--fusion-source", type=Path)
+    parser.add_argument("--pin-mode", type=int, default=0, choices=range(3))
+    parser.add_argument("--pin-mask", type=int, default=0)
+    parser.add_argument("--modrm-plan", type=Path)
+    parser.add_argument("--static-operand-plan", type=Path)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
-    generate(read_catalog(args.catalog), args.output, args.fusion_source)
+    generate(read_catalog(args.catalog), args.output, args.fusion_source, args.pin_mode, args.pin_mask, args.modrm_plan,
+             args.static_operand_plan)

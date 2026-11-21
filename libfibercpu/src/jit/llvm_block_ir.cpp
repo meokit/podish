@@ -1,3 +1,4 @@
+#define FIBERCPU_LLVM_BLOCK_TEMPLATE
 #include "jit/llvm_block_jit.h"
 #include "llvm_op_ids.h"
 #include "ops/ops_alu_impl.h"
@@ -19,15 +20,36 @@
 namespace fiberish {
 
 extern "C" bool FiberLLVMUseStep(unsigned index);
+extern "C" unsigned FiberLLVMOperandLayout(unsigned index);
 extern "C" LLVMBlockExit FiberLLVMExit();
 extern "C" LogicFlow FiberLLVMPlaceholder(unsigned index, uint32_t encoding, uint32_t ea_desc, uint32_t displacement,
                                           LogicFuncParams);
 
-template <LogicFunc Live, LogicFunc Dead>
-FORCE_INLINE LogicFlow RunLLVMFlagPolicy(uint8_t metadata, LogicFuncParams) {
-    if (metadata & Meta::no_flags_mask) return Dead(LogicPassParams);
-    return Live(LogicPassParams);
+#ifdef FIBERCPU_LLVM_SHARED_REGION_EXITS
+extern "C"
+    [[gnu::noinline]] ATTR_PRESERVE_NONE int64_t FiberLLVMRegionReturn(EmuState* state, DecodedOp*, int64_t instr_limit,
+                                                                       mem::MicroTlbAbiWord, mem::MicroTlbAbiWord,
+                                                                       uint32_t,
+                                                                       uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_COMMIT(state);
+    CommitFlagsCache(state, flags_cache);
+    return instr_limit;
 }
+
+#define FIBERCPU_DEFINE_REGION_CHAIN(Name, LinkSlot)                                                                 \
+    extern "C" [[gnu::noinline]] ATTR_PRESERVE_NONE int64_t Name(                                                    \
+        EmuState* state, DecodedOp* op, int64_t instr_limit, mem::MicroTlbAbiWord tags, mem::MicroTlbAbiWord addend, \
+        uint32_t eip, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {                                                    \
+        __builtin_assume(instr_limit > 0);                                                                           \
+        ATTR_MUSTTAIL return ResolveBranchTargetInline<LinkSlot, false>(state, op, instr_limit, tags, addend, eip,   \
+                                                                        flags_cache FIBERCPU_PIN_ARGS);              \
+    }
+FIBERCPU_DEFINE_REGION_CHAIN(FiberLLVMRegionChainSingle, 0)
+FIBERCPU_DEFINE_REGION_CHAIN(FiberLLVMRegionChainDouble, 1)
+#undef FIBERCPU_DEFINE_REGION_CHAIN
+
+extern "C" const HandlerFunc FiberLLVMRegionMemoryExits[] = {&MemoryOpRestart, &MemoryOpRetry};
+#endif
 
 #define FIBERCPU_LLVM_OP(Id, Name, Exact, Requirements, Extensions)                                         \
     extern "C" LogicFlow FiberLLVMGeneric_##Name(unsigned, uint32_t, uint32_t, uint32_t, LogicFuncParams) { \
@@ -36,14 +58,8 @@ FORCE_INLINE LogicFlow RunLLVMFlagPolicy(uint8_t metadata, LogicFuncParams) {
     extern "C" LogicFlow FiberLLVMTemplate_##Name(unsigned, uint32_t encoding, uint32_t ea_desc,            \
                                                   uint32_t displacement, LogicFuncParams) {                 \
         const auto metadata = uint8_t(encoding >> 16);                                                      \
-        __builtin_assume(op->modrm == uint8_t(encoding));                                                   \
-        __builtin_assume(op->prefixes.all == uint8_t(encoding >> 8));                                       \
-        __builtin_assume((op->meta.all & DecodedOperandShape::metadata_mask) == metadata);                  \
-        __builtin_assume(op->len == uint8_t(encoding >> 24));                                               \
-        if ((metadata & 0xc2) == 2) {                                                                       \
-            __builtin_assume(op->ext.data.ea_desc == ea_desc);                                              \
-            __builtin_assume(op->ext.data.disp == displacement);                                            \
-        }                                                                                                   \
+        const OperandSpec::Baked operands{uint8_t(encoding >> 8), ea_desc, displacement};                   \
+        gpr.baked_address = DecodedOperandShape::HasMemoryAddress(metadata) ? &operands.address : nullptr;  \
         return Exact;                                                                                       \
     }
 #include "llvm_block_operations.inc"
@@ -65,16 +81,22 @@ extern "C" const LLVMOperationTable FiberLLVMOperationTable = {
     },
 };
 
-#define FIBERCPU_LLVM_STEP(I)                                                                                      \
-    do {                                                                                                           \
-        if (!FiberLLVMUseStep(I)) goto dispatch_tail;                                                              \
-        auto flow = FiberLLVMPlaceholder(I, 0, 0, 0, state, current, &utlb, GetImm(current), &branch, flags_cache, \
-                                         FIBERCPU_GPR_CACHE);                                                      \
-        if (flow != LogicFlow::Continue) {                                                                         \
-            HANDLE_SUPEROPCODE_FLOW(flow, state, current, instr_limit, utlb, utlb_tags, utlb_addend, branch,       \
-                                    flags_cache);                                                                  \
-        }                                                                                                          \
-        current = NextOp(current);                                                                                 \
+#define FIBERCPU_LLVM_STEP(I)                                                                                          \
+    do {                                                                                                               \
+        if (!FiberLLVMUseStep(I)) goto dispatch_tail;                                                                  \
+        const auto layout = FiberLLVMOperandLayout(I);                                                                 \
+        const auto slots = layout & 3;                                                                                 \
+        const auto imm = layout == kLLVMBranchLinkSlot ? current->Primary()                                            \
+                         : slots == 2                  ? (current + 1)->Primary()                                      \
+                         : current->HasMemory()        ? GetSingleSlotMemoryImmediate(current)                         \
+                                                       : current->Primary();                                                  \
+        auto flow =                                                                                                    \
+            FiberLLVMPlaceholder(I, 0, 0, 0, state, current, &utlb, imm, 0, &branch, flags_cache, FIBERCPU_GPR_CACHE); \
+        if (flow != LogicFlow::Continue) {                                                                             \
+            HANDLE_SUPEROPCODE_FLOW(flow, state, current, instr_limit, utlb, utlb_tags, utlb_addend, branch,           \
+                                    flags_cache);                                                                      \
+        }                                                                                                              \
+        current += slots;                                                                                              \
     } while (false)
 
 // Clang supplies the exact threaded ABI and shared SuperOpcode exits. Step
@@ -100,6 +122,7 @@ dispatch_tail:
         case LLVMBlockExit::Dispatch:
             break;
     }
+    RestoreLLVMBlockOnExit(state);
     ATTR_MUSTTAIL return current->handler(state, current, instr_limit, utlb_tags, utlb_addend, branch,
                                           flags_cache FIBERCPU_PIN_RELOAD);
 }

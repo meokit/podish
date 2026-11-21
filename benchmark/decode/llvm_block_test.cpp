@@ -7,6 +7,7 @@
 #include <mach/mach_vm.h>
 #endif
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -21,6 +22,10 @@
 #include <vector>
 
 #include <unistd.h>
+
+#if FIBERCPU_LLVM_JIT
+extern "C" int X86_InternalMapManagedPage(EmuState*, uint32_t, void*, uint8_t);
+#endif
 
 namespace {
 
@@ -130,6 +135,70 @@ bool VerifyMemoryExit(bool enabled, bool write) {
            X86_GetEIP(state.get()) == code_address + sizeof(code) && (compiled != nullptr) == enabled;
 }
 
+bool VerifyMovAddressOperands(bool enabled) {
+    constexpr uint8_t code[] = {
+        0x64, 0x67, 0x66, 0x8b, 0x40, 0x14, // MOV AX, FS:[BX+SI+0x14]
+        0x64, 0x67, 0x66, 0x89, 0x40, 0x1c, // MOV FS:[BX+SI+0x1c], AX
+        0x8b, 0x54, 0x8d, 0x20,             // MOV EDX, [EBP+ECX*4+0x20]
+    };
+    constexpr uint32_t ss_base = data_address + 4096;
+    constexpr int fs_segment = 4;
+    auto state = LoadCode(code, sizeof(code));
+    X86_MemMap(state.get(), data_address, 4096, 3);
+    X86_MemMap(state.get(), ss_base, 4096, 3);
+    X86_SegBaseWrite(state.get(), fs_segment, data_address);
+    X86_SegBaseWrite(state.get(), ss_segment, ss_base);
+    X86_RegWrite(state.get(), 1, 3);
+    X86_RegWrite(state.get(), 3, 0x7600fffd);
+    X86_RegWrite(state.get(), 5, 0x40);
+    X86_RegWrite(state.get(), 6, 0xe0000006);
+
+    const uint8_t dword[] = {0x78, 0x56, 0x34, 0x12};
+    X86_MemWrite(state.get(), ss_base + 0x6c, dword, sizeof(dword));
+    const auto end = code_address + sizeof(code);
+    for (const uint16_t word : {uint16_t{0xcdef}, uint16_t{0xabcd}}) {
+        const uint8_t input[] = {uint8_t(word), uint8_t(word >> 8)};
+        const uint8_t dest[] = {0x44, 0x33, 0x22, 0x11};
+        X86_MemWrite(state.get(), data_address + 0x17, input, sizeof(input));
+        X86_MemWrite(state.get(), data_address + 0x1f, dest, sizeof(dest));
+        X86_SetEIP(state.get(), code_address);
+        X86_RegWrite(state.get(), 0, 0x12340000);
+        X86_RegWrite(state.get(), 2, 0);
+
+        if (!X86_Run(state.get(), end, 16) || X86_GetEIP(state.get()) != end)
+            return false;
+        uint32_t stored = 0;
+        X86_MemRead(state.get(), data_address + 0x1f, reinterpret_cast<uint8_t*>(&stored), sizeof(stored));
+        if (X86_RegRead(state.get(), 0) != (0x12340000 | word) || X86_RegRead(state.get(), 2) != 0x12345678 ||
+            stored != (0x11220000 | word) || HasCompiledEntry(state.get()) != enabled)
+            return false;
+    }
+    return true;
+}
+
+bool VerifyStringAndLoopPrefixes(bool enabled) {
+    constexpr uint8_t code[] = {
+        0xf3, 0x66, 0x67, 0xab, // REP STOSW using CX and DI
+        0x67, 0xe3, 2,          // JCXZ skips UD2
+        0x0f, 0x0b,
+    };
+    auto state = LoadCode(code, sizeof(code));
+    X86_MemMap(state.get(), data_address, 4096, 3);
+    X86_SegBaseWrite(state.get(), 0, data_address);
+    X86_RegWrite(state.get(), 0, 0xabcd1234);
+    X86_RegWrite(state.get(), 1, 0xcafe0003);
+    X86_RegWrite(state.get(), 7, 0xccdd0104);
+    X86_SetEFLAGS(state.get(), X86_GetEFLAGS(state.get()) | 0x400);
+
+    const auto end = code_address + sizeof(code);
+    std::array<uint16_t, 3> words{};
+    if (!X86_Run(state.get(), end, 16) || X86_GetEIP(state.get()) != end)
+        return false;
+    X86_MemRead(state.get(), data_address + 0x100, reinterpret_cast<uint8_t*>(words.data()), sizeof(words));
+    return words == std::array<uint16_t, 3>{0x1234, 0x1234, 0x1234} && X86_RegRead(state.get(), 1) == 0xcafe0000 &&
+           X86_RegRead(state.get(), 7) == 0xccdd00fe && HasCompiledEntry(state.get()) == enabled;
+}
+
 bool VerifyDirectBranch(bool enabled) {
     // MOV EAX, 2; CMP EAX, 2; JE over UD2.
     constexpr uint8_t code[] = {0xb8, 2, 0, 0, 0, 0x3d, 2, 0, 0, 0, 0x74, 2, 0x0f, 0x0b};
@@ -139,6 +208,95 @@ bool VerifyDirectBranch(bool enabled) {
         return false;
     auto* block = FindCompiledBlock(state.get());
     return enabled ? block && block->inst_count() == 4 : block == nullptr;
+}
+
+bool VerifyRelocatedWordBranch(bool enabled) {
+    // JMP rel16 with a negative displacement. The target wraps to 16 bits
+    // even when the same machine code is used at a different guest address.
+    constexpr uint8_t code[] = {0x66, 0xe9, 0xfb, 0xff};
+    auto state = LoadCode(code, sizeof(code));
+    constexpr uint32_t relocated = 0x13200;
+    X86_MemMap(state.get(), relocated & ~0xfffu, 4096, 7);
+    X86_MemWrite(state.get(), relocated, code, sizeof(code));
+    fiberish::HandlerFunc entry = nullptr;
+    for (auto start : {code_address, relocated}) {
+        const auto target = (start - 1) & 0xffffu;
+        X86_SetEIP(state.get(), start);
+        if (!X86_Run(state.get(), start + sizeof(code), 1) || X86_GetEIP(state.get()) != target) {
+            std::fprintf(stderr, "rel16 from %#x expected %#x got %#x fault %u\n", start, target,
+                         X86_GetEIP(state.get()), X86_GetFaultVector(state.get()));
+            return false;
+        }
+        const auto* block = FindCompiledBlock(state.get(), start);
+        if (bool(block) != enabled || (block && entry && entry != block->entry))
+            return false;
+        if (block)
+            entry = block->entry;
+    }
+    return true;
+}
+
+bool VerifyFlagConsumers(bool enabled) {
+    constexpr uint8_t je[] = {0x85, 0xc0, 0x74, 5, 0xba, 5, 0, 0, 0}; // TEST EAX,EAX; JE end; MOV EDX,5
+    constexpr uint8_t cmov[] = {0x85, 0xc0, 0x0f, 0x44, 0xd3};        // TEST EAX,EAX; CMOVZ EDX,EBX
+    constexpr uint8_t stc[] = {0x85, 0xc0, 0xf9, 0x0f, 0x44, 0xd3};   // TEST EAX,EAX; STC; CMOVZ EDX,EBX
+    constexpr uint8_t inc[] = {0x85, 0xc0, 0x41, 0x0f, 0x44, 0xd3};   // TEST EAX,EAX; INC ECX; CMOVZ EDX,EBX
+    constexpr uint8_t cmp[] = {0x83, 0xf8, 0, 0x0f, 0x44, 0xd3};      // CMP EAX,0; CMOVZ EDX,EBX
+    constexpr uint32_t status_flags = 0x8d5;
+    constexpr uint32_t direction_flag = 0x400;
+    constexpr uint32_t initial_flags = status_flags | direction_flag | 2;
+    struct FlagCase {
+        const char* name;
+        std::span<const uint8_t> code;
+        std::array<uint32_t, 2> edx;
+        std::array<uint32_t, 2> flags;
+    };
+    const FlagCase cases[] = {
+        {"TEST; JE", je, {5, 7}, {0x84, 0x44}},          {"TEST; CMOVZ", cmov, {7, 5}, {0x84, 0x44}},
+        {"TEST; STC; CMOVZ", stc, {7, 5}, {0x85, 0x45}}, {"TEST; INC; CMOVZ", inc, {5, 7}, {0x54, 0}},
+        {"CMP; CMOVZ", cmp, {7, 5}, {0x84, 0x44}},
+    };
+    for (const auto& [name, code, edx, flags] : cases) {
+        for (const bool zero : {false, true}) {
+            auto state = LoadCode(code.data(), code.size());
+            const auto end = code_address + code.size();
+            X86_RegWrite(state.get(), 0, zero ? 0 : 0x80000003);
+            X86_RegWrite(state.get(), 1, zero ? 0 : UINT32_MAX);
+            X86_RegWrite(state.get(), 2, 7);
+            X86_RegWrite(state.get(), 3, 5);
+            X86_SetEFLAGS(state.get(), initial_flags);
+            // INC overwrites ZF while STC preserves it. Both results still
+            // have to publish the full status flags for the next block.
+            if (!X86_Run(state.get(), end, 16) || X86_GetEIP(state.get()) != end ||
+                X86_RegRead(state.get(), 2) != edx[zero] ||
+                (X86_GetEFLAGS(state.get()) & (status_flags | direction_flag)) != (flags[zero] | direction_flag) ||
+                HasCompiledEntry(state.get()) != enabled) {
+                std::fprintf(stderr, "%s (zero=%d): eip=%x edx=%x flags=%x compiled=%d\n", name, zero,
+                             X86_GetEIP(state.get()), X86_RegRead(state.get(), 2), X86_GetEFLAGS(state.get()),
+                             HasCompiledEntry(state.get()));
+                return false;
+            }
+        }
+    }
+
+    // A faulting TEST leaves the input flags intact. A memory-source CMOV
+    // must still fault on the source read when its condition is false.
+    constexpr uint8_t faulting[][5] = {{0x85, 0x01, 0x0f, 0x44, 0xd3}, {0x85, 0xc0, 0x0f, 0x44, 0x11}};
+    for (unsigned i = 0; i < std::size(faulting); ++i) {
+        auto state = LoadCode(faulting[i], sizeof(faulting[i]));
+        X86_RegWrite(state.get(), 0, 0x80000003);
+        X86_RegWrite(state.get(), 1, data_address);
+        X86_RegWrite(state.get(), 2, 7);
+        X86_SetEFLAGS(state.get(), initial_flags);
+        if (!X86_Run(state.get(), code_address + sizeof(faulting[i]), 16) || X86_GetFaultVector(state.get()) != 14 ||
+            X86_GetFaultAddress(state.get()) != data_address || X86_GetEIP(state.get()) != code_address + i * 2 ||
+            X86_RegRead(state.get(), 2) != 7 ||
+            (X86_GetEFLAGS(state.get()) & (status_flags | direction_flag)) !=
+                ((i ? 0x84 : status_flags) | direction_flag) ||
+            HasCompiledEntry(state.get()) != enabled)
+            return false;
+    }
+    return true;
 }
 
 bool VerifyGenericConcat(bool enabled) {
@@ -156,11 +314,11 @@ bool VerifyGenericConcat(bool enabled) {
     auto* block = FindCompiledBlock(state.get());
     if (!enabled)
         return block == nullptr;
-    if (!block || block->inst_count() != 4 || block->FirstOp()->len != 4)
+    if (!block || block->inst_count() != 4 || block->GetOpLength(0) != 4)
         return false;
     const int32_t opcodes[] = {0x1bf, 0x83, 0x8d, 0x1b6};
     for (unsigned i = 0; i < std::size(opcodes); ++i) {
-        if (X86_GetOpIdForHandler(reinterpret_cast<void*>(block->FirstOp()[i].handler)) != opcodes[i])
+        if (X86_GetOpIdForHandler(reinterpret_cast<void*>(block->LogicalOp(i)->handler)) != opcodes[i])
             return false;
     }
     return true;
@@ -188,18 +346,28 @@ bool VerifyGroup1Registers(bool enabled) {
 }
 
 bool VerifyGroup1Memory(bool enabled) {
-    // ADD dword [ECX], -1; CMP EAX, 0. The unmapped read restarts the ADD.
-    constexpr uint8_t code[] = {0x83, 0x01, 0xff, 0x81, 0xf8, 0, 0, 0, 0};
-    FaultData fault{false};
-    auto state = LoadCode(code, sizeof(code));
-    X86_RegWrite(state.get(), 1, data_address);
-    X86_SetFaultCallback(state.get(), MapOnFault, &fault);
-    const auto end = code_address + sizeof(code);
-    if (!X86_Run(state.get(), end, 16) || X86_GetEIP(state.get()) != end || fault.count != 1)
-        return false;
-    uint32_t stored = 0;
-    X86_MemRead(state.get(), data_address, reinterpret_cast<uint8_t*>(&stored), sizeof(stored));
-    return stored == 6 && HasCompiledEntry(state.get()) == enabled;
+    // Restart the ADD on an unmapped read, then execute the following register
+    // ADD. Exercise both the compact imm8 and the adjacent-slot fallback.
+    constexpr uint32_t displacement = 0x1240;
+    for (const auto imm : {uint8_t{0xff}, uint8_t{0xab}}) {
+        const uint8_t code[] = {0x83, 0x81, 0x40, 0x12, 0, 0, imm, 0x83, 0xc0, 3};
+        FaultData fault{false};
+        auto state = LoadCode(code, sizeof(code));
+        X86_RegWrite(state.get(), 1, data_address - displacement);
+        X86_SetFaultCallback(state.get(), MapOnFault, &fault);
+        const auto end = code_address + sizeof(code);
+        if (!X86_Run(state.get(), end, 16) || X86_GetEIP(state.get()) != end || fault.count != 1 ||
+            X86_RegRead(state.get(), 0) != 3)
+            return false;
+        uint32_t stored = 0;
+        X86_MemRead(state.get(), data_address, reinterpret_cast<uint8_t*>(&stored), sizeof(stored));
+        const auto* compiled = FindCompiledBlock(state.get());
+        const unsigned slots = imm == 0xff ? 3 : 4;
+        if (stored != uint32_t(7 + int8_t(imm)) ||
+            (enabled ? !compiled || compiled->inst_count() != 2 || compiled->slot_count != slots : compiled != nullptr))
+            return false;
+    }
+    return true;
 }
 
 bool VerifyGroup5ArithmeticAndPush(bool enabled) {
@@ -446,6 +614,30 @@ bool VerifyVectorPrefixRouting(bool enabled) {
            X86_RegRead(state.get(), 2) == 0x12345678 && HasCompiledEntry(state.get()) == enabled;
 }
 
+bool VerifySseArithmeticPrefixes(bool enabled) {
+    const auto run = [enabled]<class T, size_t N>(uint8_t prefix, const std::array<T, N>& lhs,
+                                                  const std::array<T, N>& rhs, bool scalar) {
+        const uint8_t code[] = {prefix, 0x0f, 0x58, 0xc1}; // ADDPS, ADDPD, ADDSS or ADDSD
+        const unsigned offset = prefix == 0;
+        auto state = LoadCode(code + offset, sizeof(code) - offset);
+        X86_WriteXMM(state.get(), 0, reinterpret_cast<const uint8_t*>(lhs.data()));
+        X86_WriteXMM(state.get(), 1, reinterpret_cast<const uint8_t*>(rhs.data()));
+        auto expected = lhs;
+        for (unsigned i = 0; i < (scalar ? 1 : N); ++i)
+            expected[i] += rhs[i];
+
+        const auto end = code_address + sizeof(code) - offset;
+        std::array<T, N> result{};
+        if (!X86_Run(state.get(), end, 16) || X86_GetEIP(state.get()) != end)
+            return false;
+        X86_ReadXMM(state.get(), 0, reinterpret_cast<uint8_t*>(result.data()));
+        return result == expected && HasCompiledEntry(state.get()) == enabled;
+    };
+    constexpr std::array<float, 4> f1{1, 2, 3, 4}, f2{10, 20, 30, 40};
+    constexpr std::array<double, 2> d1{1, 2}, d2{10, 20};
+    return run(0, f1, f2, false) && run(0x66, d1, d2, false) && run(0xf3, f1, f2, true) && run(0xf2, d1, d2, true);
+}
+
 bool VerifyX87Helpers(bool enabled) {
     constexpr uint8_t code[] = {
         0xd9, 0xe8, // FLD1
@@ -463,6 +655,28 @@ bool VerifyX87Helpers(bool enabled) {
     uint32_t value = 0;
     X86_MemRead(state.get(), data_address, reinterpret_cast<uint8_t*>(&value), sizeof(value));
     return value == 0x40000000 && HasCompiledEntry(state.get()) == enabled;
+}
+
+bool VerifyTwoSlotX87Prefixes(bool enabled) {
+    constexpr uint8_t code[] = {
+        0x81, 0x42, 0x34, 0x78, 0x56, 0x34, 0x12, // ADD dword [EDX+0x34], 0x12345678 uses two slots
+        0x66, 0xd9, 0x72, 0x50,                   // FNSTENV m14byte [EDX+0x50]
+    };
+    auto state = LoadCode(code, sizeof(code));
+    X86_MemMap(state.get(), data_address, 4096, 3);
+    X86_RegWrite(state.get(), 2, data_address);
+    std::array<uint8_t, 28> environment;
+    environment.fill(0xa5);
+    X86_MemWrite(state.get(), data_address + 0x50, environment.data(), environment.size());
+
+    const auto end = code_address + sizeof(code);
+    if (!X86_Run(state.get(), end, 16) || X86_GetEIP(state.get()) != end || HasCompiledEntry(state.get()) != enabled)
+        return false;
+    uint32_t value = 0;
+    X86_MemRead(state.get(), data_address + 0x34, reinterpret_cast<uint8_t*>(&value), sizeof(value));
+    X86_MemRead(state.get(), data_address + 0x50, environment.data(), environment.size());
+    return value == 0x12345678 && environment[0] == 0x7f && environment[1] == 0x03 &&
+           std::ranges::all_of(std::span(environment).subspan(14), [](auto byte) { return byte == 0xa5; });
 }
 
 bool VerifyStackWidths(bool enabled) {
@@ -563,13 +777,13 @@ bool VerifyUncompiledSuffix() {
     BasicBlock* first = nullptr;
     if (X86_GetBlockList(state.get(), &first, 1) != 1)
         return false;
-    const auto suffix = first->FirstOp()[2].handler;
+    const auto suffix = first->LogicalOp(2)->handler;
     for (int i = 0; i < 3; ++i) {
         if (!run())
             return false;
     }
     auto* hot = FindCompiledBlock(state.get());
-    return hot == first && hot->FirstOp()[2].handler == suffix;
+    return hot == first && hot->LogicalOp(2)->handler == suffix;
 }
 
 bool VerifyCodeReuse() {
@@ -634,8 +848,7 @@ bool VerifyPackedArena() {
     auto b = LoadCode(sub, sizeof(sub));
     auto peer = LoadCode(add, sizeof(add));
     constexpr size_t arena_bytes = 32 * 1024 * 1024;
-    if (!X86_ConfigureCodeCache(a.get(), 0, arena_bytes) ||
-        !X86_ConfigureCodeCache(b.get(), 0, arena_bytes) ||
+    if (!X86_ConfigureCodeCache(a.get(), 0, arena_bytes) || !X86_ConfigureCodeCache(b.get(), 0, arena_bytes) ||
         X86_ConfigureCodeCache(peer.get(), 0, arena_bytes * 2))
         return false;
 
@@ -703,7 +916,8 @@ bool HasPageProtection(mach_vm_address_t address, vm_prot_t protection) {
     mach_port_t object = MACH_PORT_NULL;
     const auto result = mach_vm_region(mach_task_self(), &base, &size, VM_REGION_BASIC_INFO_64,
                                        reinterpret_cast<vm_region_info_t>(&info), &count, &object);
-    if (object != MACH_PORT_NULL) mach_port_deallocate(mach_task_self(), object);
+    if (object != MACH_PORT_NULL)
+        mach_port_deallocate(mach_task_self(), object);
     return result == KERN_SUCCESS && base <= address && address - base < size && info.protection == protection;
 }
 
@@ -714,7 +928,8 @@ bool VerifyFlushWithActivePeer(const auto& trigger_flush) {
         std::atomic<bool> entered{false};
         bool saw_live_generation = false;
     } signal;
-    X86_SetInterruptHook(peer.get(), 0x80,
+    X86_SetInterruptHook(
+        peer.get(), 0x80,
         +[](EmuState*, uint32_t, void* userdata) -> int {
             auto& signal = *static_cast<FlushSignal*>(userdata);
             signal.entered.store(true, std::memory_order_release);
@@ -723,7 +938,8 @@ bool VerifyFlushWithActivePeer(const auto& trigger_flush) {
                 std::this_thread::yield();
             signal.saw_live_generation = fiberish::LLVMJitCacheFlushPending() && X86_GetLLVMJitLiveBlockCount() != 0;
             return 1;
-        }, &signal);
+        },
+        &signal);
 
     std::thread running_peer([&] { X86_Run(peer.get(), code_address + sizeof(interrupt), 1); });
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
@@ -736,9 +952,9 @@ bool VerifyFlushWithActivePeer(const auto& trigger_flush) {
 
 bool VerifyPackedBudget() {
     uint8_t code[] = {
-        0xb8, 1, 0, 0, 0, 0x05, 1, 0, 0, 0, // MOV EAX, 1; ADD EAX, 1
-        0xd9, 0xe8, 0xd9, 0xe8,              // FLD1 uses a resident LLVM constant.
-        0xde, 0xc1, 0xd9, 0x19,              // FADDP; FSTP dword [ECX]
+        0xb8, 1,    0,    0,    0, 0x05, 1, 0, 0, 0, // MOV EAX, 1; ADD EAX, 1
+        0xd9, 0xe8, 0xd9, 0xe8,                      // FLD1 uses a resident LLVM constant.
+        0xde, 0xc1, 0xd9, 0x19,                      // FADDP; FSTP dword [ECX]
     };
     constexpr size_t slab_bytes = 256 * 1024;
     const size_t page_size = getpagesize();
@@ -750,34 +966,38 @@ bool VerifyPackedBudget() {
         return false;
     auto arena = fiberish::ExecutableArena::Shared();
     auto data_slot = arena->ReserveData(page_size);
-    if (!data_slot) return false;
+    if (!data_slot)
+        return false;
     const auto constant_page = reinterpret_cast<mach_vm_address_t>(data_slot->Data());
     data_slot.reset();
-    if (!HasPageProtection(constant_page, VM_PROT_NONE)) return false;
+    if (!HasPageProtection(constant_page, VM_PROT_NONE))
+        return false;
     X86_MemMap(state.get(), data_address, 4096, 3);
     X86_RegWrite(state.get(), 1, data_address);
     State forked(X86_Clone(state.get(), 0), X86_Destroy);
     char stats[512];
     X86_DumpStats(forked.get(), stats, sizeof(stats));
-    if (!std::strstr(stats, "\"code_cache_limit_bytes\":1048576") ||
-        !std::strstr(stats, arena_field.c_str()))
+    if (!std::strstr(stats, "\"code_cache_limit_bytes\":1048576") || !std::strstr(stats, arena_field.c_str()))
         return false;
     const auto run = [&](uint32_t expected) {
         X86_SetEIP(state.get(), code_address);
-        if (!X86_Run(state.get(), end, 16) || X86_RegRead(state.get(), 0) != expected) return false;
+        if (!X86_Run(state.get(), end, 16) || X86_RegRead(state.get(), 0) != expected)
+            return false;
         float stored = 0;
         X86_MemRead(state.get(), data_address, reinterpret_cast<uint8_t*>(&stored), sizeof(stored));
         return stored == 2.0f;
     };
-    if (!run(2)) return false;
+    if (!run(2))
+        return false;
     const auto* first = FindCompiledBlock(state.get());
     if (!first || !HasPageProtection(constant_page, VM_PROT_READ) ||
-        ReadJitCacheBytes(state.get()) != slab_bytes + page_size ||
-        !X86_Run(forked.get(), end, 16) || !HasCompiledEntry(forked.get()))
+        ReadJitCacheBytes(state.get()) != slab_bytes + page_size || !X86_Run(forked.get(), end, 16) ||
+        !HasCompiledEntry(forked.get()))
         return false;
     const auto code_page = reinterpret_cast<mach_vm_address_t>(first->entry) & ~mach_vm_address_t{0xfff};
     const auto distance = code_page < constant_page ? constant_page - code_page : code_page - constant_page;
-    if (distance >= (uint64_t{1} << 32)) return false;
+    if (distance >= (uint64_t{1} << 32))
+        return false;
     uint8_t immediate = 2;
     const auto trigger_flush = [&] {
         for (; immediate <= 64; ++immediate) {
@@ -792,9 +1012,8 @@ bool VerifyPackedBudget() {
         }
         return false;
     };
-    if (!VerifyFlushWithActivePeer(trigger_flush) || !run(immediate + 1) ||
-        !HasCompiledEntry(state.get()) || X86_GetLLVMJitLiveBlockCount() != 1 ||
-        !HasPageProtection(constant_page, VM_PROT_READ))
+    if (!VerifyFlushWithActivePeer(trigger_flush) || !run(immediate + 1) || !HasCompiledEntry(state.get()) ||
+        X86_GetLLVMJitLiveBlockCount() != 1 || !HasPageProtection(constant_page, VM_PROT_READ))
         return false;
     X86_DumpStats(state.get(), stats, sizeof(stats));
     if (!std::strstr(stats, "\"code_cache_flush_count\":1"))
@@ -804,12 +1023,11 @@ bool VerifyPackedBudget() {
     if (X86_GetBlockCount(forked.get()) != 0 || ReadJitCacheBytes(forked.get()) != ReadJitCacheBytes(state.get()))
         return false;
     X86_SetEIP(forked.get(), code_address);
-    if (!X86_Run(forked.get(), end, 16) || X86_RegRead(forked.get(), 0) != 2 ||
-        !HasCompiledEntry(forked.get()) || X86_GetLLVMJitLiveBlockCount() != 2)
+    if (!X86_Run(forked.get(), end, 16) || X86_RegRead(forked.get(), 0) != 2 || !HasCompiledEntry(forked.get()) ||
+        X86_GetLLVMJitLiveBlockCount() != 2)
         return false;
     X86_DumpStats(forked.get(), stats, sizeof(stats));
-    return std::strstr(stats, "\"code_cache_flush_count\":1") &&
-           std::strstr(stats, arena_field.c_str());
+    return std::strstr(stats, "\"code_cache_flush_count\":1") && std::strstr(stats, arena_field.c_str());
 }
 
 bool VerifyCpuRunOptions(const char* path) {
@@ -828,20 +1046,27 @@ bool VerifyCpuRunOptions(const char* path) {
         return false;
     if (configure({"JitArenaSize=3g"}) || !std::strstr(error, "JitArenaSize exceeds 2 GiB"))
         return false;
-    const auto online = configure({"JitMode=exact", "JitHotThreshold=2", "LlvmPipeline=O1", "JitWorkers=0"});
+    if (configure({"LlvmFoldOperandLoads=invalid"}) || !std::strstr(error, "LlvmFoldOperandLoads"))
+        return false;
+    const auto online =
+        configure({"JitMode=exact", "JitHotThreshold=2", "LlvmPipeline=O1", "JitWorkers=0", "LlvmFoldOperandLoads=on"});
     if (!online || configure({"JitWorkers=2"}) || !std::strstr(error, "JitWorkers"))
         return false;
+    if (configure({"LlvmFoldOperandLoads=off"}) || !std::strstr(error, "LlvmFoldOperandLoads"))
+        return false;
     const std::string output = std::string("WeightedProfilePath=") + path;
-    const auto profile = configure({"JitMode=profile", output, "JitHotThreshold=3", "JitHotThreshold=2",
-                                    "BlockCacheSize=1m"});
+    const auto profile =
+        configure({"JitMode=profile", output, "JitHotThreshold=3", "JitHotThreshold=2", "BlockCacheSize=1m"});
     const auto second_profile = configure({"JitMode=profile", "JitHotThreshold=1", output + ".second"});
-    if (!profile || !second_profile) return false;
+    if (!profile || !second_profile)
+        return false;
 
     uint8_t code[] = {0xb8, 1, 0, 0, 0, 0x05, 1, 0, 0, 0};
     const auto run = [&](EmuState* state, unsigned count, unsigned eax) {
         for (unsigned i = 0; i < count; ++i) {
             X86_SetEIP(state, code_address);
-            if (!X86_Run(state, code_address + sizeof(code), 16) || X86_RegRead(state, 0) != eax) return false;
+            if (!X86_Run(state, code_address + sizeof(code), 16) || X86_RegRead(state, 0) != eax)
+                return false;
         }
         return true;
     };
@@ -850,26 +1075,32 @@ bool VerifyCpuRunOptions(const char* path) {
         return false;
 
     auto first = LoadCode(code, sizeof(code), profile.get());
-    if (!run(first.get(), 3, 2) || HasCompiledEntry(first.get())) return false;
+    if (!run(first.get(), 3, 2) || HasCompiledEntry(first.get()))
+        return false;
     X86_ResetAllCodeCache(first.get());
-    if (!run(first.get(), 2, 2)) return false;
+    if (!run(first.get(), 2, 2))
+        return false;
 
     // A fork inherits the collector and admission threshold, while a separate
     // CPU run can record the same recipe without adding to this run's weight.
     State forked{X86_Clone(first.get(), 0), X86_Destroy};
-    if (!run(forked.get(), 2, 2)) return false;
+    if (!run(forked.get(), 2, 2))
+        return false;
     forked.reset();
     auto other_run = LoadCode(code, sizeof(code), second_profile.get());
-    if (!run(other_run.get(), 9, 2) || !X86_FinishRun(second_profile.get(), error, sizeof(error))) return false;
+    if (!run(other_run.get(), 9, 2) || !X86_FinishRun(second_profile.get(), error, sizeof(error)))
+        return false;
     code[1] = 2;
     auto live = LoadCode(code, sizeof(code), profile.get());
-    if (!run(live.get(), 2, 3) || !X86_FinishRun(profile.get(), error, sizeof(error))) return false;
+    if (!run(live.get(), 2, 3) || !X86_FinishRun(profile.get(), error, sizeof(error)))
+        return false;
 
     const auto check_weights = [](const std::string& file, std::initializer_list<uint64_t> expected) {
         std::ifstream stream(file, std::ios::binary);
         const std::string bytes((std::istreambuf_iterator<char>(stream)), std::istreambuf_iterator<char>());
-        if (bytes.size() < 40 || !bytes.starts_with("FIBJPR03")) return false;
-        size_t offset = 40;  // Eight-byte magic, then the 32-byte fingerprint.
+        if (bytes.size() < 40 || !bytes.starts_with("FIBJPR09"))
+            return false;
+        size_t offset = 40; // Eight-byte magic, then the 32-byte fingerprint.
         const auto read_le = [&](unsigned count) {
             uint64_t value = 0;
             for (unsigned i = 0; i < count; ++i)
@@ -877,14 +1108,152 @@ bool VerifyCpuRunOptions(const char* path) {
             return value;
         };
         for (uint64_t weight : expected) {
-            if (bytes.size() - offset < 12 || read_le(8) != weight) return false;
+            if (bytes.size() - offset < 12 || read_le(8) != weight)
+                return false;
             const size_t length = read_le(4);
-            if (!length || length > bytes.size() - offset) return false;
+            if (!length || length > bytes.size() - offset)
+                return false;
             offset += length;
         }
         return offset == bytes.size();
     };
-    return check_weights(path, {7, 2}) && check_weights(std::string(path) + ".second", {9});
+    if (!check_weights(path, {7, 2}) || !check_weights(std::string(path) + ".second", {9}))
+        return false;
+
+    const auto page_profile =
+        configure({"JitMode=profile", "JitHotThreshold=2", "WeightedProfileSamePage=on", output + ".page"});
+    if (!page_profile)
+        return false;
+    auto page_state = LoadCode(code, sizeof(code), page_profile.get());
+    constexpr uint32_t neighbor = code_address + 32;
+    constexpr uint32_t late_neighbor = code_address + 64;
+    constexpr uint32_t other_page = code_address + 4096;
+    X86_MemMap(page_state.get(), other_page, 4096, 7);
+    const auto visit = [&](uint32_t address, uint8_t value) {
+        code[1] = value;
+        X86_MemWrite(page_state.get(), address, code, sizeof(code));
+        X86_SetEIP(page_state.get(), address);
+        return X86_Run(page_state.get(), address + sizeof(code), 16) &&
+               X86_RegRead(page_state.get(), 0) == unsigned(value) + 1;
+    };
+    return visit(neighbor, 3) && visit(other_page, 4) && run(page_state.get(), 2, 3) && visit(late_neighbor, 5) &&
+           X86_FinishRun(page_profile.get(), error, sizeof(error)) &&
+           check_weights(std::string(path) + ".page", {2, 1});
+}
+#endif
+
+#if FIBERCPU_LLVM_JIT
+bool VerifyPageRegion(bool cross_page = false) {
+    constexpr uint32_t first = code_address;
+    constexpr uint32_t external = first + 4096;
+    constexpr uint32_t local_second = first + 32;
+    const uint32_t second = cross_page ? external - 15 : local_second;
+    constexpr uint32_t relocated = 0x30000;
+    constexpr uint8_t local_a[] = {
+        0x8b, 0x0a, 0x8d, 0x40, 1, 0x85, 0xdb, 0xeb, 23,
+    }; // MOV ECX,[EDX]; LEA EAX,[EAX+1]; TEST EBX,EBX; JMP B.
+    constexpr uint8_t local_b[] = {
+        0x0f, 0x44, 0xf7, 0x8d, 0x40, 2, 0x83, 0xfb, 1, 0xeb, uint8_t(-43),
+    }; // CMOVZ ESI,EDI; LEA EAX,[EAX+2]; CMP EBX,1; JMP A.
+    constexpr uint8_t cross_a[] = {
+        0x8b, 0x0a, 0x8d, 0x40, 1, 0x85, 0xdb, 0xe9, 0xe5, 0x0f, 0, 0,
+    }; // MOV ECX,[EDX]; LEA EAX,[EAX+1]; TEST EBX,EBX; JMP B.
+    constexpr uint8_t cross_b[] = {
+        0x0f, 0x44, 0xf7, 0x8d, 0x40, 2, 0x83, 0xfb, 1, 0x0f, 0x85, 0, 0xf0, 0xff, 0xff,
+    }; // CMOVZ ESI,EDI; LEA EAX,[EAX+2]; CMP EBX,1; JNE A; otherwise fall into external.
+    constexpr uint8_t external_code[] = {0x0f, 0x44, 0xdf, 0xe9, 0xf8, 0xef, 0xff, 0xff};
+    // CMOVZ EBX,EDI; JMP A.
+    constexpr uint32_t flag_mask = 0x8d5 | 0x400;
+    constexpr uint32_t initial_flags = 0x480;
+    constexpr uint32_t test_flags = 0x444;
+    constexpr uint32_t cmp_flags = 0x495;
+    const auto a_code = cross_page ? std::span<const uint8_t>(cross_a) : std::span<const uint8_t>(local_a);
+    const auto b_code = cross_page ? std::span<const uint8_t>(cross_b) : std::span<const uint8_t>(local_b);
+    alignas(4096) std::array<uint8_t, 4096> bytes{};
+    std::copy(std::begin(a_code), std::end(a_code), bytes.begin());
+    std::copy(std::begin(b_code), std::end(b_code), bytes.begin() + (second - first));
+    State state{X86_CreateWithOptions(X86_CREATE_NO_FATAL_SIGNAL_HANDLERS), X86_Destroy};
+    if (!X86_InternalMapManagedPage(state.get(), first, bytes.data(), 5) ||
+        !X86_InternalMapManagedPage(state.get(), relocated, bytes.data(), 5))
+        return false;
+    if (cross_page) {
+        X86_MemMap(state.get(), external, 4096, 7);
+        X86_MemWrite(state.get(), external, external_code, sizeof(external_code));
+    }
+    X86_MemMap(state.get(), data_address, 4096, 3);
+    X86_RegWrite(state.get(), 2, data_address);
+    X86_RegWrite(state.get(), 7, 11);
+
+    const auto run = [&](uint32_t eip, uint64_t budget, uint32_t eax, uint32_t next, uint32_t esi, uint32_t flags,
+                         uint32_t ebx = 0) {
+        X86_SetEIP(state.get(), eip);
+        X86_RegWrite(state.get(), 0, 0);
+        X86_RegWrite(state.get(), 3, ebx);
+        X86_RegWrite(state.get(), 6, 7);
+        X86_SetEFLAGS(state.get(), initial_flags | 2);
+        return X86_Run(state.get(), 0, budget) && X86_GetEIP(state.get()) == next &&
+               X86_RegRead(state.get(), 0) == eax && X86_RegRead(state.get(), 6) == esi &&
+               (X86_GetEFLAGS(state.get()) & flag_mask) == flags;
+    };
+    const auto region_context = [](const BasicBlock* block) -> const void* {
+        if (!block || !block->chain.has_region_context)
+            return nullptr;
+        const void* context;
+        std::memcpy(&context, reinterpret_cast<const std::byte*>(block) + block->RegionContextOffset(),
+                    sizeof(context));
+        return context;
+    };
+    const auto warm = [&](uint32_t start) -> BasicBlock* {
+        for (int attempt = 0; attempt < 150; ++attempt) {
+            if (!run(start, 10000, 3750, start, 11, cmp_flags))
+                return nullptr;
+            auto* a = FindCompiledBlock(state.get(), start);
+            auto* b = FindCompiledBlock(state.get(), start + (second - first));
+            if (region_context(a) && region_context(a) == region_context(b) && a->entry != b->entry)
+                return a;
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        return nullptr;
+    };
+    const auto* a = warm(first);
+    if (cross_page) {
+        if (!a)
+            return false;
+        // A cold link and a cached link both pass CMP's zero flag to CMOVZ.
+        for (unsigned i = 0; i < 2; ++i) {
+            if (!run(second, 6, 2, first, 7, test_flags, 1) || X86_RegRead(state.get(), 3) != 11)
+                return false;
+        }
+        return true;
+    }
+    const auto* alias = warm(relocated);
+    if (!a || !alias || a->entry != alias->entry || region_context(a) == region_context(alias) ||
+        !run(first, 4, 1, second, 7, test_flags) || !run(second, 4, 2, first, 7, cmp_flags) ||
+        !run(second, 12, 5, first, 11, cmp_flags))
+        return false;
+
+    X86_MemUnmap(state.get(), data_address, 4096);
+    struct Observer {
+        uint8_t* bytes;
+        bool called = false;
+        uint32_t flags = 0;
+    } observer{bytes.data()};
+    X86_SetFaultCallback(
+        state.get(),
+        +[](EmuState* s, uint32_t address, int write, void* userdata) -> int {
+            auto& observer = *static_cast<Observer*>(userdata);
+            if (address != data_address || write || observer.called || !X86_IsExecuting(s))
+                return 0;
+            observer.called = true;
+            observer.flags = X86_GetEFLAGS(s);
+            observer.bytes[(local_second - first) + 5] = 9;
+            X86_ResetCodeCacheByRange(s, first, 4096);
+            X86_MemMap(s, data_address, 4096, 3);
+            return 1;
+        },
+        &observer);
+    return run(first, 8, 10, first, 11, cmp_flags) && observer.called &&
+           (observer.flags & flag_mask) == initial_flags && !region_context(alias);
 }
 #endif
 
@@ -965,6 +1334,12 @@ int main(int argc, char** argv) {
         return 1;
     }
 #if FIBERCPU_LLVM_JIT
+    if (argc == 2 && std::strcmp(argv[1], "region") == 0) {
+        if (VerifyPageRegion() && VerifyPageRegion(true))
+            return 0;
+        std::fprintf(stderr, "LLVM page region publication, relocation or memory restart mismatch\n");
+        return 1;
+    }
     if (argc == 3 && std::strcmp(argv[1], "options") == 0) {
         if (VerifyCpuRunOptions(argv[2]))
             return 0;
@@ -1007,8 +1382,17 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "LLVM memory exit or scalar restart mismatch\n");
         return 1;
     }
-    if (!VerifyDirectBranch(enabled) || X86_GetLLVMJitLiveBlockCount() != 0) {
-        std::fprintf(stderr, "LLVM direct branch or exit mismatch\n");
+    if (!VerifyMovAddressOperands(enabled) || X86_GetLLVMJitLiveBlockCount() != 0) {
+        std::fprintf(stderr, "LLVM MOV address width, segment or operand width mismatch\n");
+        return 1;
+    }
+    if (!VerifyDirectBranch(enabled) || !VerifyRelocatedWordBranch(enabled) || !VerifyStringAndLoopPrefixes(enabled) ||
+        X86_GetLLVMJitLiveBlockCount() != 0) {
+        std::fprintf(stderr, "LLVM direct branch, REP string or counter width mismatch\n");
+        return 1;
+    }
+    if (!VerifyFlagConsumers(enabled) || X86_GetLLVMJitLiveBlockCount() != 0) {
+        std::fprintf(stderr, "LLVM flag consumers, exit flags or memory replay mismatch\n");
         return 1;
     }
     if (!VerifyGenericConcat(enabled) || X86_GetLLVMJitLiveBlockCount() != 0) {
@@ -1031,7 +1415,8 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "Shift/bit flags, operands or memory restart mismatch\n");
         return 1;
     }
-    if (!VerifyExtendedInteger(enabled) || !VerifyVectorPrefixRouting(enabled) || !VerifyX87Helpers(enabled) ||
+    if (!VerifyExtendedInteger(enabled) || !VerifyVectorPrefixRouting(enabled) ||
+        !VerifySseArithmeticPrefixes(enabled) || !VerifyX87Helpers(enabled) || !VerifyTwoSlotX87Prefixes(enabled) ||
         X86_GetLLVMJitLiveBlockCount() != 0) {
         std::fprintf(stderr, "Generated integer, vector prefix or x87 template mismatch\n");
         return 1;

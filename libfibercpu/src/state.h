@@ -47,19 +47,22 @@ using InterruptHandler = int (*)(EmuState* state, uint32_t vector, void* userdat
 
 struct alignas(16) MemReadOperation {
     std::array<std::byte, 16> data;
+    const DecodedOp* instruction;
     uint32_t addr;
-    uint32_t size;
-    uint32_t eip;
+    uint8_t size;
     bool done;
 };
 
 struct alignas(16) MemWriteOperation {
     std::array<std::byte, 16> data;
+    const DecodedOp* instruction;
     uint32_t addr;
-    uint32_t size;
-    uint32_t eip;
+    uint8_t size;
     bool done;
 };
+
+static_assert(sizeof(MemReadOperation) == 32);
+static_assert(sizeof(MemWriteOperation) == 32);
 
 enum class BlockStopReason : uint8_t {
     Unknown = 0,
@@ -162,8 +165,8 @@ struct EmuState {
     std::chrono::steady_clock::time_point tsc_start_time;
 
     // Helper function to sync eip
-    void sync_eip_to_op_start(const DecodedOp* op) { ctx.eip = op->next_eip - op->len; }
-    void sync_eip_to_op_end(const DecodedOp* op) { ctx.eip = op->next_eip; }
+    void sync_eip_to_op_start(const DecodedOp* op) { ctx.eip = last_block->GetStartEip(op); }
+    void sync_eip_to_op_end(const DecodedOp* op) { ctx.eip = last_block->GetNextEip(op); }
 
     union MemOpUnion {
         MemReadOperation read;
@@ -173,6 +176,8 @@ struct EmuState {
         ~MemOpUnion() noexcept {}
     };
 
+    // Pending results belong to one native replay chain. Clear the tag
+    // before leaving execution or returning stack-backed decoded storage.
     PendingMemOp mem_op_type = PendingMemOp::None;
     MemOpUnion mem_op;
     BasicBlock* llvm_hot_block = nullptr;
@@ -180,11 +185,13 @@ struct EmuState {
     FORCE_INLINE void clear_pending_mem_op() { mem_op_type = PendingMemOp::None; }
 
     template <typename T>
-    FORCE_INLINE mem::MemResult<T> request_read_and_check_pending(uint32_t addr, uint32_t eip) {
+    FORCE_INLINE mem::MemResult<T> request_read_and_check_pending(uint32_t addr, const DecodedOp* instruction) {
+        static_assert(sizeof(T) <= 16);
+
         // Use pending value
         if (mem_op_type == PendingMemOp::Read) {
             const auto& read_op = mem_op.read;
-            if (read_op.done && read_op.eip == eip) {
+            if (read_op.done && read_op.instruction == instruction) {
                 T pending{};
                 std::memcpy(&pending, read_op.data.data(), sizeof(T));
                 clear_pending_mem_op();
@@ -197,19 +204,20 @@ struct EmuState {
         op.data = {};
         op.addr = addr;
         op.size = sizeof(T);
-        op.eip = eip;
+        op.instruction = instruction;
         op.done = false;
 
         return std::unexpected(mem::FaultCode::PageFault);
     }
 
     template <typename T>
-    FORCE_INLINE mem::MemResult<void> request_write_and_check_pending(uint32_t addr, const T& value, uint32_t eip) {
+    FORCE_INLINE mem::MemResult<void> request_write_and_check_pending(uint32_t addr, const T& value,
+                                                                      const DecodedOp* instruction) {
         static_assert(sizeof(T) <= 16);
 
         if (mem_op_type == PendingMemOp::Write) {
             const auto& write_op = mem_op.write;
-            if (write_op.done && write_op.eip == eip) {
+            if (write_op.done && write_op.instruction == instruction) {
                 clear_pending_mem_op();
                 return {};
             }
@@ -221,14 +229,14 @@ struct EmuState {
         op.addr = addr;
         op.size = sizeof(T);
         op.done = false;
-        op.eip = eip;
+        op.instruction = instruction;
         std::memcpy(op.data.data(), &value, sizeof(T));
 
         return std::unexpected(mem::FaultCode::PageFault);
     }
 
     template <typename T>
-    FORCE_INLINE mem::MemResult<void> request_write_only(uint32_t addr, const T& value, uint32_t eip) {
+    FORCE_INLINE mem::MemResult<void> request_write_only(uint32_t addr, const T& value, const DecodedOp* instruction) {
         static_assert(sizeof(T) <= 16);
 
         // No check for pending, just request
@@ -238,12 +246,28 @@ struct EmuState {
         op.addr = addr;
         op.size = sizeof(T);
         op.done = false;
-        op.eip = eip;
+        op.instruction = instruction;
         std::memcpy(op.data.data(), &value, sizeof(T));
 
         return std::unexpected(mem::FaultCode::PageFault);
     }
 };
+
+FORCE_INLINE uint32_t GetNextEip(const EmuState* state, const DecodedOp* op) {
+    return BakeableBlockEip<LLVMBlockEipField::Next>(op, state->last_block->GetNextEip(op));
+}
+
+template <unsigned Slots = 1>
+FORCE_INLINE uint32_t GetCallReturnEip(const EmuState* state, const DecodedOp* op) {
+    // Calls end decoding. Concatenation can prepend a block to a call, but
+    // only a relative jump or a conditional branch can be an internal edge.
+    assert(op + Slots == state->last_block->Sentinel());
+    return BakeableBlockEip<LLVMBlockEipField::Next>(op, state->last_block->sentinel_eip);
+}
+
+FORCE_INLINE uint8_t GetOpLength(const EmuState* state, const DecodedOp* op) {
+    return state->last_block->GetOpLength(state->last_block->LogicalIndex(op));
+}
 
 }  // namespace fiberish
 

@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <mutex>
 #include <shared_mutex>
 #include "dispatch.h"
 #include "instruction_variants.h"
@@ -10,31 +11,28 @@
 namespace fiberish {
 
 extern "C" uint64_t FiberReadRealtimeTsc(const EmuState* state) {
-    const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
-        std::chrono::steady_clock::now() - state->tsc_start_time).count();
+    const auto elapsed =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - state->tsc_start_time)
+            .count();
     __extension__ unsigned __int128 ticks = static_cast<unsigned __int128>(elapsed) * state->tsc_frequency;
     return state->tsc_offset + static_cast<uint64_t>(ticks / 1000000000ULL);
 }
 
 template <typename T>
-static inline bool ExecuteMemOp(EmuState* state, DecodedOp* op, mem::MicroTLB& utlb, uint32_t addr, T* value,
-                                bool is_write) {
-    if (!is_write) {
-        auto res = state->mmu.read<T>(addr, &utlb, op);
-        if (!res) {
-            return true;
-        } else {
-            *value = *res;
-        }
-    } else {
-        if (!state->mmu.write<T>(addr, *value, &utlb, op)) return true;
+static inline bool ExecuteMemOp(EmuState* state, mem::MicroTLB& utlb, uint32_t addr, T* value, bool is_write) {
+    if (is_write) {
+        if (state->mmu.write_tlb_only<T>(addr, *value, &utlb)) return false;
+        return !state->mmu.write_slow<T>(addr, *value);
     }
-
+    auto result = state->mmu.read_tlb_only<T>(addr, &utlb);
+    if (!result) result = state->mmu.read_slow<T>(addr);
+    if (!result) return true;
+    *value = *result;
     return false;
 }
 
-static inline bool PerformMemOp(EmuState* state, DecodedOp* op, mem::MicroTLB& utlb, uint32_t addr, uint32_t size,
-                                std::byte* value, bool is_write) {
+static inline bool PerformMemOp(EmuState* state, mem::MicroTLB& utlb, uint32_t addr, uint32_t size, std::byte* value,
+                                bool is_write) {
     struct TSize10 {
         std::byte data[10];
     };
@@ -44,9 +42,9 @@ static inline bool PerformMemOp(EmuState* state, DecodedOp* op, mem::MicroTLB& u
 
     switch (size) {
         case 1:
-            return ExecuteMemOp(state, op, utlb, addr, reinterpret_cast<uint8_t*>(value), is_write);
+            return ExecuteMemOp(state, utlb, addr, reinterpret_cast<uint8_t*>(value), is_write);
         case 2:
-            return ExecuteMemOp(state, op, utlb, addr, reinterpret_cast<uint16_t*>(value), is_write);
+            return ExecuteMemOp(state, utlb, addr, reinterpret_cast<uint16_t*>(value), is_write);
         case 4:
             // Replay can serve a straddle from two warm pages before a
             // blocking write flushes the first page's entry.
@@ -54,14 +52,14 @@ static inline bool PerformMemOp(EmuState* state, DecodedOp* op, mem::MicroTLB& u
                          : state->mmu.try_cross_page_dword_tlb<false>(addr, value)) {
                 return false;
             }
-            return ExecuteMemOp(state, op, utlb, addr, reinterpret_cast<uint32_t*>(value), is_write);
+            return ExecuteMemOp(state, utlb, addr, reinterpret_cast<uint32_t*>(value), is_write);
         case 8:
-            return ExecuteMemOp(state, op, utlb, addr, reinterpret_cast<uint64_t*>(value), is_write);
+            return ExecuteMemOp(state, utlb, addr, reinterpret_cast<uint64_t*>(value), is_write);
         case 10:
-            return ExecuteMemOp(state, op, utlb, addr, reinterpret_cast<TSize10*>(value),
+            return ExecuteMemOp(state, utlb, addr, reinterpret_cast<TSize10*>(value),
                                 is_write);  // 80-bit extended precision
         case 16:
-            return ExecuteMemOp(state, op, utlb, addr, reinterpret_cast<TSize16*>(value), is_write);
+            return ExecuteMemOp(state, utlb, addr, reinterpret_cast<TSize16*>(value), is_write);
         default:
             __builtin_unreachable();
     }
@@ -81,9 +79,12 @@ ATTR_PRESERVE_NONE int64_t MemoryOpGeneric(EmuState* RESTRICT state, DecodedOp* 
         state->clear_pending_mem_op();
         return instr_limit;
     }
+    // A TLB-only attempt never calls a guest observer. Recover the faulting
+    // instruction's EIP once, before replay can invoke callbacks or fault.
+    if (state->mem_op_type != PendingMemOp::None) state->sync_eip_to_op_start(op);
     if (state->mem_op_type == PendingMemOp::Read) {
         auto& mem_op = state->mem_op.read;
-        const bool fault = PerformMemOp(state, op, utlb, mem_op.addr, mem_op.size, mem_op.data.data(), false);
+        const bool fault = PerformMemOp(state, utlb, mem_op.addr, mem_op.size, mem_op.data.data(), false);
         if (!fault) {
             mem_op.done = true;
         } else {
@@ -96,7 +97,7 @@ ATTR_PRESERVE_NONE int64_t MemoryOpGeneric(EmuState* RESTRICT state, DecodedOp* 
         }
     } else if (state->mem_op_type == PendingMemOp::Write) {
         auto& mem_op = state->mem_op.write;
-        const bool fault = PerformMemOp(state, op, utlb, mem_op.addr, mem_op.size, mem_op.data.data(), true);
+        const bool fault = PerformMemOp(state, utlb, mem_op.addr, mem_op.size, mem_op.data.data(), true);
         if (!fault) {
             mem_op.done = true;
         } else {
@@ -114,7 +115,7 @@ ATTR_PRESERVE_NONE int64_t MemoryOpGeneric(EmuState* RESTRICT state, DecodedOp* 
     }
 
     state->clear_pending_mem_op();
-    DecodedOp* next_op = NextOp(op);
+    DecodedOp* next_op = state->last_block->NextOp(op);
     ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch,
                                           flags_cache FIBERCPU_PIN_RESUME);
 }
@@ -166,7 +167,7 @@ static FORCE_INLINE ATTR_PRESERVE_NONE int64_t ChainToKnownBlock(EmuState* RESTR
                                            std::numeric_limits<uint32_t>::max(), flags_cache FIBERCPU_PIN_RELOAD);
 }
 
-template <ExtKind Kind>
+template <unsigned LinkSlot>
 static ATTR_PRESERVE_NONE int64_t ResolveBranchTargetSlowImpl(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
                                                               int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags,
                                                               mem::MicroTlbAbiWord utlb_addend, uint32_t branch,
@@ -183,11 +184,7 @@ static ATTR_PRESERVE_NONE int64_t ResolveBranchTargetSlowImpl(EmuState* RESTRICT
         return instr_limit;
     }
 
-    if constexpr (Kind == ExtKind::Link) {
-        SetNextBlock(op, next_block);
-    } else {
-        SetCachedTarget(op, next_block);
-    }
+    (op + LinkSlot)->StoreBlockLink(next_block);
 
     state->last_block = next_block;
     ATTR_MUSTTAIL return ChainToKnownBlock(state, op, instr_limit, utlb_tags, utlb_addend, branch,
@@ -199,25 +196,28 @@ ATTR_PRESERVE_NONE int64_t ResolveBranchTargetSlowLink(EmuState* RESTRICT state,
                                                        mem::MicroTlbAbiWord utlb_addend, uint32_t branch,
                                                        uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
     FIBERCPU_PIN_ASSUME;
-    ATTR_MUSTTAIL return ResolveBranchTargetSlowImpl<ExtKind::Link>(state, op, instr_limit, utlb_tags, utlb_addend,
+    ATTR_MUSTTAIL return ResolveBranchTargetSlowImpl<0>(state, op, instr_limit, utlb_tags, utlb_addend,
                                                                     branch, flags_cache FIBERCPU_PIN_RELOAD);
 }
 
-ATTR_PRESERVE_NONE int64_t ResolveBranchTargetSlowControlFlow(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
+ATTR_PRESERVE_NONE int64_t ResolveBranchTargetSlowDoubleSlot(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
                                                               int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags,
                                                               mem::MicroTlbAbiWord utlb_addend, uint32_t branch,
                                                               uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
     FIBERCPU_PIN_ASSUME;
-    ATTR_MUSTTAIL return ResolveBranchTargetSlowImpl<ExtKind::ControlFlow>(
+    ATTR_MUSTTAIL return ResolveBranchTargetSlowImpl<1>(
         state, op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
 }
 
-ATTR_PRESERVE_NONE int64_t ResolveBranchTarget(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
-                                               mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-                                               uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
-    FIBERCPU_PIN_ASSUME;
-    ATTR_MUSTTAIL return ResolveBranchTargetInline<ExtKind::ControlFlow>(state, op, instr_limit, utlb_tags, utlb_addend,
-                                                                         branch, flags_cache FIBERCPU_PIN_RELOAD);
+// Scalar handlers use physical next-slot dispatch. The data slot only forwards the
+// threaded state, and logical traversals skip it.
+ATTR_PRESERVE_NONE int64_t ForwardMemoryImmediateSlot(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
+                                                      int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags,
+                                                      mem::MicroTlbAbiWord utlb_addend, uint32_t branch,
+                                                      uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    auto* next = op + 1;
+    ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch,
+                                       flags_cache FIBERCPU_PIN_ARGS);
 }
 
 // Sentinel Handlers
@@ -298,7 +298,7 @@ static bool CompileSpecialization(const SpecCriteria& c, HandlerFunc handler, Co
     return true;
 }
 
-static bool MatchesCompiled(const CompiledSpecialization& entry, const DecodedOp* op) {
+static bool MatchesCompiled(const CompiledSpecialization& entry, const DecodedInstruction* op) {
     if (entry.prefix_mask && (op->prefixes.all & entry.prefix_mask) != entry.prefix_value) return false;
     return !entry.requires_mem ||
            (op->meta.flags.has_mem && (GetExt(op)->data.ea_desc & entry.ea_mask) == entry.ea_value);
@@ -388,7 +388,7 @@ static void BuildSpecializationIndex() {
     }
 }
 
-static HandlerFunc LookupSpecialization(const SpecializationBuckets& buckets, const DecodedOp* op) {
+static HandlerFunc LookupSpecialization(const SpecializationBuckets& buckets, const DecodedInstruction* op) {
     const unsigned encoded = op->meta.flags.has_modrm ? unsigned(op->modrm) + 1 : 0;
     const auto& bucket = buckets[encoded * 2 + op->meta.flags.no_flags];
     for (const auto* entry : bucket) {
@@ -398,7 +398,7 @@ static HandlerFunc LookupSpecialization(const SpecializationBuckets& buckets, co
     return nullptr;
 }
 
-HandlerFunc FindSpecializedHandler(uint16_t handler_index, DecodedOp* op) {
+HandlerFunc FindSpecializedHandler(uint16_t handler_index, DecodedInstruction* op) {
     if (handler_index >= 1024) return nullptr;
     if (g_HasRuntimeSpecializations.load(std::memory_order_acquire)) {
         std::shared_lock lock(g_RuntimeSpecializationMutex);
@@ -426,7 +426,7 @@ bool ValidateSpecializationWildcardIndex() {
     for (unsigned encoded = 0; encoded <= 256; ++encoded) {
         for (unsigned flags = 0; flags < 2; ++flags) {
             for (unsigned memory = 0; memory < 2; ++memory) {
-                DecodedOp op{};
+                DecodedInstruction op{};
                 op.meta.flags.has_modrm = encoded != 0;
                 op.modrm = encoded ? encoded - 1 : 0;
                 op.meta.flags.no_flags = flags;
@@ -449,11 +449,11 @@ bool ValidateSpecializationWildcardIndex() {
     }
     return true;
 }
-bool MatchesCompiledForTest(const SpecCriteria& criteria, const DecodedOp* op) {
+bool MatchesCompiledForTest(const SpecCriteria& criteria, const DecodedInstruction* op) {
     CompiledSpecialization entry{};
     return CompileSpecialization(criteria, nullptr, entry) && MatchesCompiled(entry, op);
 }
-HandlerFunc FindSpecializedHandlerReference(uint16_t opcode, DecodedOp* op) {
+HandlerFunc FindSpecializedHandlerReference(uint16_t opcode, DecodedInstruction* op) {
     if (opcode >= 1024) return nullptr;
     for (const auto& entry : g_OpSpecializations[opcode])
         if (entry.criteria.Matches(op)) return entry.handler;
@@ -479,7 +479,7 @@ int FindOpcodeIndexForHandler(HandlerFunc handler) {
         }
     }
 
-    return FindGenericOpcodeIndex(handler);
+    return -1;
 }
 
 }  // namespace fiberish

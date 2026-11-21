@@ -1,0 +1,2433 @@
+{
+  "bindings": {
+    "FIBERCPU_BIND_VECTOR_FPU": [
+      {
+        "name": "OpFpu_D8",
+        "kernel": "Fpu_D8_Impl",
+        "arguments": [
+          "GroupOpSpec::Dynamic",
+          "AddrModeSpec::Dynamic"
+        ]
+      },
+      {
+        "name": "OpFpu_D9",
+        "kernel": "Fpu_D9_Impl",
+        "arguments": [
+          "GroupOpSpec::Dynamic",
+          "AddrModeSpec::Dynamic"
+        ]
+      },
+      {
+        "name": "OpFpu_DA",
+        "kernel": "Fpu_DA_Impl",
+        "arguments": [
+          "GroupOpSpec::Dynamic",
+          "AddrModeSpec::Dynamic"
+        ]
+      },
+      {
+        "name": "OpFpu_DB",
+        "kernel": "Fpu_DB_Impl",
+        "arguments": [
+          "GroupOpSpec::Dynamic",
+          "AddrModeSpec::Dynamic"
+        ]
+      },
+      {
+        "name": "OpFpu_DC",
+        "kernel": "Fpu_DC_Impl",
+        "arguments": [
+          "GroupOpSpec::Dynamic",
+          "AddrModeSpec::Dynamic"
+        ]
+      },
+      {
+        "name": "OpFpu_DD",
+        "kernel": "Fpu_DD_Impl",
+        "arguments": [
+          "GroupOpSpec::Dynamic",
+          "AddrModeSpec::Dynamic"
+        ]
+      },
+      {
+        "name": "OpFpu_DE",
+        "kernel": "Fpu_DE_Impl",
+        "arguments": [
+          "GroupOpSpec::Dynamic",
+          "AddrModeSpec::Dynamic"
+        ]
+      },
+      {
+        "name": "OpFpu_DF",
+        "kernel": "Fpu_DF_Impl",
+        "arguments": [
+          "GroupOpSpec::Dynamic",
+          "AddrModeSpec::Dynamic"
+        ]
+      }
+    ]
+  },
+  "llvm": [
+    {
+      "name": "OpAdd_EbGb",
+      "live": {
+        "kernel": "OpAdd_EbGb_Internal",
+        "arguments": [
+          "FlagsSpec::Live",
+          "AddrModeSpec::Dynamic"
+        ]
+      },
+      "dead": {
+        "kernel": "OpAdd_EbGb_Internal",
+        "arguments": [
+          "FlagsSpec::Dead",
+          "AddrModeSpec::Dynamic"
+        ]
+      }
+    },
+    {
+      "name": "OpAdd_EvGv",
+      "baked": true,
+      "live": {
+        "kernel": "OpAdd_EvGv_Internal",
+        "arguments": [
+          "FlagsSpec::Live",
+          "OpsizeSpec::Dynamic",
+          "AddrModeSpec::Dynamic"
+        ]
+      },
+      "dead": {
+        "kernel": "OpAdd_EvGv_Internal",
+        "arguments": [
+          "FlagsSpec::Dead",
+          "OpsizeSpec::Dynamic",
+          "AddrModeSpec::Dynamic"
+        ]
+      }
+    },
+    {
+      "name": "OpAdd_GbEb",
+      "live": {
+        "kernel": "OpAdd_GbEb_Internal",
+        "arguments": [
+          "FlagsSpec::Live",
+          "AddrModeSpec::Dynamic"
+        ]
+      },
+      "dead": {
+        "kernel": "OpAdd_GbEb_Internal",
+        "arguments": [
+          "FlagsSpec::Dead",
+          "AddrModeSpec::Dynamic"
+        ]
+      }
+    },
+    {
+      "name": "OpAdd_GvEv",
+      "baked": true,
+      "live": {
+        "kernel": "OpAdd_GvEv_Internal",
+        "arguments": [
+          "FlagsSpec::Live",
+          "OpsizeSpec::Dynamic",
+          "AddrModeSpec::Dynamic"
+        ]
+      },
+      "dead": {
+        "kernel": "OpAdd_GvEv_Internal",
+        "arguments": [
+          "FlagsSpec::Dead",
+          "OpsizeSpec::Dynamic",
+          "AddrModeSpec::Dynamic"
+        ]
+      }
+    },
+    {
+      "name": "OpAdd_AlImm",
+      "live": {
+        "kernel": "OpAdd_AlImm_Internal",
+        "arguments": [
+          "FlagsSpec::Live"
+        ]
+      },
+      "dead": {
+        "kernel": "OpAdd_AlImm_Internal",
+        "arguments": [
+          "FlagsSpec::Dead"
+        ]
+      }
+    },
+    {
+      "name": "OpAdd_EaxImm",
+      "baked": true,
+      "live": {
+        "kernel": "OpAdd_EaxImm_Internal",
+        "arguments": [
+          "FlagsSpec::Live",
+          "OpsizeSpec::Dynamic"
+        ]
+      },
+      "dead": {
+        "kernel": "OpAdd_EaxImm_Internal",
+        "arguments": [
+          "FlagsSpec::Dead",
+          "OpsizeSpec::Dynamic"
+        ]
+      }
+    },
+    {
+      "name": "OpOr_EbGb",
+      "live": {
+        "kernel": "OpOr_EbGb_Internal",
+        "arguments": [
+          "FlagsSpec::Live",
+          "AddrModeSpec::Dynamic"
+        ]
+      },
+      "dead": {
+        "kernel": "OpOr_EbGb_Internal",
+        "arguments": [
+          "FlagsSpec::Dead",
+          "AddrModeSpec::Dynamic"
+        ]
+      }
+    },
+    {
+      "name": "OpOr_EvGv",
+      "baked": true,
+      "live": {
+        "kernel": "OpOr_EvGv_Internal",
+        "arguments": [
+          "FlagsSpec::Live",
+          "OpsizeSpec::Dynamic",
+          "AddrModeSpec::Dynamic"
+        ]
+      },
+      "dead": {
+        "kernel": "OpOr_EvGv_Internal",
+        "arguments": [
+          "FlagsSpec::Dead",
+          "OpsizeSpec::Dynamic",
+          "AddrModeSpec::Dynamic"
+        ]
+      }
+    },
+    {
+      "name": "OpOr_GbEb",
+      "live": {
+        "kernel": "OpOr_GbEb_Internal",
+        "arguments": [
+          "FlagsSpec::Live",
+          "AddrModeSpec::Dynamic"
+        ]
+      },
+      "dead": {
+        "kernel": "OpOr_GbEb_Internal",
+        "arguments": [
+          "FlagsSpec::Dead",
+          "AddrModeSpec::Dynamic"
+        ]
+      }
+    },
+    {
+      "name": "OpOr_GvEv",
+      "baked": true,
+      "live": {
+        "kernel": "OpOr_GvEv_Internal",
+        "arguments": [
+          "FlagsSpec::Live",
+          "OpsizeSpec::Dynamic",
+          "AddrModeSpec::Dynamic"
+        ]
+      },
+      "dead": {
+        "kernel": "OpOr_GvEv_Internal",
+        "arguments": [
+          "FlagsSpec::Dead",
+          "OpsizeSpec::Dynamic",
+          "AddrModeSpec::Dynamic"
+        ]
+      }
+    },
+    {
+      "name": "OpOr_AlImm",
+      "live": {
+        "kernel": "OpOr_AlImm_Internal",
+        "arguments": [
+          "FlagsSpec::Live"
+        ]
+      },
+      "dead": {
+        "kernel": "OpOr_AlImm_Internal",
+        "arguments": [
+          "FlagsSpec::Dead"
+        ]
+      }
+    },
+    {
+      "name": "OpOr_EaxImm",
+      "baked": true,
+      "live": {
+        "kernel": "OpOr_EaxImm_Internal",
+        "arguments": [
+          "FlagsSpec::Live",
+          "OpsizeSpec::Dynamic"
+        ]
+      },
+      "dead": {
+        "kernel": "OpOr_EaxImm_Internal",
+        "arguments": [
+          "FlagsSpec::Dead",
+          "OpsizeSpec::Dynamic"
+        ]
+      }
+    },
+    {
+      "name": "OpAdc_EbGb",
+      "live": {
+        "kernel": "OpAdc_EbGb_Internal",
+        "arguments": [
+          "FlagsSpec::Live",
+          "AddrModeSpec::Dynamic"
+        ]
+      },
+      "dead": {
+        "kernel": "OpAdc_EbGb_Internal",
+        "arguments": [
+          "FlagsSpec::Dead",
+          "AddrModeSpec::Dynamic"
+        ]
+      }
+    },
+    {
+      "name": "OpAdc_EvGv",
+      "baked": true,
+      "live": {
+        "kernel": "OpAdc_EvGv_Internal",
+        "arguments": [
+          "FlagsSpec::Live",
+          "OpsizeSpec::Dynamic",
+          "AddrModeSpec::Dynamic"
+        ]
+      },
+      "dead": {
+        "kernel": "OpAdc_EvGv_Internal",
+        "arguments": [
+          "FlagsSpec::Dead",
+          "OpsizeSpec::Dynamic",
+          "AddrModeSpec::Dynamic"
+        ]
+      }
+    },
+    {
+      "name": "OpAdc_GbEb",
+      "live": {
+        "kernel": "OpAdc_GbEb_Internal",
+        "arguments": [
+          "FlagsSpec::Live",
+          "AddrModeSpec::Dynamic"
+        ]
+      },
+      "dead": {
+        "kernel": "OpAdc_GbEb_Internal",
+        "arguments": [
+          "FlagsSpec::Dead",
+          "AddrModeSpec::Dynamic"
+        ]
+      }
+    },
+    {
+      "name": "OpAdc_GvEv",
+      "baked": true,
+      "live": {
+        "kernel": "OpAdc_GvEv_Internal",
+        "arguments": [
+          "FlagsSpec::Live",
+          "OpsizeSpec::Dynamic",
+          "AddrModeSpec::Dynamic"
+        ]
+      },
+      "dead": {
+        "kernel": "OpAdc_GvEv_Internal",
+        "arguments": [
+          "FlagsSpec::Dead",
+          "OpsizeSpec::Dynamic",
+          "AddrModeSpec::Dynamic"
+        ]
+      }
+    },
+    {
+      "name": "OpAdc_AlImm",
+      "live": {
+        "kernel": "OpAdc_AlImm_Internal",
+        "arguments": [
+          "FlagsSpec::Live"
+        ]
+      },
+      "dead": {
+        "kernel": "OpAdc_AlImm_Internal",
+        "arguments": [
+          "FlagsSpec::Dead"
+        ]
+      }
+    },
+    {
+      "name": "OpAdc_EaxImm",
+      "baked": true,
+      "live": {
+        "kernel": "OpAdc_EaxImm_Internal",
+        "arguments": [
+          "FlagsSpec::Live",
+          "OpsizeSpec::Dynamic"
+        ]
+      },
+      "dead": {
+        "kernel": "OpAdc_EaxImm_Internal",
+        "arguments": [
+          "FlagsSpec::Dead",
+          "OpsizeSpec::Dynamic"
+        ]
+      }
+    },
+    {
+      "name": "OpSbb_EbGb",
+      "live": {
+        "kernel": "OpSbb_EbGb_Internal",
+        "arguments": [
+          "FlagsSpec::Live",
+          "AddrModeSpec::Dynamic"
+        ]
+      },
+      "dead": {
+        "kernel": "OpSbb_EbGb_Internal",
+        "arguments": [
+          "FlagsSpec::Dead",
+          "AddrModeSpec::Dynamic"
+        ]
+      }
+    },
+    {
+      "name": "OpSbb_EvGv",
+      "baked": true,
+      "live": {
+        "kernel": "OpSbb_EvGv_Internal",
+        "arguments": [
+          "FlagsSpec::Live",
+          "OpsizeSpec::Dynamic",
+          "AddrModeSpec::Dynamic"
+        ]
+      },
+      "dead": {
+        "kernel": "OpSbb_EvGv_Internal",
+        "arguments": [
+          "FlagsSpec::Dead",
+          "OpsizeSpec::Dynamic",
+          "AddrModeSpec::Dynamic"
+        ]
+      }
+    },
+    {
+      "name": "OpSbb_GbEb",
+      "live": {
+        "kernel": "OpSbb_GbEb_Internal",
+        "arguments": [
+          "FlagsSpec::Live",
+          "AddrModeSpec::Dynamic"
+        ]
+      },
+      "dead": {
+        "kernel": "OpSbb_GbEb_Internal",
+        "arguments": [
+          "FlagsSpec::Dead",
+          "AddrModeSpec::Dynamic"
+        ]
+      }
+    },
+    {
+      "name": "OpSbb_GvEv",
+      "baked": true,
+      "live": {
+        "kernel": "OpSbb_GvEv_Internal",
+        "arguments": [
+          "FlagsSpec::Live",
+          "OpsizeSpec::Dynamic",
+          "AddrModeSpec::Dynamic"
+        ]
+      },
+      "dead": {
+        "kernel": "OpSbb_GvEv_Internal",
+        "arguments": [
+          "FlagsSpec::Dead",
+          "OpsizeSpec::Dynamic",
+          "AddrModeSpec::Dynamic"
+        ]
+      }
+    },
+    {
+      "name": "OpSbb_AlImm",
+      "live": {
+        "kernel": "OpSbb_AlImm_Internal",
+        "arguments": [
+          "FlagsSpec::Live"
+        ]
+      },
+      "dead": {
+        "kernel": "OpSbb_AlImm_Internal",
+        "arguments": [
+          "FlagsSpec::Dead"
+        ]
+      }
+    },
+    {
+      "name": "OpSbb_EaxImm",
+      "baked": true,
+      "live": {
+        "kernel": "OpSbb_EaxImm_Internal",
+        "arguments": [
+          "FlagsSpec::Live",
+          "OpsizeSpec::Dynamic"
+        ]
+      },
+      "dead": {
+        "kernel": "OpSbb_EaxImm_Internal",
+        "arguments": [
+          "FlagsSpec::Dead",
+          "OpsizeSpec::Dynamic"
+        ]
+      }
+    },
+    {
+      "name": "OpAnd_EbGb",
+      "live": {
+        "kernel": "OpAnd_EbGb_Internal",
+        "arguments": [
+          "FlagsSpec::Live",
+          "AddrModeSpec::Dynamic"
+        ]
+      },
+      "dead": {
+        "kernel": "OpAnd_EbGb_Internal",
+        "arguments": [
+          "FlagsSpec::Dead",
+          "AddrModeSpec::Dynamic"
+        ]
+      }
+    },
+    {
+      "name": "OpAnd_EvGv",
+      "baked": true,
+      "live": {
+        "kernel": "OpAnd_EvGv_Internal",
+        "arguments": [
+          "FlagsSpec::Live",
+          "OpsizeSpec::Dynamic",
+          "AddrModeSpec::Dynamic"
+        ]
+      },
+      "dead": {
+        "kernel": "OpAnd_EvGv_Internal",
+        "arguments": [
+          "FlagsSpec::Dead",
+          "OpsizeSpec::Dynamic",
+          "AddrModeSpec::Dynamic"
+        ]
+      }
+    },
+    {
+      "name": "OpAnd_GbEb",
+      "live": {
+        "kernel": "OpAnd_GbEb_Internal",
+        "arguments": [
+          "FlagsSpec::Live",
+          "AddrModeSpec::Dynamic"
+        ]
+      },
+      "dead": {
+        "kernel": "OpAnd_GbEb_Internal",
+        "arguments": [
+          "FlagsSpec::Dead",
+          "AddrModeSpec::Dynamic"
+        ]
+      }
+    },
+    {
+      "name": "OpAnd_GvEv",
+      "baked": true,
+      "live": {
+        "kernel": "OpAnd_GvEv_Internal",
+        "arguments": [
+          "FlagsSpec::Live",
+          "OpsizeSpec::Dynamic",
+          "AddrModeSpec::Dynamic"
+        ]
+      },
+      "dead": {
+        "kernel": "OpAnd_GvEv_Internal",
+        "arguments": [
+          "FlagsSpec::Dead",
+          "OpsizeSpec::Dynamic",
+          "AddrModeSpec::Dynamic"
+        ]
+      }
+    },
+    {
+      "name": "OpAnd_AlImm",
+      "live": {
+        "kernel": "OpAnd_AlImm_Internal",
+        "arguments": [
+          "FlagsSpec::Live"
+        ]
+      },
+      "dead": {
+        "kernel": "OpAnd_AlImm_Internal",
+        "arguments": [
+          "FlagsSpec::Dead"
+        ]
+      }
+    },
+    {
+      "name": "OpAnd_EaxImm",
+      "baked": true,
+      "live": {
+        "kernel": "OpAnd_EaxImm_Internal",
+        "arguments": [
+          "FlagsSpec::Live",
+          "OpsizeSpec::Dynamic"
+        ]
+      },
+      "dead": {
+        "kernel": "OpAnd_EaxImm_Internal",
+        "arguments": [
+          "FlagsSpec::Dead",
+          "OpsizeSpec::Dynamic"
+        ]
+      }
+    },
+    {
+      "name": "OpSub_EbGb",
+      "live": {
+        "kernel": "OpSub_EbGb_Internal",
+        "arguments": [
+          "FlagsSpec::Live",
+          "AddrModeSpec::Dynamic"
+        ]
+      },
+      "dead": {
+        "kernel": "OpSub_EbGb_Internal",
+        "arguments": [
+          "FlagsSpec::Dead",
+          "AddrModeSpec::Dynamic"
+        ]
+      }
+    },
+    {
+      "name": "OpSub_EvGv",
+      "baked": true,
+      "live": {
+        "kernel": "OpSub_EvGv_Internal",
+        "arguments": [
+          "FlagsSpec::Live",
+          "OpsizeSpec::Dynamic",
+          "AddrModeSpec::Dynamic"
+        ]
+      },
+      "dead": {
+        "kernel": "OpSub_EvGv_Internal",
+        "arguments": [
+          "FlagsSpec::Dead",
+          "OpsizeSpec::Dynamic",
+          "AddrModeSpec::Dynamic"
+        ]
+      }
+    },
+    {
+      "name": "OpSub_GbEb",
+      "live": {
+        "kernel": "OpSub_GbEb_Internal",
+        "arguments": [
+          "FlagsSpec::Live",
+          "AddrModeSpec::Dynamic"
+        ]
+      },
+      "dead": {
+        "kernel": "OpSub_GbEb_Internal",
+        "arguments": [
+          "FlagsSpec::Dead",
+          "AddrModeSpec::Dynamic"
+        ]
+      }
+    },
+    {
+      "name": "OpSub_GvEv",
+      "baked": true,
+      "live": {
+        "kernel": "OpSub_GvEv_Internal",
+        "arguments": [
+          "FlagsSpec::Live",
+          "OpsizeSpec::Dynamic",
+          "AddrModeSpec::Dynamic"
+        ]
+      },
+      "dead": {
+        "kernel": "OpSub_GvEv_Internal",
+        "arguments": [
+          "FlagsSpec::Dead",
+          "OpsizeSpec::Dynamic",
+          "AddrModeSpec::Dynamic"
+        ]
+      }
+    },
+    {
+      "name": "OpSub_AlImm",
+      "live": {
+        "kernel": "OpSub_AlImm_Internal",
+        "arguments": [
+          "FlagsSpec::Live"
+        ]
+      },
+      "dead": {
+        "kernel": "OpSub_AlImm_Internal",
+        "arguments": [
+          "FlagsSpec::Dead"
+        ]
+      }
+    },
+    {
+      "name": "OpSub_EaxImm",
+      "baked": true,
+      "live": {
+        "kernel": "OpSub_EaxImm_Internal",
+        "arguments": [
+          "FlagsSpec::Live",
+          "OpsizeSpec::Dynamic"
+        ]
+      },
+      "dead": {
+        "kernel": "OpSub_EaxImm_Internal",
+        "arguments": [
+          "FlagsSpec::Dead",
+          "OpsizeSpec::Dynamic"
+        ]
+      }
+    },
+    {
+      "name": "OpXor_EbGb",
+      "live": {
+        "kernel": "OpXor_EbGb_Internal",
+        "arguments": [
+          "FlagsSpec::Live",
+          "AddrModeSpec::Dynamic"
+        ]
+      },
+      "dead": {
+        "kernel": "OpXor_EbGb_Internal",
+        "arguments": [
+          "FlagsSpec::Dead",
+          "AddrModeSpec::Dynamic"
+        ]
+      }
+    },
+    {
+      "name": "OpXor_EvGv",
+      "baked": true,
+      "live": {
+        "kernel": "OpXor_EvGv_Internal",
+        "arguments": [
+          "FlagsSpec::Live",
+          "OpsizeSpec::Dynamic",
+          "AddrModeSpec::Dynamic"
+        ]
+      },
+      "dead": {
+        "kernel": "OpXor_EvGv_Internal",
+        "arguments": [
+          "FlagsSpec::Dead",
+          "OpsizeSpec::Dynamic",
+          "AddrModeSpec::Dynamic"
+        ]
+      }
+    },
+    {
+      "name": "OpXor_GbEb",
+      "live": {
+        "kernel": "OpXor_GbEb_Internal",
+        "arguments": [
+          "FlagsSpec::Live",
+          "AddrModeSpec::Dynamic"
+        ]
+      },
+      "dead": {
+        "kernel": "OpXor_GbEb_Internal",
+        "arguments": [
+          "FlagsSpec::Dead",
+          "AddrModeSpec::Dynamic"
+        ]
+      }
+    },
+    {
+      "name": "OpXor_GvEv",
+      "baked": true,
+      "live": {
+        "kernel": "OpXor_GvEv_Internal",
+        "arguments": [
+          "FlagsSpec::Live",
+          "OpsizeSpec::Dynamic",
+          "AddrModeSpec::Dynamic"
+        ]
+      },
+      "dead": {
+        "kernel": "OpXor_GvEv_Internal",
+        "arguments": [
+          "FlagsSpec::Dead",
+          "OpsizeSpec::Dynamic",
+          "AddrModeSpec::Dynamic"
+        ]
+      }
+    },
+    {
+      "name": "OpXor_AlImm",
+      "live": {
+        "kernel": "OpXor_AlImm_Internal",
+        "arguments": [
+          "FlagsSpec::Live"
+        ]
+      },
+      "dead": {
+        "kernel": "OpXor_AlImm_Internal",
+        "arguments": [
+          "FlagsSpec::Dead"
+        ]
+      }
+    },
+    {
+      "name": "OpXor_EaxImm",
+      "baked": true,
+      "live": {
+        "kernel": "OpXor_EaxImm_Internal",
+        "arguments": [
+          "FlagsSpec::Live",
+          "OpsizeSpec::Dynamic"
+        ]
+      },
+      "dead": {
+        "kernel": "OpXor_EaxImm_Internal",
+        "arguments": [
+          "FlagsSpec::Dead",
+          "OpsizeSpec::Dynamic"
+        ]
+      }
+    },
+    {
+      "name": "OpInc_Reg",
+      "baked": true,
+      "live": {
+        "kernel": "OpInc_Reg_Internal",
+        "arguments": [
+          "FlagsSpec::Live"
+        ]
+      },
+      "dead": {
+        "kernel": "OpInc_Reg_Internal",
+        "arguments": [
+          "FlagsSpec::Dead"
+        ]
+      }
+    },
+    {
+      "name": "OpDec_Reg",
+      "baked": true,
+      "live": {
+        "kernel": "OpDec_Reg_Internal",
+        "arguments": [
+          "FlagsSpec::Live"
+        ]
+      },
+      "dead": {
+        "kernel": "OpDec_Reg_Internal",
+        "arguments": [
+          "FlagsSpec::Dead"
+        ]
+      }
+    },
+    {
+      "name": "OpCmp_AlImm",
+      "baked": true,
+      "live": {
+        "kernel": "OpTestAccumulator_Internal",
+        "arguments": [
+          "AccumulatorTest::Compare",
+          "true",
+          "OpsizeSpec::Dynamic",
+          "FlagsSpec::Live"
+        ]
+      },
+      "dead": {
+        "kernel": "OpTestAccumulator_Internal",
+        "arguments": [
+          "AccumulatorTest::Compare",
+          "true",
+          "OpsizeSpec::Dynamic",
+          "FlagsSpec::Dead"
+        ]
+      }
+    },
+    {
+      "name": "OpCmp_EaxImm",
+      "baked": true,
+      "live": {
+        "kernel": "OpTestAccumulator_Internal",
+        "arguments": [
+          "AccumulatorTest::Compare",
+          "false",
+          "OpsizeSpec::Dynamic",
+          "FlagsSpec::Live"
+        ]
+      },
+      "dead": {
+        "kernel": "OpTestAccumulator_Internal",
+        "arguments": [
+          "AccumulatorTest::Compare",
+          "false",
+          "OpsizeSpec::Dynamic",
+          "FlagsSpec::Dead"
+        ]
+      }
+    },
+    {
+      "name": "OpTest_AlImm",
+      "baked": true,
+      "live": {
+        "kernel": "OpTestAccumulator_Internal",
+        "arguments": [
+          "AccumulatorTest::Bitwise",
+          "true",
+          "OpsizeSpec::Dynamic",
+          "FlagsSpec::Live"
+        ]
+      },
+      "dead": {
+        "kernel": "OpTestAccumulator_Internal",
+        "arguments": [
+          "AccumulatorTest::Bitwise",
+          "true",
+          "OpsizeSpec::Dynamic",
+          "FlagsSpec::Dead"
+        ]
+      }
+    },
+    {
+      "name": "OpTest_EaxImm",
+      "baked": true,
+      "live": {
+        "kernel": "OpTestAccumulator_Internal",
+        "arguments": [
+          "AccumulatorTest::Bitwise",
+          "false",
+          "OpsizeSpec::Dynamic",
+          "FlagsSpec::Live"
+        ]
+      },
+      "dead": {
+        "kernel": "OpTestAccumulator_Internal",
+        "arguments": [
+          "AccumulatorTest::Bitwise",
+          "false",
+          "OpsizeSpec::Dynamic",
+          "FlagsSpec::Dead"
+        ]
+      }
+    },
+    {
+      "name": "OpTest_EbGb",
+      "live": {
+        "kernel": "OpTest_EbGb_Internal",
+        "arguments": [
+          "AddrModeSpec::Dynamic",
+          "FlagsSpec::Live"
+        ]
+      },
+      "dead": {
+        "kernel": "OpTest_EbGb_Internal",
+        "arguments": [
+          "AddrModeSpec::Dynamic",
+          "FlagsSpec::Dead"
+        ]
+      }
+    },
+    {
+      "name": "OpArpl",
+      "requires": [
+        "register",
+        "exact_only"
+      ]
+    },
+    "OpDaa",
+    "OpDas",
+    "OpAaa",
+    "OpAas",
+    "OpAam",
+    "OpAad",
+    "OpSalc",
+    {
+      "name": "OpCmp_EbGb",
+      "live": {
+        "kernel": "OpCmp_Byte_Internal",
+        "arguments": [
+          "ByteCompareDestination::Rm",
+          "AddrModeSpec::Dynamic",
+          "FlagsSpec::Live"
+        ]
+      },
+      "dead": {
+        "kernel": "OpCmp_Byte_Internal",
+        "arguments": [
+          "ByteCompareDestination::Rm",
+          "AddrModeSpec::Dynamic",
+          "FlagsSpec::Dead"
+        ]
+      }
+    },
+    {
+      "name": "OpCmp_GbEb",
+      "live": {
+        "kernel": "OpCmp_Byte_Internal",
+        "arguments": [
+          "ByteCompareDestination::Register",
+          "AddrModeSpec::Dynamic",
+          "FlagsSpec::Live"
+        ]
+      },
+      "dead": {
+        "kernel": "OpCmp_Byte_Internal",
+        "arguments": [
+          "ByteCompareDestination::Register",
+          "AddrModeSpec::Dynamic",
+          "FlagsSpec::Dead"
+        ]
+      }
+    },
+    "OpSetcc_0",
+    "OpSetcc_1",
+    "OpSetcc_2",
+    "OpSetcc_3",
+    "OpSetcc_4",
+    "OpSetcc_5",
+    "OpSetcc_6",
+    "OpSetcc_7",
+    "OpSetcc_8",
+    "OpSetcc_9",
+    "OpSetcc_10",
+    "OpSetcc_11",
+    "OpSetcc_12",
+    "OpSetcc_13",
+    "OpSetcc_14",
+    "OpSetcc_15",
+    {
+      "name": "OpCmpxchg_Byte",
+      "baked": true,
+      "live": {
+        "kernel": "OpCmpxchg_Internal",
+        "arguments": [
+          "true",
+          "OpsizeSpec::Dynamic",
+          "AddrModeSpec::Dynamic",
+          "FlagsSpec::Live"
+        ]
+      },
+      "dead": {
+        "kernel": "OpCmpxchg_Internal",
+        "arguments": [
+          "true",
+          "OpsizeSpec::Dynamic",
+          "AddrModeSpec::Dynamic",
+          "FlagsSpec::Dead"
+        ]
+      },
+      "requires": [
+        "register",
+        "exact_only"
+      ]
+    },
+    {
+      "name": "OpCmpxchg_EvGv",
+      "baked": true,
+      "live": {
+        "kernel": "OpCmpxchg_Internal",
+        "arguments": [
+          "false",
+          "OpsizeSpec::Dynamic",
+          "AddrModeSpec::Dynamic",
+          "FlagsSpec::Live"
+        ]
+      },
+      "dead": {
+        "kernel": "OpCmpxchg_Internal",
+        "arguments": [
+          "false",
+          "OpsizeSpec::Dynamic",
+          "AddrModeSpec::Dynamic",
+          "FlagsSpec::Dead"
+        ]
+      },
+      "requires": [
+        "register",
+        "exact_only"
+      ]
+    },
+    {
+      "name": "OpShld_EvGvIb",
+      "baked": true,
+      "live": {
+        "kernel": "OpDoubleShift_Internal",
+        "arguments": [
+          "DoubleShiftDirection::Left",
+          "DoubleShiftCount::Immediate",
+          "OpsizeSpec::Dynamic",
+          "AddrModeSpec::Dynamic",
+          "FlagsSpec::Live"
+        ]
+      },
+      "dead": {
+        "kernel": "OpDoubleShift_Internal",
+        "arguments": [
+          "DoubleShiftDirection::Left",
+          "DoubleShiftCount::Immediate",
+          "OpsizeSpec::Dynamic",
+          "AddrModeSpec::Dynamic",
+          "FlagsSpec::Dead"
+        ]
+      }
+    },
+    {
+      "name": "OpShld_EvGvCl",
+      "baked": true,
+      "live": {
+        "kernel": "OpDoubleShift_Internal",
+        "arguments": [
+          "DoubleShiftDirection::Left",
+          "DoubleShiftCount::Cl",
+          "OpsizeSpec::Dynamic",
+          "AddrModeSpec::Dynamic",
+          "FlagsSpec::Live"
+        ]
+      },
+      "dead": {
+        "kernel": "OpDoubleShift_Internal",
+        "arguments": [
+          "DoubleShiftDirection::Left",
+          "DoubleShiftCount::Cl",
+          "OpsizeSpec::Dynamic",
+          "AddrModeSpec::Dynamic",
+          "FlagsSpec::Dead"
+        ]
+      }
+    },
+    {
+      "name": "OpShrd_EvGvIb",
+      "baked": true,
+      "live": {
+        "kernel": "OpDoubleShift_Internal",
+        "arguments": [
+          "DoubleShiftDirection::Right",
+          "DoubleShiftCount::Immediate",
+          "OpsizeSpec::Dynamic",
+          "AddrModeSpec::Dynamic",
+          "FlagsSpec::Live"
+        ]
+      },
+      "dead": {
+        "kernel": "OpDoubleShift_Internal",
+        "arguments": [
+          "DoubleShiftDirection::Right",
+          "DoubleShiftCount::Immediate",
+          "OpsizeSpec::Dynamic",
+          "AddrModeSpec::Dynamic",
+          "FlagsSpec::Dead"
+        ]
+      }
+    },
+    {
+      "name": "OpShrd_EvGvCl",
+      "baked": true,
+      "live": {
+        "kernel": "OpDoubleShift_Internal",
+        "arguments": [
+          "DoubleShiftDirection::Right",
+          "DoubleShiftCount::Cl",
+          "OpsizeSpec::Dynamic",
+          "AddrModeSpec::Dynamic",
+          "FlagsSpec::Live"
+        ]
+      },
+      "dead": {
+        "kernel": "OpDoubleShift_Internal",
+        "arguments": [
+          "DoubleShiftDirection::Right",
+          "DoubleShiftCount::Cl",
+          "OpsizeSpec::Dynamic",
+          "AddrModeSpec::Dynamic",
+          "FlagsSpec::Dead"
+        ]
+      }
+    },
+    {
+      "name": "OpImul_GvEvIz",
+      "baked": true,
+      "live": {
+        "kernel": "OpImul_Internal",
+        "arguments": [
+          "ImulSource::OperandWidthImmediate",
+          "OpsizeSpec::Dynamic",
+          "AddrModeSpec::Dynamic",
+          "FlagsSpec::Live"
+        ]
+      },
+      "dead": {
+        "kernel": "OpImul_Internal",
+        "arguments": [
+          "ImulSource::OperandWidthImmediate",
+          "OpsizeSpec::Dynamic",
+          "AddrModeSpec::Dynamic",
+          "FlagsSpec::Dead"
+        ]
+      }
+    },
+    {
+      "name": "OpImul_GvEvIb",
+      "baked": true,
+      "live": {
+        "kernel": "OpImul_Internal",
+        "arguments": [
+          "ImulSource::SignedByteImmediate",
+          "OpsizeSpec::Dynamic",
+          "AddrModeSpec::Dynamic",
+          "FlagsSpec::Live"
+        ]
+      },
+      "dead": {
+        "kernel": "OpImul_Internal",
+        "arguments": [
+          "ImulSource::SignedByteImmediate",
+          "OpsizeSpec::Dynamic",
+          "AddrModeSpec::Dynamic",
+          "FlagsSpec::Dead"
+        ]
+      }
+    },
+    {
+      "name": "OpImul_GvEv",
+      "baked": true,
+      "live": {
+        "kernel": "OpImul_Internal",
+        "arguments": [
+          "ImulSource::Register",
+          "OpsizeSpec::Dynamic",
+          "AddrModeSpec::Dynamic",
+          "FlagsSpec::Live"
+        ]
+      },
+      "dead": {
+        "kernel": "OpImul_Internal",
+        "arguments": [
+          "ImulSource::Register",
+          "OpsizeSpec::Dynamic",
+          "AddrModeSpec::Dynamic",
+          "FlagsSpec::Dead"
+        ]
+      }
+    },
+    {
+      "name": "OpGroup3_Eb_Generic",
+      "baked": true,
+      "live": {
+        "kernel": "OpGroup3_Internal",
+        "arguments": [
+          "true",
+          "GroupOpSpec::Dynamic",
+          "OpsizeSpec::Dynamic",
+          "AddrModeSpec::Dynamic",
+          "FlagsSpec::Live"
+        ]
+      },
+      "dead": {
+        "kernel": "OpGroup3_Internal",
+        "arguments": [
+          "true",
+          "GroupOpSpec::Dynamic",
+          "OpsizeSpec::Dynamic",
+          "AddrModeSpec::Dynamic",
+          "FlagsSpec::Dead"
+        ]
+      }
+    },
+    {
+      "name": "OpGroup3_Ev_Generic",
+      "baked": true,
+      "live": {
+        "kernel": "OpGroup3_Internal",
+        "arguments": [
+          "false",
+          "GroupOpSpec::Dynamic",
+          "OpsizeSpec::Dynamic",
+          "AddrModeSpec::Dynamic",
+          "FlagsSpec::Live"
+        ]
+      },
+      "dead": {
+        "kernel": "OpGroup3_Internal",
+        "arguments": [
+          "false",
+          "GroupOpSpec::Dynamic",
+          "OpsizeSpec::Dynamic",
+          "AddrModeSpec::Dynamic",
+          "FlagsSpec::Dead"
+        ]
+      }
+    },
+    {
+      "name": "OpGroup4_Eb_Generic",
+      "live": {
+        "kernel": "OpGroup4_Eb_Internal",
+        "arguments": [
+          "true"
+        ]
+      },
+      "dead": {
+        "kernel": "OpGroup4_Eb_Internal",
+        "arguments": [
+          "false"
+        ]
+      },
+      "extensions": [
+        0,
+        1
+      ]
+    },
+    {
+      "name": "OpGroup5_Ev_Generic",
+      "baked": {
+        "kernel": "OpGroup5_Ev_Internal"
+      },
+      "requires": [
+        "exact_only"
+      ],
+      "extensions": [
+        0,
+        1,
+        2,
+        4,
+        6
+      ]
+    },
+    {
+      "name": "OpCmp_EvGv",
+      "baked": {
+        "kernel": "OpCmp_EvGv_Internal"
+      }
+    },
+    {
+      "name": "OpCmp_GvEv",
+      "baked": {
+        "kernel": "OpCmp_GvEv_Internal"
+      }
+    },
+    {
+      "name": "OpTest_EvGv",
+      "baked": {
+        "kernel": "OpTest_EvGv_Internal"
+      }
+    },
+    {
+      "name": "OpCwde",
+      "baked": {
+        "kernel": "OpCwde_Internal"
+      }
+    },
+    "OpCdq",
+    "OpPrefetch",
+    {
+      "name": "OpXadd_Byte",
+      "baked": true,
+      "live": {
+        "kernel": "OpXadd_Internal",
+        "arguments": [
+          "true",
+          "OpsizeSpec::Dynamic",
+          "AddrModeSpec::Dynamic",
+          "FlagsSpec::Live"
+        ]
+      },
+      "dead": {
+        "kernel": "OpXadd_Internal",
+        "arguments": [
+          "true",
+          "OpsizeSpec::Dynamic",
+          "AddrModeSpec::Dynamic",
+          "FlagsSpec::Dead"
+        ]
+      },
+      "requires": [
+        "register",
+        "exact_only"
+      ]
+    },
+    {
+      "name": "OpXadd_Word",
+      "baked": true,
+      "live": {
+        "kernel": "OpXadd_Internal",
+        "arguments": [
+          "false",
+          "OpsizeSpec::Dynamic",
+          "AddrModeSpec::Dynamic",
+          "FlagsSpec::Live"
+        ]
+      },
+      "dead": {
+        "kernel": "OpXadd_Internal",
+        "arguments": [
+          "false",
+          "OpsizeSpec::Dynamic",
+          "AddrModeSpec::Dynamic",
+          "FlagsSpec::Dead"
+        ]
+      },
+      "requires": [
+        "register",
+        "exact_only"
+      ]
+    },
+    {
+      "name": "OpGroup9",
+      "requires": [
+        "memory"
+      ],
+      "extensions": [
+        1
+      ]
+    },
+    "OpRdtsc",
+    {
+      "name": "OpPush_Reg",
+      "baked": {
+        "kernel": "OpPush_Reg_Internal"
+      }
+    },
+    {
+      "name": "OpPop_Reg",
+      "baked": {
+        "kernel": "OpPop_Reg_Internal"
+      }
+    },
+    {
+      "name": "OpPushf",
+      "baked": {
+        "kernel": "OpPushf_Internal"
+      }
+    },
+    {
+      "name": "OpPopf",
+      "baked": {
+        "kernel": "OpPopf_Internal"
+      }
+    },
+    "OpMov_EbGb",
+    "OpMov_GbEb",
+    "OpXchg_EbGb",
+    {
+      "name": "OpXchg_EvGv",
+      "baked": {
+        "kernel": "OpXchgRmWithOperands"
+      }
+    },
+    "OpMov_Rm_Sreg",
+    "OpMov_Sreg_Rm",
+    "OpMov_EbIb",
+    {
+      "name": "OpMov_EvGv",
+      "baked": {
+        "kernel": "OpMovWithOperands",
+        "arguments": [
+          "op::MovDirection::ToRm"
+        ]
+      }
+    },
+    {
+      "name": "OpMov_GvEv",
+      "baked": {
+        "kernel": "OpMovWithOperands",
+        "arguments": [
+          "op::MovDirection::FromRm"
+        ]
+      }
+    },
+    {
+      "name": "OpMov_EvIz",
+      "baked": {
+        "kernel": "OpMovImmediateRmWithOperands"
+      }
+    },
+    {
+      "name": "OpMov_RegImm",
+      "baked": {
+        "kernel": "OpMovImmediateRegWithOperands"
+      }
+    },
+    {
+      "name": "OpMovzx_Byte",
+      "baked": {
+        "kernel": "OpMovExtendWidth",
+        "arguments": [
+          "uint8_t",
+          "RmOperandSpec::Dynamic",
+          "OpsizeSpec::Dynamic"
+        ]
+      }
+    },
+    {
+      "name": "OpMovzx_Word",
+      "baked": {
+        "kernel": "OpMovExtendWidth",
+        "arguments": [
+          "uint16_t",
+          "RmOperandSpec::Dynamic",
+          "OpsizeSpec::Dynamic"
+        ]
+      }
+    },
+    {
+      "name": "OpMovsx_Byte",
+      "baked": {
+        "kernel": "OpMovExtendWidth",
+        "arguments": [
+          "int8_t",
+          "RmOperandSpec::Dynamic",
+          "OpsizeSpec::Dynamic"
+        ]
+      }
+    },
+    {
+      "name": "OpMovsx_Word",
+      "baked": {
+        "kernel": "OpMovExtendWidth",
+        "arguments": [
+          "int16_t",
+          "RmOperandSpec::Dynamic",
+          "OpsizeSpec::Dynamic"
+        ]
+      }
+    },
+    {
+      "name": "OpLea",
+      "baked": {
+        "kernel": "OpLeaWithOperands"
+      },
+      "requires": [
+        "memory"
+      ]
+    },
+    {
+      "name": "OpXchg_Reg",
+      "baked": {
+        "kernel": "OpXchgRegWithOperands"
+      }
+    },
+    "OpMov_RegImm8",
+    {
+      "name": "OpMov_Moffs_Load_Word",
+      "baked": {
+        "kernel": "OpMovMoffsScalar",
+        "arguments": [
+          "op::MovDirection::FromRm"
+        ]
+      }
+    },
+    {
+      "name": "OpMov_Moffs_Store_Word",
+      "baked": {
+        "kernel": "OpMovMoffsScalar",
+        "arguments": [
+          "op::MovDirection::ToRm"
+        ]
+      }
+    },
+    {
+      "name": "OpMov_Moffs_Load_Byte",
+      "baked": {
+        "kernel": "OpMovMoffs",
+        "arguments": [
+          "uint8_t",
+          "op::MovDirection::FromRm"
+        ]
+      }
+    },
+    {
+      "name": "OpMov_Moffs_Store_Byte",
+      "baked": {
+        "kernel": "OpMovMoffs",
+        "arguments": [
+          "uint8_t",
+          "op::MovDirection::ToRm"
+        ]
+      }
+    },
+    {
+      "name": "OpPusha",
+      "baked": {
+        "kernel": "OpPushaWithOperands"
+      }
+    },
+    {
+      "name": "OpPopa",
+      "baked": {
+        "kernel": "OpPopaWithOperands"
+      }
+    },
+    {
+      "name": "OpEnter",
+      "baked": {
+        "kernel": "OpEnterWithOperands"
+      }
+    },
+    {
+      "name": "OpLeave",
+      "baked": {
+        "kernel": "OpLeaveWithOperands"
+      }
+    },
+    {
+      "name": "OpPush_Imm32",
+      "baked": {
+        "kernel": "OpPushImmediateWithOperands",
+        "arguments": [
+          "op::PushImmediate::FullWidth"
+        ]
+      }
+    },
+    {
+      "name": "OpPush_Imm8",
+      "baked": {
+        "kernel": "OpPushImmediateWithOperands",
+        "arguments": [
+          "op::PushImmediate::SignExtendedByte"
+        ]
+      }
+    },
+    {
+      "name": "OpPop_Ev",
+      "baked": {
+        "kernel": "OpPopRmWithOperands"
+      }
+    },
+    {
+      "name": "OpMovs_Byte",
+      "baked": {
+        "kernel": "OpMovsWithShape",
+        "arguments": [
+          "uint8_t"
+        ]
+      }
+    },
+    {
+      "name": "OpMovs_Word",
+      "baked": {
+        "kernel": "OpMovsWithOperands"
+      }
+    },
+    {
+      "name": "OpCmps_Byte",
+      "baked": {
+        "kernel": "OpCmpsWithShape",
+        "arguments": [
+          "uint8_t"
+        ]
+      }
+    },
+    {
+      "name": "OpCmps_Word",
+      "baked": {
+        "kernel": "OpCmpsWithOperands"
+      }
+    },
+    {
+      "name": "OpStos_Byte",
+      "baked": {
+        "kernel": "OpStosWithShape",
+        "arguments": [
+          "uint8_t"
+        ]
+      }
+    },
+    {
+      "name": "OpStos_Word",
+      "baked": {
+        "kernel": "OpStosWithOperands"
+      }
+    },
+    {
+      "name": "OpLods_Byte",
+      "baked": {
+        "kernel": "OpLodsWithShape",
+        "arguments": [
+          "uint8_t"
+        ]
+      }
+    },
+    {
+      "name": "OpLods_Word",
+      "baked": {
+        "kernel": "OpLodsWithOperands"
+      }
+    },
+    {
+      "name": "OpScas_Byte",
+      "baked": {
+        "kernel": "OpScasWithShape",
+        "arguments": [
+          "uint8_t"
+        ]
+      }
+    },
+    {
+      "name": "OpScas_Word",
+      "baked": {
+        "kernel": "OpScasWithOperands"
+      }
+    },
+    "OpSahf",
+    "OpLahf",
+    {
+      "name": "OpXlat",
+      "baked": {
+        "kernel": "OpXlatWithOperands"
+      }
+    },
+    {
+      "name": "OpCmov_O",
+      "baked": {
+        "kernel": "OpCmov_Internal",
+        "arguments": [
+          "0"
+        ]
+      }
+    },
+    {
+      "name": "OpCmov_NO",
+      "baked": {
+        "kernel": "OpCmov_Internal",
+        "arguments": [
+          "1"
+        ]
+      }
+    },
+    {
+      "name": "OpCmov_B",
+      "baked": {
+        "kernel": "OpCmov_Internal",
+        "arguments": [
+          "2"
+        ]
+      }
+    },
+    {
+      "name": "OpCmov_AE",
+      "baked": {
+        "kernel": "OpCmov_Internal",
+        "arguments": [
+          "3"
+        ]
+      }
+    },
+    {
+      "name": "OpCmov_E",
+      "baked": {
+        "kernel": "OpCmov_Internal",
+        "arguments": [
+          "4"
+        ]
+      }
+    },
+    {
+      "name": "OpCmov_NE",
+      "baked": {
+        "kernel": "OpCmov_Internal",
+        "arguments": [
+          "5"
+        ]
+      }
+    },
+    {
+      "name": "OpCmov_BE",
+      "baked": {
+        "kernel": "OpCmov_Internal",
+        "arguments": [
+          "6"
+        ]
+      }
+    },
+    {
+      "name": "OpCmov_A",
+      "baked": {
+        "kernel": "OpCmov_Internal",
+        "arguments": [
+          "7"
+        ]
+      }
+    },
+    {
+      "name": "OpCmov_S",
+      "baked": {
+        "kernel": "OpCmov_Internal",
+        "arguments": [
+          "8"
+        ]
+      }
+    },
+    {
+      "name": "OpCmov_NS",
+      "baked": {
+        "kernel": "OpCmov_Internal",
+        "arguments": [
+          "9"
+        ]
+      }
+    },
+    {
+      "name": "OpCmov_P",
+      "baked": {
+        "kernel": "OpCmov_Internal",
+        "arguments": [
+          "10"
+        ]
+      }
+    },
+    {
+      "name": "OpCmov_NP",
+      "baked": {
+        "kernel": "OpCmov_Internal",
+        "arguments": [
+          "11"
+        ]
+      }
+    },
+    {
+      "name": "OpCmov_L",
+      "baked": {
+        "kernel": "OpCmov_Internal",
+        "arguments": [
+          "12"
+        ]
+      }
+    },
+    {
+      "name": "OpCmov_GE",
+      "baked": {
+        "kernel": "OpCmov_Internal",
+        "arguments": [
+          "13"
+        ]
+      }
+    },
+    {
+      "name": "OpCmov_LE",
+      "baked": {
+        "kernel": "OpCmov_Internal",
+        "arguments": [
+          "14"
+        ]
+      }
+    },
+    {
+      "name": "OpCmov_G",
+      "baked": {
+        "kernel": "OpCmov_Internal",
+        "arguments": [
+          "15"
+        ]
+      }
+    },
+    {
+      "name": "OpLoopne",
+      "baked": {
+        "kernel": "OpLoop_Internal",
+        "arguments": [
+          "true",
+          "false"
+        ]
+      }
+    },
+    {
+      "name": "OpLoope",
+      "baked": {
+        "kernel": "OpLoop_Internal",
+        "arguments": [
+          "true",
+          "true"
+        ]
+      }
+    },
+    {
+      "name": "OpLoop",
+      "baked": {
+        "kernel": "OpLoop_Internal",
+        "arguments": [
+          "false",
+          "false"
+        ]
+      }
+    },
+    {
+      "name": "OpJecxz",
+      "baked": {
+        "kernel": "OpJecxz_Internal"
+      }
+    },
+    {
+      "name": "OpCall_Rel",
+      "baked": {
+        "kernel": "OpCallRelWithOperands"
+      }
+    },
+    {
+      "name": "OpRet_Imm16",
+      "baked": {
+        "kernel": "OpReturnNearWithOperands",
+        "arguments": [
+          "op::RetStackAdjustment::Immediate"
+        ]
+      }
+    },
+    {
+      "name": "OpRet",
+      "baked": {
+        "kernel": "OpReturnNearWithOperands",
+        "arguments": [
+          "op::RetStackAdjustment::None"
+        ]
+      }
+    },
+    {
+      "name": "OpBound",
+      "baked": {
+        "kernel": "OpBoundWithOperands"
+      },
+      "requires": [
+        "memory"
+      ]
+    },
+    "OpGroup_0FAE",
+    "OpNop",
+    "OpWait",
+    "OpCmc",
+    "OpClc",
+    "OpStc",
+    "OpCld",
+    "OpStd",
+    "OpCpuid",
+    {
+      "name": "OpAdd_Sse",
+      "baked": {
+        "kernel": "OpAdd_SseWithOperands"
+      }
+    },
+    {
+      "name": "OpAnd_Sse",
+      "baked": {
+        "kernel": "OpAnd_SseWithOperands"
+      }
+    },
+    {
+      "name": "OpAndn_Sse",
+      "baked": {
+        "kernel": "OpAndn_SseWithOperands"
+      }
+    },
+    {
+      "name": "OpCmp_Sse",
+      "baked": {
+        "kernel": "OpCmp_SseWithOperands"
+      }
+    },
+    {
+      "name": "OpComis_Unified",
+      "baked": {
+        "kernel": "OpUcomis_UnifiedWithOperands"
+      }
+    },
+    {
+      "name": "OpCvt_2A",
+      "baked": {
+        "kernel": "OpCvt_2AWithOperands"
+      }
+    },
+    {
+      "name": "OpCvt_2C",
+      "baked": {
+        "kernel": "OpCvtScalarToInt32",
+        "arguments": [
+          "true"
+        ]
+      }
+    },
+    {
+      "name": "OpCvt_2D",
+      "baked": {
+        "kernel": "OpCvtScalarToInt32",
+        "arguments": [
+          "false"
+        ]
+      }
+    },
+    {
+      "name": "OpCvt_5A",
+      "baked": {
+        "kernel": "OpCvt_5AWithOperands"
+      }
+    },
+    {
+      "name": "OpCvt_5B",
+      "baked": {
+        "kernel": "OpCvt_5BWithOperands"
+      }
+    },
+    {
+      "name": "OpCvt_E6",
+      "baked": {
+        "kernel": "OpCvt_E6WithOperands"
+      }
+    },
+    {
+      "name": "OpDiv_Sse",
+      "baked": {
+        "kernel": "OpDiv_SseWithOperands"
+      }
+    },
+    "OpEmms",
+    "OpFpu_D8",
+    "OpFpu_D9",
+    "OpFpu_DA",
+    "OpFpu_DB",
+    "OpFpu_DC",
+    "OpFpu_DD",
+    "OpFpu_DE",
+    "OpFpu_DF",
+    {
+      "name": "OpGroup_Mmx_Shift_Imm_D",
+      "requires": [
+        "register"
+      ],
+      "extensions": [
+        2,
+        4,
+        6
+      ]
+    },
+    {
+      "name": "OpGroup_Mmx_Shift_Imm_Q",
+      "requires": [
+        "register"
+      ],
+      "extensions": [
+        2,
+        6
+      ]
+    },
+    {
+      "name": "OpGroup_Mmx_Shift_Imm_W",
+      "requires": [
+        "register"
+      ],
+      "extensions": [
+        2,
+        4,
+        6
+      ]
+    },
+    {
+      "name": "OpGroup_Mov12",
+      "requires": [
+        "memory_with_66"
+      ],
+      "baked": {
+        "kernel": "OpGroup_Mov12WithOperands"
+      }
+    },
+    {
+      "name": "OpGroup_Mov13",
+      "requires": [
+        "memory"
+      ],
+      "baked": {
+        "kernel": "OpGroup_Mov13WithOperands"
+      }
+    },
+    {
+      "name": "OpGroup_Mov16",
+      "requires": [
+        "memory_with_66"
+      ],
+      "baked": {
+        "kernel": "OpGroup_Mov16WithOperands"
+      }
+    },
+    {
+      "name": "OpGroup_Mov17",
+      "requires": [
+        "memory"
+      ],
+      "baked": {
+        "kernel": "OpGroup_Mov17WithOperands"
+      }
+    },
+    {
+      "name": "OpGroup_Pshuf",
+      "baked": {
+        "kernel": "OpGroup_PshufWithOperands"
+      }
+    },
+    {
+      "name": "OpGroup_Sse_Shift_Imm_D",
+      "requires": [
+        "register"
+      ],
+      "extensions": [
+        2,
+        4,
+        6
+      ]
+    },
+    {
+      "name": "OpGroup_Sse_Shift_Imm_Q",
+      "requires": [
+        "register"
+      ],
+      "extensions": [
+        2,
+        3,
+        6,
+        7
+      ]
+    },
+    {
+      "name": "OpGroup_Sse_Shift_Imm_W",
+      "requires": [
+        "register"
+      ],
+      "extensions": [
+        2,
+        4,
+        6
+      ]
+    },
+    {
+      "name": "OpMaskmovdqu",
+      "requires": [
+        "register"
+      ]
+    },
+    {
+      "name": "OpMaskmovq_Mmx",
+      "requires": [
+        "register"
+      ]
+    },
+    {
+      "name": "OpMax_Sse",
+      "baked": {
+        "kernel": "OpMaxMin_Sse_Impl",
+        "arguments": [
+          "false"
+        ]
+      }
+    },
+    {
+      "name": "OpMin_Sse",
+      "baked": {
+        "kernel": "OpMaxMin_Sse_Impl",
+        "arguments": [
+          "true"
+        ]
+      }
+    },
+    "OpMovAp_Load",
+    "OpMovAp_Store",
+    {
+      "name": "OpMov_Sse_Load",
+      "baked": {
+        "kernel": "OpMov_Sse_LoadWithOperands"
+      }
+    },
+    {
+      "name": "OpMov_Sse_Store",
+      "baked": {
+        "kernel": "OpMov_Sse_StoreWithOperands"
+      }
+    },
+    "OpMovd_FromMmx",
+    "OpMovd_Load",
+    {
+      "name": "OpMovd_Store",
+      "baked": {
+        "kernel": "OpMovd_StoreWithOperands"
+      }
+    },
+    "OpMovd_ToMmx",
+    {
+      "name": "OpMovdq2q",
+      "requires": [
+        "register"
+      ]
+    },
+    "OpMovdqa_Load",
+    "OpMovdqa_Store",
+    "OpMovdqu_Load",
+    "OpMovdqu_Store",
+    {
+      "name": "OpMovmsk_Unified",
+      "requires": [
+        "register"
+      ],
+      "baked": {
+        "kernel": "OpMovmsk_UnifiedWithOperands"
+      }
+    },
+    {
+      "name": "OpMovnt_Sse",
+      "requires": [
+        "memory"
+      ]
+    },
+    {
+      "name": "OpMovntdq",
+      "requires": [
+        "memory"
+      ]
+    },
+    {
+      "name": "OpMovnti",
+      "requires": [
+        "memory"
+      ]
+    },
+    {
+      "name": "OpMovntq_Mmx",
+      "requires": [
+        "memory"
+      ]
+    },
+    {
+      "name": "OpMovq2dq",
+      "requires": [
+        "register"
+      ]
+    },
+    "OpMovq_FromMmx",
+    "OpMovq_Store",
+    "OpMovq_ToMmx",
+    {
+      "name": "OpMul_Sse",
+      "baked": {
+        "kernel": "OpMul_SseWithOperands"
+      }
+    },
+    {
+      "name": "OpOr_Sse",
+      "baked": {
+        "kernel": "OpOr_SseWithOperands"
+      }
+    },
+    "OpPackssdw_Mmx",
+    "OpPackssdw_Sse",
+    "OpPacksswb_Mmx",
+    "OpPacksswb_Sse",
+    "OpPackuswb_Mmx",
+    "OpPackuswb_Sse",
+    "OpPaddb_Mmx",
+    "OpPaddb_Sse",
+    "OpPaddd_Mmx",
+    "OpPaddd_Sse",
+    "OpPaddq_Mmx",
+    "OpPaddq_Sse",
+    "OpPaddsb_Mmx",
+    "OpPaddsb_Sse",
+    "OpPaddsw_Mmx",
+    "OpPaddsw_Sse",
+    "OpPaddusb_Mmx",
+    "OpPaddusb_Sse",
+    "OpPaddusw_Mmx",
+    "OpPaddusw_Sse",
+    "OpPaddw_Mmx",
+    "OpPaddw_Sse",
+    "OpPand_Mmx",
+    "OpPand_Sse",
+    "OpPandn_Mmx",
+    "OpPandn_Sse",
+    "OpPavgb_Mmx",
+    "OpPavgb_Sse",
+    "OpPavgw_Mmx",
+    "OpPavgw_Sse",
+    "OpPcmpeqb_Mmx",
+    "OpPcmpeqb_Sse",
+    "OpPcmpeqd_Mmx",
+    "OpPcmpeqd_Sse",
+    "OpPcmpeqw_Mmx",
+    "OpPcmpeqw_Sse",
+    "OpPcmpgtb_Mmx",
+    "OpPcmpgtb_Sse",
+    "OpPcmpgtd_Mmx",
+    "OpPcmpgtd_Sse",
+    "OpPcmpgtw_Mmx",
+    "OpPcmpgtw_Sse",
+    {
+      "name": "OpPextrw_Mmx",
+      "requires": [
+        "register"
+      ]
+    },
+    {
+      "name": "OpPextrw_Sse",
+      "requires": [
+        "register"
+      ]
+    },
+    "OpPinsrw_Mmx",
+    "OpPinsrw_Sse",
+    "OpPmaddwd_Mmx",
+    "OpPmaddwd_Sse",
+    "OpPmaxsw_Mmx",
+    "OpPmaxsw_Sse",
+    "OpPmaxub_Mmx",
+    "OpPmaxub_Sse",
+    "OpPminsw_Mmx",
+    "OpPminsw_Sse",
+    "OpPminub_Mmx",
+    "OpPminub_Sse",
+    {
+      "name": "OpPmovmskb_Mmx",
+      "requires": [
+        "register"
+      ]
+    },
+    {
+      "name": "OpPmovmskb_Sse",
+      "requires": [
+        "register"
+      ]
+    },
+    "OpPmulhuw_Mmx",
+    "OpPmulhuw_Sse",
+    "OpPmulhw_Mmx",
+    "OpPmulhw_Sse",
+    "OpPmullw_Mmx",
+    "OpPmullw_Sse",
+    "OpPmuludq_Mmx",
+    "OpPmuludq_Sse",
+    "OpPor_Mmx",
+    "OpPor_Sse",
+    "OpPsadbw_Mmx",
+    "OpPsadbw_Sse",
+    "OpPshufw_Mmx",
+    "OpPslld_Mmx",
+    "OpPslld_Sse",
+    "OpPsllq_Mmx",
+    "OpPsllq_Sse",
+    "OpPsllw_Mmx",
+    "OpPsllw_Sse",
+    "OpPsrad_Mmx",
+    "OpPsrad_Sse",
+    "OpPsraw_Mmx",
+    "OpPsraw_Sse",
+    "OpPsrld_Mmx",
+    "OpPsrld_Sse",
+    "OpPsrlq_Mmx",
+    "OpPsrlq_Sse",
+    "OpPsrlw_Mmx",
+    "OpPsrlw_Sse",
+    "OpPsubb_Mmx",
+    "OpPsubb_Sse",
+    "OpPsubd_Mmx",
+    "OpPsubd_Sse",
+    "OpPsubq_Mmx",
+    "OpPsubq_Sse",
+    "OpPsubsb_Mmx",
+    "OpPsubsb_Sse",
+    "OpPsubsw_Mmx",
+    "OpPsubsw_Sse",
+    "OpPsubusb_Mmx",
+    "OpPsubusb_Sse",
+    "OpPsubusw_Mmx",
+    "OpPsubusw_Sse",
+    "OpPsubw_Mmx",
+    "OpPsubw_Sse",
+    "OpPunpckhbw_Mmx",
+    "OpPunpckhbw_Sse",
+    "OpPunpckhdq_Mmx",
+    "OpPunpckhdq_Sse",
+    "OpPunpckhqdq_Sse",
+    "OpPunpckhwd_Mmx",
+    "OpPunpckhwd_Sse",
+    "OpPunpcklbw_Mmx",
+    "OpPunpcklbw_Sse",
+    "OpPunpckldq_Mmx",
+    "OpPunpckldq_Sse",
+    "OpPunpcklqdq_Sse",
+    "OpPunpcklwd_Mmx",
+    "OpPunpcklwd_Sse",
+    "OpPxor_Mmx",
+    "OpPxor_Sse",
+    {
+      "name": "OpRcp_Sse",
+      "baked": {
+        "kernel": "OpRcp_SseWithOperands"
+      }
+    },
+    {
+      "name": "OpRsqrt_Sse",
+      "baked": {
+        "kernel": "OpRsqrt_SseWithOperands"
+      }
+    },
+    {
+      "name": "OpShuf_Unified",
+      "baked": {
+        "kernel": "OpShuf_UnifiedWithOperands"
+      }
+    },
+    {
+      "name": "OpSqrt_Sse",
+      "baked": {
+        "kernel": "OpSqrt_SseWithOperands"
+      }
+    },
+    {
+      "name": "OpSub_Sse",
+      "baked": {
+        "kernel": "OpSub_SseWithOperands"
+      }
+    },
+    {
+      "name": "OpUcomis_Unified",
+      "baked": {
+        "kernel": "OpUcomis_UnifiedWithOperands"
+      }
+    },
+    {
+      "name": "OpUnpckh_Unified",
+      "baked": {
+        "kernel": "OpUnpckh_UnifiedWithOperands"
+      }
+    },
+    {
+      "name": "OpUnpckl_Unified",
+      "baked": {
+        "kernel": "OpUnpckl_UnifiedWithOperands"
+      }
+    },
+    {
+      "name": "OpXor_Sse",
+      "baked": {
+        "kernel": "OpXor_SseWithOperands"
+      }
+    }
+  ]
+}

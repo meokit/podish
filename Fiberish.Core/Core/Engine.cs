@@ -990,40 +990,41 @@ public class Engine : IDisposable
                 handlerIdsByPtr[handler.HandlerPtr] = handler.HandlerId;
 
         var trainingIds = new Dictionary<nint, uint>();
+        const uint maxBlockInstructions = byte.MaxValue;
+        var ops = stackalloc X86Native.BlockDumpOp[(int)maxBlockInstructions];
         foreach (var blockPtr in blocks)
         {
             if (blockPtr == IntPtr.Zero) continue;
 
-            var nativeBlock = (X86Native.BasicBlock*)blockPtr;
-            var startEip = nativeBlock->start_eip;
-            var instCount = (uint)nativeBlock->inst_count;
-            writer.Write(startEip);
-            writer.Write(nativeBlock->end_eip);
-            writer.Write(instCount);
-            writer.Write(nativeBlock->exec_count);
+            X86Native.BlockDumpHeader block;
+            if (X86Native.ReadBlockDump(blockPtr, &block, ops, maxBlockInstructions) == 0)
+                throw new InvalidDataException("Could not read decoded instructions for the block dump.");
+            writer.Write(block.StartEip);
+            writer.Write(block.EndEip);
+            writer.Write(block.InstCount);
+            writer.Write(block.ExecCount);
 
-            var ops = (X86Native.DecodedOp*)((byte*)nativeBlock + sizeof(X86Native.BasicBlock));
-            for (var i = 0; i < instCount; i++)
+            for (var i = 0; i < block.InstCount; i++)
             {
-                var op = ops[i];
-                var memPacked = PackDumpMem(op);
-                writer.Write(memPacked);
-                writer.Write(op.next_eip);
-                writer.Write(op.len);
-                writer.Write(op.modrm);
-                writer.Write(op.prefixes);
-                writer.Write(op.meta);
-                writer.Write(ExtractDumpImm(op));
-                if (!trainingIds.TryGetValue(op.handler, out var trainingId))
+                ref readonly var op = ref ops[i];
+                var handler = unchecked((nint)op.Handler);
+                writer.Write(op.PackedMemory);
+                writer.Write(op.NextEip);
+                writer.Write(op.Length);
+                writer.Write(op.ModRm);
+                writer.Write(op.Prefixes);
+                writer.Write(op.Meta);
+                writer.Write(op.Immediate);
+                if (!trainingIds.TryGetValue(handler, out var trainingId))
                 {
-                    trainingId = X86Native.GetTrainingHandlerId(op.handler);
-                    trainingIds.Add(op.handler, trainingId);
+                    trainingId = X86Native.GetTrainingHandlerId(handler);
+                    trainingIds.Add(handler, trainingId);
                 }
                 writer.Write(trainingId);
-                writer.Write(op.handler.ToInt64());
-                var handlerId = handlerIdsByPtr.TryGetValue(op.handler, out var knownHandlerId)
+                writer.Write(handler.ToInt64());
+                var handlerId = handlerIdsByPtr.TryGetValue(handler, out var knownHandlerId)
                     ? knownHandlerId
-                    : X86Native.GetHandlerId(op.handler);
+                    : X86Native.GetHandlerId(handler);
                 writer.Write(handlerId);
             }
         }
@@ -1062,28 +1063,6 @@ public class Engine : IDisposable
         }
 
         return handlers;
-    }
-
-    internal static ulong PackDumpMem(X86Native.DecodedOp op)
-    {
-        if (!HasMem(op.meta))
-            return 0;
-        return ((ulong)op.ea_desc << 32) | op.disp;
-    }
-
-    internal static uint ExtractDumpImm(X86Native.DecodedOp op)
-    {
-        return HasImm(op.meta) ? op.imm : 0u;
-    }
-
-    private static bool HasMem(byte meta)
-    {
-        return (meta & (1 << 1)) != 0;
-    }
-
-    private static bool HasImm(byte meta)
-    {
-        return (meta & (1 << 2)) != 0;
     }
 
     public IntPtr GetNativeImageBase()

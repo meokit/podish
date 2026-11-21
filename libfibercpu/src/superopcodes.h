@@ -1,55 +1,56 @@
 #pragma once
+#include <array>
+#include <utility>
 
 #include "decoder.h"
 #include "dispatch.h"
 
 namespace fiberish {
 
-using RegisterHandwrittenCallback = void (*)(void*, HandlerFunc, HandlerFunc, HandlerFunc, HandlerFunc, HandlerFunc,
-                                             unsigned);
-void RegisterHandwrittenSuperOpcodes(void* context, RegisterHandwrittenCallback callback);
-HandlerFunc FindSuperOpcode(const DecodedOp* ops);
+HandlerFunc FindSuperOpcode(const DecodedInstruction* ops);
 uint32_t FindFusionTrainingId(HandlerFunc handler);
 #if FIBERCPU_HAVE_GENERATED_SUPEROPCODES
-HandlerFunc GeneratedFindSuperOpcode(const DecodedOp* ops);
+HandlerFunc GeneratedFindSuperOpcode(const DecodedInstruction* ops);
 #endif
-void ApplySuperOpcodesToBlockOps(DecodedOp* ops, uint32_t op_count, bool previously_lowered = false);
+void ApplySuperOpcodesToBlockOps(DecodedInstruction* ops, uint32_t op_count, bool previously_lowered = false);
+
+template <bool TakenOnZero, class Result>
+FORCE_INLINE LogicFlow BranchOnZeroResult(LogicFuncParams, Result flags) {
+    if (flags.IsZero() != TakenOnZero) {
+        flags.Pack(flags_cache, !TakenOnZero);
+        return LogicFlow::Continue;
+    }
+    flags.Pack(flags_cache, TakenOnZero);
+    *branch = GetControlTargetEip(op);
+    return LogicFlow::ExitToBranch;
+}
+
+#define DEFINE_FUSION_HANDLERS(name, width, selectable) \
+    extern constinit const std::array<HandlerFunc, 1u << (width)> name##_handlers = {DecodeHandlerKey<[] {}>}
 
 #define HANDLE_SUPEROPCODE_FLOW(flow, state, flow_op, instr_limit, utlb, utlb_tags, utlb_addend, branch, flags_cache)  \
     do {                                                                                                               \
         switch (flow) {                                                                                                \
-            case LogicFlow::Continue:                                                                                  \
-                if (auto* next_op = NextOp(flow_op)) {                                                                 \
-                    mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);                                              \
-                    ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, \
-                                                          flags_cache FIBERCPU_PIN_RELOAD);                            \
-                }                                                                                                      \
-                __builtin_unreachable();                                                                               \
-            case LogicFlow::ContinueSkipOne:                                                                           \
-                if (auto* next_op = NextOp(NextOp(flow_op))) {                                                         \
-                    mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);                                              \
-                    ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch, \
-                                                          flags_cache FIBERCPU_PIN_RELOAD);                            \
-                }                                                                                                      \
-                __builtin_unreachable();                                                                               \
             case LogicFlow::ExitOnCurrentEIP:                                                                          \
+                RestoreLLVMBlockOnExit(state);                                                                         \
                 RecordBlockHandlersThrough(state, flow_op);                                                            \
-                FIBERCPU_PIN_COMMIT(state);                                                                            \
-                CommitFlagsCache(state, flags_cache);                                                                  \
                 if (!(state)->eip_dirty) (state)->sync_eip_to_op_start(flow_op);                                       \
-                return instr_limit;                                                                                    \
+                ATTR_MUSTTAIL return ReturnFromBlock(state, flow_op, instr_limit, utlb_tags, utlb_addend, branch,      \
+                                                     flags_cache FIBERCPU_PIN_ARGS);                                   \
             case LogicFlow::ExitOnNextEIP:                                                                             \
+                RestoreLLVMBlockOnExit(state);                                                                         \
                 RecordBlockHandlersThrough(state, flow_op);                                                            \
-                FIBERCPU_PIN_COMMIT(state);                                                                            \
-                CommitFlagsCache(state, flags_cache);                                                                  \
                 if (!(state)->eip_dirty) (state)->sync_eip_to_op_end(flow_op);                                         \
-                return instr_limit;                                                                                    \
+                ATTR_MUSTTAIL return ReturnFromBlock(state, flow_op, instr_limit, utlb_tags, utlb_addend, branch,      \
+                                                     flags_cache FIBERCPU_PIN_ARGS);                                   \
             case LogicFlow::RestartMemoryOp:                                                                           \
+                RestoreLLVMBlockOnExit(state);                                                                         \
                 RecordBlockHandlersThrough(state, flow_op);                                                            \
                 mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);                                                  \
                 ATTR_MUSTTAIL return MemoryOpRestart(state, flow_op, instr_limit, utlb_tags, utlb_addend, branch,      \
                                                      flags_cache FIBERCPU_PIN_RELOAD);                                 \
             case LogicFlow::RetryMemoryOp:                                                                             \
+                RestoreLLVMBlockOnExit(state);                                                                         \
                 RecordBlockHandlersThrough(state, flow_op);                                                            \
                 mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);                                                  \
                 ATTR_MUSTTAIL return MemoryOpRetry(state, flow_op, instr_limit, utlb_tags, utlb_addend, branch,        \
@@ -57,25 +58,30 @@ void ApplySuperOpcodesToBlockOps(DecodedOp* ops, uint32_t op_count, bool previou
             case LogicFlow::ExitToBranch:                                                                              \
                 RecordBlockHandlersThrough(state, flow_op);                                                            \
                 mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);                                                  \
-                ATTR_MUSTTAIL return ResolveBranchTargetInline<ExtKind::ControlFlow>(                                  \
-                    state, flow_op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);     \
+                ATTR_MUSTTAIL return ResolveBranchTargetInline<1>(state, flow_op, instr_limit, utlb_tags, utlb_addend, \
+                                                                  branch, flags_cache FIBERCPU_PIN_RELOAD);            \
+            case LogicFlow::ExitToBranchSingleSlot:                                                                    \
+                RecordBlockHandlersThrough(state, flow_op);                                                            \
+                mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);                                                  \
+                ATTR_MUSTTAIL return ResolveBranchTargetInline<0>(state, flow_op, instr_limit, utlb_tags, utlb_addend, \
+                                                                  branch, flags_cache FIBERCPU_PIN_RELOAD);            \
             default:                                                                                                   \
-                FIBERCPU_PIN_COMMIT(state);                                                                            \
-                CommitFlagsCache(state, flags_cache);                                                                  \
-                return instr_limit;                                                                                    \
+                RestoreLLVMBlockOnExit(state);                                                                         \
+                ATTR_MUSTTAIL return ReturnFromBlock(state, flow_op, instr_limit, utlb_tags, utlb_addend, branch,      \
+                                                     flags_cache FIBERCPU_PIN_ARGS);                                   \
         }                                                                                                              \
     } while (false)
 
-#define RUN_SUPEROPCODE_OP_IMM(target, state, cur_op, instr_limit, utlb, branch, flags_cache, imm)          \
-    do {                                                                                                    \
-        auto flow = target(state, cur_op, &utlb, imm, &branch, flags_cache, FIBERCPU_GPR_CACHE);            \
-        if (flow != LogicFlow::Continue) [[unlikely]] {                                                     \
-            HANDLE_SUPEROPCODE_FLOW(flow, state, cur_op, instr_limit, utlb, utlb_tags, utlb_addend, branch, \
-                                    flags_cache);                                                           \
-        }                                                                                                   \
+#define RUN_SUPEROPCODE_OP_WITH_POLICY(policy, target, state, cur_op, instr_limit, utlb, branch, flags_cache, ...) \
+    do {                                                                                                           \
+        static_assert(OperandSpec::Executable<policy> && OperandSpec::FixedModRM<policy>);                         \
+        policy::Assume(cur_op);                                                                                    \
+        auto flow = target(state, cur_op, &utlb, policy::Immediate(cur_op), policy::ModRM(cur_op), &branch,        \
+                           flags_cache, OperandGprCache<policy>(FIBERCPU_GPR_CACHE) __VA_OPT__(, ) __VA_ARGS__);   \
+        if (flow != LogicFlow::Continue) [[unlikely]] {                                                            \
+            HANDLE_SUPEROPCODE_FLOW(flow, state, cur_op, instr_limit, utlb, utlb_tags, utlb_addend, branch,        \
+                                    flags_cache);                                                                  \
+        }                                                                                                          \
     } while (false)
-
-#define RUN_SUPEROPCODE_OP(target, state, cur_op, instr_limit, utlb, branch, flags_cache) \
-    RUN_SUPEROPCODE_OP_IMM(target, state, cur_op, instr_limit, utlb, branch, flags_cache, GetImm(cur_op))
 
 }  // namespace fiberish

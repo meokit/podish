@@ -9,7 +9,7 @@
 
 namespace fiberish {
 
-enum class JitMode { Off, Generic, Exact, LegacyProfile, Profile };
+enum class JitMode { Off, Generic, Exact, Region, LegacyProfile, Profile };
 struct WeightedProfile;
 
 struct CpuRunOptions {
@@ -22,6 +22,7 @@ struct CpuRunOptions {
 struct SharedJitOptions {
     std::optional<unsigned> workers;
     std::optional<std::string_view> pipeline;
+    std::optional<bool> fold_operand_loads;
     size_t arena_bytes = 0;
 };
 

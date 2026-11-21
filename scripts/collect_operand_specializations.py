@@ -10,7 +10,7 @@ from pathlib import Path
 
 from gen_instruction_catalog import read_catalog
 from operand_specialization_data import (
-    HAS_IMMEDIATE, HAS_MEMORY, METADATA_MASK, Operand, generated_fusions, training_handlers,
+    HAS_IMMEDIATE, HAS_MEMORY, METADATA_MASK, Operand, generated_fusions, relative_control_operations, training_handlers,
 )
 
 
@@ -62,7 +62,8 @@ def blocks(path):
 
 def collect(profiles, fusion_source, limit):
     catalog = read_catalog()
-    handlers = training_handlers(catalog, generated_fusions(fusion_source.read_text()))
+    handlers = training_handlers(catalog, generated_fusions(fusion_source.read_text()) if fusion_source else {})
+    relative = relative_control_operations(catalog)
     scalar_ids = {handler.name: op_id for op_id, handler in handlers.items() if handler.kind == "wrapper"}
     observed, dispatches, skipped = Counter(), Counter(), Counter()
     for path in profiles:
@@ -83,10 +84,11 @@ def collect(profiles, fusion_source, limit):
                     skipped[op_id] += executions
                     cursor += 1
                     continue
-                if handler.kind != "handwritten":
-                    key = (op_id, operands)
-                    dispatches[key] += executions
-                    observed[key] += executions
+                operands = tuple(op.for_specialization(name in relative)
+                                 for name, op in zip(handler.operations, operands))
+                key = (op_id, operands)
+                dispatches[key] += executions
+                observed[key] += executions
                 if width > 1:
                     for name, shape in zip(handler.operations, operands):
                         observed[scalar_ids[name], (shape,)] += executions
@@ -99,6 +101,25 @@ def collect(profiles, fusion_source, limit):
         for op_id, operands in ranked[:limit]
     ]
     return entries, len(ranked), skipped
+
+
+def bake_scalar_workload_union(profiles, output):
+    selected = {}
+    for name, profile in sorted(profiles.items()):
+        limit = 1024 if name == "fast-deep-equal" else 384 if name.startswith("coremark") else 256
+        entries, _, _ = collect([profile], None, limit)
+        for row in entries:
+            operand, = row["operands"]
+            key = row["originalId"], Operand(**operand)
+            if key not in selected:
+                selected[key] = row
+            else:
+                selected[key]["count"] += row["count"]
+                selected[key]["dispatch_count"] += row["dispatch_count"]
+    if not selected:
+        raise ValueError("no eligible scalar operands in the unfused captures")
+    rows = ",\n".join("    " + json.dumps(row, separators=(",", ":")) for row in selected.values())
+    output.write_text('{\n  "version": 3,\n  "entries": [\n' + rows + '\n  ]\n}\n', encoding="utf-8")
 
 
 def main():

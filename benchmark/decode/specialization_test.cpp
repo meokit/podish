@@ -5,12 +5,9 @@
 #include <random>
 
 namespace fiberish {
-HandlerFunc FindSpecializedHandlerReference(uint16_t, DecodedOp*);
-bool MatchesCompiledForTest(const SpecCriteria&, const DecodedOp*);
+HandlerFunc FindSpecializedHandlerReference(uint16_t, DecodedInstruction*);
+bool MatchesCompiledForTest(const SpecCriteria&, const DecodedInstruction*);
 bool ValidateSpecializationWildcardIndex();
-namespace handwritten_superopcodes {
-bool ValidateHandwrittenSuperOpcodes();
-}
 #ifdef FIBERCPU_TEST_GENERATED_SUPEROPCODES
 bool ValidateGeneratedSequenceLookup();
 #endif
@@ -21,7 +18,7 @@ bool ValidateDynamicOperandSpecializations();
 
 static bool ValidateProfileOperands() {
     using namespace fiberish;
-    DecodedOp ops[2]{};
+    DecodedInstruction ops[2]{};
     ops[0].handler = g_Handlers[0x81];
     ops[1].handler = g_Handlers[0x83];
     ops[0].len = 8;
@@ -43,18 +40,18 @@ static bool ValidateProfileOperands() {
         {ops[0].handler, exact, {first, second}, 2},
         {ops[0].handler, alternate, {different_immediate, second}, 2},
     };
-    const OperandIndex<false, false, DecodedOperandShape> index(entries, 2, nullptr, 0);
-    if (index.Find(ops) != exact)
+    const OperandIndex index(entries);
+    if (index.Find(ops, ops->handler) != exact)
         return false;
     ops[0].meta.flags.operand_lowered = 1;
     ops[0].next_eip = 0x10005000;
-    if (index.Find(ops) != exact)
+    if (index.Find(ops, ops->handler) != exact)
         return false;
     ops[0].ext.data.imm++;
-    if (index.Find(ops) != alternate)
+    if (index.Find(ops, ops->handler) != alternate)
         return false;
     ops[1].ext.data.imm++;
-    if (index.Find(ops) != nullptr)
+    if (index.Find(ops, ops->handler) != nullptr)
         return false;
     ops[1].ext.data.imm--;
 
@@ -62,7 +59,7 @@ static bool ValidateProfileOperands() {
     const auto rejects = [&](auto mutate) {
         ops[0] = original;
         mutate(ops[0]);
-        return index.Find(ops) == nullptr;
+        return index.Find(ops, ops->handler) == nullptr;
     };
     return rejects([](auto& op) { op.ext.data.disp++; }) && rejects([](auto& op) { op.ext.data.ea_desc++; }) &&
            rejects([](auto& op) { op.prefixes.all ^= 0x40; }) && rejects([](auto& op) { op.modrm ^= 1; }) &&
@@ -104,7 +101,7 @@ int main() {
         for (unsigned encoded = 0; encoded <= 256; ++encoded) {
             for (unsigned flags = 0; flags < 2; ++flags) {
                 for (unsigned sample = 0; sample < 8; ++sample) {
-                    fiberish::DecodedOp op{};
+                    fiberish::DecodedInstruction op{};
                     op.meta.flags.has_modrm = encoded != 0;
                     op.modrm = encoded ? encoded - 1 : 0;
                     op.meta.flags.no_flags = flags;
@@ -125,7 +122,7 @@ int main() {
     // Exercise arbitrary masks and values, including out-of-range bits,
     // unconstrained fields with nonzero values, and matching combinations.
     for (unsigned i = 0; i < 1000000; ++i) {
-        fiberish::DecodedOp op{};
+        fiberish::DecodedInstruction op{};
         op.meta.flags.has_mem = rng() & 1;
         op.prefixes.all = rng();
         auto* ext = fiberish::GetExt(&op);
@@ -147,10 +144,6 @@ int main() {
             return 1;
         }
     }
-    if (!fiberish::handwritten_superopcodes::ValidateHandwrittenSuperOpcodes()) {
-        std::fprintf(stderr, "Handwritten superopcode lookup mismatch\n");
-        return 1;
-    }
 #ifdef FIBERCPU_TEST_GENERATED_SUPEROPCODES
     if (!fiberish::ValidateGeneratedSequenceLookup()) {
         std::fprintf(stderr, "Generated superopcode lookup mismatch\n");
@@ -158,7 +151,7 @@ int main() {
     }
 #endif
     using namespace fiberish;
-    DecodedOp runtime_op{};
+    DecodedInstruction runtime_op{};
     auto fallback = g_Handlers[0x90];
     auto registered = g_Handlers[0x05];
     RegisterSpecializedHandler(0x90, SpecCriteria{.prefix_mask = 0xff, .prefix_val = 0x40}, registered, 0);

@@ -4,7 +4,7 @@
 
 namespace fiberish {
 
-HandlerFunc LowerDynamicOperandHandler(const DecodedOp* op, HandlerFunc original, unsigned remaining);
+HandlerFunc LowerDynamicOperandHandler(const DecodedInstruction* op, HandlerFunc original, unsigned remaining);
 HandlerFunc CanonicalDynamicOperandHandler(HandlerFunc handler);
 size_t DynamicOperandCount();
 int32_t DynamicOperandId(HandlerFunc handler);

@@ -2,6 +2,7 @@
 
 #include <ankerl/unordered_dense.h>
 #include <algorithm>
+#include <ranges>
 
 #if FIBERCPU_LINKED_BLOCK_CACHE
 #include "jit/linked_block_cache.h"
@@ -27,9 +28,9 @@ namespace fiberish::block_recipe {
 namespace {
 
 const auto& Operations() {
-    static const ankerl::unordered_dense::map<HandlerFunc, Operation> operations = {
+    static const ankerl::unordered_dense::map<uint32_t, Operation> operations = {
 #define FIBERCPU_LLVM_OP(Id, Name, Exact, Requirements, Extensions) \
-    {DispatchWrapper<op::Name>, {OpId{Id}, Requirements, Extensions}},
+    {FindScalarTrainingId(DispatchWrapper<op::Name>), {OpId{Id}, Requirements, Extensions}},
 #include "llvm_block_operations.inc"
 #undef FIBERCPU_LLVM_OP
     };
@@ -53,9 +54,9 @@ uint16_t HotThreshold(const EmuState& state) {
 
 void InitializeOperationLookup() { (void)Operations(); }
 
-OpId FindOperation(const DecodedOp& op, bool exact) {
+OpId FindOperation(const DecodedInstruction& op, const BoundScalarHandler& binding, bool exact) {
     const auto& operations = Operations();
-    const auto match = operations.find(op.handler);
+    const auto match = operations.find(binding.id);
     return match != operations.end() && match->second.Matches(op, exact) ? match->second.id : kInvalidOpId;
 }
 
@@ -73,19 +74,25 @@ LLVMBlockExit FullBlockExit(const BasicBlock& block) {
 }
 
 bool PlanBlock(EmuState& state, const BasicBlock& block, bool exact, Plan& plan) {
-    const auto ops = std::span(block.FirstOp(), std::min<size_t>(block.sentinel_slot_index, kMaxOps));
+    const auto count = std::min<size_t>(block.inst_count(), kMaxOps);
+    const auto ops =
+        std::views::iota(size_t{0}, count) | std::views::transform([&](size_t slot) { return block.ReadOp(slot); });
     return PlanBlock(
-        ops, block.sentinel_slot_index, FullBlockExit(block), exact,
-        [&](const DecodedOp& op, DecodedOp& generic) { return RedecodeGenericInstruction(&state, op, generic); }, plan);
+        ops, block.start_eip(), block.inst_count(), FullBlockExit(block), exact,
+        [&](const DecodedInstruction& op, DecodedInstruction& generic) {
+            return RedecodeGenericInstruction(&state, op, generic);
+        },
+        plan);
 }
 
 void InstallBlockHandler(BasicBlock& block, std::span<const HandlerFunc> replay_handlers, HandlerFunc entry) {
     // Replay a slow load on its original scalar slot. The uncompiled suffix
     // keeps its independently selected SuperOpcodes and operand handlers.
-    auto* ops = block.FirstOp();
-    for (size_t i = 0; i < replay_handlers.size(); ++i) {
-        ops[i].handler = replay_handlers[i];
-        ops[i].meta.flags.operand_lowered = 0;
+    auto* op = block.FirstOp();
+    for (const auto handler : replay_handlers) {
+        op->handler = handler;
+        if (!block.IsLinkOnlyReturn(op)) op->ClearOperandLowered();
+        op = block.NextOp(op);
     }
     block.entry = entry;
 }

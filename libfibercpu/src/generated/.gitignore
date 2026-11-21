@@ -3,3 +3,4 @@
 !superopcodes.generated.cpp
 !instruction_fusion_families.json
 !superopcodes.extended.generated.cpp
+!modrm-specializations.json

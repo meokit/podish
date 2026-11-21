@@ -37,8 +37,8 @@
 #include "mem/mmu.h"
 #include "operand_specialization.h"
 #include "ops.h"
-#include "state.h"
 #include "runtime_options.h"
+#include "state.h"
 #include "superopcodes.h"
 
 #if defined(__SSE__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 1)
@@ -122,6 +122,7 @@ public:
 
     ~ScopedNativeExecution() {
         if (!entered_) return;
+        state_->clear_pending_mem_op();
         state_->mmu.end_execution();
         state_->native_execution_active = false;
         g_native_execution_active = false;
@@ -273,125 +274,74 @@ static bool CanBlockConcatWithSuccessor(const BasicBlock* a, const BasicBlock* b
     return true;
 }
 
-static void LowerConcatenatedBlock(const EmuState& state, BasicBlock* concat, const BasicBlock* a, const BasicBlock* b,
-                                   uint32_t a_instructions) {
-    auto* ops = concat->FirstOp();
+static BasicBlock* BuildBlockConcat(EmuState* state, const BasicBlock* a, const BasicBlock* b, bool remove_terminal) {
+    std::array<DecodedInstruction, 65> staged_ops;
+    const uint32_t source_count = a->inst_count() - (remove_terminal ? 1u : 0u);
+    const uint32_t concat_count = source_count + b->inst_count();
+    const uint32_t start_eip = a->start_eip();
+    auto ops = std::span(staged_ops).first(concat_count + 1);
+
+    for (uint32_t i = 0; i < source_count; ++i) {
+        ops[i] = a->ReadOp(i);
+    }
+    for (uint32_t i = 0; i < b->inst_count(); ++i) {
+        ops[source_count + i] = b->ReadOp(i);
+    }
+    ops.back() = b->ReadOp(b->inst_count());
+
+    const bool retain_scalar_handlers = a->has_unfused_handlers && b->has_unfused_handlers;
 #if FIBERCPU_BLOCK_COMPILATION
-    if (concat->has_unfused_handlers) {
-        auto* handlers = concat->UnfusedHandlers();
-        std::copy_n(a->UnfusedHandlers(), a_instructions, handlers);
-        std::copy_n(b->UnfusedHandlers(), b->inst_count(), handlers + a_instructions);
-        for (uint32_t i = 0; i < concat->inst_count(); ++i) {
-            ops[i].handler = handlers[i];
+    if (retain_scalar_handlers) {
+        for (uint32_t i = 0; i < source_count; ++i) {
+            ops[i].handler = a->UnfusedHandlers()[i];
             ops[i].meta.flags.operand_lowered = 0;
         }
-        concat->chain.weighted_profile = a->chain.weighted_profile;
-        concat->chain.llvm_hot_count = concat->chain.weighted_profile ? block_recipe::HotThreshold(state)
-                                                                     : a->chain.llvm_hot_count;
+        for (uint32_t i = 0; i < b->inst_count(); ++i) {
+            auto& op = ops[source_count + i];
+            op.handler = b->UnfusedHandlers()[i];
+            op.meta.flags.operand_lowered = 0;
+        }
     }
-#else
-    (void)state;
-    (void)a;
-    (void)b;
-    (void)a_instructions;
 #endif
-    ApplySuperOpcodesToBlockOps(ops, concat->inst_count(), !concat->has_unfused_handlers);
-    concat->entry = ops->handler;
-}
-
-static BasicBlock* BuildDirectJmpBlockConcat(EmuState* state, const BasicBlock* a, const BasicBlock* b) {
-    constexpr uint32_t kMaxConcatSlotCount = 65;
-    const uint32_t concat_inst_count = a->inst_count() - 1 + b->inst_count();
-    const uint32_t concat_slot_count = concat_inst_count + 1;
-    std::array<DecodedOp, kMaxConcatSlotCount> staged_ops{};
-    const uint32_t start_eip = a->start_eip();
-    const uint32_t end_eip = b->end_eip;
-    const uint32_t branch_target_eip = b->branch_target_eip;
-    const uint32_t fallthrough_eip = b->fallthrough_eip;
-    const BlockTerminalKind terminal_kind = b->terminal_kind();
-
-    const DecodedOp* a_ops = a->FirstOp();
-    const DecodedOp* b_ops = b->FirstOp();
-    uint32_t out = 0;
-    for (uint32_t i = 0; i + 1 < a->inst_count(); ++i) {
-        staged_ops[out++] = a_ops[i];
-    }
-    for (uint32_t i = 0; i < b->inst_count(); ++i) {
-        staged_ops[out++] = b_ops[i];
-    }
-    staged_ops[out] = *b->Sentinel();
-
-    const bool retain_scalar_handlers = a->has_unfused_handlers && b->has_unfused_handlers;
-    void* mem = state->mmu.try_allocate_block_bytes(
-        BasicBlock::CalculateSize(concat_slot_count, retain_scalar_handlers), start_eip);
+    const auto layout = BlockSlotLayout::Inspect(start_eip, ops);
+    const bool retain_region_context = a->chain.has_region_context && b->chain.has_region_context;
+    void* mem =
+        state->mmu.try_allocate_block_bytes(
+            BasicBlock::CalculateSize(layout, retain_scalar_handlers, retain_region_context), start_eip);
     if (!mem) return nullptr;
-    BasicBlock* concat = new (mem) BasicBlock;
+    // Static scalar lowering depends on each instruction's original operands.
+    // In this build the published slots already carry the correct handlers.
+#if !FIBERCPU_ENABLE_SUPEROPCODES && !FIBERCPU_DYNAMIC_OPERANDS
+    const bool preserve_handlers = !retain_scalar_handlers;
+#else
+    constexpr bool preserve_handlers = false;
+#endif
+    if (!preserve_handlers) ApplySuperOpcodesToBlockOps(ops.data(), concat_count, !retain_scalar_handlers);
+    auto* concat = new (mem) BasicBlock;
     state->mmu.remember_allocated_block(concat);
 
     concat->set_start_eip(start_eip);
     concat->set_valid(true);
-    concat->end_eip = end_eip;
-    concat->set_inst_count(concat_inst_count);
-    concat->slot_count = concat_slot_count;
-    concat->sentinel_slot_index = concat_inst_count;
-    concat->branch_target_eip = branch_target_eip;
-    concat->fallthrough_eip = fallthrough_eip;
-    concat->set_terminal_kind(terminal_kind);
-    concat->exec_count = 0;
+    concat->end_eip = b->end_eip;
+    concat->set_inst_count(concat_count);
+    concat->branch_target_eip = b->branch_target_eip;
+    concat->fallthrough_eip = b->fallthrough_eip;
+    concat->set_terminal_kind(b->terminal_kind());
     concat->has_unfused_handlers = retain_scalar_handlers;
+    concat->chain.has_region_context = retain_region_context;
+    concat->WriteOps(layout, ops, state->mmu.invalid_code_block(), preserve_handlers);
+    if (retain_region_context) concat->SetRegionContext(nullptr);
 
-    DecodedOp* dst = concat->FirstOp();
-    std::copy_n(staged_ops.data(), concat_slot_count, dst);
-
-    LowerConcatenatedBlock(*state, concat, a, b, a->inst_count() - 1);
-    return concat;
-}
-
-static BasicBlock* BuildJccFallthroughBlockConcat(EmuState* state, const BasicBlock* a, const BasicBlock* b) {
-    constexpr uint32_t kMaxConcatSlotCount = 65;
-    const uint32_t concat_inst_count = a->inst_count() + b->inst_count();
-    const uint32_t concat_slot_count = concat_inst_count + 1;
-    std::array<DecodedOp, kMaxConcatSlotCount> staged_ops{};
-    const uint32_t start_eip = a->start_eip();
-    const uint32_t end_eip = b->end_eip;
-    const uint32_t branch_target_eip = b->branch_target_eip;
-    const uint32_t fallthrough_eip = b->fallthrough_eip;
-    const BlockTerminalKind terminal_kind = b->terminal_kind();
-
-    const DecodedOp* a_ops = a->FirstOp();
-    const DecodedOp* b_ops = b->FirstOp();
-    uint32_t out = 0;
-    for (uint32_t i = 0; i < a->inst_count(); ++i) {
-        staged_ops[out++] = a_ops[i];
+#if FIBERCPU_BLOCK_COMPILATION
+    if (retain_scalar_handlers) {
+        auto* handlers = concat->UnfusedHandlers();
+        std::copy_n(a->UnfusedHandlers(), source_count, handlers);
+        std::copy_n(b->UnfusedHandlers(), b->inst_count(), handlers + source_count);
+        concat->chain.weighted_profile = a->chain.weighted_profile;
+        concat->chain.llvm_hot_count =
+            concat->chain.weighted_profile ? block_recipe::HotThreshold(*state) : a->chain.llvm_hot_count;
     }
-    for (uint32_t i = 0; i < b->inst_count(); ++i) {
-        staged_ops[out++] = b_ops[i];
-    }
-    staged_ops[out] = *b->Sentinel();
-
-    const bool retain_scalar_handlers = a->has_unfused_handlers && b->has_unfused_handlers;
-    void* mem = state->mmu.try_allocate_block_bytes(
-        BasicBlock::CalculateSize(concat_slot_count, retain_scalar_handlers), start_eip);
-    if (!mem) return nullptr;
-    BasicBlock* concat = new (mem) BasicBlock;
-    state->mmu.remember_allocated_block(concat);
-
-    concat->set_start_eip(start_eip);
-    concat->set_valid(true);
-    concat->end_eip = end_eip;
-    concat->set_inst_count(concat_inst_count);
-    concat->slot_count = concat_slot_count;
-    concat->sentinel_slot_index = concat_inst_count;
-    concat->branch_target_eip = branch_target_eip;
-    concat->fallthrough_eip = fallthrough_eip;
-    concat->set_terminal_kind(terminal_kind);
-    concat->exec_count = 0;
-    concat->has_unfused_handlers = retain_scalar_handlers;
-
-    DecodedOp* dst = concat->FirstOp();
-    std::copy_n(staged_ops.data(), concat_slot_count, dst);
-
-    LowerConcatenatedBlock(*state, concat, a, b, a->inst_count());
+#endif
     return concat;
 }
 
@@ -448,8 +398,7 @@ static __attribute__((noinline, cold)) BasicBlock* ResolveBlockForRunSlow(EmuSta
         return CacheDecodedBlock(state, eip, new_block);
     }
 
-    BasicBlock* concat_block = is_direct_jmp ? BuildDirectJmpBlockConcat(state, new_block, successor_block)
-                                             : BuildJccFallthroughBlockConcat(state, new_block, successor_block);
+    BasicBlock* concat_block = BuildBlockConcat(state, new_block, successor_block, is_direct_jmp);
     // The budget warning itself invokes a host log callback. An explicit
     // reset from that callback must not publish the pre-reset source block.
     if (state->mmu.code_cache().reset_request_epoch != reset_request_epoch) {
@@ -892,16 +841,21 @@ static bool ExecuteSingleInstructionOnStack(EmuState* state) {
         FinalizeDecodedInstruction(state, state->ctx.eip, handler_index, &inst.head);
     }
 
-    alignas(16) std::byte op_storage[sizeof(DecodedOp) * 2]{};
-    auto* head = reinterpret_cast<DecodedOp*>(op_storage);
-    std::memcpy(head, &inst.head, sizeof(inst.head));
-    DecodedOp sentinel{};
-    const uint8_t subop = (head->modrm >> 3) & 7;
+    std::array<DecodedInstruction, 2> ops{inst.head, {}};
+    if (inst.head.len) ApplySuperOpcodesToBlockOps(ops.data(), 1);
+    const uint8_t subop = (inst.head.modrm >> 3) & 7;
     const bool indirect_branch = handler_index == 0xFF && (subop == 2 || subop == 4);
-    sentinel.handler = indirect_branch ? g_ExitHandlersBranch[0] : g_ExitHandlersFallthrough[0];
-    sentinel.next_eip = head->next_eip;
-    SetNextBlock(&sentinel, state->mmu.invalid_code_block());
-    std::memcpy(head + 1, &sentinel, sizeof(sentinel));
+    ops.back().handler = indirect_branch ? g_ExitHandlersBranch[0] : g_ExitHandlersFallthrough[0];
+    ops.back().next_eip = inst.head.next_eip;
+    SetExtKind(&ops.back(), ExtKind::Link);
+
+    alignas(BasicBlock) std::byte block_storage[BasicBlock::CalculateSize({2, 1, 1})];
+    auto* scratch = new (block_storage) BasicBlock;
+    scratch->set_start_eip(state->ctx.eip);
+    scratch->WriteOps(BlockSlotLayout::Inspect(state->ctx.eip, ops), ops, state->mmu.invalid_code_block());
+    auto* head = scratch->FirstOp();
+    auto* previous_block = state->last_block;
+    state->last_block = scratch;
 
 #ifdef FIBERCPU_ENABLE_HANDLER_PROFILE
     state->current_block_head = head;
@@ -920,6 +874,8 @@ static bool ExecuteSingleInstructionOnStack(EmuState* state) {
 #ifdef FIBERCPU_ENABLE_HANDLER_PROFILE
     state->current_block_head = nullptr;
 #endif
+    state->clear_pending_mem_op();
+    state->last_block = previous_block;
     return true;
 }
 
@@ -998,7 +954,7 @@ int X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
 #endif
 
             if (state->last_block->inst_count() > 0) {
-                SetNextBlock(state->last_block->Sentinel(), block_ptr);
+                state->last_block->SetFallthroughLink(block_ptr);
             }
             state->last_block = block_ptr;
             if (block_ptr->inst_count() == 0) return;
@@ -1215,7 +1171,7 @@ uint32_t X86_GetBuildFeatures(void) {
 #endif
     features |=
         (FIBERCPU_OPERAND_MODE << 4) | ((FIBERCPU_GPR_PIN_MODE & 3) << 8) | ((FIBERCPU_GPR_PIN_MODE >> 2) << 11);
-#if FIBERCPU_OPERAND_FUSIONS_ONLY
+#if FIBERCPU_LOWER_OPERANDS
     features |= 1u << 10;
 #endif
 #if FIBERCPU_STATIC_SPECIALIZATION
@@ -1518,7 +1474,7 @@ int X86_DumpStats(EmuState* state, char* buffer, size_t buffer_size) {
                     "{\"all_blocks_count\":%zu,\"block_cache_size\":%zu,\"page_to_blocks_size\":%zu,"
                     "\"code_cache_bytes_requested\":%llu,\"code_cache_limit_bytes\":%llu,"
                     "\"code_cache_flush_count\":%llu,\"code_cache_generation\":%llu,\"llvm_code_cache_bytes\":%zu,"
-                     "\"jit_arena_used_bytes\":%zu,\"jit_arena_capacity_bytes\":%zu}",
+                    "\"jit_arena_used_bytes\":%zu,\"jit_arena_capacity_bytes\":%zu}",
                     code_cache.all_blocks.size(), code_cache.CountValidBlocks(), code_cache.page_to_blocks.size(),
                     (unsigned long long)code_cache.requested_block_bytes,
                     (unsigned long long)code_cache.block_budget_bytes, (unsigned long long)code_cache.flush_count,
@@ -1543,12 +1499,35 @@ size_t X86_GetBlockList(EmuState* state, BasicBlock** buffer, size_t max_count) 
     return count;
 }
 
+int X86_ReadBlockDump(const BasicBlock* block, X86_BlockDumpHeader* header, X86_BlockDumpOp* ops, uint32_t capacity) {
+    static_assert(sizeof(X86_BlockDumpHeader) == 24);
+    static_assert(sizeof(X86_BlockDumpOp) == 32);
+    if (!block || !header) return 0;
+    const auto count = block->inst_count();
+    if (count > capacity || (count && !ops)) return 0;
+    *header = {block->exec_count, block->start_eip(), block->end_eip, count, 0};
+    for (uint32_t i = 0; i < count; ++i) {
+        const auto op = block->ReadOp(i);
+        const auto memory = HasMem(&op) ? (uint64_t{op.ext.data.ea_desc} << 32) | op.ext.data.disp : 0;
+        ops[i] = {reinterpret_cast<uintptr_t>(op.handler),
+                  memory,
+                  op.next_eip,
+                  GetImm(&op),
+                  op.len,
+                  op.modrm,
+                  op.prefixes.all,
+                  op.meta.all,
+                  0};
+    }
+    return 1;
+}
+
 int32_t X86_GetOpIdForHandler(void* handler) {
     auto fn = reinterpret_cast<HandlerFunc>(handler);
 #if FIBERCPU_DYNAMIC_OPERANDS
     fn = CanonicalDynamicOperandHandler(fn);
 #endif
-    return static_cast<int32_t>(FindOpcodeIndexForHandler(fn));
+    return static_cast<int32_t>(FindOpcodeIndexForHandler(CanonicalBoundHandler(fn)));
 }
 
 uint32_t X86_GetTrainingHandlerId(void* handler) {
@@ -1587,6 +1566,14 @@ uint64_t X86_GetLLVMJitLiveBlockCount() {
 uint64_t X86_GetLinkedBlockHitCount() {
 #if FIBERCPU_LINKED_BLOCK_CACHE
     return LinkedBlockHitCount();
+#else
+    return 0;
+#endif
+}
+
+uint64_t X86_GetLinkedPageRegionHitCount() {
+#if FIBERCPU_LINKED_BLOCK_CACHE
+    return LinkedPageRegionHitCount();
 #else
     return 0;
 #endif

@@ -20,22 +20,23 @@ constexpr block_recipe::Operation kOperations[] = {
 
 static_assert(std::size(kOperations) == block_recipe::kOpIdCount);
 
-bool ReadStep(llvm::StringRef& line, block_recipe::OpId& id, DecodedOperandShape& shape) {
+bool ReadStep(llvm::StringRef& line, block_recipe::BoundOperation& operation, DecodedOperandShape& shape) {
     const auto [token, operands] = line.split(' ');
     uint16_t raw_id;
     if (token.getAsInteger(10, raw_id) || raw_id >= std::size(kOperations)) return false;
-    id = block_recipe::OpId{raw_id};
+    operation.id = block_recipe::OpId{raw_id};
     line = operands;
     for (auto* field : {&shape.encoding, &shape.ea_desc, &shape.displacement, &shape.immediate}) {
         const auto [operand, next] = line.split(' ');
         if (operand.getAsInteger(10, *field)) return false;
         line = next;
     }
+    operation.shape = shape.Binding();
     return true;
 }
 
 bool SupportsShape(block_recipe::OpId id, const DecodedOperandShape& shape) {
-    DecodedOp op{};
+    DecodedInstruction op{};
     op.modrm = uint8_t(shape.encoding);
     op.prefixes.all = uint8_t(shape.encoding >> 8);
     op.meta.all = uint8_t(shape.encoding >> 16);
@@ -68,14 +69,14 @@ llvm::Error Run(const char* bitcode, const char* requests, const char* output) {
     while (!rows.empty()) {
         auto [line, rest] = rows.split('\n');
         rows = rest;
-        std::array<block_recipe::OpId, 4> operations;
+        std::array<block_recipe::BoundOperation, 4> operations;
         std::array<DecodedOperandShape, 4> operands;
         std::size_t count = 0;
         bool supported = true;
         while (!line.empty()) {
             if (count == operations.size() || !ReadStep(line, operations[count], operands[count]))
                 return llvm::createStringError("invalid LLVM operand stencil request");
-            supported &= SupportsShape(operations[count], operands[count]);
+            supported &= SupportsShape(operations[count].id, operands[count]);
             ++count;
         }
         if (!count) return llvm::createStringError("empty LLVM operand stencil request");
@@ -88,10 +89,19 @@ llvm::Error Run(const char* bitcode, const char* requests, const char* output) {
         auto module = PrepareLLVMBlock(templates, key, "FiberOperandStencil");
         if (!module)
             return llvm::createStringError("cannot prepare LLVM operand stencil for ID %u",
-                                           static_cast<unsigned>(operations.front()));
+                                           static_cast<unsigned>(operations.front().id));
         auto object = compiler(*module);
         if (!object) return object.takeError();
-        if (!llvm_block_cache::WriteRecord(out, (*object)->getBuffer()))
+        // Keep the native packer inside the same binding when it groups
+        // objects by instruction bytes for immediate patching.
+        llvm::SmallVector<char, 256> record;
+        for (const auto& operation : key.operations) {
+            record.push_back(static_cast<char>(operation.shape.modrm));
+            record.push_back(static_cast<char>(operation.shape.slots));
+        }
+        const auto buffer = (*object)->getBuffer();
+        record.append(buffer.begin(), buffer.end());
+        if (!llvm_block_cache::WriteRecord(out, std::string_view(record.data(), record.size())))
             return llvm::createStringError("cannot write stencil object");
     }
     out.close();

@@ -1,5 +1,5 @@
-#include "bindings.h"
 #include "runtime_options.h"
+#include "bindings.h"
 
 #include <algorithm>
 #include <charconv>
@@ -38,11 +38,16 @@ bool ReadSize(std::string_view text, size_t& bytes) {
     for (auto& c : suffix)
         if (c >= 'A' && c <= 'Z') c += 'a' - 'A';
     size_t scale;
-    if (suffix.empty() || suffix == "b") scale = 1;
-    else if (suffix == "k" || suffix == "kb" || suffix == "ki" || suffix == "kib") scale = size_t{1} << 10;
-    else if (suffix == "m" || suffix == "mb" || suffix == "mi" || suffix == "mib") scale = size_t{1} << 20;
-    else if (suffix == "g" || suffix == "gb" || suffix == "gi" || suffix == "gib") scale = size_t{1} << 30;
-    else return false;
+    if (suffix.empty() || suffix == "b")
+        scale = 1;
+    else if (suffix == "k" || suffix == "kb" || suffix == "ki" || suffix == "kib")
+        scale = size_t{1} << 10;
+    else if (suffix == "m" || suffix == "mb" || suffix == "mi" || suffix == "mib")
+        scale = size_t{1} << 20;
+    else if (suffix == "g" || suffix == "gb" || suffix == "gi" || suffix == "gib")
+        scale = size_t{1} << 30;
+    else
+        return false;
     if (bytes > std::numeric_limits<size_t>::max() / scale) return false;
     bytes *= scale;
     return true;
@@ -75,10 +80,22 @@ X86_RunContext* X86_CreateRun(const char* args, size_t size, char* error, size_t
 
     // Keep only the final value of each key before validating values. This is
     // also how a start-time value overrides an option saved by run.
-    enum Key { BlockSize, ArenaSize, Mode, Threshold, Workers, Pipeline, ProfilePath, Count };
+    enum Key {
+        BlockSize,
+        ArenaSize,
+        Mode,
+        Threshold,
+        Workers,
+        Pipeline,
+        FoldOperands,
+        ProfilePath,
+        ProfileSamePage,
+        Count
+    };
     constexpr std::string_view names[] = {
-        "BlockCacheSize", "JitArenaSize", "JitMode", "JitHotThreshold",
-        "JitWorkers", "LlvmPipeline", "WeightedProfilePath",
+        "BlockCacheSize",       "JitArenaSize",        "JitMode",
+        "JitHotThreshold",      "JitWorkers",          "LlvmPipeline",
+        "LlvmFoldOperandLoads", "WeightedProfilePath", "WeightedProfileSamePage",
     };
     static_assert(std::size(names) == Count);
     std::optional<std::string_view> values[Count];
@@ -104,11 +121,18 @@ X86_RunContext* X86_CreateRun(const char* args, size_t size, char* error, size_t
         return fail("JitArenaSize requires a positive size in bytes, optionally suffixed with k, m or g");
     if (values[Mode]) {
         const auto mode = *values[Mode];
-        if (mode == "off") options->jit_mode = JitMode::Off;
-        else if (mode == "generic") options->jit_mode = JitMode::Generic;
-        else if (mode == "exact") options->jit_mode = JitMode::Exact;
-        else if (mode == "profile") options->jit_mode = JitMode::Profile;
-        else return fail("JitMode requires off, generic, exact or profile");
+        if (mode == "off")
+            options->jit_mode = JitMode::Off;
+        else if (mode == "generic")
+            options->jit_mode = JitMode::Generic;
+        else if (mode == "exact")
+            options->jit_mode = JitMode::Exact;
+        else if (mode == "region")
+            options->jit_mode = JitMode::Region;
+        else if (mode == "profile")
+            options->jit_mode = JitMode::Profile;
+        else
+            return fail("JitMode requires off, generic, exact, region or profile");
     }
     if (values[Threshold]) {
         uint16_t threshold = 0;
@@ -126,6 +150,15 @@ X86_RunContext* X86_CreateRun(const char* args, size_t size, char* error, size_t
         if (values[Pipeline]->empty()) return fail("LlvmPipeline requires an optimization level or pass pipeline");
         shared.pipeline = values[Pipeline];
     }
+    if (values[FoldOperands]) {
+        const auto value = *values[FoldOperands];
+        if (value == "on" || value == "1")
+            shared.fold_operand_loads = true;
+        else if (value == "off" || value == "0")
+            shared.fold_operand_loads = false;
+        else
+            return fail("LlvmFoldOperandLoads requires on or off");
+    }
     if (values[ProfilePath] && values[ProfilePath]->empty()) values[ProfilePath].reset();
     if (values[ProfilePath]) {
         if (options->jit_mode && options->jit_mode != JitMode::Profile)
@@ -134,9 +167,19 @@ X86_RunContext* X86_CreateRun(const char* args, size_t size, char* error, size_t
     }
     if (options->jit_mode == JitMode::Profile && !values[ProfilePath])
         return fail("JitMode=profile requires WeightedProfilePath");
+    bool profile_same_page = false;
+    if (values[ProfileSamePage]) {
+        const auto value = *values[ProfileSamePage];
+        if (value == "on" || value == "1")
+            profile_same_page = true;
+        else if (value != "off" && value != "0")
+            return fail("WeightedProfileSamePage requires on or off");
+        if (profile_same_page && !values[ProfilePath])
+            return fail("WeightedProfileSamePage requires WeightedProfilePath");
+    }
 
-    const bool llvm_requested = (options->jit_mode && options->jit_mode != JitMode::Off) ||
-                                options->hot_threshold || shared.workers || shared.pipeline;
+    const bool llvm_requested = (options->jit_mode && options->jit_mode != JitMode::Off) || options->hot_threshold ||
+                                shared.workers || shared.pipeline || shared.fold_operand_loads;
 #if FIBERCPU_LLVM_JIT
     if (llvm_requested && !LLVMBlockJitSupported())
         return fail("LLVM CPU options require LLVM block JIT support on this host");
@@ -144,9 +187,9 @@ X86_RunContext* X86_CreateRun(const char* args, size_t size, char* error, size_t
         std::error_code ec;
         run->profile_path = std::filesystem::absolute(std::filesystem::path(*values[ProfilePath]), ec).string();
         if (ec) return fail("WeightedProfilePath: " + ec.message());
-        options->profile = CreateLLVMWeightedProfile();
+        options->profile = CreateLLVMWeightedProfile(profile_same_page);
     }
-    if (shared.workers || shared.pipeline || shared.arena_bytes) {
+    if (shared.workers || shared.pipeline || shared.fold_operand_loads || shared.arena_bytes) {
         std::string diagnostic;
         if (!ConfigureLLVMBlockJit(shared, diagnostic)) return fail(diagnostic);
     }

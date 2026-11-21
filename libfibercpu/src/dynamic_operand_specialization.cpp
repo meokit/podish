@@ -11,7 +11,9 @@
 #include <vector>
 
 #include "dispatch.h"
+#include "instruction_variants.h"
 #include "jit/executable_arena.h"
+#include "superopcodes.h"
 
 namespace fiberish {
 namespace {
@@ -171,13 +173,19 @@ ExecutableOperands& Executable() {
 
 }  // namespace
 
-HandlerFunc LowerDynamicOperandHandler(const DecodedOp* op, HandlerFunc original, unsigned remaining) {
-    if (!DynamicOperandsEnabled()) return nullptr;
-    static const auto index = [] {
-        ankerl::unordered_dense::map<HandlerFunc, std::vector<const OperandFamily*>> families;
+HandlerFunc LowerDynamicOperandHandler(const DecodedInstruction* op, HandlerFunc original, unsigned remaining) {
+    if (!DynamicOperandsEnabled() || !remaining) return nullptr;
+    const auto semantic_id = [](HandlerFunc handler) {
+        if (const auto scalar = FindScalarTrainingId(handler)) return scalar;
+        return FindFusionTrainingId(handler);
+    };
+    const auto id = semantic_id(original);
+    if (!id) return nullptr;
+    static const auto index = [semantic_id] {
+        ankerl::unordered_dense::map<uint32_t, std::vector<const OperandFamily*>> families;
         families.reserve(kFamilyCount);
         for (const auto& family : std::span(kFamilies, kFamilyCount)) {
-            families[family.handler].push_back(&family);
+            if (const auto family_id = semantic_id(family.handler)) families[family_id].push_back(&family);
         }
         for (auto& [handler, choices] : families) {
             std::stable_sort(choices.begin(), choices.end(), [](const auto* a, const auto* b) {
@@ -186,10 +194,11 @@ HandlerFunc LowerDynamicOperandHandler(const DecodedOp* op, HandlerFunc original
         }
         return families;
     }();
-    const auto found = index.find(original);
+    const auto found = index.find(id);
     if (found == index.end()) return nullptr;
 
     const auto shape = DecodedOperandShape::Read(op);
+    const auto baseline = BoundOperandShape::Read(*op);
     const auto order = [](const DecodedOperandShape& s) {
         return std::tie(s.encoding, s.ea_desc, s.displacement, s.immediate);
     };
@@ -200,6 +209,7 @@ HandlerFunc LowerDynamicOperandHandler(const DecodedOp* op, HandlerFunc original
         auto entry = std::ranges::lower_bound(keys, order(shape), {},
                                               [&](const DynamicOperandEntry& key) { return order(key.shape); });
         for (; entry != keys.end() && entry->shape == shape; ++entry) {
+            if (baseline != entry->shape.Binding()) continue;
             bool match = true;
             for (unsigned i = 1; i < family.width; ++i) {
                 if (DecodedOperandShape::Read(op + i) != kTailShapes[entry->tail + i - 1]) {
@@ -226,7 +236,7 @@ const char* DynamicOperandName(uint32_t id) { return id < kRecipeCount ? kRecipe
 bool ValidateDynamicOperandSpecializations() {
     for (const auto& family : std::span(kFamilies, kFamilyCount)) {
         for (const auto& entry : std::span(kEntries + family.first, family.count)) {
-            DecodedOp ops[4]{};
+            DecodedInstruction ops[4]{};
             for (unsigned i = 0; i < family.width; ++i) {
                 const auto& shape = i == 0 ? entry.shape : kTailShapes[entry.tail + i - 1];
                 ops[i].modrm = uint8_t(shape.encoding);

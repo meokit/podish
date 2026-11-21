@@ -50,13 +50,18 @@ Typed facts
 The kernel-side types in instruction_kernel_spec.h include OpsizeSpec,
 AddrModeSpec, FlagsSpec, RmOperandSpec and GroupOpSpec. Their Dynamic cases
 use decoded inputs or preserve the generic flags behavior. The common
-OperandSpec policies provide Dynamic, Exact, Profile, Register and Encoded
-dispatch paths. OperandSpec::Profile can fix the decoded fields and immediate
-for a kernel independent of its internal template parameters.
+OperandSpec policies bind slot count and trained operands. Opcode and
+mandatory-prefix semantics come from the architectural catalog.
+OperandSpec::Profile binds exact decoded operands for baked fusions.
 
 RegisterSpecializedHandler can publish a rule after initialization. A runtime
 rule affects future decodes, and the caller owns the lifetime of its code.
 The catalog exposes build-time metadata independently of runtime registration.
+
+Baked instruction variants
+--------------------------
+See baked-instruction-variants.md for the current CMake training targets, the
+checked-in scalar and fusion plans, and the machine-code review procedure.
 
 Dynamic operand templates
 -------------------------
@@ -91,6 +96,18 @@ and a block invalidation rejects results for its previous revision.
 FIBERCPU_LLVM_JIT_WORKERS selects 0–8 workers. Set it to 0 for synchronous
 promotion. Profile collection records block recipes synchronously.
 
+The asynchronous scheduler samples recent block visits from the existing
+entry countdown. It ranks a bounded candidate list by visit rate, expected
+dispatch savings over the installed static handlers, and estimated work.
+Older candidates age out before their instructions are copied. The shared
+pool allows an initial burst of 64 ms of compiler CPU and replenishes the
+budget at half of the configured workers' CPU capacity. Completed jobs
+reconcile their reservations with measured thread CPU time.
+
+FIBERCPU_LLVM_JIT_SCHEDULER_TRACE=/path/to/trace.csv
+captures accepted submissions, queue and compiler timings, and block visits
+between JIT installation and invalidation or cache retirement.
+
 Podish passes CPU options to libfibercpu
 ----------------------------------------
 Use -XX:Name=Value or repeat --cpu-opt Name=Value before the guest command.
@@ -112,12 +129,51 @@ such as k, m and g.
 --block-cache-size and --jit-arena-size are legacy CLI shorthands. A saved
 spec with both old JIT limits migrates to the smaller nonzero size.
 
-JitMode selects off, exact, generic or profile for the run. JitHotThreshold
-sets its block admission count (1 through 65535). These options override
-the equivalent Host environment settings. JitWorkers accepts 0 through 8.
+JitMode selects off, exact, generic, region or profile for the run. JitHotThreshold
+sets the entry count before an asynchronous block is considered for ranking
+(1 through 65535). Synchronous compilation and profiling use it as the
+admission count. These options override the equivalent Host environment
+settings. JitWorkers accepts 0 through 8.
 LlvmPipeline accepts an LLVM IR optimization level (O0, O1, O2, O3, Os, Oz)
 or a textual pass pipeline. The default is O2 with dead template definitions
-removed early online. Worker count, pipeline and JIT arena capacity are
+removed early online. LlvmFoldOperandLoads=on enables extra folding of
+decoded operand reads after LLVM inlines the exact block template. The
+default is off. Use FIBERCPU_LLVM_FOLD_OPERAND_LOADS=1 to set the process
+default or to enable the same pass in fibercpu_llvm_cache when generating
+a linked cache. The pass uses the packed layout of single- and two-slot
+instructions and keeps branch targets, link offsets and mutable bits live.
+The existing exact-operand argument bindings apply in both settings.
+
+After inlining and optimization, the online compiler and linked cache builder
+trace single-bit tests in the block's LLVM SSA. Proven predicates can feed
+consumers such as Jcc and CMOVcc directly. Packed flags remain available at
+block exits and memory replay, and the pass leaves unproven reads in place.
+
+  podish run -XX:JitMode=exact -XX:LlvmFoldOperandLoads=on IMAGE COMMAND
+
+JitMode=region uses the exact LLVM kernels and the same compilation workers.
+When a hot block is admitted, it can compile connected, registered blocks
+from the same read-only executable backing page into a shared function.
+Each member has its own threaded entry. The entry reads a guest page base
+and the member table from the decoded block. The code key contains only
+page offsets and recipes, so the region can be reused at another guest
+address. Known local edges use a branch and the target's fixed instruction
+count. Indirect targets are matched against the compiled page offsets.
+
+Region compilation currently considers up to twelve blocks and 192 guest
+instructions per job. Members need a complete recipe and must leave the
+shared function before any helper that may invoke a guest observer.
+External chains and memory replay materialize the current block and use
+the normal dispatcher. Publication validates the entire snapshot. A
+member invalidation revokes every entry of that page's region and restores
+the independent LLVM handlers with their scalar replay slots.
+
+Set FIBERCPU_LLVM_SHARED_REGION_EXITS=ON at CMake configure time to share
+flag packing and exit code among region edges with the same exit action.
+The default is OFF. This setting applies to online regions and to regions
+compiled by fibercpu_llvm_cache.
+
+Worker count, pipeline, operand load folding and JIT arena capacity are
 shared by the host process. Once initialized, an explicit conflicting value
 fails. A run with no override uses the shared setting.
 
@@ -169,8 +225,19 @@ the same recipe are merged across guest MMUs and cache resets in the
 same run. Podish finalizes the run after the scheduler returns and native
 code writes the profile atomically.
 
+WeightedProfileSamePage=on also samples the valid registered blocks starting
+in the hot block's guest page in the same MMU when the threshold is reached.
+Recipe generation runs at the dispatch boundary. Members that can be
+compiled use the same entry counters, with an export weight of one for
+recipes that were registered but never entered. The offline tool still
+compiles independent blocks.
+
 A block key contains the exit and ordered catalog-assigned operation IDs.
-Exact keys include the decoded operand shape for each operation. LLVM
+Exact keys include decoded operand shapes and the relative guest EIP
+layout, including discontinuities introduced by concatenation. Compiled
+handlers derive their guest EIP base from the installed block, so identical
+recipes can share code across guest addresses. The profile and linked bundle
+must be regenerated for the relative EIP key format. LLVM
 templates are indexed by the same IDs. Weighted profiles store each key's
 64-bit entry count in little-endian order before its encoded record.
 The legacy unweighted format, produced using FIBERCPU_LLVM_JIT=profile
@@ -182,11 +249,21 @@ profiles and linked bundles when changing the producer.
     --top 512 --llvm-opt-level O2
 
 The offline tool sorts weighted recipes by descending entry count.
---top limits the number of emitted objects. --llvm-opt-level and
+--top limits the number of independent block objects. --llvm-opt-level and
 --llvm-pass-pipeline are mutually exclusive.
+
+To add page regions to a linked cache, train with JitMode=region and set
+FIBERCPU_LLVM_JIT_SCHEDULER_TRACE to a file. Pass that file as --regions to
+fibercpu_llvm_cache along with the block profile. The trace records the
+relative member offsets and exact recipes of published regions. The tool
+compiles independent fallback objects and links each region as one object.
+The consumer publishes a region once all registered member blocks match its
+recipes and backing page. FIBERCPU_LINKED_PAGE_REGIONS=0 keeps the
+independent cache active and skips region installation.
 
 Configure the interpreter using the same sources, compiler, target and VM
 layout settings as the producer, with the linked bundle as a build input.
+Use the same FIBERCPU_LLVM_SHARED_REGION_EXITS setting in both builds.
 
   cmake -S libfibercpu -B <consumer> -DFIBERCPU_ENABLE_LLVM_JIT=OFF \
     -DFIBERCPU_LINKED_BLOCK_CACHE_FILE=/absolute/path/blocks.linked
@@ -208,38 +285,14 @@ first, and misses go to the online compiler. X86_GetLinkedBlockHitCount counts
 linked block entry installations. Linked handlers persist for the lifetime of the
 library and use no per-MMU JIT allocation budget.
 
-Tool metadata and fusion snapshot
----------------------------------
-X86_GetInstructionVariantCount/GetInstructionVariant expose immutable, build-local
-handler pointers together with names, families, normalized constraints, priorities,
-fusion parents and stable variant keys. The key includes opcode, logic reference
-and normalized constraints; addresses and registration order are not identities.
-The C ABI and managed bindings expose schema_version=1. Function pointers are
-only meaningful in the process/library that returned them. Disabled native
-variants keep their metadata and report a null handler.
-
-PerfTools reads generated/instruction_fusion_families.json for cross-platform
-baking. This small checked-in snapshot is exported from the native declarations;
-the baker no longer maintains a separate specializationFamilies dictionary.
-The source fingerprint is embedded at CMake configuration and checked on export
-and load. Hashing normalizes CRLF, so checkout line endings do not alter identity.
-No target library needs to be loaded while cross-compiling or generating source.
-
-After editing declaration inputs:
-  1. Build the native library against the existing checked-in fusion source.
-     For an already configured macOS tree:
-       cmake --build Fiberish.X86/build_native/host -j 3
-  2. Build PerfTools, then export the snapshot:
-       dotnet build Podish.PerfTools/Podish.PerfTools.csproj -c Release
-       dotnet Podish.PerfTools/bin/Release/net10.0/Podish.PerfTools.dll export-instruction-catalog --library Fiberish.X86/build_native/host/libfibercpu.dylib
-  3. Regenerate the selected fusion source using the normal gen-superopcodes
-     command if the approved expansion set changed. Review both generated files.
-  4. Run CPU tests with fusion ON/OFF and PerfTools tests.
-
-Use the corresponding .so/.dll path on other hosts. Export requires a native
-library built from the current catalog; stale libraries/snapshots are rejected.
-Initial native bootstrap uses the existing fusion source without running the
-baker. Custom SuperOpcodeManifest builds can generate again after the export.
+Tool metadata
+-------------
+X86_GetInstructionVariantCount/GetInstructionVariant expose the architectural
+catalog with normalized encodings and stable variant keys. X86_GetTrainingHandlerId
+canonicalizes native and baked handlers to structured training IDs. Use the
+handler-reflection API to inspect individual native symbols within the current
+process. The baked-fusion generator reads the numerical sequences from its
+profile manifest.
 
 Migration evidence (Apple M5 Max, macOS ARM64)
 --------------------------------------------

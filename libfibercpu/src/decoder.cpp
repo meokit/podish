@@ -18,6 +18,9 @@
 #if FIBERCPU_BLOCK_COMPILATION
 #include "jit/block_recipe.h"
 #endif
+#if FIBERCPU_LINKED_BLOCK_CACHE
+#include "jit/linked_block_cache.h"
+#endif
 
 namespace fiberish {
 
@@ -31,7 +34,7 @@ alignas(64) static const uint8_t kControlFlowMaps[2][32] = {
 
 // Helper to determine Immediate Size (in bytes) based on Blink Type and
 // Prefixes
-static int GetImmLength(uint8_t type, const DecodedOp* op) {
+static int GetImmLength(uint8_t type, const DecodedInstruction* op) {
     bool osz = op->prefixes.flags.opsize;  // 0x66
 
     switch (type) {
@@ -71,11 +74,12 @@ static int GetImmLength(uint8_t type, const DecodedOp* op) {
 }
 
 static bool UsesControlFlowCacheStorage(uint16_t handler_index) {
-    if (handler_index == 0xE8 || handler_index == 0xE9 || handler_index == 0xEB || handler_index == 0xC2 ||
-        handler_index == 0xC3 || (handler_index >= 0xE0 && handler_index <= 0xE3)) {
+    switch (handler_index) {
+#include "block_link_opcodes.inc"
         return true;
+        default:
+            return false;
     }
-    return (handler_index >= 0x70 && handler_index <= 0x7F) || (handler_index >= 0x180 && handler_index <= 0x18F);
 }
 
 static bool IsLockableOpcode(uint16_t opcode) {
@@ -138,7 +142,7 @@ InstructionDecodeResult DecodeInstructionBounded(const uint8_t* code, size_t ava
                                                  DecodeHandlerMode mode) {
     *inst = {};
 
-    DecodedOp* op = &inst->head;
+    DecodedInstruction* op = &inst->head;
 
     const uint8_t* start = code;
     const uint8_t* ptr = code;
@@ -386,20 +390,6 @@ InstructionDecodeResult DecodeInstructionBounded(const uint8_t* code, size_t ava
     // false positive)
     op->meta.flags.is_control_flow = is_rep | (is_map_match & (map <= 1));
 
-    // Final Step: Calculate Relative Handler Offset
-    // Specialized 32-bit MOV (0x89, 0x8B) - No Legacy Prefixes
-    // Important: We only check legacy prefixes (lock, rep, segment, opsize, addrsize)
-    // which are in the low 8 bits of prefixes.all.
-    if (mode == DecodeHandlerMode::Native && map == 0 && (op->prefixes.all & 0xFF) == 0) {
-        if (opcode == 0x89) {
-            uint8_t mod = (op->modrm >> 6) & 3;
-            *handler_index = (mod == 3) ? OP_MOV_RR_STORE : OP_MOV_RM_STORE;
-        } else if (opcode == 0x8B) {
-            uint8_t mod = (op->modrm >> 6) & 3;
-            *handler_index = (mod == 3) ? OP_MOV_RR_LOAD : OP_MOV_MR_LOAD;
-        }
-    }
-
     HandlerFunc h = g_Handlers[*handler_index];
     if (h) {
         op->handler = h;
@@ -466,80 +456,50 @@ static bool IsDirectRelativeJccHandlerIndex(uint16_t handler_index) {
 
 static bool IsDirectRelativeCallHandlerIndex(uint16_t handler_index) { return handler_index == 0xE8; }
 
-static bool UsesBranchCarryingSentinel(uint16_t handler_index, const DecodedOp& op) {
+static bool UsesBranchCarryingSentinel(uint16_t handler_index, const DecodedInstruction& op) {
     if (handler_index != 0xFF) return false;
     const uint8_t subop = (op.modrm >> 3) & 7;
     return subop == 2 || subop == 4;
 }
 
-static uint32_t GetDirectRelativeJmpTarget(uint16_t handler_index, const DecodedOp& op) {
-    if (handler_index == 0xEB) {
-        return op.next_eip + static_cast<int8_t>(GetImm(&op));
-    }
-    if (op.prefixes.flags.opsize) {
-        return (op.next_eip + static_cast<int16_t>(GetImm(&op))) & 0xFFFFu;
-    }
-    return op.next_eip + static_cast<int32_t>(GetImm(&op));
+static RelativeBranchWidth GetRelativeBranchWidth(uint16_t opcode, bool operand16) {
+    if (!IsDirectRelativeJmpHandlerIndex(opcode) && !IsDirectRelativeJccHandlerIndex(opcode) &&
+        !IsDirectRelativeCallHandlerIndex(opcode))
+        return RelativeBranchWidth::None;
+    if (opcode == 0xEB || (opcode >= 0x70 && opcode <= 0x7F) || (opcode >= 0xE0 && opcode <= 0xE3))
+        return RelativeBranchWidth::Byte;
+    return operand16 ? RelativeBranchWidth::Word : RelativeBranchWidth::Dword;
 }
 
-static uint32_t GetDirectRelativeJccTarget(uint16_t handler_index, const DecodedOp& op) {
-    if ((handler_index >= 0xE0 && handler_index <= 0xE3) || (handler_index >= 0x70 && handler_index <= 0x7F)) {
-        return op.next_eip + static_cast<int8_t>(GetImm(&op));
-    }
-    if (op.prefixes.flags.opsize) {
-        return (op.next_eip + static_cast<int16_t>(GetImm(&op))) & 0xFFFFu;
-    }
-    return op.next_eip + static_cast<int32_t>(GetImm(&op));
-}
-
-static bool TryGetDirectRelativeTargetEip(uint16_t handler_index, const DecodedOp& op, uint32_t* target_eip) {
-    if (IsDirectRelativeJmpHandlerIndex(handler_index)) {
-        *target_eip = GetDirectRelativeJmpTarget(handler_index, op);
-        return true;
-    }
-    if (IsDirectRelativeJccHandlerIndex(handler_index)) {
-        *target_eip = GetDirectRelativeJccTarget(handler_index, op);
-        return true;
-    }
-    if (IsDirectRelativeCallHandlerIndex(handler_index)) {
-        *target_eip = GetDirectRelativeJmpTarget(handler_index, op);
-        return true;
-    }
-    return false;
-}
-
-static void ApplySpecializedHandler(uint16_t handler_index, DecodedOp& op) {
+static void ApplySpecializedHandler(uint16_t handler_index, DecodedInstruction& op) {
     HandlerFunc specialized_h = FindSpecializedHandler(handler_index, &op);
     if (specialized_h) {
         op.handler = specialized_h;
     }
 }
 
-static void FinalizeDecodedInstructionAt(uint32_t eip, uint16_t handler_index, DecodedOp* op, DecodeHandlerMode mode,
-                                         BasicBlock* invalid_target) {
+static void FinalizeDecodedInstructionAt(uint32_t eip, uint16_t handler_index, DecodedInstruction* op,
+                                         DecodeHandlerMode mode) {
     op->next_eip = eip + op->GetLength();
     if (mode == DecodeHandlerMode::Native) {
         ApplySpecializedHandler(handler_index, *op);
     } else if (auto generic = FindGenericInstructionHandler(handler_index, op)) {
         op->handler = generic;
     }
-    if (GetExtKind(op) == ExtKind::ControlFlow) {
-        SetCachedTarget(op, invalid_target);
-    }
-    uint32_t target_eip;
-    // Read the immediate before storing a target. These fields share storage
-    // with the memory descriptor, so only relative control-flow ops use it.
-    if (TryGetDirectRelativeTargetEip(handler_index, *op, &target_eip)) {
-        SetControlTargetEip(op, target_eip);
+    const auto width = GetRelativeBranchWidth(handler_index, op->prefixes.flags.opsize);
+    if (width != RelativeBranchWidth::None) {
+        SetExtKind(op, ExtKind::ControlFlow);
+        op->ext.control.target_eip = RelativeBranchTarget(op->next_eip, GetImm(op), width);
+        op->ext.control.relative_width = width;
     }
 }
 
-void FinalizeDecodedInstruction(EmuState* state, uint32_t eip, uint16_t handler_index, DecodedOp* op,
+void FinalizeDecodedInstruction(EmuState*, uint32_t eip, uint16_t handler_index, DecodedInstruction* op,
                                 DecodeHandlerMode mode) {
-    FinalizeDecodedInstructionAt(eip, handler_index, op, mode, state->mmu.invalid_code_block());
+    FinalizeDecodedInstructionAt(eip, handler_index, op, mode);
 }
 
-static bool DecodedOpSemanticallyEquals(const DecodedOp& decoded, const DecodedOp& cached) {
+static bool DecodedInstructionSemanticallyEquals(const DecodedInstruction& decoded, const DecodedInstruction& cached) {
     if (decoded.handler != cached.handler || decoded.next_eip != cached.next_eip || decoded.len != cached.len ||
         decoded.modrm != cached.modrm || decoded.prefixes.all != cached.prefixes.all ||
         decoded.meta.all != cached.meta.all) {
@@ -559,7 +519,7 @@ static bool DecodedOpSemanticallyEquals(const DecodedOp& decoded, const DecodedO
     return false;
 }
 
-bool CopyDecodedInstructionBytes(EmuState* state, const DecodedOp& published, std::span<uint8_t> bytes) {
+bool CopyDecodedInstructionBytes(EmuState* state, const DecodedInstruction& published, std::span<uint8_t> bytes) {
     if (bytes.empty() || bytes.size() != published.len) return false;
     uint32_t eip = published.next_eip - published.len;
     while (!bytes.empty()) {
@@ -573,7 +533,8 @@ bool CopyDecodedInstructionBytes(EmuState* state, const DecodedOp& published, st
     return true;
 }
 
-bool RedecodeGenericInstruction(std::span<const uint8_t> bytes, const DecodedOp& published, DecodedOp& generic) {
+bool RedecodeGenericInstruction(std::span<const uint8_t> bytes, const DecodedInstruction& published,
+                                DecodedInstruction& generic) {
     if (bytes.empty() || bytes.size() != published.len) return false;
     constexpr auto mode = DecodeHandlerMode::Generic;
     const uint32_t eip = published.next_eip - published.len;
@@ -582,7 +543,7 @@ bool RedecodeGenericInstruction(std::span<const uint8_t> bytes, const DecodedOp&
     if (DecodeInstructionBounded(bytes.data(), bytes.size(), &inst, &opcode, nullptr, mode) !=
         InstructionDecodeResult::Success)
         return false;
-    FinalizeDecodedInstructionAt(eip, opcode, &inst.head, mode, nullptr);
+    FinalizeDecodedInstructionAt(eip, opcode, &inst.head, mode);
 
     // Use the final block's slot boundaries. In particular, DecodeBlock can
     // absorb one or more NOPs into an instruction's length.
@@ -603,10 +564,10 @@ bool RedecodeGenericInstruction(std::span<const uint8_t> bytes, const DecodedOp&
     auto expected = published;
     expected.handler = generic.handler;
     expected.meta.flags.operand_lowered = 0;
-    return DecodedOpSemanticallyEquals(generic, expected);
+    return DecodedInstructionSemanticallyEquals(generic, expected);
 }
 
-bool RedecodeGenericInstruction(EmuState* state, const DecodedOp& published, DecodedOp& generic) {
+bool RedecodeGenericInstruction(EmuState* state, const DecodedInstruction& published, DecodedInstruction& generic) {
     uint8_t buffer[UINT8_MAX];
     const auto bytes = std::span(buffer).first(published.len);
     return CopyDecodedInstructionBytes(state, published, bytes) &&
@@ -619,22 +580,22 @@ static bool BasicBlockMatchesDecodedCandidate(const BasicBlock* candidate, uint3
                                               std::span<const DecodedInstTmp> temp_ops) {
     if (!candidate || candidate->is_valid()) return false;
     if (candidate->canonical_start_eip() != start_eip || candidate->end_eip != end_eip ||
-        candidate->inst_count() != inst_count || candidate->slot_count != slot_count ||
-        candidate->sentinel_slot_index != slot_count - 1 || candidate->terminal_kind() != terminal_kind ||
+        candidate->inst_count() != inst_count || candidate->terminal_kind() != terminal_kind ||
         candidate->branch_target_eip != branch_target_eip || candidate->fallthrough_eip != fallthrough_eip) {
         return false;
     }
 
-    const DecodedOp* cached_ops = candidate->FirstOp();
     for (uint32_t i = 0; i < slot_count; ++i) {
-        if (compare_scalar && i < candidate->sentinel_slot_index) {
-            auto scalar = cached_ops[i];
-            scalar.handler = candidate->UnfusedHandlers()[i];
-            scalar.meta.flags.operand_lowered = 0;
-            if (!DecodedOpSemanticallyEquals(temp_ops[i].head, scalar)) return false;
-        } else {
-            if (!DecodedOpSemanticallyEquals(temp_ops[i].head, cached_ops[i])) return false;
+        auto slot = candidate->ReadOp(i);
+        if (compare_scalar && i < inst_count) {
+            slot.handler = candidate->UnfusedHandlers()[i];
+            slot.meta.flags.operand_lowered = 0;
         }
+        auto decoded = temp_ops[i].head;
+        if (!compare_scalar && i < inst_count) {
+            if (const auto binding = BindScalarHandler(decoded); binding.handler) decoded.handler = binding.handler;
+        }
+        if (!DecodedInstructionSemanticallyEquals(decoded, slot)) return false;
     }
 
     return true;
@@ -721,7 +682,7 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
             sentinel.head.handler = exit_h;
 
             // Sentinel next_block initialization to dummy
-            SetNextBlock(&sentinel.head, state->mmu.invalid_code_block());
+            SetExtKind(&sentinel.head, ExtKind::Link);
             sentinel.head.next_eip = current_eip;
 
             op_storage[op_count++] = sentinel;
@@ -797,7 +758,7 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
             branch_carrying_sentinel ? g_ExitHandlersBranch[exit_idx] : g_ExitHandlersFallthrough[exit_idx];
         sentinel.head.handler = exit_h;
         sentinel.head.next_eip = op_storage[op_count - 1].head.next_eip;  // Copy next_eip from last op
-        SetNextBlock(&sentinel.head, state->mmu.invalid_code_block());
+        SetExtKind(&sentinel.head, ExtKind::Link);
         op_storage[op_count++] = sentinel;
     }
     end_eip = current_eip;
@@ -806,7 +767,7 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
     // DFE Optimization (Backward Pass)
     live_flags = DFE_ALL_FLAGS;
     for (int i = (int)op_count - 2; i >= 0; --i) {
-        DecodedOp& op = op_storage[i].head;
+        DecodedInstruction& op = op_storage[i].head;
         if (i >= (int)index_count) break;
 
         uint16_t h_idx = index_storage[i];
@@ -845,16 +806,19 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
                                        : op.prefixes.flags.opsize                 ? 16
                                                                                   : 32;
                 if (count == 0 || (carry_rotate && count % (width + 1) == 0)) break;
-                writes = subop < 4 ? CF_MASK | OF_MASK : DFE_ALL_FLAGS;
+                // Rotates preserve OF for multiple bits in the interpreter.
+                // Shifts clear the arithmetic flags before calculating new ones.
+                writes = subop < 4 ? CF_MASK | (count == 1 ? OF_MASK : 0) : DFE_ALL_FLAGS;
                 break;
             }
             case DFE_TYPE_GROUP3: {
                 uint8_t reg = (op.modrm >> 3) & 7;
-                if (reg == 0 || reg == 1) {  // TEST
+                if (reg < 2 || reg == 3) {  // TEST, NEG
                     writes = DFE_ALL_FLAGS;
-                } else if (reg == 2) {  // NOT
-                } else {                // NEG, MUL
-                    writes = DFE_ALL_FLAGS;
+                } else if (reg == 4 || reg == 5) {  // MUL, IMUL
+                    writes = CF_MASK | OF_MASK;
+                } else if (reg >= 6) {  // DIV, IDIV may fault and preserve the cached flags.
+                    reads = DFE_ALL_FLAGS;
                 }
                 break;
             }
@@ -865,7 +829,7 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
                 }
                 // Group 5 may fault before updating flags or access the stack
                 // even when its explicit operand is a register (CALL, PUSH).
-                if (flat_idx == 0xff && (HasMem(&op) || (reg > 1 && reg != 4))) reads = DFE_ALL_FLAGS;
+                if (reg > 1 && (flat_idx == 0xfe || reg != 4)) reads = DFE_ALL_FLAGS;
                 break;
             }
             case DFE_TYPE_REGISTER_FLAGS:
@@ -889,27 +853,10 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
                 break;
         }
 
-        if (writes != 0 && (writes & live_flags) == 0) {
-            // Dead Flags!
-            op.meta.flags.no_flags = 1;
+        // A restart or fault may expose the flags from before the instruction.
+        if (HasMem(&op) && flat_idx != 0x8d) reads |= DFE_ALL_FLAGS;  // LEA has no memory access.
 
-            // Re-resolve Handler with no_flags set
-            // Note: We might have resolved a specialized handler earlier.
-            // If we have a specialized handler that also supports NoFlags, fantastic.
-            // But currently registered handlers are either Generic, Generic-NF, or Specialized-Attr.
-            // If we have Specialized-Attr (e.g. Add_RegEax), we need Add_RegEax_NF.
-            // But if we only have Add_Generic_NF, we might lose RegEax optimization.
-            // The user implies we should use specialization system to select the best one.
-            HandlerFunc special_h = FindSpecializedHandler(h_idx, &op);
-            if (special_h) {
-                op.handler = special_h;
-            } else {
-                // If no specialized handler found for NoFlags, keep original?
-                // Or try to find generic NF handler?
-                // RegisterNF implementation registers a specialized handler with just no_flags=true.
-                // FindSpecialized will match it if no other constraints block it.
-            }
-        }
+        if (writes != 0 && (writes & live_flags) == 0) op.meta.flags.no_flags = 1;
         live_flags &= ~writes;
         live_flags |= reads;
     }
@@ -930,14 +877,14 @@ finalize:
 
     const uint32_t slot_count = static_cast<uint32_t>(op_count);
     const uint32_t decoded_inst_count = slot_count == 0 ? 0 : slot_count - 1;
-    auto* scalar_ops = reinterpret_cast<DecodedOp*>(op_storage.data());
+    auto* scalar_ops = reinterpret_cast<DecodedInstruction*>(op_storage.data());
 
     BlockTerminalKind terminal_kind = BlockTerminalKind::None;
     uint32_t branch_target_eip = 0;
     uint32_t fallthrough_eip = end_eip;
     if (decoded_inst_count != 0 && index_count != 0) {
         const uint16_t last_handler_index = index_storage[index_count - 1];
-        const DecodedOp& last_op = op_storage[decoded_inst_count - 1].head;
+        const DecodedInstruction& last_op = op_storage[decoded_inst_count - 1].head;
         if (IsDirectRelativeJmpHandlerIndex(last_handler_index)) {
             terminal_kind = BlockTerminalKind::DirectJmpRel;
             branch_target_eip = GetControlTargetEip(&last_op);
@@ -975,7 +922,16 @@ finalize:
         return invalidated_candidate;
     }
 
-    size_t alloc_size = BasicBlock::CalculateSize(slot_count, hot_count != 0);
+    const std::span<const DecodedInstruction> final_ops(scalar_ops, slot_count);
+    const auto layout = BlockSlotLayout::Inspect(start_eip, final_ops);
+    bool retain_region_context = false;
+#if FIBERCPU_LLVM_JIT
+    retain_region_context = hot_count && LLVMPageRegionsEnabled(*state);
+#endif
+#if FIBERCPU_LINKED_BLOCK_CACHE
+    retain_region_context |= hot_count && LinkedPageRegionsEnabled();
+#endif
+    size_t alloc_size = BasicBlock::CalculateSize(layout, hot_count != 0, retain_region_context);
     void* mem = state->mmu.try_allocate_block_bytes(alloc_size, start_eip);
     if (!mem) {
         if (use_single_step) *use_single_step = true;
@@ -988,23 +944,19 @@ finalize:
     block->set_valid(true);
     block->end_eip = end_eip;
     block->set_inst_count(inst_count);
-    block->slot_count = slot_count;
     block->exec_count = 0;
-    block->sentinel_slot_index = slot_count - 1;
     block->branch_target_eip = branch_target_eip;
     block->fallthrough_eip = fallthrough_eip;
     block->set_terminal_kind(terminal_kind);
-    block->entry = scalar_ops->handler;
     block->chain.llvm_hot_count = hot_count;
 #if FIBERCPU_LLVM_JIT
     block->chain.weighted_profile = hot_count && LLVMWeightedProfileEnabled(*state);
 #endif
     block->has_unfused_handlers = hot_count != 0;
+    block->chain.has_region_context = retain_region_context;
 
-    DecodedOp* dst = block->FirstOp();
-    for (uint32_t i = 0; i < slot_count; ++i) {
-        dst[i] = op_storage[i].head;
-    }
+    block->WriteOps(layout, final_ops, state->mmu.invalid_code_block());
+    if (retain_region_context) block->SetRegionContext(nullptr);
 #if FIBERCPU_BLOCK_COMPILATION
     if (hot_count) std::copy_n(scalar_handlers.data(), decoded_inst_count, block->UnfusedHandlers());
 #endif
@@ -1016,8 +968,161 @@ finalize:
 // BasicBlock Implementation
 // ----------------------------------------------------------------------------
 
+namespace {
+
+uint64_t PackOperand(const DecodedInstruction& op) {
+    const auto common = DecodedOp::PackOperandHeader(op.modrm, op.prefixes.all, op.meta.all);
+    if (!HasMem(&op)) {
+        const auto ext_kind = GetExtKind(&op);
+        const auto branch_width =
+            ext_kind == ExtKind::ControlFlow ? op.ext.control.relative_width : RelativeBranchWidth::None;
+        const auto value = branch_width == RelativeBranchWidth::None ? GetImm(&op) : GetControlTargetEip(&op);
+        if (ext_kind == ExtKind::ControlFlow) {
+            // Only the opcode low bits occupy the ModRM byte on these forms.
+            assert(!op.meta.flags.has_modrm && op.modrm < 8);
+            return common | DecodedOp::kBranchTag | (uint64_t(branch_width) << DecodedOp::kBranchWidthShift) | value;
+        }
+        return common | (uint64_t(ext_kind) << DecodedOp::kAddressShift) | value;
+    }
+    assert(op.meta.flags.has_modrm);
+    return DecodedOp::PackMemoryPayload(common, GetAddressDescriptor(&op), GetDisplacement(&op), GetImm(&op));
+}
+
+}  // namespace
+
+BlockSlotLayout BlockSlotLayout::Inspect(uint32_t start_eip, std::span<const DecodedInstruction> ops) {
+    assert(!ops.empty() && ops.size() <= 65);
+    BlockSlotLayout layout{static_cast<uint8_t>(ops.size()), 0, 0};
+    auto expected = start_eip;
+    for (const auto& op : ops.first(ops.size() - 1)) {
+        if (op.next_eip - op.len != expected) ++layout.anchor_count;
+        expected = op.next_eip;
+        if (HasExtraOperandSlot(op.meta.all, op.prefixes.all, GetImm(&op))) ++layout.data_slot_count;
+    }
+    return layout;
+}
+
+void BasicBlock::WriteOps(BlockSlotLayout layout, std::span<const DecodedInstruction> ops, BasicBlock* invalid,
+                          bool preserve_handlers) {
+    slot_count = static_cast<uint8_t>(layout.PhysicalSlotCount());
+    sentinel_slot_index = slot_count - 1;
+    set_inst_count(layout.logical_slot_count - 1);
+    link_only_return_prefixes = 0;
+    anchor_count = layout.anchor_count;
+    sentinel_eip = ops.back().next_eip;
+
+    const auto anchor_offset = AnchorOffset();
+    auto* anchors =
+        anchor_count ? reinterpret_cast<uint64_t*>(reinterpret_cast<std::byte*>(this) + anchor_offset) : nullptr;
+    auto* adjustments = anchors ? reinterpret_cast<uint32_t*>(anchors + 1) : nullptr;
+    auto* data_mask = HasDataSlots() ? const_cast<BlockDataSlotMask*>(DataSlotMask()) : nullptr;
+    if (data_mask) *data_mask = {};
+    if (anchors) *anchors = 0;
+    uint16_t offset = 0;
+    uint32_t expected = start_eip();
+    auto* ends = const_cast<uint16_t*>(PCEnds());
+    uint32_t physical_index = 0;
+    for (unsigned i = 0; i < inst_count(); ++i) {
+        const auto& op = ops[i];
+        const uint64_t bit = uint64_t{1} << i;
+        if (op.next_eip - op.len != expected) {
+            *anchors |= bit;
+            *adjustments++ = op.next_eip - op.len - (start_eip() + offset);
+        }
+        offset += op.len;
+        ends[i] = offset;
+        expected = op.next_eip;
+        auto& slot = FirstOp()[physical_index++];
+        if (fiberish::IsLinkOnlyReturn(op.meta.all)) {
+            assert(i + 1 == inst_count() && !op.prefixes.flags.lock);
+            link_only_return_prefixes = op.prefixes.all | prefix::LOCK;
+            slot.StoreBlockLink(invalid);
+        } else {
+            slot.payload = PackOperand(op);
+        }
+        slot.handler = op.handler;
+        if (!preserve_handlers) {
+            const auto binding = BindScalarHandler(op);
+            if (binding.handler) slot.handler = binding.handler;
+        }
+        const bool branch_link = HasBranchLinkSlot(op.meta.all);
+        const bool memory_immediate = compact_imm::NeedsSeparateSlot(op);
+        if (branch_link || memory_immediate) {
+            data_mask->logical |= bit;
+            data_mask->physical[physical_index / 64] |= uint64_t{1} << (physical_index % 64);
+            auto& data = FirstOp()[physical_index++];
+            if (branch_link) {
+                data.handler = nullptr;
+                data.StoreBlockLink(invalid);
+            } else {
+                data.handler = ForwardMemoryImmediateSlot;
+                data.payload = GetImm(&op);
+            }
+        }
+    }
+    assert(physical_index == sentinel_slot_index);
+    Sentinel()->handler = ops.back().handler;
+    entry = FirstOp()->handler;
+    SetFallthroughLink(invalid);
+}
+
+DecodedInstruction BasicBlock::ReadOp(size_t slot) const {
+    const auto& op = *LogicalOp(slot);
+    DecodedInstruction result{};
+    result.handler = op.handler;
+    result.next_eip = GetNextEip(slot);
+    if (slot == inst_count()) {
+        SetExtKind(&result, ExtKind::Link);
+        return result;
+    }
+    result.len = GetOpLength(slot);
+    if (IsLinkOnlyReturn(&op)) {
+        result.modrm = 0xC3 & 7;
+        result.prefixes.all = link_only_return_prefixes & ~prefix::LOCK;
+        result.meta.flags.is_control_flow = 1;
+        SetExtKind(&result, ExtKind::ControlFlow);
+        return result;
+    }
+    // Runtime handlers get a bound constant. Only the decoded snapshot
+    // needs the original encoding for concatenation, re-decode and export.
+    result.modrm = uint8_t(op.payload >> DecodedOp::kModRMShift);
+    if (op.HasBranchOperands()) result.modrm &= 7;
+    result.prefixes = op.GetPrefixes();
+    result.meta = op.GetMeta();
+    if (GetExtKind(&result) == ExtKind::ControlFlow) {
+        const auto width = op.BranchWidth();
+        const auto target = width == RelativeBranchWidth::None ? 0 : op.Primary();
+        uint32_t displacement = op.Primary() - result.next_eip;
+        switch (width) {
+            case RelativeBranchWidth::Byte:
+                displacement = uint8_t(displacement);
+                break;
+            case RelativeBranchWidth::Word:
+                displacement = uint16_t(displacement);
+                break;
+            case RelativeBranchWidth::Dword:
+                break;
+            case RelativeBranchWidth::None:
+                displacement = op.Primary();
+                break;
+        }
+        result.ext.control = {displacement, target, width, {}};
+    } else if (op.HasMemory()) {
+        result.ext.data = {GetImm(&op), op.AddressDescriptor(), op.Primary(), 0};
+    } else {
+        result.ext.data.imm = op.Primary();
+    }
+    return result;
+}
+
 void BasicBlock::Invalidate() {
     if (!is_valid()) return;
+#if FIBERCPU_LLVM_JIT
+    if (chain.jit_execution_profile) {
+        TraceLLVMJitRetirement(*this);
+        chain.jit_execution_profile = false;
+    }
+#endif
     set_valid(false);
     ++invalidation_revision;
     // No unlinking needed because chained exits validate the cached block header on dispatch.

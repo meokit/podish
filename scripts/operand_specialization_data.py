@@ -2,18 +2,21 @@
 
 import hashlib
 import re
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
 
 
 def instruction_targets(catalog):
     targets = {}
     for opcode, name in catalog["fallbacks"].items():
         targets.setdefault(name, set()).add(int(opcode))
-    for opcode, name in catalog.get("generic_fallbacks", {}).items():
-        targets.setdefault(name, set()).add(int(opcode))
     for row in catalog["variants"]:
         targets.setdefault(row["logic"], set()).add(catalog["families"][row["family"]]["opcode"])
     return targets
+
+
+def relative_control_operations(catalog):
+    relative = set(catalog["block_links"]["with_operands"]) - {0xc2}  # RET imm16 pops extra stack bytes.
+    return {name for name, opcodes in instruction_targets(catalog).items() if opcodes <= relative}
 
 
 def generated_fusions(source):
@@ -23,7 +26,9 @@ def generated_fusions(source):
     }
 
 
-FUSION_CALL = re.compile(r'RUN_SUPEROPCODE_OP\(op::(\w+),[^()]*\)')
+FUSION_CALL = re.compile(
+    r'RUN_SUPEROPCODE_OP_WITH_POLICY\(SlotPolicy\d+, op::(\w+),[^()]*\)'
+)
 
 
 @dataclass(frozen=True)
@@ -35,6 +40,12 @@ class TrainingHandler:
     @property
     def cpp(self):
         return f"DispatchWrapper<op::{self.name}>" if self.kind == "wrapper" else self.name
+
+
+def fusion_training_id(operation_ids):
+    key = b"".join(op_id.to_bytes(4, "little") for op_id in operation_ids)
+    digest = int.from_bytes(hashlib.sha256(key).digest()[:4], "little")
+    return 0x80000000 | (digest & 0x3fffffff)
 
 
 def training_handlers(catalog, fusions):
@@ -52,16 +63,14 @@ def training_handlers(catalog, fusions):
     scalar_ids = {name: add(0, name.encode("ascii"), name, (name,), "wrapper")
                   for name in sorted(instruction_targets(catalog))}
 
-    def add_fusion(domain, name, operations, kind):
+    for name, body in sorted(fusions.items()):
+        operations = tuple(call[1] for call in FUSION_CALL.finditer(body))
         if not 2 <= len(operations) <= 4 or any(op not in scalar_ids for op in operations):
             raise ValueError(f"invalid training fusion recipe: {name}")
-        key = b"".join(scalar_ids[op].to_bytes(4, "little") for op in operations)
-        add(domain, key, name, operations, kind)
-
-    for name, body in sorted(fusions.items()):
-        add_fusion(0x80000000, name, tuple(call[1] for call in FUSION_CALL.finditer(body)), "fused")
-    for row in catalog["handwritten_fusions"]:
-        add_fusion(0xc0000000, row["name"], tuple(row["operations"]), "handwritten")
+        identifier = fusion_training_id(scalar_ids[op] for op in operations)
+        if identifier in handlers:
+            raise ValueError(f"duplicate training identity: {name} (0x{identifier:08x})")
+        handlers[identifier] = TrainingHandler(name, operations, "fused")
     return handlers
 
 
@@ -75,10 +84,11 @@ def training_plan_match(plan):
     return match
 
 
-def resolve_training_plan(plan, catalog, fusions, limit=None):
+def resolve_training_plan(plan, catalog, fusions):
     handlers = training_handlers(catalog, fusions)
-    rows = []
-    for item in plan["entries"][:limit]:
+    relative = relative_control_operations(catalog)
+    rows = {}
+    for item in plan["entries"]:
         identifier = item["originalId"]
         if type(identifier) is not int or not 0 < identifier <= 0xffffffff:
             raise ValueError(f"invalid training handler ID: {identifier!r}")
@@ -90,28 +100,37 @@ def resolve_training_plan(plan, catalog, fusions, limit=None):
             raise ValueError(f"unknown training handler ID: 0x{identifier:08x}")
         if (item["kind"], item["width"]) != (handler.kind, len(handler.operations)):
             raise ValueError(f"invalid shape for training handler ID: 0x{identifier:08x}")
-        rows.append({**item, "original": handler.cpp})
-    return rows
+        operands = tuple(Operand(**fields) for fields in item["operands"])
+        if len(operands) != len(handler.operations):
+            raise ValueError(f"invalid decoded operand count for {handler.name}")
+        shapes = tuple(operand.for_specialization(name in relative)
+                       for operand, name in zip(operands, handler.operations))
+        key = identifier, shapes
+        for field in ("count", "dispatch_count"):
+            if field in item and (type(item[field]) is not int or item[field] < 0):
+                raise ValueError(f"invalid {field} for {handler.name}")
+        if key in rows:
+            for field in ("count", "dispatch_count"):
+                if field in item:
+                    rows[key][field] = rows[key].get(field, 0) + item[field]
+        else:
+            rows[key] = {**item, "original": handler.cpp, "operands": [asdict(shape) for shape in shapes]}
+    return list(rows.values())
 
 
-def specialize_profile_fusion(body, original, clone, operands):
-    calls = list(FUSION_CALL.finditer(body))
-    if len(calls) != len(operands):
+def specialize_fusion(body, original, clone, policies):
+    if len(list(FUSION_CALL.finditer(body))) != len(policies):
         raise ValueError("Fusion width does not match selected source: " + original)
-    for call, operand in reversed(list(zip(calls, operands))):
-        replacement = "RUN_SUPEROPCODE_OP_IMM" + call[0][len("RUN_SUPEROPCODE_OP"):-1]
-        body = body[:call.start()] + replacement + f", 0x{operand.imm:08x}u)" + body[call.end():]
-    assumptions = "".join(
-        f"    OperandSpec::Profile<{operand.cpp()}>::Assume(op + {i});\n"
-        for i, operand in enumerate(operands)
-    )
-    pos = body.index("{") + 1
-    return (body[:pos] + "\n" + assumptions + body[pos:]).replace(original, clone)
+    return re.sub(r'OperandSpec::FusionSlot<SlotMask, (\d+)>',
+                  lambda match: policies[int(match[1])], body).replace(original, clone)
 
 
 METADATA_MASK = 0xdf  # The lowering bit describes the host handler, not the x86 instruction.
+HAS_MODRM = 1
 HAS_MEMORY = 2
 HAS_IMMEDIATE = 4
+NO_FLAGS = 1 << 4
+OPSIZE_PREFIX = 1 << 6
 
 
 @dataclass(frozen=True, order=True)
@@ -140,6 +159,11 @@ class Operand:
 
     def shape_key(self):
         return self.modrm | self.prefixes << 8 | self.ea_desc << 16
+
+    def for_specialization(self, relative):
+        if relative and self.meta >> 6 == 2 and self.imm:
+            return replace(self, imm=0)
+        return self
 
     @property
     def encoding(self):
