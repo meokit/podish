@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <mutex>
 #include <shared_mutex>
 #include "dispatch.h"
 #include "instruction_variants.h"

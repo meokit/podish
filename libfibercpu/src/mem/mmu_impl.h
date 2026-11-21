@@ -353,6 +353,18 @@ MemResult<T> Mmu::read_tlb_only(GuestAddr addr, MicroTLB* utlb) {
     return std::unexpected(FaultCode::PageFault);
 }
 
+template <typename T>
+FORCE_INLINE void StoreGuestValue(const EmuState* state, HostAddr host, const T& value) {
+#if defined(__has_builtin)
+#if __has_builtin(__builtin_assume_separate_storage)
+    // Guest backing, including caller-owned external pages, is allocated separately from the engine.
+    __builtin_assume_separate_storage(state, host);
+#endif
+#endif
+    (void)state;
+    std::memcpy(host, &value, sizeof(T));
+}
+
 template <typename T, bool Store, bool FlushOnMiss>
 MemResult<std::conditional_t<Store, void, HostAddr>> Mmu::write_tlb_impl(GuestAddr addr, T val, MicroTLB* utlb) {
     const MicroTlbAccessGuard<T> guard{addr};
@@ -362,11 +374,12 @@ MemResult<std::conditional_t<Store, void, HostAddr>> Mmu::write_tlb_impl(GuestAd
             stats.l1_write_hits++;
             stats.total_writes++;
 #endif
+            auto* host = reinterpret_cast<HostAddr>(utlb->addend + addr);
             if constexpr (Store) {
-                std::memcpy((void*)(utlb->addend + addr), &val, sizeof(T));
+                StoreGuestValue(get_state(), host, val);
                 return {};
             } else {
-                return reinterpret_cast<HostAddr>(utlb->addend + addr);
+                return host;
             }
         }
 
@@ -380,7 +393,8 @@ MemResult<std::conditional_t<Store, void, HostAddr>> Mmu::write_tlb_impl(GuestAd
 #endif
             // Preserve ordinary-store ordering. The RMW specialization only
             // obtains the target; Store is compile-time.
-            if constexpr (Store) std::memcpy((void*)(entry.addend + addr), &val, sizeof(T));
+            auto* host = reinterpret_cast<HostAddr>(entry.addend + addr);
+            if constexpr (Store) StoreGuestValue(get_state(), host, val);
 
             const bool readable = has_property(entry.perm, Property::Read);
             utlb->tags = PackMicroTlbTags(readable ? guard.tag : kInvalidMicroTlbTag, guard.tag);
@@ -388,7 +402,7 @@ MemResult<std::conditional_t<Store, void, HostAddr>> Mmu::write_tlb_impl(GuestAd
             if constexpr (Store)
                 return {};
             else
-                return reinterpret_cast<HostAddr>(entry.addend + addr);
+                return host;
         }
     }
 

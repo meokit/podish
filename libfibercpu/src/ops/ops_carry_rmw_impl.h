@@ -50,7 +50,7 @@ FORCE_INLINE LogicFlow ExecuteCarryMemRmw(EmuState* state, GprCache& gpr, Decode
         return flow;
     }
     const T result = CalculateCarryRmw<Kind, T, UpdateFlags>(state, flags_cache, dest, src);
-    std::memcpy(*target, &result, sizeof(T));
+    mem::StoreGuestValue(state, *target, result);
     return LogicFlow::Continue;
 }
 

@@ -1874,6 +1874,7 @@ public:
 
     // API: map_external_page - Map an external memory page to guest address
     // The external memory is NOT owned by the MMU (will not be freed on munmap)
+    // The backing allocation is caller-owned and separate from any engine's EmuState.
     // For mmap passthrough, shared memory, etc.
     // Returns true on success
     bool map_external_page(GuestAddr addr, HostAddr external_page, uint8_t perms_raw) {
