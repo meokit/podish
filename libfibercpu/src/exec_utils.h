@@ -751,19 +751,23 @@ FORCE_INLINE T AluAdd(EmuState* state, uint64_t& flags_cache, T dest, T src) {
     return res;
 }
 
-template <typename T, bool UpdateFlags = true>
-FORCE_INLINE T AluSub(EmuState* state, uint64_t& flags_cache, T dest, T src) {
+template <typename T>
+struct SubtractionResultFlags {
     using Difference = std::conditional_t<sizeof(T) == 2, uint32_t, T>;
-    const Difference difference = Difference(dest) - Difference(src);
-    const T res = static_cast<T>(difference);
+    T dest;
+    T src;
 
-    if constexpr (UpdateFlags) {
+    FORCE_INLINE Difference GetDifference() const { return Difference(dest) - Difference(src); }
+    FORCE_INLINE bool IsZero() const { return dest == src; }
+
+    FORCE_INLINE void Pack(uint64_t& flags_cache, bool zero) const {
+        const Difference difference = GetDifference();
+        const T res = static_cast<T>(difference);
+        uint32_t flags = zero ? ZF_MASK : 0;
         if constexpr (sizeof(T) == 1) {
             const uint32_t d = dest;
             const uint32_t s = src;
             const uint32_t r = res;
-            uint32_t flags = 0;
-            if (r == 0) flags |= ZF_MASK;
             flags |= r & SF_MASK;
             if (d < s) flags |= CF_MASK;
             if ((((d ^ s) & (d ^ r)) & SF_MASK) != 0) flags |= OF_MASK;
@@ -773,8 +777,6 @@ FORCE_INLINE T AluSub(EmuState* state, uint64_t& flags_cache, T dest, T src) {
             // The same subtraction yields the result and the unsigned borrow.
             // Keep the high bits until flags have been produced.
             const uint32_t sign_changes = (dest ^ src) & (dest ^ difference);
-            uint32_t flags = 0;
-            if (difference == 0) flags |= ZF_MASK;
             flags |= (difference >> 8) & SF_MASK;
             flags |= (difference >> 16) & CF_MASK;
             flags |= (sign_changes >> 4) & OF_MASK;
@@ -783,8 +785,6 @@ FORCE_INLINE T AluSub(EmuState* state, uint64_t& flags_cache, T dest, T src) {
         } else {
             uint32_t msb_idx = sizeof(T) * 8 - 1;
             T sign_mask = (T)1 << msb_idx;
-            uint32_t flags = 0;
-            if (res == 0) flags |= ZF_MASK;
             if (((res >> msb_idx) & 1) != 0) flags |= SF_MASK;
             if (dest < src) flags |= CF_MASK;
             if (((dest ^ src) & sign_mask) && ((dest ^ res) & sign_mask)) flags |= OF_MASK;
@@ -792,7 +792,14 @@ FORCE_INLINE T AluSub(EmuState* state, uint64_t& flags_cache, T dest, T src) {
             WriteArithmeticFlags(flags_cache, flags, static_cast<uint8_t>(res));
         }
     }
-    return res;
+};
+
+template <typename T, bool UpdateFlags = true>
+FORCE_INLINE T AluSub(EmuState* state, uint64_t& flags_cache, T dest, T src) {
+    const SubtractionResultFlags<T> flags{dest, src};
+    const auto difference = flags.GetDifference();
+    if constexpr (UpdateFlags) flags.Pack(flags_cache, difference == 0);
+    return static_cast<T>(difference);
 }
 
 template <typename T, bool UpdateFlags = true>
@@ -934,26 +941,38 @@ FORCE_INLINE T AluShl(EmuState* state, uint64_t& flags_cache, T dest, uint8_t co
     return res;
 }
 
+template <typename T>
+struct RightShiftResultFlags {
+    T result;
+    bool carry;
+    bool overflow;
+
+    FORCE_INLINE bool IsZero() const { return result == 0; }
+
+    FORCE_INLINE void Pack(uint64_t& flags_cache, bool zero) const {
+        ClearArithmeticFlags(flags_cache);
+        AssignZF(flags_cache, zero);
+        AssignSF(flags_cache, ((result >> (sizeof(T) * 8 - 1)) & 1) != 0);
+        AssignCF(flags_cache, carry);
+        AssignOF(flags_cache, overflow);
+        SetParityState(flags_cache, static_cast<uint8_t>(result));
+    }
+};
+
+// The caller has already masked the count and ruled out zero.
+template <typename T>
+FORCE_INLINE RightShiftResultFlags<T> CalculateRightShift(T dest, uint8_t count) {
+    return {static_cast<T>(dest >> count), ((dest >> (count - 1)) & 1) != 0,
+            count == 1 && ((dest >> (sizeof(T) * 8 - 1)) & 1) != 0};
+}
+
 template <typename T, bool UpdateFlags = true>
 FORCE_INLINE T AluShr(EmuState* state, uint64_t& flags_cache, T dest, uint8_t count) {
-    if (count == 0) return dest;
     count &= 0x1F;
     if (count == 0) return dest;
-
-    // CF: Last bit shifted out is bit (count-1)
-    bool cf = (dest >> (count - 1)) & 1;
-
-    T res = dest >> count;
-
-    if constexpr (UpdateFlags) {
-        ClearArithmeticFlags(flags_cache);
-        AssignZF(flags_cache, res == 0);
-        AssignSF(flags_cache, ((res >> (sizeof(T) * 8 - 1)) & 1) != 0);
-        AssignCF(flags_cache, cf);
-        if (count == 1) AssignOF(flags_cache, ((dest >> (sizeof(T) * 8 - 1)) & 1) != 0);
-        SetParityState(flags_cache, static_cast<uint8_t>(res));
-    }
-    return res;
+    const auto flags = CalculateRightShift(dest, count);
+    if constexpr (UpdateFlags) flags.Pack(flags_cache, flags.IsZero());
+    return flags.result;
 }
 
 template <typename T, bool UpdateFlags = true>

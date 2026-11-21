@@ -18,7 +18,7 @@ namespace fiberish {
 template <typename T, AddrModeSpec Form>
 FORCE_INLINE MemResult<T> ReadCompareRm(EmuState* state, GprCache& gpr, DecodedOp* op, uint8_t operand_modrm,
                                         mem::MicroTLB* utlb) {
-    if constexpr (Form == AddrModeSpec::ModReg) return static_cast<T>(gpr.GetReg(state, operand_modrm & 7));
+    if constexpr (Form == AddrModeSpec::ModReg) return ReadRegGeneric<T>(state, gpr, operand_modrm & 7);
     return ReadModRM<T, OpOnTLBMiss::Restart, 1, Form>(state, gpr, op, operand_modrm, utlb);
 }
 
@@ -87,16 +87,16 @@ FORCE_INLINE LogicFlow OpCmp_GvEv_Internal(LogicFuncParams, const Operands& oper
 // ============================================================================
 
 template <typename T, AddrModeSpec Form>
-FORCE_INLINE MemResult<T> ReadTest_EvGv(LogicFuncParams) {
+FORCE_INLINE MemResult<T> ReadTestModRM(LogicFuncParams) {
     const auto dest = ReadCompareRm<T, Form>(state, gpr, op, operand_modrm, utlb);
     if (!dest) return dest;
-    const T src = static_cast<T>(gpr.GetReg(state, (operand_modrm >> 3) & 7));
+    const T src = ReadRegGeneric<T>(state, gpr, (operand_modrm >> 3) & 7);
     return static_cast<T>(*dest & src);
 }
 
 template <typename T, AddrModeSpec Form>
 FORCE_INLINE LogicFlow OpTest_EvGvWidth(LogicFuncParams) {
-    const auto result = ReadTest_EvGv<T, Form>(LogicPassParams);
+    const auto result = ReadTestModRM<T, Form>(LogicPassParams);
     if (!result) return LogicFlow::RestartMemoryOp;
     SetLogicalResultFlags(flags_cache, *result);
     return LogicFlow::Continue;
@@ -111,14 +111,52 @@ FORCE_INLINE LogicFlow OpTest_EvGv_Internal(LogicFuncParams, const Operands& ope
 }
 
 template <class Policy>
-using FusedTestResult = LogicalResultFlags<std::conditional_t<(Policy::prefixes & prefix::OPSIZE), uint16_t, uint32_t>>;
+using FusedOperandWidth = std::conditional_t<(Policy::prefixes & prefix::OPSIZE) != 0, uint16_t, uint32_t>;
 
 template <class Policy, typename T>
-FORCE_INLINE LogicFlow OpTest_EvGvDeferred(LogicFuncParams, LogicalResultFlags<T>& flags) {
+FORCE_INLINE LogicFlow OpTestModRMDeferred(LogicFuncParams, LogicalResultFlags<T>& flags) {
     constexpr auto form = Policy::modrm >= 0xc0 ? AddrModeSpec::ModReg : AddrModeSpec::Memory;
-    const auto result = ReadTest_EvGv<T, form>(LogicPassParams);
+    const auto result = ReadTestModRM<T, form>(LogicPassParams);
     if (!result) return LogicFlow::RestartMemoryOp;
     flags.result = *result;
+    return LogicFlow::Continue;
+}
+
+template <typename T>
+FORCE_INLINE LogicFlow OpTestAccumulatorDeferred(LogicFuncParams, LogicalResultFlags<T>& flags) {
+    flags.result = static_cast<T>(ReadRegGeneric<T>(state, gpr, EAX) & T(imm));
+    return LogicFlow::Continue;
+}
+
+template <class Policy, bool RmIsDestination, typename T>
+FORCE_INLINE LogicFlow OpCompareModRMDeferred(LogicFuncParams, SubtractionResultFlags<T>& flags) {
+    constexpr auto form = Policy::modrm >= 0xc0 ? AddrModeSpec::ModReg : AddrModeSpec::Memory;
+    const auto rm = ReadCompareRm<T, form>(state, gpr, op, operand_modrm, utlb);
+    if (!rm) return LogicFlow::RestartMemoryOp;
+    const T reg = ReadRegGeneric<T>(state, gpr, (operand_modrm >> 3) & 7);
+    if constexpr (RmIsDestination)
+        flags = {*rm, reg};
+    else
+        flags = {reg, *rm};
+    return LogicFlow::Continue;
+}
+
+template <class Policy, bool SignExtend, typename T>
+FORCE_INLINE LogicFlow OpCompareImmediateDeferred(LogicFuncParams, SubtractionResultFlags<T>& flags) {
+    static_assert(((Policy::modrm >> 3) & 7) == 7);
+    constexpr auto form = Policy::modrm >= 0xc0 ? AddrModeSpec::ModReg : AddrModeSpec::Memory;
+    const auto dest = ReadCompareRm<T, form>(state, gpr, op, operand_modrm, utlb);
+    if (!dest) return LogicFlow::RestartMemoryOp;
+    if constexpr (SignExtend)
+        flags = {*dest, static_cast<T>(static_cast<int8_t>(imm))};
+    else
+        flags = {*dest, static_cast<T>(imm)};
+    return LogicFlow::Continue;
+}
+
+template <typename T>
+FORCE_INLINE LogicFlow OpCompareAccumulatorDeferred(LogicFuncParams, SubtractionResultFlags<T>& flags) {
+    flags = {ReadRegGeneric<T>(state, gpr, EAX), static_cast<T>(imm)};
     return LogicFlow::Continue;
 }
 

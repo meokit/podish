@@ -7,9 +7,51 @@ from pathlib import Path
 
 from gen_instruction_catalog import read_catalog, supports_exact_operands
 from operand_specialization_data import (
-    FUSION_CALL, Operand, generated_fusions, resolve_training_plan, specialize_fusion, training_plan_match,
+    FUSION_CALL, NO_FLAGS, Operand, generated_fusions, resolve_training_plan, specialize_fusion, training_plan_match,
 )
 from scalar_modrm import pin_keep
+
+
+ZERO_BRANCHES = {
+    "OpJcc_E_Rel8": "true",
+    "OpJcc_E_Rel32": "true",
+    "OpJcc_NE_Rel8": "false",
+    "OpJcc_NE_Rel32": "false",
+}
+
+BYTE_PRODUCERS = {
+    "OpTest_EbGb", "OpTest_AlImm", "OpCmp_EbGb", "OpCmp_GbEb", "OpCmp_AlImm", "OpGroup1_EbIb_Generic",
+    "OpGroup2_Eb1", "OpGroup2_EbIb",
+}
+
+
+def deferred_zero_producer(name, operand, policy):
+    width = "uint8_t" if name in BYTE_PRODUCERS else f"FusedOperandWidth<{policy}>"
+    if operand.meta & NO_FLAGS:
+        return None
+    if name in ("OpTest_EbGb", "OpTest_EvGv"):
+        return f"LogicalResultFlags<{width}>", f"OpTestModRMDeferred<{policy}>"
+    if name in ("OpTest_AlImm", "OpTest_EaxImm"):
+        return f"LogicalResultFlags<{width}>", "OpTestAccumulatorDeferred"
+    if name in ("OpCmp_AlImm", "OpCmp_EaxImm"):
+        return f"SubtractionResultFlags<{width}>", "OpCompareAccumulatorDeferred"
+    if name in ("OpCmp_EbGb", "OpCmp_EvGv", "OpCmp_GbEb", "OpCmp_GvEv"):
+        rm_destination = "true" if name in ("OpCmp_EbGb", "OpCmp_EvGv") else "false"
+        return f"SubtractionResultFlags<{width}>", f"(OpCompareModRMDeferred<{policy}, {rm_destination}>)"
+    extension = (operand.modrm >> 3) & 7
+    if extension == 7 and name in ("OpGroup1_EbIb_Generic", "OpGroup1_EvIb_Generic", "OpGroup1_EvIz_Generic"):
+        extend = "true" if name == "OpGroup1_EvIb_Generic" else "false"
+        return f"SubtractionResultFlags<{width}>", f"(OpCompareImmediateDeferred<{policy}, {extend}>)"
+    if extension == 5 and operand.modrm >= 0xc0:
+        if name in ("OpGroup2_Eb1", "OpGroup2_Ev1"):
+            count = 1
+        elif name in ("OpGroup2_EbIb", "OpGroup2_EvIb"):
+            count = operand.imm & 31
+        else:
+            count = 0
+        if count:
+            return f"RightShiftResultFlags<{width}>", f"(OpRightShiftDeferred<{policy}, {count}>)"
+    return None
 
 
 def generate(source, plan, catalog, budget, pin_mode, pin_mask):
@@ -34,21 +76,19 @@ def generate(source, plan, catalog, budget, pin_mode, pin_mask):
         operations = [match[1] for match in calls]
         policies = [f"OperandSpec::Profile<{shape}>" for shape in shapes]
         body = specialize_fusion(body, original, clone, policies)
-        ends_with_test_branch = (operations[-2] == "OpTest_EvGv"
-                                 and operations[-1] in ("OpJcc_E_Rel8", "OpJcc_E_Rel32",
-                                                        "OpJcc_NE_Rel8", "OpJcc_NE_Rel32")
-                                 and supports_exact_operands(catalog, operations[-2], operands[-2]))
+        deferred = None
+        if operations[-1] in ZERO_BRANCHES and supports_exact_operands(catalog, operations[-2], operands[-2]):
+            deferred = deferred_zero_producer(operations[-2], operands[-2], f"SlotPolicy{len(operations) - 2}")
         for position, (name, operand) in enumerate(zip(operations, operands)):
-            if ends_with_test_branch and position == len(operations) - 2:
+            if deferred and position == len(operations) - 2:
                 call = calls[position][0]
-                test = f"OpTest_EvGvDeferred<SlotPolicy{position}>"
-                body = body.replace(call, f"FusedTestResult<SlotPolicy{position}> test_flags;\n    "
-                                    + call[:-1].replace(f"op::{name}", test) + ", test_flags)")
-            elif ends_with_test_branch and position == len(operations) - 1:
+                result_type, producer = deferred
+                body = body.replace(call, f"{result_type} deferred_flags;\n    "
+                                    + call[:-1].replace(f"op::{name}", producer) + ", deferred_flags)")
+            elif deferred and position == len(operations) - 1:
                 call = calls[position][0]
-                taken_on_zero = "true" if name.startswith("OpJcc_E_") else "false"
-                body = body.replace(call, call[:-1].replace(f"op::{name}", f"BranchOnTestResult<{taken_on_zero}>")
-                                    + ", test_flags)")
+                branch = f"BranchOnZeroResult<{ZERO_BRANCHES[name]}>"
+                body = body.replace(call, call[:-1].replace(f"op::{name}", branch) + ", deferred_flags)")
             elif supports_exact_operands(catalog, name, operand):
                 body = body.replace(f"(SlotPolicy{position}, op::{name},",
                                     f"(SlotPolicy{position}, baked_operand::{name}<SlotPolicy{position}>,")

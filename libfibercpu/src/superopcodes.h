@@ -14,8 +14,8 @@ HandlerFunc GeneratedFindSuperOpcode(const DecodedInstruction* ops);
 #endif
 void ApplySuperOpcodesToBlockOps(DecodedInstruction* ops, uint32_t op_count, bool previously_lowered = false);
 
-template <bool TakenOnZero, typename T>
-FORCE_INLINE LogicFlow BranchOnTestResult(LogicFuncParams, LogicalResultFlags<T> flags) {
+template <bool TakenOnZero, class Result>
+FORCE_INLINE LogicFlow BranchOnZeroResult(LogicFuncParams, Result flags) {
     if (flags.IsZero() != TakenOnZero) {
         flags.Pack(flags_cache, !TakenOnZero);
         return LogicFlow::Continue;

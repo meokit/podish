@@ -15,6 +15,16 @@ namespace fiberish {
 enum class ShiftWidth { Byte, Scalar };
 enum class ShiftCountSource { Immediate, One, Cl };
 
+template <class Policy, unsigned Count, typename T>
+FORCE_INLINE LogicFlow OpRightShiftDeferred(LogicFuncParams, RightShiftResultFlags<T>& flags) {
+    static_assert(Policy::modrm >= 0xc0 && ((Policy::modrm >> 3) & 7) == 5);
+    static_assert(Count > 0 && Count < 32);
+    constexpr uint8_t reg = Policy::modrm & 7;
+    flags = CalculateRightShift(ReadRegGeneric<T>(state, gpr, reg), Count);
+    WriteRegGeneric<T>(state, gpr, reg, flags.result);
+    return LogicFlow::Continue;
+}
+
 template <typename T, ShiftCountSource CountSource, GroupOpSpec SubOp, FlagsSpec Flags, AddrModeSpec Form>
 FORCE_INLINE LogicFlow OpGroup2_T_Internal(LogicFuncParams) {
     const ModRMRmwOperand<Form> operand(state, gpr, op, operand_modrm);
