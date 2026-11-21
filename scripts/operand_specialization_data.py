@@ -2,7 +2,7 @@
 
 import hashlib
 import re
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
 
 
 def instruction_targets(catalog):
@@ -12,6 +12,11 @@ def instruction_targets(catalog):
     for row in catalog["variants"]:
         targets.setdefault(row["logic"], set()).add(catalog["families"][row["family"]]["opcode"])
     return targets
+
+
+def relative_control_operations(catalog):
+    relative = set(catalog["block_links"]["with_operands"]) - {0xc2}  # RET imm16 pops extra stack bytes.
+    return {name for name, opcodes in instruction_targets(catalog).items() if opcodes <= relative}
 
 
 def generated_fusions(source):
@@ -79,10 +84,11 @@ def training_plan_match(plan):
     return match
 
 
-def resolve_training_plan(plan, catalog, fusions, limit=None):
+def resolve_training_plan(plan, catalog, fusions):
     handlers = training_handlers(catalog, fusions)
-    rows = []
-    for item in plan["entries"][:limit]:
+    relative = relative_control_operations(catalog)
+    rows = {}
+    for item in plan["entries"]:
         identifier = item["originalId"]
         if type(identifier) is not int or not 0 < identifier <= 0xffffffff:
             raise ValueError(f"invalid training handler ID: {identifier!r}")
@@ -94,8 +100,22 @@ def resolve_training_plan(plan, catalog, fusions, limit=None):
             raise ValueError(f"unknown training handler ID: 0x{identifier:08x}")
         if (item["kind"], item["width"]) != (handler.kind, len(handler.operations)):
             raise ValueError(f"invalid shape for training handler ID: 0x{identifier:08x}")
-        rows.append({**item, "original": handler.cpp})
-    return rows
+        operands = tuple(Operand(**fields) for fields in item["operands"])
+        if len(operands) != len(handler.operations):
+            raise ValueError(f"invalid decoded operand count for {handler.name}")
+        shapes = tuple(operand.for_specialization(name in relative)
+                       for operand, name in zip(operands, handler.operations))
+        key = identifier, shapes
+        for field in ("count", "dispatch_count"):
+            if field in item and (type(item[field]) is not int or item[field] < 0):
+                raise ValueError(f"invalid {field} for {handler.name}")
+        if key in rows:
+            for field in ("count", "dispatch_count"):
+                if field in item:
+                    rows[key][field] = rows[key].get(field, 0) + item[field]
+        else:
+            rows[key] = {**item, "original": handler.cpp, "operands": [asdict(shape) for shape in shapes]}
+    return list(rows.values())
 
 
 def specialize_fusion(body, original, clone, policies):
@@ -139,6 +159,11 @@ class Operand:
 
     def shape_key(self):
         return self.modrm | self.prefixes << 8 | self.ea_desc << 16
+
+    def for_specialization(self, relative):
+        if relative and self.meta >> 6 == 2 and self.imm:
+            return replace(self, imm=0)
+        return self
 
     @property
     def encoding(self):

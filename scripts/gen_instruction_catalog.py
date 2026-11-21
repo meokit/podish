@@ -8,7 +8,7 @@ import re
 from pathlib import Path
 
 from operand_specialization_data import (
-    Operand, generated_fusions, instruction_targets, training_handlers, training_plan_match,
+    Operand, generated_fusions, instruction_targets, relative_control_operations, training_handlers, training_plan_match,
 )
 from scalar_modrm import SHARDS, load_baked_modrm, pin_keep, scalar_modrm_plans
 
@@ -190,12 +190,13 @@ def static_operand_shapes(plan, catalog, training):
     if training_plan_match(profile) != "decoded":
         raise ValueError("expected a decoded version 3 scalar operand plan")
     result = {}
+    relative = relative_control_operations(catalog)
     for row in profile["entries"]:
         handler = training.get(row["originalId"])
         if handler is None or handler.kind != "wrapper" or row["kind"] != "wrapper" or row["width"] != 1:
             raise ValueError("static scalar plans require a scalar training ID for each entry")
         fields, = row["operands"]
-        operand = Operand(**fields)
+        operand = Operand(**fields).for_specialization(handler.name in relative)
         if supports_exact_operands(catalog, handler.name, operand):
             result.setdefault(handler.name, set()).add(operand)
     return result

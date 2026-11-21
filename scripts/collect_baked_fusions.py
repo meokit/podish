@@ -9,13 +9,13 @@ from pathlib import Path
 
 from collect_operand_specializations import blocks
 from gen_instruction_catalog import read_catalog
-from operand_specialization_data import fusion_training_id, training_handlers
+from operand_specialization_data import fusion_training_id, relative_control_operations, training_handlers
 
 DEFAULT_TOP = 384
 DEFAULT_BUDGET = 768
 
 
-def sequences(ops, handlers):
+def sequences(ops, handlers, relative):
     for start, (op_id, _) in enumerate(ops):
         if op_id not in handlers:
             continue
@@ -24,7 +24,7 @@ def sequences(ops, handlers):
             if candidate not in handlers or shape is None:
                 break
             ids.append(candidate)
-            shapes.append(shape)
+            shapes.append(shape.for_specialization(candidate in relative))
             if len(ids) >= 2:
                 yield start, (tuple(ids), tuple(shapes))
             # A branch (including one created by block concatenation) ends
@@ -42,14 +42,14 @@ def unfused_blocks(profile, handlers):
         yield executions, ops
 
 
-def record_scores(profiles, handlers):
+def record_scores(profiles, handlers, relative):
     scores, visits, totals = Counter(), Counter(), {}
     for profile in profiles:
         counts = Counter()
         total = 0
         for executions, ops in unfused_blocks(profile, handlers):
             total += executions * len(ops)
-            for _, key in sequences(ops, handlers):
+            for _, key in sequences(ops, handlers, relative):
                 counts[key] += executions
         if not total:
             raise ValueError(f"{profile}: no weighted instruction visits")
@@ -60,11 +60,11 @@ def record_scores(profiles, handlers):
     return scores, visits, totals
 
 
-def replay_layouts(profile, handlers, candidates):
+def replay_layouts(profile, handlers, relative, candidates):
     """Compress blocks with the same eligible exact windows for replay."""
     layouts = Counter()
     for executions, ops in blocks(profile):
-        matching = tuple((start, index) for start, key in sequences(ops, handlers)
+        matching = tuple((start, index) for start, key in sequences(ops, handlers, relative)
                          if (index := candidates.get(key)) is not None)
         if matching:
             layouts[matching] += executions
@@ -86,14 +86,14 @@ def saved_dispatches(layout, widths, enabled):
     return saved
 
 
-def select_variants(profiles, handlers, top, budget):
-    scores, visits, totals = record_scores(profiles, handlers)
+def select_variants(profiles, handlers, relative, top, budget):
+    scores, visits, totals = record_scores(profiles, handlers, relative)
     # Rank by potential savings before replay. Keep a wider shortlist so
     # overlap can reject redundant shapes.
     ranked = sorted(scores, key=lambda key: (-scores[key], key))[:max(top, 4 * budget)]
     indexes = {key: index for index, key in enumerate(ranked)}
     widths = [len(ids) for ids, _ in ranked]
-    profile_layouts = {profile: replay_layouts(profile, handlers, indexes) for profile in profiles}
+    profile_layouts = {profile: replay_layouts(profile, handlers, relative, indexes) for profile in profiles}
     weights = Counter()
     for profile, layouts in profile_layouts.items():
         for layout, count in layouts.items():
@@ -140,8 +140,11 @@ def select_variants(profiles, handlers, top, budget):
 def bake(profiles, candidates, operands, top=DEFAULT_TOP, budget=DEFAULT_BUDGET):
     if min(top, budget) <= 0:
         raise ValueError("top and budget must be positive")
-    handlers = training_handlers(read_catalog(), {})
-    recipes, entries, coverage = select_variants(sorted(set(profiles)), handlers, top, budget)
+    catalog = read_catalog()
+    handlers = training_handlers(catalog, {})
+    relative_operations = relative_control_operations(catalog)
+    relative = {op_id for op_id, handler in handlers.items() if handler.name in relative_operations}
+    recipes, entries, coverage = select_variants(sorted(set(profiles)), handlers, relative, top, budget)
     if not entries:
         raise ValueError("no executable fusion variants in the captures")
     names = {str(i): f"op::{handlers[i].name}" for i in sorted({i for row in recipes for i in row})}

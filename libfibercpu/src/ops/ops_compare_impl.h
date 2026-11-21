@@ -86,37 +86,29 @@ FORCE_INLINE LogicFlow OpCmp_GvEv_Internal(LogicFuncParams, const Operands& oper
 // Specializations for OpTest_EvGv (85: TEST r/m16/32, r16/32)
 // ============================================================================
 
-template <OpsizeSpec Size = OpsizeSpec::Dynamic, AddrModeSpec Form = AddrModeSpec::Dynamic,
-          class Operands = OperandSpec::Dynamic>
-FORCE_INLINE LogicFlow OpTest_EvGv_Internal(LogicFuncParams, const Operands& operands = {}) {
-    // 85: TEST r/m16/32, r16/32
-    const bool opsize = OperandIs16<Size>(op, operands);
-
-    uint8_t reg = (operand_modrm >> 3) & 7;
-    if (opsize) {
-        uint16_t dest;
-        if constexpr (Form == AddrModeSpec::ModReg) {
-            dest = (uint16_t)gpr.GetReg(state, operand_modrm & 7);
-        } else {
-            auto dest_res = ReadModRM<uint16_t, OpOnTLBMiss::Restart, 1, Form>(state, gpr, op, operand_modrm, utlb);
-            if (!dest_res) return LogicFlow::RestartMemoryOp;
-            dest = *dest_res;
-        }
-        uint16_t src = (uint16_t)gpr.GetReg(state, reg);
-        AluAnd<uint16_t>(state, flags_cache, dest, src);
-    } else {
-        uint32_t dest;
-        if constexpr (Form == AddrModeSpec::ModReg) {
-            dest = gpr.GetReg(state, operand_modrm & 7);
-        } else {
-            auto dest_res = ReadModRM<uint32_t, OpOnTLBMiss::Restart, 1, Form>(state, gpr, op, operand_modrm, utlb);
-            if (!dest_res) return LogicFlow::RestartMemoryOp;
-            dest = *dest_res;
-        }
-        uint32_t src = gpr.GetReg(state, reg);
-        AluAnd<uint32_t>(state, flags_cache, dest, src);
-    }
+template <typename T, AddrModeSpec Form, bool DeferZero>
+FORCE_INLINE LogicFlow OpTest_EvGvWidth(LogicFuncParams, bool* zero) {
+    const auto dest = ReadCompareRm<T, Form>(state, gpr, op, operand_modrm, utlb);
+    if (!dest) return LogicFlow::RestartMemoryOp;
+    const T src = static_cast<T>(gpr.GetReg(state, (operand_modrm >> 3) & 7));
+    const T result = *dest & src;
+    SetLogicalResultFlags<!DeferZero>(flags_cache, result);
+    if constexpr (DeferZero) *zero = result == 0;
     return LogicFlow::Continue;
+}
+
+template <OpsizeSpec Size = OpsizeSpec::Dynamic, AddrModeSpec Form = AddrModeSpec::Dynamic, bool DeferZero = false,
+          class Operands = OperandSpec::Dynamic>
+FORCE_INLINE LogicFlow OpTest_EvGv_Internal(LogicFuncParams, const Operands& operands = {}, bool* zero = nullptr) {
+    // 85: TEST r/m16/32, r16/32
+    if (OperandIs16<Size>(op, operands)) return OpTest_EvGvWidth<uint16_t, Form, DeferZero>(LogicPassParams, zero);
+    return OpTest_EvGvWidth<uint32_t, Form, DeferZero>(LogicPassParams, zero);
+}
+
+template <class Policy>
+FORCE_INLINE LogicFlow OpTest_EvGvForZeroBranch(LogicFuncParams, bool& zero) {
+    return OpTest_EvGv_Internal<OpsizeSpec::Dynamic, AddrModeSpec::Dynamic, true>(LogicPassParams, Policy::operands,
+                                                                               &zero);
 }
 
 // ============================================================================

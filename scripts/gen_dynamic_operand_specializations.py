@@ -70,7 +70,6 @@ def emit_plan(args):
     fusions = generated_fusions(args.fusions.read_text()) if args.fusions else {}
     records, requests = [], [llvm_operation_fingerprint(op_names) + "\n"]
     missing, missing_weight = Counter(), Counter()
-    seen = set()
     source = json.loads(args.plan.read_text())
     if training_plan_match(source) != "decoded":
         raise ValueError("dynamic operand templates need a decoded version 3 operand plan")
@@ -79,9 +78,6 @@ def emit_plan(args):
         original, shapes = shape_key(item)
         if type(item["dispatch_count"]) is not int or item["dispatch_count"] < 0:
             raise ValueError("invalid dispatch count: " + original)
-        if (original, shapes) in seen:
-            raise ValueError("duplicate operand shape for " + original)
-        seen.add((original, shapes))
         if item["kind"] == "wrapper":
             match = WRAPPER.fullmatch(original)
             names = (match[1],) if match else ()

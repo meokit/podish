@@ -30,11 +30,26 @@ def generate(source, plan, catalog, budget, pin_mode, pin_mask):
             raise ValueError(f"invalid decoded operand count for {original}")
         shapes = [operand.cpp() for operand in operands]
         body = fusions[original]
-        operations = [match[1] for match in FUSION_CALL.finditer(body)]
+        calls = list(FUSION_CALL.finditer(body))
+        operations = [match[1] for match in calls]
         policies = [f"OperandSpec::Profile<{shape}>" for shape in shapes]
         body = specialize_fusion(body, original, clone, policies)
+        ends_with_test_branch = (operations[-2] == "OpTest_EvGv"
+                                 and operations[-1] in ("OpJcc_E_Rel8", "OpJcc_E_Rel32",
+                                                        "OpJcc_NE_Rel8", "OpJcc_NE_Rel32")
+                                 and supports_exact_operands(catalog, operations[-2], operands[-2]))
         for position, (name, operand) in enumerate(zip(operations, operands)):
-            if supports_exact_operands(catalog, name, operand):
+            if ends_with_test_branch and position == len(operations) - 2:
+                call = calls[position][0]
+                test = f"OpTest_EvGvForZeroBranch<SlotPolicy{position}>"
+                body = body.replace(call, "bool test_zero;\n    " + call[:-1].replace(f"op::{name}", test)
+                                    + ", test_zero)")
+            elif ends_with_test_branch and position == len(operations) - 1:
+                call = calls[position][0]
+                taken_on_zero = "true" if name.startswith("OpJcc_E_") else "false"
+                body = body.replace(call, call[:-1].replace(f"op::{name}", f"BranchOnTestZero<{taken_on_zero}>")
+                                    + ", test_zero)")
+            elif supports_exact_operands(catalog, name, operand):
                 body = body.replace(f"(SlotPolicy{position}, op::{name},",
                                     f"(SlotPolicy{position}, baked_operand::{name}<SlotPolicy{position}>,")
         keep = (1 << pin_mask.bit_count()) - 1

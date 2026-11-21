@@ -93,6 +93,13 @@ it increases the estimated savings. The operand plan records estimated
 dispatch savings per workload for review. The default training budget is
 384 sequences and 768 exact shapes. `BASE` uses the first 32 sequences.
 
+Relative control transfers share an operand shape across encoded offsets.
+The decoder resolves the target into the runtime slot and retains the
+encoding for profile export. The collectors group these offsets before
+ranking variants, and the code generators accept older v3 plans by merging
+the equivalent entries. Data immediates and the stack adjustment of
+`RET imm16` still distinguish shapes.
+
 Use the same offline collector to refresh the manifests from existing
 unfused profiles:
 
@@ -107,7 +114,7 @@ dotnet Podish.PerfTools/bin/Release/net10.0/Podish.PerfTools.dll gen-superopcode
   --input benchmark/optimization/manifests/baked-fusions-v3.json --top 32 \
   --output libfibercpu/src/generated/superopcodes.generated.cpp
 dotnet Podish.PerfTools/bin/Release/net10.0/Podish.PerfTools.dll gen-superopcodes \
-  --input benchmark/optimization/manifests/baked-fusions-v3.json --top 128 \
+  --input benchmark/optimization/manifests/baked-fusions-v3.json --top 384 \
   --output libfibercpu/src/generated/superopcodes.extended.generated.cpp
 ```
 

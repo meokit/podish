@@ -233,7 +233,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 5
+          "imm": 0
         }
       ],
       "count": 1055807
@@ -277,7 +277,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 4
+          "imm": 0
         }
       ],
       "count": 2799557
@@ -321,7 +321,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 2
+          "imm": 0
         }
       ],
       "count": 2349850
@@ -391,7 +391,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 17
+          "imm": 0
         }
       ],
       "count": 2097350
@@ -473,6 +473,32 @@
         }
       ],
       "count": 196010448
+    },
+    {
+      "kind": "fused",
+      "originalId": 2184155093,
+      "width": 2,
+      "operands": [
+        {
+          "modrm": 192,
+          "prefixes": 0,
+          "meta": 1,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 4,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 201845794
     },
     {
       "kind": "fused",
@@ -724,7 +750,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 236
+          "imm": 0
         }
       ],
       "count": 2349850
@@ -794,10 +820,36 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 5
+          "imm": 0
         }
       ],
       "count": 1363586
+    },
+    {
+      "kind": "fused",
+      "originalId": 3107986399,
+      "width": 2,
+      "operands": [
+        {
+          "modrm": 192,
+          "prefixes": 0,
+          "meta": 5,
+          "length": 3,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 4
+        },
+        {
+          "modrm": 3,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 1616048
     },
     {
       "kind": "fused",
@@ -838,7 +890,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 17
+          "imm": 0
         }
       ],
       "count": 1819792
@@ -1040,7 +1092,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 32
+          "imm": 0
         }
       ],
       "count": 1152337
@@ -1084,10 +1136,36 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 222
+          "imm": 0
         }
       ],
       "count": 1152303
+    },
+    {
+      "kind": "fused",
+      "originalId": 3217728129,
+      "width": 2,
+      "operands": [
+        {
+          "modrm": 1,
+          "prefixes": 0,
+          "meta": 4,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 1
+        },
+        {
+          "modrm": 3,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 2605825
     },
     {
       "kind": "fused",
@@ -1161,32 +1239,6 @@
     },
     {
       "kind": "fused",
-      "originalId": 3107986399,
-      "width": 2,
-      "operands": [
-        {
-          "modrm": 192,
-          "prefixes": 0,
-          "meta": 5,
-          "length": 3,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 4
-        },
-        {
-          "modrm": 3,
-          "prefixes": 0,
-          "meta": 140,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 231
-        }
-      ],
-      "count": 1053675
-    },
-    {
-      "kind": "fused",
       "originalId": 2766313757,
       "width": 4,
       "operands": [
@@ -1228,6 +1280,32 @@
         }
       ],
       "count": 367200000
+    },
+    {
+      "kind": "fused",
+      "originalId": 3206160123,
+      "width": 2,
+      "operands": [
+        {
+          "modrm": 4,
+          "prefixes": 0,
+          "meta": 3,
+          "length": 3,
+          "ea_desc": 534044,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 5,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 2799642
     },
     {
       "kind": "fused",
@@ -1294,7 +1372,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 11
+          "imm": 0
         }
       ],
       "count": 21540
@@ -1380,32 +1458,6 @@
     },
     {
       "kind": "fused",
-      "originalId": 3217728129,
-      "width": 2,
-      "operands": [
-        {
-          "modrm": 1,
-          "prefixes": 0,
-          "meta": 4,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 1
-        },
-        {
-          "modrm": 3,
-          "prefixes": 0,
-          "meta": 140,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 235
-        }
-      ],
-      "count": 2601710
-    },
-    {
-      "kind": "fused",
       "originalId": 2399872922,
       "width": 4,
       "operands": [
@@ -1443,7 +1495,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 13
+          "imm": 0
         }
       ],
       "count": 7793192
@@ -1662,7 +1714,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 13
+          "imm": 0
         }
       ],
       "count": 14706
@@ -1750,7 +1802,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 46
+          "imm": 0
         }
       ],
       "count": 14706
@@ -1785,7 +1837,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 17
+          "imm": 0
         }
       ],
       "count": 1953509
@@ -1862,32 +1914,6 @@
     },
     {
       "kind": "fused",
-      "originalId": 2184155093,
-      "width": 2,
-      "operands": [
-        {
-          "modrm": 192,
-          "prefixes": 0,
-          "meta": 1,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 4,
-          "prefixes": 0,
-          "meta": 140,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 17
-        }
-      ],
-      "count": 2361325
-    },
-    {
-      "kind": "fused",
       "originalId": 3170763909,
       "width": 3,
       "operands": [
@@ -1916,10 +1942,36 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 82
+          "imm": 0
         }
       ],
       "count": 1819727
+    },
+    {
+      "kind": "fused",
+      "originalId": 2356109148,
+      "width": 2,
+      "operands": [
+        {
+          "modrm": 208,
+          "prefixes": 0,
+          "meta": 1,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 3,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 2349862
     },
     {
       "kind": "fused",
@@ -2048,7 +2100,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 9
+          "imm": 0
         }
       ],
       "count": 262080000
@@ -2131,6 +2183,58 @@
         }
       ],
       "count": 1152303
+    },
+    {
+      "kind": "fused",
+      "originalId": 2642362042,
+      "width": 2,
+      "operands": [
+        {
+          "modrm": 246,
+          "prefixes": 0,
+          "meta": 1,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 5,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 707479874
+    },
+    {
+      "kind": "fused",
+      "originalId": 2173822817,
+      "width": 2,
+      "operands": [
+        {
+          "modrm": 0,
+          "prefixes": 0,
+          "meta": 0,
+          "length": 1,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 0,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 5,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 48944203
     },
     {
       "kind": "fused",
@@ -2223,7 +2327,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 219
+          "imm": 0
         }
       ],
       "count": 3710032
@@ -2355,7 +2459,7 @@
           "length": 6,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 4294967081
+          "imm": 0
         }
       ],
       "count": 1049878
@@ -2399,7 +2503,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 82
+          "imm": 0
         }
       ],
       "count": 1049816
@@ -2443,10 +2547,45 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 26
+          "imm": 0
         }
       ],
       "count": 3647068
+    },
+    {
+      "kind": "fused",
+      "originalId": 2579813595,
+      "width": 3,
+      "operands": [
+        {
+          "modrm": 54,
+          "prefixes": 0,
+          "meta": 3,
+          "length": 2,
+          "ea_desc": 526360,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 246,
+          "prefixes": 0,
+          "meta": 1,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 5,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 343860163
     },
     {
       "kind": "fused",
@@ -2592,10 +2731,10 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 237
+          "imm": 0
         }
       ],
-      "count": 19880
+      "count": 20026
     },
     {
       "kind": "fused",
@@ -2627,7 +2766,7 @@
           "length": 6,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 190
+          "imm": 0
         }
       ],
       "count": 7737080
@@ -2671,7 +2810,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 5
+          "imm": 0
         }
       ],
       "count": 307779
@@ -2838,10 +2977,36 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 46
+          "imm": 0
         }
       ],
-      "count": 14907
+      "count": 21700
+    },
+    {
+      "kind": "fused",
+      "originalId": 2684255668,
+      "width": 2,
+      "operands": [
+        {
+          "modrm": 192,
+          "prefixes": 0,
+          "meta": 1,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 4,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 6,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 543812463
     },
     {
       "kind": "fused",
@@ -2873,7 +3038,7 @@
           "length": 6,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 4294967134
+          "imm": 0
         }
       ],
       "count": 14706
@@ -2908,7 +3073,7 @@
           "length": 5,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 4294830984
+          "imm": 0
         }
       ],
       "count": 14706
@@ -2956,6 +3121,67 @@
         }
       ],
       "count": 753664
+    },
+    {
+      "kind": "fused",
+      "originalId": 3206160123,
+      "width": 2,
+      "operands": [
+        {
+          "modrm": 202,
+          "prefixes": 0,
+          "meta": 1,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 5,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 4199731
+    },
+    {
+      "kind": "fused",
+      "originalId": 2330859449,
+      "width": 3,
+      "operands": [
+        {
+          "modrm": 6,
+          "prefixes": 0,
+          "meta": 0,
+          "length": 1,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 3,
+          "prefixes": 0,
+          "meta": 0,
+          "length": 1,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 0,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 5,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 16307389
     },
     {
       "kind": "fused",
@@ -3292,6 +3518,41 @@
     },
     {
       "kind": "fused",
+      "originalId": 2540733589,
+      "width": 3,
+      "operands": [
+        {
+          "modrm": 55,
+          "prefixes": 0,
+          "meta": 3,
+          "length": 3,
+          "ea_desc": 526364,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 254,
+          "prefixes": 0,
+          "meta": 5,
+          "length": 3,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 16
+        },
+        {
+          "modrm": 6,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 6,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 1187427
+    },
+    {
+      "kind": "fused",
       "originalId": 2785145737,
       "width": 4,
       "operands": [
@@ -3329,7 +3590,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 241
+          "imm": 0
         }
       ],
       "count": 8704
@@ -3505,7 +3766,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 226
+          "imm": 0
         }
       ],
       "count": 4128705
@@ -3549,7 +3810,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 234
+          "imm": 0
         }
       ],
       "count": 179340000
@@ -3725,7 +3986,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 219
+          "imm": 0
         }
       ],
       "count": 174960000
@@ -3769,7 +4030,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 236
+          "imm": 0
         }
       ],
       "count": 174960000
@@ -3962,10 +4223,36 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 8
+          "imm": 0
         }
       ],
       "count": 167460000
+    },
+    {
+      "kind": "fused",
+      "originalId": 2184155093,
+      "width": 2,
+      "operands": [
+        {
+          "modrm": 210,
+          "prefixes": 0,
+          "meta": 1,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 4,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 48808945
     },
     {
       "kind": "fused",
@@ -4006,10 +4293,36 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 239
+          "imm": 0
         }
       ],
       "count": 172800000
+    },
+    {
+      "kind": "fused",
+      "originalId": 2173822817,
+      "width": 2,
+      "operands": [
+        {
+          "modrm": 3,
+          "prefixes": 0,
+          "meta": 0,
+          "length": 1,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 0,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 5,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 25870036
     },
     {
       "kind": "fused",
@@ -4057,38 +4370,29 @@
     },
     {
       "kind": "fused",
-      "originalId": 2540733589,
-      "width": 3,
+      "originalId": 2642362042,
+      "width": 2,
       "operands": [
         {
-          "modrm": 55,
+          "modrm": 192,
           "prefixes": 0,
-          "meta": 3,
-          "length": 3,
-          "ea_desc": 526364,
+          "meta": 1,
+          "length": 2,
+          "ea_desc": 0,
           "disp": 0,
           "imm": 0
         },
         {
-          "modrm": 254,
-          "prefixes": 0,
-          "meta": 5,
-          "length": 3,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 16
-        },
-        {
-          "modrm": 6,
+          "modrm": 5,
           "prefixes": 0,
           "meta": 140,
-          "length": 6,
+          "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 133
+          "imm": 0
         }
       ],
-      "count": 1050635
+      "count": 20371617
     },
     {
       "kind": "fused",
@@ -4471,10 +4775,80 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 17
+          "imm": 0
         }
       ],
       "count": 1954459
+    },
+    {
+      "kind": "fused",
+      "originalId": 2587300393,
+      "width": 4,
+      "operands": [
+        {
+          "modrm": 7,
+          "prefixes": 0,
+          "meta": 0,
+          "length": 1,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 6,
+          "prefixes": 0,
+          "meta": 0,
+          "length": 1,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 3,
+          "prefixes": 0,
+          "meta": 0,
+          "length": 1,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 0,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 5,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 15129432
+    },
+    {
+      "kind": "fused",
+      "originalId": 2642362042,
+      "width": 2,
+      "operands": [
+        {
+          "modrm": 210,
+          "prefixes": 0,
+          "meta": 1,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 5,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 369343419
     },
     {
       "kind": "fused",
@@ -4541,10 +4915,36 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 5
+          "imm": 0
         }
       ],
       "count": 307779
+    },
+    {
+      "kind": "fused",
+      "originalId": 2930976716,
+      "width": 2,
+      "operands": [
+        {
+          "modrm": 210,
+          "prefixes": 0,
+          "meta": 1,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 5,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 78411398
     },
     {
       "kind": "fused",
@@ -4585,7 +4985,7 @@
           "length": 6,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 347
+          "imm": 0
         }
       ],
       "count": 509450
@@ -4769,7 +5169,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 3
+          "imm": 0
         }
       ],
       "count": 174990
@@ -4804,10 +5204,36 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 236
+          "imm": 0
         }
       ],
       "count": 308899
+    },
+    {
+      "kind": "fused",
+      "originalId": 3206160123,
+      "width": 2,
+      "operands": [
+        {
+          "modrm": 241,
+          "prefixes": 0,
+          "meta": 1,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 5,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 2799843
     },
     {
       "kind": "fused",
@@ -4855,6 +5281,32 @@
     },
     {
       "kind": "fused",
+      "originalId": 2738231809,
+      "width": 2,
+      "operands": [
+        {
+          "modrm": 202,
+          "prefixes": 0,
+          "meta": 1,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 4,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 1276292
+    },
+    {
+      "kind": "fused",
       "originalId": 2434025993,
       "width": 3,
       "operands": [
@@ -4883,7 +5335,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 184
+          "imm": 0
         }
       ],
       "count": 303857
@@ -4918,7 +5370,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 239
+          "imm": 0
         }
       ],
       "count": 303857
@@ -4951,6 +5403,32 @@
     },
     {
       "kind": "fused",
+      "originalId": 2707977397,
+      "width": 2,
+      "operands": [
+        {
+          "modrm": 207,
+          "prefixes": 0,
+          "meta": 1,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 5,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 367200320
+    },
+    {
+      "kind": "fused",
       "originalId": 3121077680,
       "width": 2,
       "operands": [
@@ -4970,10 +5448,10 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 6
+          "imm": 0
         }
       ],
-      "count": 1152729
+      "count": 1152785
     },
     {
       "kind": "fused",
@@ -5082,6 +5560,67 @@
     },
     {
       "kind": "fused",
+      "originalId": 2468607055,
+      "width": 2,
+      "operands": [
+        {
+          "modrm": 251,
+          "prefixes": 0,
+          "meta": 5,
+          "length": 3,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 44
+        },
+        {
+          "modrm": 4,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 6,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 364320000
+    },
+    {
+      "kind": "fused",
+      "originalId": 2322893386,
+      "width": 3,
+      "operands": [
+        {
+          "modrm": 0,
+          "prefixes": 0,
+          "meta": 3,
+          "length": 2,
+          "ea_desc": 526336,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 192,
+          "prefixes": 0,
+          "meta": 1,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 4,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 6,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 173306006
+    },
+    {
+      "kind": "fused",
       "originalId": 2376728933,
       "width": 3,
       "operands": [
@@ -5110,7 +5649,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 41
+          "imm": 0
         }
       ],
       "count": 179820000
@@ -5136,36 +5675,10 @@
           "length": 6,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 203
+          "imm": 0
         }
       ],
       "count": 8529658
-    },
-    {
-      "kind": "fused",
-      "originalId": 2642362042,
-      "width": 2,
-      "operands": [
-        {
-          "modrm": 246,
-          "prefixes": 0,
-          "meta": 1,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 5,
-          "prefixes": 0,
-          "meta": 140,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 26
-        }
-      ],
-      "count": 354960080
     },
     {
       "kind": "fused",
@@ -5239,29 +5752,38 @@
     },
     {
       "kind": "fused",
-      "originalId": 2684255668,
-      "width": 2,
+      "originalId": 2434621576,
+      "width": 3,
       "operands": [
         {
-          "modrm": 192,
+          "modrm": 2,
           "prefixes": 0,
-          "meta": 1,
+          "meta": 4,
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
           "imm": 0
         },
         {
-          "modrm": 4,
+          "modrm": 2,
           "prefixes": 0,
-          "meta": 140,
-          "length": 6,
+          "meta": 4,
+          "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 188
+          "imm": 8
+        },
+        {
+          "modrm": 0,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 5,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
         }
       ],
-      "count": 367200383
+      "count": 8738
     },
     {
       "kind": "fused",
@@ -5291,32 +5813,6 @@
     },
     {
       "kind": "fused",
-      "originalId": 2642362042,
-      "width": 2,
-      "operands": [
-        {
-          "modrm": 210,
-          "prefixes": 0,
-          "meta": 1,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 5,
-          "prefixes": 0,
-          "meta": 140,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 244
-        }
-      ],
-      "count": 367200085
-    },
-    {
-      "kind": "fused",
       "originalId": 3010946396,
       "width": 2,
       "operands": [
@@ -5340,41 +5836,6 @@
         }
       ],
       "count": 367200003
-    },
-    {
-      "kind": "fused",
-      "originalId": 2434621576,
-      "width": 3,
-      "operands": [
-        {
-          "modrm": 2,
-          "prefixes": 0,
-          "meta": 4,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 2,
-          "prefixes": 0,
-          "meta": 4,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 8
-        },
-        {
-          "modrm": 0,
-          "prefixes": 0,
-          "meta": 140,
-          "length": 5,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 4294965533
-        }
-      ],
-      "count": 8704
     },
     {
       "kind": "fused",
@@ -5492,41 +5953,6 @@
     },
     {
       "kind": "fused",
-      "originalId": 2579813595,
-      "width": 3,
-      "operands": [
-        {
-          "modrm": 54,
-          "prefixes": 0,
-          "meta": 3,
-          "length": 2,
-          "ea_desc": 526360,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 246,
-          "prefixes": 0,
-          "meta": 1,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 5,
-          "prefixes": 0,
-          "meta": 140,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 241
-        }
-      ],
-      "count": 173700000
-    },
-    {
-      "kind": "fused",
       "originalId": 3015110128,
       "width": 2,
       "operands": [
@@ -5550,6 +5976,32 @@
         }
       ],
       "count": 343860540
+    },
+    {
+      "kind": "fused",
+      "originalId": 2568631842,
+      "width": 2,
+      "operands": [
+        {
+          "modrm": 209,
+          "prefixes": 0,
+          "meta": 1,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 5,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 22043
     },
     {
       "kind": "fused",
@@ -5581,27 +6033,27 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 166
+          "imm": 0
         }
       ],
       "count": 769846
     },
     {
       "kind": "fused",
-      "originalId": 2579813595,
+      "originalId": 2265351253,
       "width": 3,
       "operands": [
         {
-          "modrm": 54,
+          "modrm": 0,
           "prefixes": 0,
           "meta": 3,
           "length": 2,
-          "ea_desc": 526360,
+          "ea_desc": 526336,
           "disp": 0,
           "imm": 0
         },
         {
-          "modrm": 246,
+          "modrm": 192,
           "prefixes": 0,
           "meta": 1,
           "length": 2,
@@ -5610,16 +6062,16 @@
           "imm": 0
         },
         {
-          "modrm": 5,
+          "modrm": 4,
           "prefixes": 0,
           "meta": 140,
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 240
+          "imm": 0
         }
       ],
-      "count": 166680000
+      "count": 171722978
     },
     {
       "kind": "fused",
@@ -5658,41 +6110,6 @@
     },
     {
       "kind": "fused",
-      "originalId": 2322893386,
-      "width": 3,
-      "operands": [
-        {
-          "modrm": 0,
-          "prefixes": 0,
-          "meta": 3,
-          "length": 2,
-          "ea_desc": 526336,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 192,
-          "prefixes": 0,
-          "meta": 1,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 4,
-          "prefixes": 0,
-          "meta": 140,
-          "length": 6,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 214
-        }
-      ],
-      "count": 173220000
-    },
-    {
-      "kind": "fused",
       "originalId": 2948154066,
       "width": 2,
       "operands": [
@@ -5719,6 +6136,32 @@
     },
     {
       "kind": "fused",
+      "originalId": 2988052830,
+      "width": 2,
+      "operands": [
+        {
+          "modrm": 69,
+          "prefixes": 0,
+          "meta": 3,
+          "length": 3,
+          "ea_desc": 395284,
+          "disp": 4294967260,
+          "imm": 0
+        },
+        {
+          "modrm": 3,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 7823556
+    },
+    {
+      "kind": "fused",
       "originalId": 2886762278,
       "width": 2,
       "operands": [
@@ -5738,97 +6181,10 @@
           "length": 6,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 4294967039
+          "imm": 0
         }
       ],
       "count": 7793192
-    },
-    {
-      "kind": "fused",
-      "originalId": 2321595923,
-      "width": 2,
-      "operands": [
-        {
-          "modrm": 192,
-          "prefixes": 0,
-          "meta": 21,
-          "length": 3,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 1
-        },
-        {
-          "modrm": 210,
-          "prefixes": 0,
-          "meta": 1,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        }
-      ],
-      "count": 20026
-    },
-    {
-      "kind": "fused",
-      "originalId": 2930976716,
-      "width": 2,
-      "operands": [
-        {
-          "modrm": 210,
-          "prefixes": 0,
-          "meta": 1,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 5,
-          "prefixes": 0,
-          "meta": 140,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 237
-        }
-      ],
-      "count": 19916
-    },
-    {
-      "kind": "fused",
-      "originalId": 2265351253,
-      "width": 3,
-      "operands": [
-        {
-          "modrm": 0,
-          "prefixes": 0,
-          "meta": 3,
-          "length": 2,
-          "ea_desc": 526336,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 192,
-          "prefixes": 0,
-          "meta": 1,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 4,
-          "prefixes": 0,
-          "meta": 140,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 74
-        }
-      ],
-      "count": 166680000
     },
     {
       "kind": "fused",
@@ -5908,32 +6264,6 @@
         }
       ],
       "count": 372886
-    },
-    {
-      "kind": "fused",
-      "originalId": 2468607055,
-      "width": 2,
-      "operands": [
-        {
-          "modrm": 251,
-          "prefixes": 0,
-          "meta": 5,
-          "length": 3,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 44
-        },
-        {
-          "modrm": 4,
-          "prefixes": 0,
-          "meta": 140,
-          "length": 6,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 310
-        }
-      ],
-      "count": 316800000
     },
     {
       "kind": "fused",
@@ -6026,10 +6356,10 @@
           "length": 6,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 254
+          "imm": 0
         }
       ],
-      "count": 311520000
+      "count": 311528910
     },
     {
       "kind": "fused",
@@ -6091,32 +6421,6 @@
         }
       ],
       "count": 23860
-    },
-    {
-      "kind": "fused",
-      "originalId": 2184155093,
-      "width": 2,
-      "operands": [
-        {
-          "modrm": 192,
-          "prefixes": 0,
-          "meta": 1,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 4,
-          "prefixes": 0,
-          "meta": 140,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 46
-        }
-      ],
-      "count": 14975
     },
     {
       "kind": "fused",
@@ -6187,32 +6491,6 @@
         }
       ],
       "count": 99360000
-    },
-    {
-      "kind": "fused",
-      "originalId": 2642362042,
-      "width": 2,
-      "operands": [
-        {
-          "modrm": 192,
-          "prefixes": 0,
-          "meta": 1,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 5,
-          "prefixes": 0,
-          "meta": 140,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 13
-        }
-      ],
-      "count": 25669
     },
     {
       "kind": "fused",
@@ -6409,10 +6687,10 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 14
+          "imm": 0
         }
       ],
-      "count": 345801
+      "count": 418849
     },
     {
       "kind": "fused",
@@ -6486,6 +6764,32 @@
     },
     {
       "kind": "fused",
+      "originalId": 3122657450,
+      "width": 2,
+      "operands": [
+        {
+          "modrm": 219,
+          "prefixes": 0,
+          "meta": 1,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 4,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 266974061
+    },
+    {
+      "kind": "fused",
       "originalId": 3148150502,
       "width": 4,
       "operands": [
@@ -6523,7 +6827,7 @@
           "length": 6,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 247
+          "imm": 0
         }
       ],
       "count": 95040000
@@ -6760,7 +7064,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 35
+          "imm": 0
         }
       ],
       "count": 88800000
@@ -6795,7 +7099,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 76
+          "imm": 0
         }
       ],
       "count": 473394
@@ -6830,10 +7134,80 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 30
+          "imm": 0
         }
       ],
       "count": 473394
+    },
+    {
+      "kind": "fused",
+      "originalId": 2587300393,
+      "width": 4,
+      "operands": [
+        {
+          "modrm": 1,
+          "prefixes": 0,
+          "meta": 0,
+          "length": 1,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 2,
+          "prefixes": 0,
+          "meta": 0,
+          "length": 1,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 0,
+          "prefixes": 0,
+          "meta": 0,
+          "length": 1,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 0,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 5,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 269397
+    },
+    {
+      "kind": "fused",
+      "originalId": 2449455362,
+      "width": 2,
+      "operands": [
+        {
+          "modrm": 254,
+          "prefixes": 0,
+          "meta": 5,
+          "length": 3,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 16
+        },
+        {
+          "modrm": 6,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 6,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 1187538
     },
     {
       "kind": "fused",
@@ -6856,10 +7230,36 @@
           "length": 6,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 4294967007
+          "imm": 0
         }
       ],
-      "count": 262080000
+      "count": 262142121
+    },
+    {
+      "kind": "fused",
+      "originalId": 2930976716,
+      "width": 2,
+      "operands": [
+        {
+          "modrm": 192,
+          "prefixes": 0,
+          "meta": 1,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 5,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 786156
     },
     {
       "kind": "fused",
@@ -6900,7 +7300,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 17
+          "imm": 0
         }
       ],
       "count": 252500
@@ -6988,7 +7388,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 16
+          "imm": 0
         }
       ],
       "count": 252496
@@ -7076,7 +7476,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 19
+          "imm": 0
         }
       ],
       "count": 252496
@@ -7252,7 +7652,51 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 24
+          "imm": 0
+        }
+      ],
+      "count": 252496
+    },
+    {
+      "kind": "fused",
+      "originalId": 2471359871,
+      "width": 4,
+      "operands": [
+        {
+          "modrm": 1,
+          "prefixes": 0,
+          "meta": 0,
+          "length": 1,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 77,
+          "prefixes": 0,
+          "meta": 3,
+          "length": 3,
+          "ea_desc": 395284,
+          "disp": 4294967268,
+          "imm": 0
+        },
+        {
+          "modrm": 117,
+          "prefixes": 0,
+          "meta": 3,
+          "length": 3,
+          "ea_desc": 395284,
+          "disp": 4294967268,
+          "imm": 0
+        },
+        {
+          "modrm": 206,
+          "prefixes": 0,
+          "meta": 1,
+          "length": 3,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
         }
       ],
       "count": 252496
@@ -7462,7 +7906,7 @@
           "length": 6,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 376
+          "imm": 0
         }
       ],
       "count": 88800000
@@ -7506,7 +7950,7 @@
           "length": 6,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 174
+          "imm": 0
         }
       ],
       "count": 88800000
@@ -7706,6 +8150,32 @@
     },
     {
       "kind": "fused",
+      "originalId": 2184155093,
+      "width": 2,
+      "operands": [
+        {
+          "modrm": 201,
+          "prefixes": 0,
+          "meta": 1,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 4,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 39572023
+    },
+    {
+      "kind": "fused",
       "originalId": 2351101466,
       "width": 4,
       "operands": [
@@ -7882,6 +8352,32 @@
     },
     {
       "kind": "fused",
+      "originalId": 3095082871,
+      "width": 2,
+      "operands": [
+        {
+          "modrm": 248,
+          "prefixes": 0,
+          "meta": 1,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 4,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 3710074
+    },
+    {
+      "kind": "fused",
       "originalId": 2465888248,
       "width": 2,
       "operands": [
@@ -7979,7 +8475,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 65
+          "imm": 0
         }
       ],
       "count": 1049878
@@ -8005,7 +8501,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 10
+          "imm": 0
         }
       ],
       "count": 1049878
@@ -8075,7 +8571,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 12
+          "imm": 0
         }
       ],
       "count": 77280000
@@ -8110,7 +8606,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 40
+          "imm": 0
         }
       ],
       "count": 131983
@@ -8242,7 +8738,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 46
+          "imm": 0
         }
       ],
       "count": 219160
@@ -8286,7 +8782,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 22
+          "imm": 0
         }
       ],
       "count": 219160
@@ -8330,7 +8826,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 149
+          "imm": 0
         }
       ],
       "count": 78240000
@@ -8374,7 +8870,7 @@
           "length": 5,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 4294966960
+          "imm": 0
         }
       ],
       "count": 77280000
@@ -8409,7 +8905,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 9
+          "imm": 0
         }
       ],
       "count": 74402
@@ -8444,7 +8940,7 @@
           "length": 6,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 180
+          "imm": 0
         }
       ],
       "count": 74402
@@ -8768,7 +9264,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 18
+          "imm": 0
         }
       ],
       "count": 249678
@@ -10067,32 +10563,6 @@
     },
     {
       "kind": "fused",
-      "originalId": 2184155093,
-      "width": 2,
-      "operands": [
-        {
-          "modrm": 210,
-          "prefixes": 0,
-          "meta": 1,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 4,
-          "prefixes": 0,
-          "meta": 140,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 3
-        }
-      ],
-      "count": 254262
-    },
-    {
-      "kind": "fused",
       "originalId": 2187240486,
       "width": 3,
       "operands": [
@@ -10121,7 +10591,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 100
+          "imm": 0
         }
       ],
       "count": 89141
@@ -10239,6 +10709,111 @@
         }
       ],
       "count": 87495
+    },
+    {
+      "kind": "fused",
+      "originalId": 3079437900,
+      "width": 4,
+      "operands": [
+        {
+          "modrm": 195,
+          "prefixes": 0,
+          "meta": 1,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 219,
+          "prefixes": 0,
+          "meta": 1,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 12,
+          "prefixes": 0,
+          "meta": 3,
+          "length": 4,
+          "ea_desc": 525080,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 77,
+          "prefixes": 0,
+          "meta": 3,
+          "length": 3,
+          "ea_desc": 395284,
+          "disp": 4294967283,
+          "imm": 0
+        }
+      ],
+      "count": 87495
+    },
+    {
+      "kind": "fused",
+      "originalId": 2930976716,
+      "width": 2,
+      "operands": [
+        {
+          "modrm": 201,
+          "prefixes": 0,
+          "meta": 1,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 5,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 389707
+    },
+    {
+      "kind": "fused",
+      "originalId": 2330859449,
+      "width": 3,
+      "operands": [
+        {
+          "modrm": 2,
+          "prefixes": 0,
+          "meta": 0,
+          "length": 1,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 0,
+          "prefixes": 0,
+          "meta": 0,
+          "length": 1,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 0,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 5,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 718550
     },
     {
       "kind": "fused",
@@ -10443,29 +11018,64 @@
     },
     {
       "kind": "fused",
-      "originalId": 3107986399,
-      "width": 2,
+      "originalId": 2540030320,
+      "width": 3,
       "operands": [
         {
-          "modrm": 192,
+          "modrm": 196,
           "prefixes": 0,
-          "meta": 5,
+          "meta": 21,
           "length": 3,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 4
+          "imm": 16
         },
         {
-          "modrm": 3,
+          "modrm": 192,
+          "prefixes": 0,
+          "meta": 1,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 5,
           "prefixes": 0,
           "meta": 140,
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 229
+          "imm": 0
         }
       ],
-      "count": 284759
+      "count": 339471
+    },
+    {
+      "kind": "fused",
+      "originalId": 2468607055,
+      "width": 2,
+      "operands": [
+        {
+          "modrm": 250,
+          "prefixes": 0,
+          "meta": 5,
+          "length": 3,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 44
+        },
+        {
+          "modrm": 4,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 6,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 196800011
     },
     {
       "kind": "fused",
@@ -10576,10 +11186,36 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 27
+          "imm": 0
         }
       ],
       "count": 62400000
+    },
+    {
+      "kind": "fused",
+      "originalId": 2173822817,
+      "width": 2,
+      "operands": [
+        {
+          "modrm": 7,
+          "prefixes": 0,
+          "meta": 0,
+          "length": 1,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 0,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 5,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 93918904
     },
     {
       "kind": "fused",
@@ -10653,6 +11289,50 @@
     },
     {
       "kind": "fused",
+      "originalId": 2530994107,
+      "width": 4,
+      "operands": [
+        {
+          "modrm": 68,
+          "prefixes": 0,
+          "meta": 3,
+          "length": 4,
+          "ea_desc": 401428,
+          "disp": 4294967212,
+          "imm": 0
+        },
+        {
+          "modrm": 69,
+          "prefixes": 0,
+          "meta": 3,
+          "length": 3,
+          "ea_desc": 395284,
+          "disp": 4294967276,
+          "imm": 0
+        },
+        {
+          "modrm": 56,
+          "prefixes": 0,
+          "meta": 7,
+          "length": 3,
+          "ea_desc": 526336,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 5,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 61440000
+    },
+    {
+      "kind": "fused",
       "originalId": 2652236960,
       "width": 4,
       "operands": [
@@ -10690,7 +11370,7 @@
           "length": 6,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 310
+          "imm": 0
         }
       ],
       "count": 61440000
@@ -10734,7 +11414,7 @@
           "length": 6,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 302
+          "imm": 0
         }
       ],
       "count": 61440000
@@ -10785,50 +11465,6 @@
     },
     {
       "kind": "fused",
-      "originalId": 2449120784,
-      "width": 4,
-      "operands": [
-        {
-          "modrm": 196,
-          "prefixes": 0,
-          "meta": 5,
-          "length": 3,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 16
-        },
-        {
-          "modrm": 68,
-          "prefixes": 0,
-          "meta": 3,
-          "length": 4,
-          "ea_desc": 401428,
-          "disp": 4294967212,
-          "imm": 0
-        },
-        {
-          "modrm": 69,
-          "prefixes": 0,
-          "meta": 3,
-          "length": 3,
-          "ea_desc": 395284,
-          "disp": 4294967276,
-          "imm": 0
-        },
-        {
-          "modrm": 56,
-          "prefixes": 0,
-          "meta": 7,
-          "length": 3,
-          "ea_desc": 526336,
-          "disp": 0,
-          "imm": 0
-        }
-      ],
-      "count": 61440000
-    },
-    {
-      "kind": "fused",
       "originalId": 2455093784,
       "width": 2,
       "operands": [
@@ -10848,10 +11484,10 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 8
+          "imm": 0
         }
       ],
-      "count": 191100000
+      "count": 191100595
     },
     {
       "kind": "fused",
@@ -10953,7 +11589,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 9
+          "imm": 0
         }
       ],
       "count": 140995
@@ -11001,6 +11637,32 @@
         }
       ],
       "count": 273584
+    },
+    {
+      "kind": "fused",
+      "originalId": 2948547542,
+      "width": 2,
+      "operands": [
+        {
+          "modrm": 219,
+          "prefixes": 0,
+          "meta": 1,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 4,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 6,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 186241269
     },
     {
       "kind": "fused",
@@ -11137,7 +11799,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 239
+          "imm": 0
         }
       ],
       "count": 208620
@@ -11233,7 +11895,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 50
+          "imm": 0
         }
       ],
       "count": 88800000
@@ -11285,10 +11947,10 @@
           "length": 5,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 133
+          "imm": 0
         }
       ],
-      "count": 287290
+      "count": 287310
     },
     {
       "kind": "fused",
@@ -11399,10 +12061,36 @@
           "length": 6,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 559
+          "imm": 0
         }
       ],
       "count": 61440000
+    },
+    {
+      "kind": "fused",
+      "originalId": 2940656384,
+      "width": 2,
+      "operands": [
+        {
+          "modrm": 2,
+          "prefixes": 0,
+          "meta": 4,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 8
+        },
+        {
+          "modrm": 0,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 5,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 10807
     },
     {
       "kind": "fused",
@@ -11846,7 +12534,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 14
+          "imm": 0
         }
       ],
       "count": 1396090
@@ -11885,6 +12573,50 @@
         },
         {
           "modrm": 3,
+          "prefixes": 0,
+          "meta": 0,
+          "length": 1,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 1396090
+    },
+    {
+      "kind": "fused",
+      "originalId": 3091071770,
+      "width": 4,
+      "operands": [
+        {
+          "modrm": 2,
+          "prefixes": 0,
+          "meta": 4,
+          "length": 5,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 16
+        },
+        {
+          "modrm": 229,
+          "prefixes": 0,
+          "meta": 1,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 7,
+          "prefixes": 0,
+          "meta": 0,
+          "length": 1,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 6,
           "prefixes": 0,
           "meta": 0,
           "length": 1,
@@ -11976,17 +12708,17 @@
     },
     {
       "kind": "fused",
-      "originalId": 2540030320,
+      "originalId": 2265351253,
       "width": 3,
       "operands": [
         {
-          "modrm": 196,
+          "modrm": 68,
           "prefixes": 0,
-          "meta": 21,
-          "length": 3,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 16
+          "meta": 3,
+          "length": 4,
+          "ea_desc": 395280,
+          "disp": 16,
+          "imm": 0
         },
         {
           "modrm": 192,
@@ -11998,16 +12730,16 @@
           "imm": 0
         },
         {
-          "modrm": 5,
+          "modrm": 4,
           "prefixes": 0,
           "meta": 140,
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 17
+          "imm": 0
         }
       ],
-      "count": 252499
+      "count": 261674
     },
     {
       "kind": "fused",
@@ -12030,7 +12762,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 16
+          "imm": 0
         }
       ],
       "count": 504992
@@ -12065,7 +12797,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 45
+          "imm": 0
         }
       ],
       "count": 252496
@@ -12100,77 +12832,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 74
-        }
-      ],
-      "count": 252496
-    },
-    {
-      "kind": "fused",
-      "originalId": 2177310479,
-      "width": 3,
-      "operands": [
-        {
-          "modrm": 1,
-          "prefixes": 0,
-          "meta": 0,
-          "length": 1,
-          "ea_desc": 0,
-          "disp": 0,
           "imm": 0
-        },
-        {
-          "modrm": 77,
-          "prefixes": 0,
-          "meta": 3,
-          "length": 3,
-          "ea_desc": 395284,
-          "disp": 4294967268,
-          "imm": 0
-        },
-        {
-          "modrm": 117,
-          "prefixes": 0,
-          "meta": 3,
-          "length": 3,
-          "ea_desc": 395284,
-          "disp": 4294967268,
-          "imm": 0
-        }
-      ],
-      "count": 252496
-    },
-    {
-      "kind": "fused",
-      "originalId": 2330859449,
-      "width": 3,
-      "operands": [
-        {
-          "modrm": 6,
-          "prefixes": 0,
-          "meta": 0,
-          "length": 1,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 3,
-          "prefixes": 0,
-          "meta": 0,
-          "length": 1,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 0,
-          "prefixes": 0,
-          "meta": 140,
-          "length": 5,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 4294575747
         }
       ],
       "count": 252496
@@ -12196,10 +12858,10 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 226
+          "imm": 0
         }
       ],
-      "count": 4129201
+      "count": 4134893
     },
     {
       "kind": "fused",
@@ -12235,6 +12897,67 @@
         }
       ],
       "count": 2064447
+    },
+    {
+      "kind": "fused",
+      "originalId": 2330859449,
+      "width": 3,
+      "operands": [
+        {
+          "modrm": 7,
+          "prefixes": 0,
+          "meta": 0,
+          "length": 1,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 6,
+          "prefixes": 0,
+          "meta": 0,
+          "length": 1,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 0,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 5,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 1573678
+    },
+    {
+      "kind": "fused",
+      "originalId": 3206160123,
+      "width": 2,
+      "operands": [
+        {
+          "modrm": 197,
+          "prefixes": 0,
+          "meta": 1,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 5,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 175923664
     },
     {
       "kind": "fused",
@@ -12279,32 +13002,6 @@
         }
       ],
       "count": 56160000
-    },
-    {
-      "kind": "fused",
-      "originalId": 3206160123,
-      "width": 2,
-      "operands": [
-        {
-          "modrm": 197,
-          "prefixes": 0,
-          "meta": 1,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 5,
-          "prefixes": 0,
-          "meta": 140,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 236
-        }
-      ],
-      "count": 174960024
     },
     {
       "kind": "fused",
@@ -12360,6 +13057,32 @@
     },
     {
       "kind": "fused",
+      "originalId": 3206160123,
+      "width": 2,
+      "operands": [
+        {
+          "modrm": 215,
+          "prefixes": 64,
+          "meta": 1,
+          "length": 3,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 5,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 174600000
+    },
+    {
+      "kind": "fused",
       "originalId": 3176215518,
       "width": 3,
       "operands": [
@@ -12388,36 +13111,10 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 242
+          "imm": 0
         }
       ],
       "count": 4115
-    },
-    {
-      "kind": "fused",
-      "originalId": 2684255668,
-      "width": 2,
-      "operands": [
-        {
-          "modrm": 192,
-          "prefixes": 0,
-          "meta": 1,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 4,
-          "prefixes": 0,
-          "meta": 140,
-          "length": 6,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 214
-        }
-      ],
-      "count": 173220313
     },
     {
       "kind": "fused",
@@ -12465,6 +13162,67 @@
     },
     {
       "kind": "fused",
+      "originalId": 3122657450,
+      "width": 2,
+      "operands": [
+        {
+          "modrm": 192,
+          "prefixes": 0,
+          "meta": 1,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 4,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 1431813
+    },
+    {
+      "kind": "fused",
+      "originalId": 2887531468,
+      "width": 3,
+      "operands": [
+        {
+          "modrm": 195,
+          "prefixes": 0,
+          "meta": 1,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 219,
+          "prefixes": 0,
+          "meta": 1,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 12,
+          "prefixes": 0,
+          "meta": 3,
+          "length": 4,
+          "ea_desc": 525080,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 109964
+    },
+    {
+      "kind": "fused",
       "originalId": 2179950278,
       "width": 2,
       "operands": [
@@ -12488,6 +13246,32 @@
         }
       ],
       "count": 620589
+    },
+    {
+      "kind": "fused",
+      "originalId": 2173822817,
+      "width": 2,
+      "operands": [
+        {
+          "modrm": 6,
+          "prefixes": 0,
+          "meta": 0,
+          "length": 1,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 0,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 5,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 12271783
     },
     {
       "kind": "fused",
@@ -12519,7 +13303,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 95
+          "imm": 0
         }
       ],
       "count": 1957524
@@ -12558,6 +13342,32 @@
         }
       ],
       "count": 1957492
+    },
+    {
+      "kind": "fused",
+      "originalId": 2684255668,
+      "width": 2,
+      "operands": [
+        {
+          "modrm": 255,
+          "prefixes": 0,
+          "meta": 1,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 4,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 6,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 975577
     },
     {
       "kind": "fused",
@@ -12624,36 +13434,10 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 9
+          "imm": 0
         }
       ],
       "count": 123839
-    },
-    {
-      "kind": "fused",
-      "originalId": 2184155093,
-      "width": 2,
-      "operands": [
-        {
-          "modrm": 192,
-          "prefixes": 0,
-          "meta": 1,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 4,
-          "prefixes": 0,
-          "meta": 140,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 74
-        }
-      ],
-      "count": 166680466
     },
     {
       "kind": "fused",
@@ -12825,7 +13609,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 68
+          "imm": 0
         }
       ],
       "count": 78720000
@@ -12947,7 +13731,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 9
+          "imm": 0
         }
       ],
       "count": 157440000
@@ -12973,7 +13757,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 8
+          "imm": 0
         }
       ],
       "count": 157440000
@@ -13420,6 +14204,76 @@
     },
     {
       "kind": "fused",
+      "originalId": 2357199377,
+      "width": 3,
+      "operands": [
+        {
+          "modrm": 85,
+          "prefixes": 0,
+          "meta": 3,
+          "length": 3,
+          "ea_desc": 395284,
+          "disp": 4294967264,
+          "imm": 0
+        },
+        {
+          "modrm": 69,
+          "prefixes": 0,
+          "meta": 3,
+          "length": 3,
+          "ea_desc": 395284,
+          "disp": 4294967268,
+          "imm": 0
+        },
+        {
+          "modrm": 0,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 5,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 219950
+    },
+    {
+      "kind": "fused",
+      "originalId": 2632719538,
+      "width": 3,
+      "operands": [
+        {
+          "modrm": 70,
+          "prefixes": 0,
+          "meta": 3,
+          "length": 3,
+          "ea_desc": 526360,
+          "disp": 4294967280,
+          "imm": 0
+        },
+        {
+          "modrm": 77,
+          "prefixes": 0,
+          "meta": 3,
+          "length": 3,
+          "ea_desc": 395284,
+          "disp": 4294967260,
+          "imm": 0
+        },
+        {
+          "modrm": 235,
+          "prefixes": 0,
+          "meta": 5,
+          "length": 3,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 16
+        }
+      ],
+      "count": 219728
+    },
+    {
+      "kind": "fused",
       "originalId": 2361649135,
       "width": 4,
       "operands": [
@@ -13501,7 +14355,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 8
+          "imm": 0
         }
       ],
       "count": 788706
@@ -13545,7 +14399,7 @@
           "length": 5,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 4294954011
+          "imm": 0
         }
       ],
       "count": 788706
@@ -13589,7 +14443,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 3
+          "imm": 0
         }
       ],
       "count": 44801
@@ -13624,7 +14478,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 174
+          "imm": 0
         }
       ],
       "count": 78240000
@@ -13932,7 +14786,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 7
+          "imm": 0
         }
       ],
       "count": 1191229
@@ -14055,7 +14909,7 @@
           "length": 6,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 4294967072
+          "imm": 0
         }
       ],
       "count": 77280000
@@ -14187,7 +15041,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 100
+          "imm": 0
         }
       ],
       "count": 44340
@@ -14414,6 +15268,50 @@
     },
     {
       "kind": "fused",
+      "originalId": 2246232733,
+      "width": 4,
+      "operands": [
+        {
+          "modrm": 85,
+          "prefixes": 0,
+          "meta": 3,
+          "length": 3,
+          "ea_desc": 395284,
+          "disp": 4294967240,
+          "imm": 0
+        },
+        {
+          "modrm": 6,
+          "prefixes": 0,
+          "meta": 0,
+          "length": 1,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 117,
+          "prefixes": 0,
+          "meta": 3,
+          "length": 3,
+          "ea_desc": 395284,
+          "disp": 4294967220,
+          "imm": 0
+        },
+        {
+          "modrm": 117,
+          "prefixes": 0,
+          "meta": 3,
+          "length": 3,
+          "ea_desc": 395284,
+          "disp": 4294967216,
+          "imm": 0
+        }
+      ],
+      "count": 44309
+    },
+    {
+      "kind": "fused",
       "originalId": 2216491800,
       "width": 4,
       "operands": [
@@ -14446,6 +15344,50 @@
         },
         {
           "modrm": 6,
+          "prefixes": 0,
+          "meta": 0,
+          "length": 1,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 44309
+    },
+    {
+      "kind": "fused",
+      "originalId": 2593618951,
+      "width": 4,
+      "operands": [
+        {
+          "modrm": 69,
+          "prefixes": 0,
+          "meta": 3,
+          "length": 3,
+          "ea_desc": 395284,
+          "disp": 4294967264,
+          "imm": 0
+        },
+        {
+          "modrm": 1,
+          "prefixes": 0,
+          "meta": 0,
+          "length": 1,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 77,
+          "prefixes": 0,
+          "meta": 3,
+          "length": 3,
+          "ea_desc": 395284,
+          "disp": 4294967232,
+          "imm": 0
+        },
+        {
+          "modrm": 7,
           "prefixes": 0,
           "meta": 0,
           "length": 1,
@@ -14525,6 +15467,32 @@
         }
       ],
       "count": 587725
+    },
+    {
+      "kind": "fused",
+      "originalId": 2943342021,
+      "width": 2,
+      "operands": [
+        {
+          "modrm": 251,
+          "prefixes": 0,
+          "meta": 5,
+          "length": 3,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 245
+        },
+        {
+          "modrm": 7,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 143040000
     },
     {
       "kind": "fused",
@@ -14634,7 +15602,7 @@
           "length": 6,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 144
+          "imm": 0
         }
       ],
       "count": 249678
@@ -15009,16 +15977,16 @@
     },
     {
       "kind": "fused",
-      "originalId": 2184155093,
+      "originalId": 2746812706,
       "width": 2,
       "operands": [
         {
-          "modrm": 201,
+          "modrm": 125,
           "prefixes": 0,
-          "meta": 1,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
+          "meta": 7,
+          "length": 4,
+          "ea_desc": 395284,
+          "disp": 4294967239,
           "imm": 0
         },
         {
@@ -15028,10 +15996,36 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 76
+          "imm": 0
         }
       ],
-      "count": 475535
+      "count": 473829
+    },
+    {
+      "kind": "fused",
+      "originalId": 2373383870,
+      "width": 2,
+      "operands": [
+        {
+          "modrm": 240,
+          "prefixes": 0,
+          "meta": 1,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 6,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 6,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 473805
     },
     {
       "kind": "fused",
@@ -15058,6 +16052,32 @@
         }
       ],
       "count": 473394
+    },
+    {
+      "kind": "fused",
+      "originalId": 2184155093,
+      "width": 2,
+      "operands": [
+        {
+          "modrm": 246,
+          "prefixes": 0,
+          "meta": 1,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 4,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 12209919
     },
     {
       "kind": "fused",
@@ -15146,6 +16166,50 @@
         }
       ],
       "count": 1044160
+    },
+    {
+      "kind": "fused",
+      "originalId": 2565190853,
+      "width": 4,
+      "operands": [
+        {
+          "modrm": 68,
+          "prefixes": 0,
+          "meta": 3,
+          "length": 5,
+          "ea_desc": 524296,
+          "disp": 4294967295,
+          "imm": 0
+        },
+        {
+          "modrm": 0,
+          "prefixes": 0,
+          "meta": 0,
+          "length": 1,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 2,
+          "prefixes": 0,
+          "meta": 4,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 0,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 5,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 1043999
     },
     {
       "kind": "fused",
@@ -15281,50 +16345,6 @@
     },
     {
       "kind": "fused",
-      "originalId": 2565190853,
-      "width": 4,
-      "operands": [
-        {
-          "modrm": 68,
-          "prefixes": 0,
-          "meta": 3,
-          "length": 5,
-          "ea_desc": 524296,
-          "disp": 4294967295,
-          "imm": 0
-        },
-        {
-          "modrm": 0,
-          "prefixes": 0,
-          "meta": 0,
-          "length": 1,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 2,
-          "prefixes": 0,
-          "meta": 4,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 0,
-          "prefixes": 0,
-          "meta": 140,
-          "length": 5,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 20875
-        }
-      ],
-      "count": 1043998
-    },
-    {
-      "kind": "fused",
       "originalId": 2543197989,
       "width": 4,
       "operands": [
@@ -15450,7 +16470,7 @@
           "length": 6,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 4294967030
+          "imm": 0
         }
       ],
       "count": 1043998
@@ -15589,6 +16609,50 @@
     },
     {
       "kind": "fused",
+      "originalId": 2587300393,
+      "width": 4,
+      "operands": [
+        {
+          "modrm": 5,
+          "prefixes": 0,
+          "meta": 0,
+          "length": 1,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 7,
+          "prefixes": 0,
+          "meta": 0,
+          "length": 1,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 6,
+          "prefixes": 0,
+          "meta": 0,
+          "length": 1,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 0,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 5,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 660333
+    },
+    {
+      "kind": "fused",
       "originalId": 3142109941,
       "width": 3,
       "operands": [
@@ -15617,7 +16681,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 209
+          "imm": 0
         }
       ],
       "count": 87495
@@ -15661,7 +16725,51 @@
           "length": 5,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 21235
+          "imm": 0
+        }
+      ],
+      "count": 1032674
+    },
+    {
+      "kind": "fused",
+      "originalId": 2495375940,
+      "width": 4,
+      "operands": [
+        {
+          "modrm": 0,
+          "prefixes": 0,
+          "meta": 0,
+          "length": 1,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 7,
+          "prefixes": 0,
+          "meta": 0,
+          "length": 1,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 2,
+          "prefixes": 0,
+          "meta": 0,
+          "length": 1,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 125,
+          "prefixes": 0,
+          "meta": 3,
+          "length": 3,
+          "ea_desc": 395284,
+          "disp": 4294967260,
+          "imm": 0
         }
       ],
       "count": 1032674
@@ -15709,6 +16817,32 @@
         }
       ],
       "count": 1032674
+    },
+    {
+      "kind": "fused",
+      "originalId": 2703860767,
+      "width": 2,
+      "operands": [
+        {
+          "modrm": 56,
+          "prefixes": 0,
+          "meta": 7,
+          "length": 3,
+          "ea_desc": 526336,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 5,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 122884441
     },
     {
       "kind": "fused",
@@ -15793,7 +16927,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 6
+          "imm": 0
         }
       ],
       "count": 197950
@@ -15925,7 +17059,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 124
+          "imm": 0
         }
       ],
       "count": 62913
@@ -16057,7 +17191,7 @@
           "length": 6,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 136
+          "imm": 0
         }
       ],
       "count": 62913
@@ -16237,6 +17371,32 @@
         }
       ],
       "count": 163840
+    },
+    {
+      "kind": "fused",
+      "originalId": 3122657450,
+      "width": 2,
+      "operands": [
+        {
+          "modrm": 201,
+          "prefixes": 0,
+          "meta": 1,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 4,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 370879
     },
     {
       "kind": "fused",
@@ -16453,10 +17613,45 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 168
+          "imm": 0
         }
       ],
       "count": 41040000
+    },
+    {
+      "kind": "fused",
+      "originalId": 2330859449,
+      "width": 3,
+      "operands": [
+        {
+          "modrm": 6,
+          "prefixes": 0,
+          "meta": 0,
+          "length": 1,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 7,
+          "prefixes": 0,
+          "meta": 0,
+          "length": 1,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 0,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 5,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 61533590
     },
     {
       "kind": "fused",
@@ -16527,6 +17722,50 @@
         }
       ],
       "count": 1370298
+    },
+    {
+      "kind": "fused",
+      "originalId": 2731553885,
+      "width": 4,
+      "operands": [
+        {
+          "modrm": 229,
+          "prefixes": 0,
+          "meta": 1,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 7,
+          "prefixes": 0,
+          "meta": 0,
+          "length": 1,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 6,
+          "prefixes": 0,
+          "meta": 0,
+          "length": 1,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 0,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 5,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 848854
     },
     {
       "kind": "fused",
@@ -16602,7 +17841,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 74
+          "imm": 0
         }
       ],
       "count": 62400000
@@ -16681,7 +17920,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 233
+          "imm": 0
         }
       ],
       "count": 61440000
@@ -16717,41 +17956,6 @@
           "ea_desc": 526348,
           "disp": 265624,
           "imm": 0
-        }
-      ],
-      "count": 1396090
-    },
-    {
-      "kind": "fused",
-      "originalId": 2330859449,
-      "width": 3,
-      "operands": [
-        {
-          "modrm": 6,
-          "prefixes": 0,
-          "meta": 0,
-          "length": 1,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 3,
-          "prefixes": 0,
-          "meta": 0,
-          "length": 1,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 0,
-          "prefixes": 0,
-          "meta": 140,
-          "length": 5,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 4294966880
         }
       ],
       "count": 1396090
@@ -16802,47 +18006,29 @@
     },
     {
       "kind": "fused",
-      "originalId": 2587300393,
-      "width": 4,
+      "originalId": 3095082871,
+      "width": 2,
       "operands": [
         {
-          "modrm": 5,
+          "modrm": 199,
           "prefixes": 0,
-          "meta": 0,
-          "length": 1,
+          "meta": 1,
+          "length": 2,
           "ea_desc": 0,
           "disp": 0,
           "imm": 0
         },
         {
-          "modrm": 7,
-          "prefixes": 0,
-          "meta": 0,
-          "length": 1,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 6,
-          "prefixes": 0,
-          "meta": 0,
-          "length": 1,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 0,
+          "modrm": 4,
           "prefixes": 0,
           "meta": 140,
-          "length": 5,
+          "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 4294895051
+          "imm": 0
         }
       ],
-      "count": 505394
+      "count": 135084
     },
     {
       "kind": "fused",
@@ -16869,6 +18055,94 @@
         }
       ],
       "count": 132495
+    },
+    {
+      "kind": "fused",
+      "originalId": 2731553885,
+      "width": 4,
+      "operands": [
+        {
+          "modrm": 229,
+          "prefixes": 0,
+          "meta": 1,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 6,
+          "prefixes": 0,
+          "meta": 0,
+          "length": 1,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 3,
+          "prefixes": 0,
+          "meta": 0,
+          "length": 1,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 0,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 5,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 506234
+    },
+    {
+      "kind": "fused",
+      "originalId": 2590427868,
+      "width": 4,
+      "operands": [
+        {
+          "modrm": 1,
+          "prefixes": 48,
+          "meta": 4,
+          "length": 6,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 20
+        },
+        {
+          "modrm": 69,
+          "prefixes": 0,
+          "meta": 3,
+          "length": 3,
+          "ea_desc": 395284,
+          "disp": 4294967284,
+          "imm": 0
+        },
+        {
+          "modrm": 192,
+          "prefixes": 0,
+          "meta": 1,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 0,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 5,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 504792
     },
     {
       "kind": "fused",
@@ -17001,6 +18275,94 @@
         }
       ],
       "count": 504778
+    },
+    {
+      "kind": "fused",
+      "originalId": 2858435188,
+      "width": 4,
+      "operands": [
+        {
+          "modrm": 5,
+          "prefixes": 0,
+          "meta": 0,
+          "length": 1,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 229,
+          "prefixes": 0,
+          "meta": 1,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 7,
+          "prefixes": 0,
+          "meta": 0,
+          "length": 1,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 0,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 5,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 440452
+    },
+    {
+      "kind": "fused",
+      "originalId": 2858435188,
+      "width": 4,
+      "operands": [
+        {
+          "modrm": 6,
+          "prefixes": 0,
+          "meta": 0,
+          "length": 1,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 206,
+          "prefixes": 0,
+          "meta": 1,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 3,
+          "prefixes": 0,
+          "meta": 0,
+          "length": 1,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 0,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 5,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 20388
     },
     {
       "kind": "fused",
@@ -17305,7 +18667,7 @@
           "length": 6,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 4294966382
+          "imm": 0
         }
       ],
       "count": 896768
@@ -17349,7 +18711,7 @@
           "length": 6,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 406
+          "imm": 0
         }
       ],
       "count": 896768
@@ -17384,10 +18746,36 @@
           "length": 6,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 212
+          "imm": 0
         }
       ],
       "count": 56160000
+    },
+    {
+      "kind": "fused",
+      "originalId": 2184155093,
+      "width": 2,
+      "operands": [
+        {
+          "modrm": 255,
+          "prefixes": 0,
+          "meta": 1,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 4,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 18323957
     },
     {
       "kind": "fused",
@@ -17428,7 +18816,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 227
+          "imm": 0
         }
       ],
       "count": 38880000
@@ -17514,6 +18902,32 @@
     },
     {
       "kind": "fused",
+      "originalId": 2679599672,
+      "width": 2,
+      "operands": [
+        {
+          "modrm": 0,
+          "prefixes": 0,
+          "meta": 4,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 7
+        },
+        {
+          "modrm": 4,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 81571
+    },
+    {
+      "kind": "fused",
       "originalId": 3001290100,
       "width": 3,
       "operands": [
@@ -17593,6 +19007,32 @@
     },
     {
       "kind": "fused",
+      "originalId": 2745822983,
+      "width": 2,
+      "operands": [
+        {
+          "modrm": 208,
+          "prefixes": 0,
+          "meta": 1,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 2,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 84827
+    },
+    {
+      "kind": "fused",
       "originalId": 2364799477,
       "width": 4,
       "operands": [
@@ -17634,32 +19074,6 @@
         }
       ],
       "count": 84964
-    },
-    {
-      "kind": "fused",
-      "originalId": 2745822983,
-      "width": 2,
-      "operands": [
-        {
-          "modrm": 208,
-          "prefixes": 0,
-          "meta": 1,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 2,
-          "prefixes": 0,
-          "meta": 140,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 230
-        }
-      ],
-      "count": 74402
     },
     {
       "kind": "fused",
@@ -17744,10 +19158,36 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 13
+          "imm": 0
         }
       ],
       "count": 84943
+    },
+    {
+      "kind": "fused",
+      "originalId": 2679599672,
+      "width": 2,
+      "operands": [
+        {
+          "modrm": 0,
+          "prefixes": 0,
+          "meta": 4,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 1
+        },
+        {
+          "modrm": 4,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 459837
     },
     {
       "kind": "fused",
@@ -17805,10 +19245,10 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 5
+          "imm": 0
         }
       ],
-      "count": 562412
+      "count": 562413
     },
     {
       "kind": "fused",
@@ -18069,7 +19509,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 180
+          "imm": 0
         }
       ],
       "count": 847642
@@ -18120,50 +19560,6 @@
     },
     {
       "kind": "fused",
-      "originalId": 2731553885,
-      "width": 4,
-      "operands": [
-        {
-          "modrm": 229,
-          "prefixes": 0,
-          "meta": 1,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 7,
-          "prefixes": 0,
-          "meta": 0,
-          "length": 1,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 6,
-          "prefixes": 0,
-          "meta": 0,
-          "length": 1,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 0,
-          "prefixes": 0,
-          "meta": 140,
-          "length": 5,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 2985
-        }
-      ],
-      "count": 847642
-    },
-    {
-      "kind": "fused",
       "originalId": 3092728087,
       "width": 4,
       "operands": [
@@ -18201,6 +19597,50 @@
           "length": 3,
           "ea_desc": 395284,
           "disp": 4294967280,
+          "imm": 0
+        }
+      ],
+      "count": 847642
+    },
+    {
+      "kind": "fused",
+      "originalId": 2639697773,
+      "width": 4,
+      "operands": [
+        {
+          "modrm": 5,
+          "prefixes": 0,
+          "meta": 0,
+          "length": 1,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 2,
+          "prefixes": 0,
+          "meta": 4,
+          "length": 5,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 32506
+        },
+        {
+          "modrm": 229,
+          "prefixes": 0,
+          "meta": 1,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 7,
+          "prefixes": 0,
+          "meta": 0,
+          "length": 1,
+          "ea_desc": 0,
+          "disp": 0,
           "imm": 0
         }
       ],
@@ -18367,10 +19807,54 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 58
+          "imm": 0
         }
       ],
       "count": 550981
+    },
+    {
+      "kind": "fused",
+      "originalId": 2902410051,
+      "width": 4,
+      "operands": [
+        {
+          "modrm": 236,
+          "prefixes": 0,
+          "meta": 5,
+          "length": 3,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 8
+        },
+        {
+          "modrm": 3,
+          "prefixes": 0,
+          "meta": 0,
+          "length": 1,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 7,
+          "prefixes": 0,
+          "meta": 0,
+          "length": 1,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 0,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 5,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 30881434
     },
     {
       "kind": "fused",
@@ -18397,6 +19881,32 @@
         }
       ],
       "count": 1642138
+    },
+    {
+      "kind": "fused",
+      "originalId": 3074685128,
+      "width": 2,
+      "operands": [
+        {
+          "modrm": 0,
+          "prefixes": 0,
+          "meta": 4,
+          "length": 5,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 2
+        },
+        {
+          "modrm": 5,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 152107
     },
     {
       "kind": "fused",
@@ -18432,32 +19942,6 @@
         }
       ],
       "count": 2000522
-    },
-    {
-      "kind": "fused",
-      "originalId": 2184155093,
-      "width": 2,
-      "operands": [
-        {
-          "modrm": 192,
-          "prefixes": 0,
-          "meta": 1,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 4,
-          "prefixes": 0,
-          "meta": 140,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 9
-        }
-      ],
-      "count": 261942
     },
     {
       "kind": "fused",
@@ -18533,7 +20017,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 6
+          "imm": 0
         }
       ],
       "count": 22824
@@ -18612,7 +20096,7 @@
           "length": 6,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 996
+          "imm": 0
         }
       ],
       "count": 790469
@@ -18829,6 +20313,32 @@
     },
     {
       "kind": "fused",
+      "originalId": 3055705493,
+      "width": 2,
+      "operands": [
+        {
+          "modrm": 117,
+          "prefixes": 0,
+          "meta": 3,
+          "length": 3,
+          "ea_desc": 395284,
+          "disp": 8,
+          "imm": 0
+        },
+        {
+          "modrm": 0,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 5,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 2358218
+    },
+    {
+      "kind": "fused",
       "originalId": 2265351253,
       "width": 3,
       "operands": [
@@ -18857,10 +20367,10 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 5
+          "imm": 0
         }
       ],
-      "count": 788719
+      "count": 788720
     },
     {
       "kind": "fused",
@@ -18892,7 +20402,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 36
+          "imm": 0
         }
       ],
       "count": 788706
@@ -18978,6 +20488,32 @@
     },
     {
       "kind": "fused",
+      "originalId": 3205704306,
+      "width": 2,
+      "operands": [
+        {
+          "modrm": 232,
+          "prefixes": 0,
+          "meta": 1,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 4,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 150347
+    },
+    {
+      "kind": "fused",
       "originalId": 3135590993,
       "width": 3,
       "operands": [
@@ -19013,7 +20549,33 @@
     },
     {
       "kind": "fused",
-      "originalId": 2184155093,
+      "originalId": 2684255668,
+      "width": 2,
+      "operands": [
+        {
+          "modrm": 210,
+          "prefixes": 0,
+          "meta": 1,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 4,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 6,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 1433020
+    },
+    {
+      "kind": "fused",
+      "originalId": 3122657450,
       "width": 2,
       "operands": [
         {
@@ -19032,546 +20594,10 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 6
-        }
-      ],
-      "count": 119357
-    },
-    {
-      "kind": "fused",
-      "originalId": 2474527645,
-      "width": 4,
-      "operands": [
-        {
-          "modrm": 209,
-          "prefixes": 0,
-          "meta": 1,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 233,
-          "prefixes": 0,
-          "meta": 21,
-          "length": 3,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 7
-        },
-        {
-          "modrm": 251,
-          "prefixes": 0,
-          "meta": 5,
-          "length": 3,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 12
-        },
-        {
-          "modrm": 77,
-          "prefixes": 0,
-          "meta": 3,
-          "length": 3,
-          "ea_desc": 395284,
-          "disp": 4294967240,
           "imm": 0
         }
       ],
-      "count": 1284056
-    },
-    {
-      "kind": "fused",
-      "originalId": 2756501639,
-      "width": 4,
-      "operands": [
-        {
-          "modrm": 16,
-          "prefixes": 0,
-          "meta": 3,
-          "length": 3,
-          "ea_desc": 526336,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 93,
-          "prefixes": 0,
-          "meta": 3,
-          "length": 4,
-          "ea_desc": 395284,
-          "disp": 4294967271,
-          "imm": 0
-        },
-        {
-          "modrm": 192,
-          "prefixes": 0,
-          "meta": 21,
-          "length": 3,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 1
-        },
-        {
-          "modrm": 209,
-          "prefixes": 0,
-          "meta": 1,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        }
-      ],
-      "count": 1284056
-    },
-    {
-      "kind": "fused",
-      "originalId": 2253588809,
-      "width": 4,
-      "operands": [
-        {
-          "modrm": 87,
-          "prefixes": 0,
-          "meta": 3,
-          "length": 3,
-          "ea_desc": 526364,
-          "disp": 8,
-          "imm": 0
-        },
-        {
-          "modrm": 194,
-          "prefixes": 0,
-          "meta": 5,
-          "length": 3,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 1
-        },
-        {
-          "modrm": 69,
-          "prefixes": 0,
-          "meta": 3,
-          "length": 3,
-          "ea_desc": 395284,
-          "disp": 4294967248,
-          "imm": 0
-        },
-        {
-          "modrm": 87,
-          "prefixes": 0,
-          "meta": 3,
-          "length": 3,
-          "ea_desc": 526364,
-          "disp": 8,
-          "imm": 0
-        }
-      ],
-      "count": 1283890
-    },
-    {
-      "kind": "fused",
-      "originalId": 2505253779,
-      "width": 3,
-      "operands": [
-        {
-          "modrm": 77,
-          "prefixes": 0,
-          "meta": 3,
-          "length": 3,
-          "ea_desc": 395284,
-          "disp": 4294967264,
-          "imm": 0
-        },
-        {
-          "modrm": 192,
-          "prefixes": 0,
-          "meta": 1,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 5,
-          "prefixes": 0,
-          "meta": 140,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 40
-        }
-      ],
-      "count": 44326
-    },
-    {
-      "kind": "fused",
-      "originalId": 2837741326,
-      "width": 3,
-      "operands": [
-        {
-          "modrm": 1,
-          "prefixes": 0,
-          "meta": 0,
-          "length": 1,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 69,
-          "prefixes": 0,
-          "meta": 3,
-          "length": 3,
-          "ea_desc": 395284,
-          "disp": 4294967264,
-          "imm": 0
-        },
-        {
-          "modrm": 1,
-          "prefixes": 0,
-          "meta": 0,
-          "length": 1,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        }
-      ],
-      "count": 44309
-    },
-    {
-      "kind": "fused",
-      "originalId": 2802557380,
-      "width": 3,
-      "operands": [
-        {
-          "modrm": 196,
-          "prefixes": 0,
-          "meta": 21,
-          "length": 3,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 32
-        },
-        {
-          "modrm": 192,
-          "prefixes": 0,
-          "meta": 1,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 4,
-          "prefixes": 0,
-          "meta": 140,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 175
-        }
-      ],
-      "count": 44309
-    },
-    {
-      "kind": "fused",
-      "originalId": 2534244106,
-      "width": 4,
-      "operands": [
-        {
-          "modrm": 1,
-          "prefixes": 0,
-          "meta": 3,
-          "length": 3,
-          "ea_desc": 526340,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 93,
-          "prefixes": 0,
-          "meta": 3,
-          "length": 4,
-          "ea_desc": 395284,
-          "disp": 4294967271,
-          "imm": 0
-        },
-        {
-          "modrm": 81,
-          "prefixes": 0,
-          "meta": 3,
-          "length": 3,
-          "ea_desc": 526340,
-          "disp": 1,
-          "imm": 0
-        },
-        {
-          "modrm": 192,
-          "prefixes": 0,
-          "meta": 1,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        }
-      ],
-      "count": 1277114
-    },
-    {
-      "kind": "fused",
-      "originalId": 2504896433,
-      "width": 4,
-      "operands": [
-        {
-          "modrm": 117,
-          "prefixes": 0,
-          "meta": 3,
-          "length": 3,
-          "ea_desc": 395284,
-          "disp": 4294967244,
-          "imm": 0
-        },
-        {
-          "modrm": 85,
-          "prefixes": 0,
-          "meta": 3,
-          "length": 3,
-          "ea_desc": 395284,
-          "disp": 4294967248,
-          "imm": 0
-        },
-        {
-          "modrm": 94,
-          "prefixes": 0,
-          "meta": 3,
-          "length": 3,
-          "ea_desc": 526360,
-          "disp": 2,
-          "imm": 0
-        },
-        {
-          "modrm": 241,
-          "prefixes": 0,
-          "meta": 1,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        }
-      ],
-      "count": 1277091
-    },
-    {
-      "kind": "fused",
-      "originalId": 2243179019,
-      "width": 4,
-      "operands": [
-        {
-          "modrm": 1,
-          "prefixes": 64,
-          "meta": 3,
-          "length": 3,
-          "ea_desc": 526340,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 77,
-          "prefixes": 0,
-          "meta": 3,
-          "length": 3,
-          "ea_desc": 395284,
-          "disp": 4294967248,
-          "imm": 0
-        },
-        {
-          "modrm": 93,
-          "prefixes": 0,
-          "meta": 3,
-          "length": 3,
-          "ea_desc": 395284,
-          "disp": 4294967244,
-          "imm": 0
-        },
-        {
-          "modrm": 3,
-          "prefixes": 0,
-          "meta": 140,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 198
-        }
-      ],
-      "count": 1277091
-    },
-    {
-      "kind": "fused",
-      "originalId": 2179350480,
-      "width": 4,
-      "operands": [
-        {
-          "modrm": 246,
-          "prefixes": 0,
-          "meta": 1,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 188,
-          "prefixes": 0,
-          "meta": 3,
-          "length": 7,
-          "ea_desc": 526364,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 251,
-          "prefixes": 0,
-          "meta": 5,
-          "length": 3,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 12
-        },
-        {
-          "modrm": 5,
-          "prefixes": 0,
-          "meta": 140,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 27
-        }
-      ],
-      "count": 1276927
-    },
-    {
-      "kind": "fused",
-      "originalId": 2554086548,
-      "width": 3,
-      "operands": [
-        {
-          "modrm": 7,
-          "prefixes": 0,
-          "meta": 0,
-          "length": 1,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 5,
-          "prefixes": 0,
-          "meta": 0,
-          "length": 1,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 2,
-          "prefixes": 0,
-          "meta": 140,
-          "length": 3,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 4
-        }
-      ],
-      "count": 1914794
-    },
-    {
-      "kind": "fused",
-      "originalId": 2981349315,
-      "width": 4,
-      "operands": [
-        {
-          "modrm": 4,
-          "prefixes": 0,
-          "meta": 3,
-          "length": 4,
-          "ea_desc": 524544,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 198,
-          "prefixes": 0,
-          "meta": 1,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 192,
-          "prefixes": 0,
-          "meta": 1,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 125,
-          "prefixes": 0,
-          "meta": 3,
-          "length": 3,
-          "ea_desc": 395284,
-          "disp": 4294967272,
-          "imm": 0
-        }
-      ],
-      "count": 22348
-    },
-    {
-      "kind": "fused",
-      "originalId": 2196750391,
-      "width": 4,
-      "operands": [
-        {
-          "modrm": 69,
-          "prefixes": 0,
-          "meta": 3,
-          "length": 3,
-          "ea_desc": 395284,
-          "disp": 24,
-          "imm": 0
-        },
-        {
-          "modrm": 4,
-          "prefixes": 0,
-          "meta": 3,
-          "length": 4,
-          "ea_desc": 524544,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 198,
-          "prefixes": 0,
-          "meta": 1,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 192,
-          "prefixes": 0,
-          "meta": 1,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        }
-      ],
-      "count": 22348
+      "count": 26835791
     },
     {
       "kind": "fused",
@@ -19629,7 +20655,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 5
+          "imm": 0
         }
       ],
       "count": 188215
@@ -19671,180 +20697,6 @@
     },
     {
       "kind": "fused",
-      "originalId": 2679599672,
-      "width": 2,
-      "operands": [
-        {
-          "modrm": 0,
-          "prefixes": 0,
-          "meta": 4,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 1
-        },
-        {
-          "modrm": 4,
-          "prefixes": 0,
-          "meta": 140,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 245
-        }
-      ],
-      "count": 143955
-    },
-    {
-      "kind": "fused",
-      "originalId": 2468607055,
-      "width": 2,
-      "operands": [
-        {
-          "modrm": 250,
-          "prefixes": 0,
-          "meta": 5,
-          "length": 3,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 44
-        },
-        {
-          "modrm": 4,
-          "prefixes": 0,
-          "meta": 140,
-          "length": 6,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 371
-        }
-      ],
-      "count": 99360000
-    },
-    {
-      "kind": "fused",
-      "originalId": 3205704306,
-      "width": 2,
-      "operands": [
-        {
-          "modrm": 232,
-          "prefixes": 0,
-          "meta": 1,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 4,
-          "prefixes": 0,
-          "meta": 140,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 9
-        }
-      ],
-      "count": 146020
-    },
-    {
-      "kind": "fused",
-      "originalId": 2997253357,
-      "width": 4,
-      "operands": [
-        {
-          "modrm": 116,
-          "prefixes": 0,
-          "meta": 3,
-          "length": 4,
-          "ea_desc": 395280,
-          "disp": 20,
-          "imm": 0
-        },
-        {
-          "modrm": 194,
-          "prefixes": 0,
-          "meta": 5,
-          "length": 3,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 1
-        },
-        {
-          "modrm": 64,
-          "prefixes": 0,
-          "meta": 7,
-          "length": 4,
-          "ea_desc": 526336,
-          "disp": 4,
-          "imm": 1
-        },
-        {
-          "modrm": 0,
-          "prefixes": 0,
-          "meta": 7,
-          "length": 3,
-          "ea_desc": 526336,
-          "disp": 0,
-          "imm": 1
-        }
-      ],
-      "count": 32640000
-    },
-    {
-      "kind": "fused",
-      "originalId": 2179726014,
-      "width": 2,
-      "operands": [
-        {
-          "modrm": 200,
-          "prefixes": 0,
-          "meta": 1,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 208,
-          "prefixes": 0,
-          "meta": 1,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        }
-      ],
-      "count": 257377
-    },
-    {
-      "kind": "fused",
-      "originalId": 2468607055,
-      "width": 2,
-      "operands": [
-        {
-          "modrm": 250,
-          "prefixes": 0,
-          "meta": 5,
-          "length": 3,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 44
-        },
-        {
-          "modrm": 4,
-          "prefixes": 0,
-          "meta": 140,
-          "length": 6,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 524
-        }
-      ],
-      "count": 97440000
-    },
-    {
-      "kind": "fused",
       "originalId": 2746812706,
       "width": 2,
       "operands": [
@@ -19864,16 +20716,25 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 111
+          "imm": 0
         }
       ],
       "count": 97440000
     },
     {
       "kind": "fused",
-      "originalId": 3193581272,
+      "originalId": 3088359533,
       "width": 4,
       "operands": [
+        {
+          "modrm": 192,
+          "prefixes": 0,
+          "meta": 5,
+          "length": 3,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 1
+        },
         {
           "modrm": 88,
           "prefixes": 0,
@@ -19900,106 +20761,9 @@
           "ea_desc": 0,
           "disp": 0,
           "imm": 0
-        },
-        {
-          "modrm": 225,
-          "prefixes": 0,
-          "meta": 21,
-          "length": 3,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 10
         }
       ],
       "count": 1207761
-    },
-    {
-      "kind": "fused",
-      "originalId": 2733398455,
-      "width": 4,
-      "operands": [
-        {
-          "modrm": 235,
-          "prefixes": 0,
-          "meta": 21,
-          "length": 3,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 6
-        },
-        {
-          "modrm": 217,
-          "prefixes": 0,
-          "meta": 17,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 194,
-          "prefixes": 0,
-          "meta": 1,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 5,
-          "prefixes": 0,
-          "meta": 140,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 229
-        }
-      ],
-      "count": 1207761
-    },
-    {
-      "kind": "fused",
-      "originalId": 2265431483,
-      "width": 4,
-      "operands": [
-        {
-          "modrm": 223,
-          "prefixes": 0,
-          "meta": 1,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 149,
-          "prefixes": 0,
-          "meta": 3,
-          "length": 6,
-          "ea_desc": 395284,
-          "disp": 4294967032,
-          "imm": 0
-        },
-        {
-          "modrm": 149,
-          "prefixes": 0,
-          "meta": 3,
-          "length": 6,
-          "ea_desc": 395284,
-          "disp": 4294967048,
-          "imm": 0
-        },
-        {
-          "modrm": 5,
-          "prefixes": 0,
-          "meta": 140,
-          "length": 6,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 996
-        }
-      ],
-      "count": 488017
     },
     {
       "kind": "fused",
@@ -20055,337 +20819,29 @@
     },
     {
       "kind": "fused",
-      "originalId": 2858978959,
-      "width": 4,
+      "originalId": 2948547542,
+      "width": 2,
       "operands": [
         {
-          "modrm": 192,
+          "modrm": 210,
           "prefixes": 0,
           "meta": 1,
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 125,
-          "prefixes": 0,
-          "meta": 3,
-          "length": 4,
-          "ea_desc": 395284,
-          "disp": 24,
-          "imm": 0
-        },
-        {
-          "modrm": 69,
-          "prefixes": 0,
-          "meta": 3,
-          "length": 4,
-          "ea_desc": 395284,
-          "disp": 4294967283,
           "imm": 0
         },
         {
           "modrm": 4,
           "prefixes": 0,
           "meta": 140,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 44
-        }
-      ],
-      "count": 30720000
-    },
-    {
-      "kind": "fused",
-      "originalId": 2823537110,
-      "width": 4,
-      "operands": [
-        {
-          "modrm": 69,
-          "prefixes": 0,
-          "meta": 3,
-          "length": 3,
-          "ea_desc": 395284,
-          "disp": 4294967244,
-          "imm": 0
-        },
-        {
-          "modrm": 0,
-          "prefixes": 0,
-          "meta": 0,
-          "length": 1,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 69,
-          "prefixes": 0,
-          "meta": 3,
-          "length": 3,
-          "ea_desc": 395284,
-          "disp": 4294967276,
-          "imm": 0
-        },
-        {
-          "modrm": 0,
-          "prefixes": 0,
-          "meta": 0,
-          "length": 1,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        }
-      ],
-      "count": 30720000
-    },
-    {
-      "kind": "fused",
-      "originalId": 2902410051,
-      "width": 4,
-      "operands": [
-        {
-          "modrm": 236,
-          "prefixes": 0,
-          "meta": 5,
-          "length": 3,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 8
-        },
-        {
-          "modrm": 3,
-          "prefixes": 0,
-          "meta": 0,
-          "length": 1,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 7,
-          "prefixes": 0,
-          "meta": 0,
-          "length": 1,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 0,
-          "prefixes": 0,
-          "meta": 140,
-          "length": 5,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 406
-        }
-      ],
-      "count": 30720000
-    },
-    {
-      "kind": "fused",
-      "originalId": 2476758627,
-      "width": 2,
-      "operands": [
-        {
-          "modrm": 28,
-          "prefixes": 0,
-          "meta": 3,
-          "length": 3,
-          "ea_desc": 533020,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 3,
-          "prefixes": 0,
-          "meta": 140,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 240
-        }
-      ],
-      "count": 140995
-    },
-    {
-      "kind": "fused",
-      "originalId": 2448895868,
-      "width": 4,
-      "operands": [
-        {
-          "modrm": 69,
-          "prefixes": 0,
-          "meta": 3,
-          "length": 3,
-          "ea_desc": 395284,
-          "disp": 4294967260,
-          "imm": 0
-        },
-        {
-          "modrm": 147,
-          "prefixes": 0,
-          "meta": 3,
           "length": 6,
-          "ea_desc": 526348,
-          "disp": 1344,
-          "imm": 0
-        },
-        {
-          "modrm": 69,
-          "prefixes": 0,
-          "meta": 3,
-          "length": 3,
-          "ea_desc": 395284,
-          "disp": 4294967252,
-          "imm": 0
-        },
-        {
-          "modrm": 131,
-          "prefixes": 0,
-          "meta": 3,
-          "length": 6,
-          "ea_desc": 526348,
-          "disp": 1348,
-          "imm": 0
-        }
-      ],
-      "count": 136857
-    },
-    {
-      "kind": "fused",
-      "originalId": 2755645290,
-      "width": 4,
-      "operands": [
-        {
-          "modrm": 117,
-          "prefixes": 0,
-          "meta": 3,
-          "length": 3,
-          "ea_desc": 395284,
-          "disp": 4294967268,
-          "imm": 0
-        },
-        {
-          "modrm": 209,
-          "prefixes": 0,
-          "meta": 1,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 241,
-          "prefixes": 0,
-          "meta": 17,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 193,
-          "prefixes": 0,
-          "meta": 1,
-          "length": 2,
           "ea_desc": 0,
           "disp": 0,
           "imm": 0
         }
       ],
-      "count": 136853
-    },
-    {
-      "kind": "fused",
-      "originalId": 3172121356,
-      "width": 4,
-      "operands": [
-        {
-          "modrm": 77,
-          "prefixes": 0,
-          "meta": 3,
-          "length": 3,
-          "ea_desc": 395284,
-          "disp": 4294967268,
-          "imm": 0
-        },
-        {
-          "modrm": 69,
-          "prefixes": 0,
-          "meta": 3,
-          "length": 3,
-          "ea_desc": 395284,
-          "disp": 4294967252,
-          "imm": 0
-        },
-        {
-          "modrm": 69,
-          "prefixes": 0,
-          "meta": 3,
-          "length": 4,
-          "ea_desc": 395284,
-          "disp": 4294967252,
-          "imm": 0
-        },
-        {
-          "modrm": 69,
-          "prefixes": 0,
-          "meta": 19,
-          "length": 3,
-          "ea_desc": 395284,
-          "disp": 4294967252,
-          "imm": 0
-        }
-      ],
-      "count": 136853
-    },
-    {
-      "kind": "fused",
-      "originalId": 2602453777,
-      "width": 4,
-      "operands": [
-        {
-          "modrm": 0,
-          "prefixes": 0,
-          "meta": 4,
-          "length": 5,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 32768
-        },
-        {
-          "modrm": 250,
-          "prefixes": 0,
-          "meta": 1,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 125,
-          "prefixes": 0,
-          "meta": 3,
-          "length": 3,
-          "ea_desc": 395284,
-          "disp": 4294967268,
-          "imm": 0
-        },
-        {
-          "modrm": 3,
-          "prefixes": 0,
-          "meta": 140,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 4
-        }
-      ],
-      "count": 136853
+      "count": 95053390
     },
     {
       "kind": "fused",
@@ -20477,20 +20933,37 @@
     },
     {
       "kind": "fused",
-      "originalId": 2504896433,
-      "width": 4,
+      "originalId": 2988052830,
+      "width": 2,
       "operands": [
         {
-          "modrm": 71,
+          "modrm": 117,
           "prefixes": 0,
           "meta": 3,
           "length": 3,
-          "ea_desc": 526364,
-          "disp": 4,
+          "ea_desc": 395284,
+          "disp": 4294967264,
           "imm": 0
         },
         {
-          "modrm": 241,
+          "modrm": 3,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 408288
+    },
+    {
+      "kind": "fused",
+      "originalId": 3206160123,
+      "width": 2,
+      "operands": [
+        {
+          "modrm": 218,
           "prefixes": 0,
           "meta": 1,
           "length": 2,
@@ -20499,69 +20972,16 @@
           "imm": 0
         },
         {
-          "modrm": 187,
+          "modrm": 5,
           "prefixes": 0,
-          "meta": 3,
-          "length": 6,
-          "ea_desc": 526348,
-          "disp": 1348,
-          "imm": 0
-        },
-        {
-          "modrm": 69,
-          "prefixes": 64,
-          "meta": 3,
-          "length": 4,
-          "ea_desc": 395284,
-          "disp": 4294967248,
+          "meta": 140,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
           "imm": 0
         }
       ],
-      "count": 136792
-    },
-    {
-      "kind": "fused",
-      "originalId": 2504896433,
-      "width": 4,
-      "operands": [
-        {
-          "modrm": 85,
-          "prefixes": 0,
-          "meta": 3,
-          "length": 3,
-          "ea_desc": 395284,
-          "disp": 4294967268,
-          "imm": 0
-        },
-        {
-          "modrm": 69,
-          "prefixes": 0,
-          "meta": 3,
-          "length": 3,
-          "ea_desc": 395284,
-          "disp": 4294967252,
-          "imm": 0
-        },
-        {
-          "modrm": 131,
-          "prefixes": 0,
-          "meta": 3,
-          "length": 6,
-          "ea_desc": 526348,
-          "disp": 134552,
-          "imm": 0
-        },
-        {
-          "modrm": 69,
-          "prefixes": 0,
-          "meta": 3,
-          "length": 3,
-          "ea_desc": 395284,
-          "disp": 4294967248,
-          "imm": 0
-        }
-      ],
-      "count": 136792
+      "count": 239269
     },
     {
       "kind": "fused",
@@ -20597,6 +21017,41 @@
         }
       ],
       "count": 1838404
+    },
+    {
+      "kind": "fused",
+      "originalId": 2330859449,
+      "width": 3,
+      "operands": [
+        {
+          "modrm": 6,
+          "prefixes": 0,
+          "meta": 0,
+          "length": 1,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 0,
+          "prefixes": 0,
+          "meta": 0,
+          "length": 1,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 0,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 5,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 816915
     },
     {
       "kind": "fused",
@@ -20663,7 +21118,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 23
+          "imm": 0
         }
       ],
       "count": 30720000
@@ -20714,6 +21169,32 @@
     },
     {
       "kind": "fused",
+      "originalId": 2745822983,
+      "width": 2,
+      "operands": [
+        {
+          "modrm": 242,
+          "prefixes": 0,
+          "meta": 1,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 2,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 9103
+    },
+    {
+      "kind": "fused",
       "originalId": 3041149366,
       "width": 4,
       "operands": [
@@ -20758,29 +21239,29 @@
     },
     {
       "kind": "fused",
-      "originalId": 2745822983,
+      "originalId": 2707977397,
       "width": 2,
       "operands": [
         {
-          "modrm": 242,
+          "modrm": 69,
           "prefixes": 0,
-          "meta": 1,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
+          "meta": 3,
+          "length": 3,
+          "ea_desc": 395284,
+          "disp": 4294967268,
           "imm": 0
         },
         {
-          "modrm": 2,
+          "modrm": 5,
           "prefixes": 0,
           "meta": 140,
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 10
+          "imm": 0
         }
       ],
-      "count": 4353
+      "count": 279330
     },
     {
       "kind": "fused",
@@ -20842,58 +21323,6 @@
         }
       ],
       "count": 261693
-    },
-    {
-      "kind": "fused",
-      "originalId": 2642362042,
-      "width": 2,
-      "operands": [
-        {
-          "modrm": 192,
-          "prefixes": 0,
-          "meta": 1,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 5,
-          "prefixes": 0,
-          "meta": 140,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 17
-        }
-      ],
-      "count": 256498
-    },
-    {
-      "kind": "fused",
-      "originalId": 2184155093,
-      "width": 2,
-      "operands": [
-        {
-          "modrm": 246,
-          "prefixes": 0,
-          "meta": 1,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 4,
-          "prefixes": 0,
-          "meta": 140,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 74
-        }
-      ],
-      "count": 252767
     },
     {
       "kind": "fused",
@@ -20975,32 +21404,6 @@
     },
     {
       "kind": "fused",
-      "originalId": 3206160123,
-      "width": 2,
-      "operands": [
-        {
-          "modrm": 241,
-          "prefixes": 0,
-          "meta": 1,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 5,
-          "prefixes": 0,
-          "meta": 140,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 219
-        }
-      ],
-      "count": 2064447
-    },
-    {
-      "kind": "fused",
       "originalId": 2322893386,
       "width": 3,
       "operands": [
@@ -21029,7 +21432,7 @@
           "length": 6,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 4294967148
+          "imm": 0
         }
       ],
       "count": 62913
@@ -21064,7 +21467,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 76
+          "imm": 0
         }
       ],
       "count": 62913
@@ -21134,7 +21537,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 17
+          "imm": 0
         }
       ],
       "count": 188935
@@ -21169,10 +21572,36 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 64
+          "imm": 0
         }
       ],
       "count": 188935
+    },
+    {
+      "kind": "fused",
+      "originalId": 3206160123,
+      "width": 2,
+      "operands": [
+        {
+          "modrm": 194,
+          "prefixes": 0,
+          "meta": 1,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 5,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 42420384
     },
     {
       "kind": "fused",
@@ -21256,7 +21685,7 @@
           "length": 6,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 144
+          "imm": 0
         }
       ],
       "count": 301509
@@ -21282,10 +21711,80 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 182
+          "imm": 0
         }
       ],
       "count": 79920000
+    },
+    {
+      "kind": "fused",
+      "originalId": 2703860767,
+      "width": 2,
+      "operands": [
+        {
+          "modrm": 251,
+          "prefixes": 0,
+          "meta": 5,
+          "length": 3,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 46
+        },
+        {
+          "modrm": 5,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 78720000
+    },
+    {
+      "kind": "fused",
+      "originalId": 2858435188,
+      "width": 4,
+      "operands": [
+        {
+          "modrm": 6,
+          "prefixes": 0,
+          "meta": 0,
+          "length": 1,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 198,
+          "prefixes": 0,
+          "meta": 1,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 3,
+          "prefixes": 0,
+          "meta": 0,
+          "length": 1,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 0,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 5,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 371380
     },
     {
       "kind": "fused",
@@ -21326,7 +21825,7 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 7
+          "imm": 0
         }
       ],
       "count": 34712
@@ -21475,10 +21974,80 @@
           "length": 2,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 5
+          "imm": 0
         }
       ],
       "count": 504863
+    },
+    {
+      "kind": "fused",
+      "originalId": 2488079861,
+      "width": 3,
+      "operands": [
+        {
+          "modrm": 229,
+          "prefixes": 0,
+          "meta": 1,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 7,
+          "prefixes": 0,
+          "meta": 0,
+          "length": 1,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 0,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 5,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 440460
+    },
+    {
+      "kind": "fused",
+      "originalId": 2488079861,
+      "width": 3,
+      "operands": [
+        {
+          "modrm": 206,
+          "prefixes": 0,
+          "meta": 1,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 3,
+          "prefixes": 0,
+          "meta": 0,
+          "length": 1,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 0,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 5,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 20389
     },
     {
       "kind": "fused",
@@ -21905,10 +22474,45 @@
           "length": 6,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 155
+          "imm": 0
         }
       ],
       "count": 25920000
+    },
+    {
+      "kind": "fused",
+      "originalId": 2330859449,
+      "width": 3,
+      "operands": [
+        {
+          "modrm": 3,
+          "prefixes": 0,
+          "meta": 0,
+          "length": 1,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 7,
+          "prefixes": 0,
+          "meta": 0,
+          "length": 1,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 0,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 5,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 30954519
     },
     {
       "kind": "fused",
@@ -21938,6 +22542,32 @@
     },
     {
       "kind": "fused",
+      "originalId": 2948547542,
+      "width": 2,
+      "operands": [
+        {
+          "modrm": 201,
+          "prefixes": 0,
+          "meta": 1,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 4,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 6,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 72486057
+    },
+    {
+      "kind": "fused",
       "originalId": 2749740802,
       "width": 2,
       "operands": [
@@ -21964,6 +22594,58 @@
     },
     {
       "kind": "fused",
+      "originalId": 2173822817,
+      "width": 2,
+      "operands": [
+        {
+          "modrm": 2,
+          "prefixes": 0,
+          "meta": 0,
+          "length": 1,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 0,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 5,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 8314462
+    },
+    {
+      "kind": "fused",
+      "originalId": 2468607055,
+      "width": 2,
+      "operands": [
+        {
+          "modrm": 249,
+          "prefixes": 0,
+          "meta": 5,
+          "length": 3,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 44
+        },
+        {
+          "modrm": 4,
+          "prefixes": 0,
+          "meta": 140,
+          "length": 6,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 72480000
+    },
+    {
+      "kind": "fused",
       "originalId": 2179950278,
       "width": 2,
       "operands": [
@@ -21987,32 +22669,6 @@
         }
       ],
       "count": 201709
-    },
-    {
-      "kind": "fused",
-      "originalId": 2746812706,
-      "width": 2,
-      "operands": [
-        {
-          "modrm": 125,
-          "prefixes": 0,
-          "meta": 7,
-          "length": 4,
-          "ea_desc": 395284,
-          "disp": 4294967239,
-          "imm": 0
-        },
-        {
-          "modrm": 4,
-          "prefixes": 0,
-          "meta": 140,
-          "length": 2,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 33
-        }
-      ],
-      "count": 249678
     },
     {
       "kind": "fused",
@@ -22105,7 +22761,7 @@
           "length": 6,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 180
+          "imm": 0
         }
       ],
       "count": 780230
@@ -22140,36 +22796,36 @@
           "length": 6,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 168
+          "imm": 0
         }
       ],
       "count": 780230
     },
     {
       "kind": "fused",
-      "originalId": 2746812706,
+      "originalId": 2173822817,
       "width": 2,
       "operands": [
         {
-          "modrm": 125,
+          "modrm": 1,
           "prefixes": 0,
-          "meta": 7,
-          "length": 4,
-          "ea_desc": 395284,
-          "disp": 4294967239,
+          "meta": 0,
+          "length": 1,
+          "ea_desc": 0,
+          "disp": 0,
           "imm": 0
         },
         {
-          "modrm": 4,
+          "modrm": 0,
           "prefixes": 0,
           "meta": 140,
-          "length": 2,
+          "length": 5,
           "ea_desc": 0,
           "disp": 0,
-          "imm": 89
+          "imm": 0
         }
       ],
-      "count": 223716
+      "count": 5647573
     },
     {
       "kind": "fused",
@@ -22260,41 +22916,6 @@
     },
     {
       "kind": "fused",
-      "originalId": 2837741326,
-      "width": 3,
-      "operands": [
-        {
-          "modrm": 0,
-          "prefixes": 0,
-          "meta": 0,
-          "length": 1,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        },
-        {
-          "modrm": 69,
-          "prefixes": 0,
-          "meta": 3,
-          "length": 3,
-          "ea_desc": 395284,
-          "disp": 4294967276,
-          "imm": 0
-        },
-        {
-          "modrm": 0,
-          "prefixes": 0,
-          "meta": 0,
-          "length": 1,
-          "ea_desc": 0,
-          "disp": 0,
-          "imm": 0
-        }
-      ],
-      "count": 30720323
-    },
-    {
-      "kind": "fused",
       "originalId": 2834917649,
       "width": 2,
       "operands": [
@@ -22318,6 +22939,76 @@
         }
       ],
       "count": 61440563
+    },
+    {
+      "kind": "fused",
+      "originalId": 2683194454,
+      "width": 3,
+      "operands": [
+        {
+          "modrm": 147,
+          "prefixes": 0,
+          "meta": 3,
+          "length": 6,
+          "ea_desc": 526348,
+          "disp": 1344,
+          "imm": 0
+        },
+        {
+          "modrm": 69,
+          "prefixes": 0,
+          "meta": 3,
+          "length": 3,
+          "ea_desc": 395284,
+          "disp": 4294967252,
+          "imm": 0
+        },
+        {
+          "modrm": 131,
+          "prefixes": 0,
+          "meta": 3,
+          "length": 6,
+          "ea_desc": 526348,
+          "disp": 1348,
+          "imm": 0
+        }
+      ],
+      "count": 136857
+    },
+    {
+      "kind": "fused",
+      "originalId": 3021374939,
+      "width": 3,
+      "operands": [
+        {
+          "modrm": 125,
+          "prefixes": 0,
+          "meta": 3,
+          "length": 3,
+          "ea_desc": 395284,
+          "disp": 4294967220,
+          "imm": 0
+        },
+        {
+          "modrm": 240,
+          "prefixes": 0,
+          "meta": 1,
+          "length": 2,
+          "ea_desc": 0,
+          "disp": 0,
+          "imm": 0
+        },
+        {
+          "modrm": 60,
+          "prefixes": 0,
+          "meta": 3,
+          "length": 3,
+          "ea_desc": 536604,
+          "disp": 0,
+          "imm": 0
+        }
+      ],
+      "count": 136792
     },
     {
       "kind": "fused",
@@ -22359,68 +23050,68 @@
     {
       "profile": "coremark",
       "instruction_visits": 25094989315,
-      "saved_dispatches": 10110525285,
-      "fraction": 0.4028902008321098
+      "saved_dispatches": 10142166519,
+      "fraction": 0.4041510594681837
     },
     {
       "profile": "coremark-gcc",
       "instruction_visits": 26129612344,
-      "saved_dispatches": 11702171920,
-      "fraction": 0.4478509579835809
+      "saved_dispatches": 11936588877,
+      "fraction": 0.45682227198219166
     },
     {
       "profile": "fast-deep-equal",
       "instruction_visits": 973126905,
-      "saved_dispatches": 113627028,
-      "fraction": 0.11676486120790176
+      "saved_dispatches": 106144322,
+      "fraction": 0.10907551877830364
     },
     {
       "profile": "gnu-grep_fixed",
       "instruction_visits": 17036772,
-      "saved_dispatches": 8447020,
-      "fraction": 0.4958110609216347
+      "saved_dispatches": 8501025,
+      "fraction": 0.4989809689300297
     },
     {
       "profile": "gnu-grep_regex",
       "instruction_visits": 45907373,
-      "saved_dispatches": 24074080,
-      "fraction": 0.5244055241409696
+      "saved_dispatches": 24449729,
+      "fraction": 0.5325882838035625
     },
     {
       "profile": "gnu-gunzip",
       "instruction_visits": 112861689,
-      "saved_dispatches": 65948696,
-      "fraction": 0.5843319959530289
+      "saved_dispatches": 64258396,
+      "fraction": 0.569355257478027
     },
     {
       "profile": "gnu-gzip",
       "instruction_visits": 599743593,
-      "saved_dispatches": 327316730,
-      "fraction": 0.5457611116155767
+      "saved_dispatches": 329696234,
+      "fraction": 0.5497286471220377
     },
     {
       "profile": "gnu-sed",
       "instruction_visits": 393452987,
-      "saved_dispatches": 96123210,
-      "fraction": 0.24430672323247607
+      "saved_dispatches": 103520342,
+      "fraction": 0.2631072718225418
     },
     {
       "profile": "gnu-sha256",
       "instruction_visits": 97953912,
-      "saved_dispatches": 52344221,
-      "fraction": 0.5343760134868325
+      "saved_dispatches": 52359062,
+      "fraction": 0.5345275235153446
     },
     {
       "profile": "gnu-sort",
       "instruction_visits": 73041397,
-      "saved_dispatches": 41889180,
-      "fraction": 0.5734991623996458
+      "saved_dispatches": 42983758,
+      "fraction": 0.5884848834421937
     },
     {
       "profile": "gnu-tar",
       "instruction_visits": 1241210,
-      "saved_dispatches": 600466,
-      "fraction": 0.4837747037165347
+      "saved_dispatches": 616708,
+      "fraction": 0.4968603217827765
     }
   ]
 }

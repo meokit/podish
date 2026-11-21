@@ -310,7 +310,7 @@ template <typename T>
 MemResult<T> Mmu::read_tlb_only(GuestAddr addr, MicroTLB* utlb) {
     const MicroTlbAccessGuard<T> guard{addr};
     if (guard.can_probe()) [[likely]] {
-        if (guard.matches(utlb->tag_r)) [[likely]] {
+        if (guard.matches(utlb->ReadTag())) [[likely]] {
 #ifdef ENABLE_TLB_STATS
             stats.l1_read_hits++;
             stats.total_reads++;
@@ -331,15 +331,14 @@ MemResult<T> Mmu::read_tlb_only(GuestAddr addr, MicroTLB* utlb) {
             T val;
             std::memcpy(&val, (const void*)(entry.addend + addr), sizeof(T));
 
-            utlb->tag_r = guard.tag;
-            utlb->addend = entry.addend;
             // Write fast-path eligibility must match TLB::fill: a clean (not Dirty)
             // page must take the slow path so the write can mark it dirty, otherwise
             // the store is invisible to file writeback/eviction.
-            utlb->tag_w = (has_property(entry.perm, Property::Write) && has_property(entry.perm, Property::Dirty) &&
-                           !has_property(entry.perm, Property::ForceWriteSlow))
-                              ? guard.tag
-                              : std::numeric_limits<decltype(utlb->tag_w)>::max();
+            const bool writable = has_property(entry.perm, Property::Write) &&
+                                  has_property(entry.perm, Property::Dirty) &&
+                                  !has_property(entry.perm, Property::ForceWriteSlow);
+            utlb->tags = PackMicroTlbTags(guard.tag, writable ? guard.tag : kInvalidMicroTlbTag);
+            utlb->addend = entry.addend;
             return val;
         }
     }
@@ -358,7 +357,7 @@ template <typename T, bool Store, bool FlushOnMiss>
 MemResult<std::conditional_t<Store, void, HostAddr>> Mmu::write_tlb_impl(GuestAddr addr, T val, MicroTLB* utlb) {
     const MicroTlbAccessGuard<T> guard{addr};
     if (guard.can_probe()) [[likely]] {
-        if (guard.matches(utlb->tag_w)) [[likely]] {
+        if (guard.matches(utlb->WriteTag())) [[likely]] {
 #ifdef ENABLE_TLB_STATS
             stats.l1_write_hits++;
             stats.total_writes++;
@@ -383,10 +382,9 @@ MemResult<std::conditional_t<Store, void, HostAddr>> Mmu::write_tlb_impl(GuestAd
             // obtains the target; Store is compile-time.
             if constexpr (Store) std::memcpy((void*)(entry.addend + addr), &val, sizeof(T));
 
-            utlb->tag_w = guard.tag;
+            const bool readable = has_property(entry.perm, Property::Read);
+            utlb->tags = PackMicroTlbTags(readable ? guard.tag : kInvalidMicroTlbTag, guard.tag);
             utlb->addend = entry.addend;
-            utlb->tag_r = has_property(entry.perm, Property::Read) ? guard.tag
-                                                                   : std::numeric_limits<decltype(utlb->tag_r)>::max();
             if constexpr (Store)
                 return {};
             else

@@ -7,30 +7,34 @@
 
 namespace fiberish::mem {
 
-struct alignas(16) MicroTLB {
-    uint32_t tag_r = std::numeric_limits<uint32_t>::max();  // Mismatch by default (odd value for even aligned vars)
-    uint32_t tag_w = std::numeric_limits<uint32_t>::max();
-    std::uintptr_t addend = 0;
-
-    void invalidate() {
-        tag_r = std::numeric_limits<decltype(tag_r)>::max();
-        tag_w = std::numeric_limits<decltype(tag_w)>::max();
-        addend = 0;
-    }
-};
-
 using MicroTlbAbiWord = uint64_t;
+inline constexpr uint32_t kInvalidMicroTlbTag = std::numeric_limits<uint32_t>::max();
 
 inline constexpr MicroTlbAbiWord PackMicroTlbTags(uint32_t tag_r, uint32_t tag_w) {
     return static_cast<MicroTlbAbiWord>(tag_r) | (static_cast<MicroTlbAbiWord>(tag_w) << 32);
 }
 
 inline constexpr MicroTlbAbiWord InvalidMicroTlbAbiTags() {
-    return PackMicroTlbTags(std::numeric_limits<uint32_t>::max(), std::numeric_limits<uint32_t>::max());
+    return PackMicroTlbTags(kInvalidMicroTlbTag, kInvalidMicroTlbTag);
 }
 
+// Keep the same representation in the MMU and the handler ABI so a hit
+// can forward both tags without reconstructing the word.
+struct alignas(16) MicroTLB {
+    MicroTlbAbiWord tags = InvalidMicroTlbAbiTags();
+    std::uintptr_t addend = 0;
+
+    constexpr uint32_t ReadTag() const { return static_cast<uint32_t>(tags); }
+    constexpr uint32_t WriteTag() const { return static_cast<uint32_t>(tags >> 32); }
+
+    void invalidate() {
+        tags = InvalidMicroTlbAbiTags();
+        addend = 0;
+    }
+};
+
 inline constexpr MicroTlbAbiWord EncodeMicroTlbTags(const MicroTLB& utlb) {
-    return PackMicroTlbTags(utlb.tag_r, utlb.tag_w);
+    return utlb.tags;
 }
 
 inline constexpr MicroTlbAbiWord EncodeMicroTlbAddend(const MicroTLB& utlb) {
@@ -43,11 +47,7 @@ inline constexpr void EncodeMicroTlbAbi(const MicroTLB& utlb, MicroTlbAbiWord& t
 }
 
 inline constexpr MicroTLB DecodeMicroTlbAbi(MicroTlbAbiWord tags, MicroTlbAbiWord addend) {
-    MicroTLB utlb{};
-    utlb.tag_r = static_cast<uint32_t>(tags);
-    utlb.tag_w = static_cast<uint32_t>(tags >> 32);
-    utlb.addend = static_cast<std::uintptr_t>(addend);
-    return utlb;
+    return {tags, static_cast<std::uintptr_t>(addend)};
 }
 
 inline void InvalidateMicroTLB(MicroTLB* utlb) {

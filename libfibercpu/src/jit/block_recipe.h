@@ -101,7 +101,8 @@ bool PlanBlock(Ops&& ops, size_t sentinel, LLVMBlockExit full_exit, bool exact, 
         const auto id = FindOperation(generic, binding, exact);
         if (id == kInvalidOpId) break;
         plan.operations[plan.covered] = {id, binding.shape};
-        if (exact) plan.operands[plan.covered] = DecodedOperandShape::Read(&generic);
+        // Linked block bundles already serialize the original relative offset.
+        if (exact) plan.operands[plan.covered] = DecodedOperandShape::Read(&generic, /*include_relative_offset=*/true);
         plan.replay_handlers[plan.covered++] = binding.handler;
     }
     plan.exit = plan.covered == sentinel ? full_exit : LLVMBlockExit::Dispatch;

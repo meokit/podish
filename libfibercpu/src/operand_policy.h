@@ -98,14 +98,19 @@ struct DecodedOperandShape {
 
     auto operator<=>(const DecodedOperandShape&) const = default;
 
-    static FORCE_INLINE DecodedOperandShape Read(const DecodedInstruction* op) {
-        const bool data_memory = HasMem(op) && GetExtKind(op) == ExtKind::Data;
+    static FORCE_INLINE DecodedOperandShape Read(const DecodedInstruction* op, bool include_relative_offset = false) {
+        const auto kind = GetExtKind(op);
+        const bool data_memory = HasMem(op) && kind == ExtKind::Data;
+        // Relative branches consume the resolved target in the runtime Op.
+        // RET imm16 uses the same storage kind and still needs its immediate.
+        const bool omit_immediate = !include_relative_offset && kind == ExtKind::ControlFlow &&
+                                   op->ext.control.relative_width != RelativeBranchWidth::None;
         return {
             uint32_t(op->modrm) | (uint32_t(op->prefixes.all) << 8) | (uint32_t(op->meta.all & metadata_mask) << 16) |
                 (uint32_t(op->len) << 24),
             data_memory ? op->ext.data.ea_desc : 0,
             data_memory ? op->ext.data.disp : 0,
-            GetImm(op),
+            omit_immediate ? 0 : GetImm(op),
         };
     }
 };

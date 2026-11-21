@@ -1,4 +1,5 @@
 #include "bindings.h"
+#include "exec_utils.h"
 #include "instruction_variants.h"
 #include "state.h"
 #include <cstdio>
@@ -86,7 +87,9 @@ static bool CheckCompactSlots(EmuState* state) {
         if (GetExtKind(&expected) == ExtKind::ControlFlow) {
             auto* link = slot + 1;
             if (block->NextOp(slot) != slot + 2 || link->LoadBlockLink() != state->mmu.invalid_code_block() ||
-                GetControlTargetEip(&got) != GetControlTargetEip(&expected))
+                GetControlTargetEip(&got) != GetControlTargetEip(&expected) ||
+                DecodedOperandShape::Read(&got).immediate != 0 ||
+                DecodedOperandShape::Read(&got, /*include_relative_offset=*/true).immediate != GetImm(&got))
                 return false;
             link->StoreBlockLink(block);
         }
@@ -171,6 +174,7 @@ static bool CheckReturnSlots(bool narrow, bool immediate) {
     const auto restored = block->ReadOp(0);
     if (restored.modrm != (immediate ? 2 : 3) || restored.prefixes.flags.opsize != narrow ||
         GetExtKind(&restored) != ExtKind::ControlFlow || GetImm(&restored) != (immediate ? adjustment : 0) ||
+        DecodedOperandShape::Read(&restored).immediate != (immediate ? adjustment : 0) ||
         block->NextOp(op) != block->Sentinel()) {
         std::fprintf(stderr, "RET restore failed (opcode bits=%u, prefixes=%u, metadata=%u, imm=%x)\n",
                      restored.modrm, restored.prefixes.all, restored.meta.all, GetImm(&restored));
@@ -185,6 +189,67 @@ static bool CheckReturnSlots(bool narrow, bool immediate) {
     std::fprintf(stderr, "RET execution failed (eip=%x, esp=%x, expected esp=%x)\n",
                  X86_GetEIP(cpu), X86_RegRead(cpu, ESP), esp);
     return false;
+}
+
+static bool CheckTestBranches() {
+    constexpr uint32_t mask = CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK;
+    std::unique_ptr<EmuState, decltype(&X86_Destroy)> state(X86_Create(), X86_Destroy);
+    auto* cpu = state.get();
+    for (bool branch_on_zero : {true, false}) {
+        const uint32_t address = branch_on_zero ? 0x1000 : 0x2000;
+        const uint8_t code[] = {
+            0x85, 0xc0,                                            // test eax, eax
+            0x0f, uint8_t(branch_on_zero ? 0x84 : 0x85), 5, 0, 0, 0,  // je/jne end
+            0xba, 1, 0, 0, 0,                                      // mov edx, 1
+        };
+        X86_MemMap(cpu, address, 4096, 7);
+        X86_MemWrite(cpu, address, code, sizeof(code));
+        for (const uint32_t eax : {0u, 1u, 0x80000000u}) {
+            cpu->status = EmuStatus::Running;
+            SetArchitecturalEflags(cpu, mask);
+            X86_SetEIP(cpu, address);
+            X86_RegWrite(cpu, EAX, eax);
+            X86_RegWrite(cpu, EDX, 0);
+            X86_Run(cpu, address + sizeof(code), 8);
+            const uint32_t flags = eax == 0 ? ZF_MASK | PF_MASK : (eax == 1 ? 0 : SF_MASK | PF_MASK);
+            const bool taken = (eax == 0) == branch_on_zero;
+            if (X86_GetEIP(cpu) != address + sizeof(code) || X86_RegRead(cpu, EDX) != unsigned(!taken) ||
+                (GetArchitecturalEflags(cpu) & mask) != flags) {
+                std::fprintf(stderr, "TEST/Jcc mismatch (je=%d, eax=%x, eip=%x, edx=%x, flags=%x, expected=%x)\n",
+                             branch_on_zero, eax, X86_GetEIP(cpu), X86_RegRead(cpu, EDX),
+                             GetArchitecturalEflags(cpu) & mask, flags);
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+static bool CheckWordCompareFlags() {
+    struct Case {
+        uint16_t dest;
+        uint16_t src;
+        uint32_t expected;
+    };
+    constexpr Case cases[] = {
+        {0, 0, ZF_MASK | PF_MASK},
+        {0, 1, SF_MASK | CF_MASK | AF_MASK | PF_MASK},
+        {0x8000, 1, OF_MASK | AF_MASK | PF_MASK},
+        {0x7fff, 0xffff, SF_MASK | CF_MASK | OF_MASK | PF_MASK},
+        {1, 0, 0},
+    };
+    constexpr uint32_t mask = CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK;
+    for (auto [dest, src, expected] : cases) {
+        uint64_t flags = InitFlagsCache(mask);
+        AluCmp<uint16_t>(nullptr, flags, dest, src);
+        const uint32_t actual = (GetFlags32(flags) & (mask & ~PF_MASK)) | (EvaluatePF(flags) ? PF_MASK : 0);
+        if (actual != expected) {
+            std::fprintf(stderr, "Word CMP flags mismatch (dest=%x, src=%x, flags=%x, expected=%x)\n", dest, src,
+                         actual, expected);
+            return false;
+        }
+    }
+    return true;
 }
 
 static bool CheckPendingMemoryReplay(EmuState* state) {
@@ -384,7 +449,8 @@ int main() {
             }
         }
     }
-    ok = CheckPendingMemoryReplay(state) && CheckDeadFlagsAcrossReplay() && ok;
+    ok = CheckPendingMemoryReplay(state) && CheckDeadFlagsAcrossReplay() && CheckWordCompareFlags() &&
+         CheckTestBranches() && ok;
     ok = CheckMemoryFaultEip(false, false) && CheckMemoryFaultEip(true, false) && CheckMemoryFaultEip(false, true) &&
          CheckMemoryFaultEip(true, true) && CheckMemoryFaultEip(false, false, true) &&
          CheckMemoryFaultEip(true, false, true) && ok;

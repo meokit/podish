@@ -10,7 +10,7 @@ from pathlib import Path
 
 from gen_instruction_catalog import read_catalog
 from operand_specialization_data import (
-    HAS_IMMEDIATE, HAS_MEMORY, METADATA_MASK, Operand, generated_fusions, training_handlers,
+    HAS_IMMEDIATE, HAS_MEMORY, METADATA_MASK, Operand, generated_fusions, relative_control_operations, training_handlers,
 )
 
 
@@ -63,6 +63,7 @@ def blocks(path):
 def collect(profiles, fusion_source, limit):
     catalog = read_catalog()
     handlers = training_handlers(catalog, generated_fusions(fusion_source.read_text()) if fusion_source else {})
+    relative = relative_control_operations(catalog)
     scalar_ids = {handler.name: op_id for op_id, handler in handlers.items() if handler.kind == "wrapper"}
     observed, dispatches, skipped = Counter(), Counter(), Counter()
     for path in profiles:
@@ -83,6 +84,8 @@ def collect(profiles, fusion_source, limit):
                     skipped[op_id] += executions
                     cursor += 1
                     continue
+                operands = tuple(op.for_specialization(name in relative)
+                                 for name, op in zip(handler.operations, operands))
                 key = (op_id, operands)
                 dispatches[key] += executions
                 observed[key] += executions

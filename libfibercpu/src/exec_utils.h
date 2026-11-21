@@ -728,7 +728,9 @@ FORCE_INLINE T AluAdd(EmuState* state, uint64_t& flags_cache, T dest, T src) {
 
 template <typename T, bool UpdateFlags = true>
 FORCE_INLINE T AluSub(EmuState* state, uint64_t& flags_cache, T dest, T src) {
-    T res = dest - src;
+    using Difference = std::conditional_t<sizeof(T) == 2, uint32_t, T>;
+    const Difference difference = Difference(dest) - Difference(src);
+    const T res = static_cast<T>(difference);
 
     if constexpr (UpdateFlags) {
         if constexpr (sizeof(T) == 1) {
@@ -742,6 +744,17 @@ FORCE_INLINE T AluSub(EmuState* state, uint64_t& flags_cache, T dest, T src) {
             if ((((d ^ s) & (d ^ r)) & SF_MASK) != 0) flags |= OF_MASK;
             if (((d ^ s ^ r) & AF_MASK) != 0) flags |= AF_MASK;
             SetFlags32AndParityState(flags_cache, flags, static_cast<uint8_t>(r));
+        } else if constexpr (sizeof(T) == 2) {
+            // The same subtraction yields the result and the unsigned borrow.
+            // Keep the high bits until flags have been produced.
+            const uint32_t sign_changes = (dest ^ src) & (dest ^ difference);
+            uint32_t flags = BuildArithmeticFlagsBase(flags_cache);
+            if (difference == 0) flags |= ZF_MASK;
+            flags |= (difference >> 8) & SF_MASK;
+            flags |= (difference >> 16) & CF_MASK;
+            flags |= (sign_changes >> 4) & OF_MASK;
+            flags |= (dest ^ src ^ difference) & AF_MASK;
+            SetFlags32AndParityState(flags_cache, flags, static_cast<uint8_t>(difference));
         } else {
             uint32_t msb_idx = sizeof(T) * 8 - 1;
             T sign_mask = (T)1 << msb_idx;
@@ -807,16 +820,20 @@ FORCE_INLINE T AluSbb(EmuState* state, uint64_t& flags_cache, T dest, T src) {
     return res;
 }
 
+template <bool IncludeZero = true, typename T>
+FORCE_INLINE void SetLogicalResultFlags(uint64_t& flags_cache, T res) {
+    uint32_t flags = BuildArithmeticFlagsBase(flags_cache);
+    if constexpr (IncludeZero) {
+        if (res == 0) flags |= ZF_MASK;
+    }
+    if (((res >> (sizeof(T) * 8 - 1)) & 1) != 0) flags |= SF_MASK;
+    SetFlags32AndParityState(flags_cache, flags, static_cast<uint8_t>(res));
+}
+
 template <typename T, bool UpdateFlags = true>
 FORCE_INLINE T AluAnd(EmuState* state, uint64_t& flags_cache, T dest, T src) {
-    T res = dest & src;
-
-    if constexpr (UpdateFlags) {
-        uint32_t flags = BuildArithmeticFlagsBase(flags_cache);
-        if (res == 0) flags |= ZF_MASK;
-        if (((res >> (sizeof(T) * 8 - 1)) & 1) != 0) flags |= SF_MASK;
-        SetFlags32AndParityState(flags_cache, flags, static_cast<uint8_t>(res));
-    }
+    const T res = dest & src;
+    if constexpr (UpdateFlags) SetLogicalResultFlags(flags_cache, res);
     return res;
 }
 

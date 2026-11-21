@@ -14,6 +14,16 @@ HandlerFunc GeneratedFindSuperOpcode(const DecodedInstruction* ops);
 #endif
 void ApplySuperOpcodesToBlockOps(DecodedInstruction* ops, uint32_t op_count, bool previously_lowered = false);
 
+template <bool TakenOnZero>
+FORCE_INLINE LogicFlow BranchOnTestZero(LogicFuncParams, bool zero) {
+    // TEST has already cleared the cached ZF. Both exits publish the actual
+    // guest flag while the branch can consume the TEST result directly.
+    if (zero) flags_cache |= ZF_MASK;
+    if (zero != TakenOnZero) return LogicFlow::Continue;
+    *branch = GetControlTargetEip(op);
+    return LogicFlow::ExitToBranch;
+}
+
 #define DEFINE_FUSION_HANDLERS(name, width, selectable) \
     extern constinit const std::array<HandlerFunc, 1u << (width)> name##_handlers = {DecodeHandlerKey<[] {}>}
 
@@ -59,12 +69,12 @@ void ApplySuperOpcodesToBlockOps(DecodedInstruction* ops, uint32_t op_count, boo
         }                                                                                                             \
     } while (false)
 
-#define RUN_SUPEROPCODE_OP_WITH_POLICY(policy, target, state, cur_op, instr_limit, utlb, branch, flags_cache) \
+#define RUN_SUPEROPCODE_OP_WITH_POLICY(policy, target, state, cur_op, instr_limit, utlb, branch, flags_cache, ...) \
     do {                                                                                                      \
         static_assert(OperandSpec::Executable<policy> && OperandSpec::FixedModRM<policy>);                    \
         policy::Assume(cur_op);                                                                               \
         auto flow = target(state, cur_op, &utlb, policy::Immediate(cur_op), policy::ModRM(cur_op), &branch,   \
-                           flags_cache, OperandGprCache<policy>(FIBERCPU_GPR_CACHE));                         \
+                           flags_cache, OperandGprCache<policy>(FIBERCPU_GPR_CACHE) __VA_OPT__(,) __VA_ARGS__); \
         if (flow != LogicFlow::Continue) [[unlikely]] {                                                       \
             HANDLE_SUPEROPCODE_FLOW(flow, state, cur_op, instr_limit, utlb, utlb_tags, utlb_addend, branch,   \
                                     flags_cache);                                                             \
