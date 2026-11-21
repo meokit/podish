@@ -244,8 +244,17 @@ profiles and linked bundles when changing the producer.
     --top 512 --llvm-opt-level O2
 
 The offline tool sorts weighted recipes by descending entry count.
---top limits the number of emitted objects. --llvm-opt-level and
+--top limits the number of independent block objects. --llvm-opt-level and
 --llvm-pass-pipeline are mutually exclusive.
+
+To add page regions to a linked cache, train with JitMode=region and set
+FIBERCPU_LLVM_JIT_SCHEDULER_TRACE to a file. Pass that file as --regions to
+fibercpu_llvm_cache along with the block profile. The trace records the
+relative member offsets and exact recipes of published regions. The tool
+compiles independent fallback objects and links each region as one object.
+The consumer publishes a region once all registered member blocks match its
+recipes and backing page. FIBERCPU_LINKED_PAGE_REGIONS=0 keeps the
+independent cache active and skips region installation.
 
 Configure the interpreter using the same sources, compiler, target and VM
 layout settings as the producer, with the linked bundle as a build input.

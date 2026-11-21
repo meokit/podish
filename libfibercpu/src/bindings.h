@@ -117,6 +117,7 @@ int X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts);
 uint64_t X86_GetLLVMJitBlockCount();
 uint64_t X86_GetLLVMJitLiveBlockCount();
 uint64_t X86_GetLinkedBlockHitCount();
+uint64_t X86_GetLinkedPageRegionHitCount();
 // Returns the number of compiled entries, or -1 on failure.
 int X86_BuildLinkedLLVMBlockCache(const char* profile_path, const char* cache_path);
 int X86_BuildLinkedLLVMBlockCacheWithOptions(const char* profile_path, const char* cache_path, uint32_t limit,

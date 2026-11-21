@@ -18,6 +18,9 @@
 #if FIBERCPU_BLOCK_COMPILATION
 #include "jit/block_recipe.h"
 #endif
+#if FIBERCPU_LINKED_BLOCK_CACHE
+#include "jit/linked_block_cache.h"
+#endif
 
 namespace fiberish {
 
@@ -924,6 +927,9 @@ finalize:
     bool retain_region_context = false;
 #if FIBERCPU_LLVM_JIT
     retain_region_context = hot_count && LLVMPageRegionsEnabled(*state);
+#endif
+#if FIBERCPU_LINKED_BLOCK_CACHE
+    retain_region_context |= hot_count && LinkedPageRegionsEnabled();
 #endif
     size_t alloc_size = BasicBlock::CalculateSize(layout, hot_count != 0, retain_region_context);
     void* mem = state->mmu.try_allocate_block_bytes(alloc_size, start_eip);

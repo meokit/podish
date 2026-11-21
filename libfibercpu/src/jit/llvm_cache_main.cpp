@@ -2,13 +2,13 @@
 #include <cstdio>
 #include <string_view>
 
-#include "bindings.h"
+#include "jit/llvm_block_jit.h"
 
 namespace {
 
 int Usage() {
     std::fprintf(stderr, "usage: fibercpu_llvm_cache --linked PROFILE BUNDLE [--top N] "
-                         "[--llvm-opt-level LEVEL | --llvm-pass-pipeline PIPELINE]\n");
+                         "[--llvm-opt-level LEVEL | --llvm-pass-pipeline PIPELINE] [--regions JIT_TRACE]\n");
     return 2;
 }
 
@@ -19,6 +19,7 @@ int main(int argc, char** argv) {
 
     const char* opt_level = nullptr;
     const char* pipeline = nullptr;
+    const char* regions = nullptr;
     uint32_t limit = 0;
     for (int i = 4; i < argc; i += 2) {
         if (i + 1 == argc || !*argv[i + 1]) return Usage();
@@ -32,6 +33,8 @@ int main(int argc, char** argv) {
             opt_level = value;
         } else if (option == "--llvm-pass-pipeline" && !pipeline && !opt_level) {
             pipeline = value;
+        } else if (option == "--regions" && !regions) {
+            regions = value;
         } else {
             return Usage();
         }
@@ -39,7 +42,7 @@ int main(int argc, char** argv) {
 
     const auto* profile = argv[2];
     const auto* bundle = argv[3];
-    const int objects = X86_BuildLinkedLLVMBlockCacheWithOptions(profile, bundle, limit, opt_level, pipeline);
+    const int objects = fiberish::BuildLinkedLLVMBlockCache(profile, bundle, limit, opt_level, pipeline, regions);
     if (objects < 0) {
         std::fprintf(stderr, "Could not build linked block bundle from %s\n", profile);
         return 1;

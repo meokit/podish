@@ -36,6 +36,6 @@ bool LLVMWeightedProfileEnabled(const EmuState& state);
 std::shared_ptr<WeightedProfile> CreateLLVMWeightedProfile(bool same_page);
 bool WriteWeightedLLVMProfile(WeightedProfile& profile, const char* path, std::string& error);
 int BuildLinkedLLVMBlockCache(const char* profile_path, const char* cache_path, uint32_t limit, const char* opt_level,
-                              const char* pass_pipeline);
+                              const char* pass_pipeline, const char* region_profile = nullptr);
 
 }  // namespace fiberish

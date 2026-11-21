@@ -362,6 +362,22 @@ void WriteRegionMember(llvm::raw_ostream& out, const LLVMPageMember& member) {
     llvm_block_cache::WriteRecord(out, {key.data(), key.size()});
 }
 
+bool ReadRegionRecord(std::string_view input, std::vector<std::pair<uint32_t, std::string_view>>& chunks) {
+    chunks.clear();
+    if (input.empty() || uint8_t(input.front()) != llvm_block_cache::region_tag) return false;
+    input.remove_prefix(1);
+    while (!input.empty()) {
+        uint32_t offset;
+        std::string_view record;
+        if (chunks.size() == kMaxRegionMembers || !llvm_block_cache::ReadU32(input, offset) ||
+            offset > mem::PAGE_MASK || (!chunks.empty() && offset <= chunks.back().first) ||
+            !llvm_block_cache::ReadRecord(input, record))
+            return false;
+        chunks.emplace_back(offset, record);
+    }
+    return chunks.size() >= 2;
+}
+
 class BlockCompiler {
     std::unique_ptr<llvm::orc::LLJIT> jit_;
     BlockMemoryManager* memory_ = nullptr;
@@ -625,8 +641,8 @@ public:
         compilation_done_.notify_all();
     }
 
-    static int BuildLinkedCache(std::span<const ProfileRecipe> recipes, llvm::raw_ostream& output, uint32_t limit,
-                                llvm::StringRef pipeline) {
+    static int BuildLinkedCache(std::span<const ProfileRecipe> recipes, std::span<const std::string> regions,
+                                llvm::raw_ostream& output, uint32_t limit, llvm::StringRef pipeline) {
         if (!InitializeLLVMTarget()) return -1;
         BlockIR ir;
         if (!ir.templates.IsValid()) return -1;
@@ -641,6 +657,7 @@ public:
         int compiled = 0;
         block_recipe::Plan plan;
         const bool fold_operand_loads = DefaultFoldOperandLoads();
+        ankerl::unordered_dense::set<std::string_view> compiled_keys;
         for (const auto& recipe : recipes) {
             const auto record = recipe.key;
             bool exact;
@@ -656,8 +673,47 @@ public:
             if (!llvm_block_cache::WriteRecord(output, record) ||
                 !llvm_block_cache::WriteRecord(output, (*object)->getBuffer()))
                 return -1;
+            compiled_keys.insert(record);
             ++compiled;
             if (limit && static_cast<uint32_t>(compiled) == limit) break;
+        }
+        size_t baked_regions = 0;
+        std::vector<std::pair<uint32_t, std::string_view>> chunks;
+        for (const auto& region : regions) {
+            if (!ReadRegionRecord(region, chunks)) return -1;
+            std::vector<block_recipe::Plan> plans(chunks.size());
+            std::vector<LLVMPageMember> members;
+            for (auto [i, chunk] : llvm::enumerate(chunks)) {
+                const auto& [offset, record] = chunk;
+                bool exact = false;
+                if (!llvm_block_cache::DecodeKey(record, plans[i], exact) || !exact ||
+                    plans[i].exit == LLVMBlockExit::Dispatch)
+                    return -1;
+                if (compiled_keys.contains(record)) members.push_back({plans[i].Key(true), offset});
+            }
+            if (members.size() < 2) continue;
+            std::vector<size_t> included;
+            const auto name = "FiberCachedPage_" + std::to_string(compiled);
+            auto module = PrepareLLVMPageRegion(ir.templates, members, name, pipeline, fold_operand_loads, included);
+            if (!module) continue;
+            auto object = compiler(*module);
+            if (!object) {
+                llvm::logAllUnhandledErrors(object.takeError(), llvm::errs(), "LLVM page cache: ");
+                continue;
+            }
+            std::string record;
+            llvm::raw_string_ostream encoded(record);
+            encoded << char(llvm_block_cache::region_tag);
+            for (const auto i : included) WriteRegionMember(encoded, members[i]);
+            if (!llvm_block_cache::WriteRecord(output, record) ||
+                !llvm_block_cache::WriteRecord(output, (*object)->getBuffer()))
+                return -1;
+            ++compiled;
+            ++baked_regions;
+        }
+        if (!regions.empty()) {
+            if (!baked_regions) return -1;
+            llvm::outs() << "Compiled " << baked_regions << " page regions\n";
         }
         return compiled;
     }
@@ -1523,7 +1579,7 @@ void RetireLLVMJitTrace(const mem::CodeCacheState& cache) {
 }
 
 int BuildLinkedLLVMBlockCache(const char* profile_path, const char* cache_path, uint32_t limit, const char* opt_level,
-                              const char* pass_pipeline) {
+                              const char* pass_pipeline, const char* region_profile) {
     if (!profile_path || !cache_path) return -1;
     auto input = llvm::MemoryBuffer::getFile(profile_path);
     if (!input) return -1;
@@ -1531,6 +1587,34 @@ int BuildLinkedLLVMBlockCache(const char* profile_path, const char* cache_path, 
     bool weighted;
     std::vector<ProfileRecipe> recipes;
     if (!ReadProfileHeader(profile, weighted) || !ReadProfileRecipes(profile, weighted, recipes)) return -1;
+    std::vector<std::string> regions;
+    if (region_profile) {
+        auto trace = llvm::MemoryBuffer::getFile(region_profile);
+        if (!trace) return -1;
+        const auto fingerprint = llvm::toHex(llvm::ArrayRef<uint8_t>(ProfileFingerprint()));
+        auto lines = (*trace)->getBuffer();
+        ankerl::unordered_dense::set<std::string> seen;
+        while (!lines.empty()) {
+            auto [line, rest] = lines.split('\n');
+            lines = rest;
+            if (!line.consume_front("region_recipe,")) continue;
+            const auto [signature, encoded] = line.split(',');
+            std::string record;
+            if (signature != fingerprint || !llvm::tryGetFromHex(encoded, record)) return -1;
+            if (seen.insert(record).second) regions.push_back(std::move(record));
+        }
+        if (regions.empty()) return -1;
+        // The standalone fallback for each region member uses the same recipe.
+        ankerl::unordered_dense::set<std::string_view> known;
+        for (const auto& recipe : recipes) known.insert(recipe.key);
+        std::vector<std::pair<uint32_t, std::string_view>> chunks;
+        for (const auto& region : regions) {
+            if (!ReadRegionRecord(region, chunks)) return -1;
+            for (const auto& [offset, record] : chunks) {
+                if (known.insert(record).second) recipes.push_back({record, 1});
+            }
+        }
+    }
     auto pipeline = ParseLLVMBlockPipeline(opt_level ? opt_level : "", pass_pipeline ? pass_pipeline : "");
     if (!pipeline) {
         llvm::logAllUnhandledErrors(pipeline.takeError(), llvm::errs(), "LLVM block cache: ");
@@ -1545,7 +1629,7 @@ int BuildLinkedLLVMBlockCache(const char* profile_path, const char* cache_path, 
     int count;
     {
         llvm::raw_fd_ostream output(temp->FD, false);
-        count = BlockCompiler::BuildLinkedCache(recipes, output, limit, *pipeline);
+        count = BlockCompiler::BuildLinkedCache(recipes, regions, output, limit, *pipeline);
         output.flush();
         if (output.has_error()) {
             output.clear_error();

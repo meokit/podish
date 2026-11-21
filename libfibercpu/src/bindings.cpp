@@ -1571,6 +1571,14 @@ uint64_t X86_GetLinkedBlockHitCount() {
 #endif
 }
 
+uint64_t X86_GetLinkedPageRegionHitCount() {
+#if FIBERCPU_LINKED_BLOCK_CACHE
+    return LinkedPageRegionHitCount();
+#else
+    return 0;
+#endif
+}
+
 int X86_FinishRun(const X86_RunContext* run, char* error, size_t error_size) {
     if (error && error_size) error[0] = '\0';
     if (!run) return 0;

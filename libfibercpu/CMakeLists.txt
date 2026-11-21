@@ -928,6 +928,7 @@ if(FIBERCPU_ENABLE_LLVM_JIT)
     target_link_libraries(fibercpu PRIVATE fibercpu_llvm_codegen ${_llvm_components})
     add_executable(fibercpu_llvm_cache src/jit/llvm_cache_main.cpp)
     target_include_directories(fibercpu_llvm_cache PRIVATE src)
+    target_include_directories(fibercpu_llvm_cache SYSTEM PRIVATE ${simde_SOURCE_DIR})
     target_link_libraries(fibercpu_llvm_cache PRIVATE fibercpu)
 endif()
 

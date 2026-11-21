@@ -13,7 +13,7 @@ namespace fiberish::llvm_block_cache {
 
 inline constexpr std::string_view profile_magic = "FIBJPR08";
 inline constexpr std::string_view weighted_profile_magic = "FIBJPR09";
-inline constexpr std::string_view linked_magic = "FIBJLC04";
+inline constexpr std::string_view linked_magic = "FIBJLC05";
 inline constexpr uint8_t region_tag = 0xff;
 
 inline bool ReadU32(std::string_view& bytes, uint32_t& value) {
