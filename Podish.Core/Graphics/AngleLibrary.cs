@@ -17,6 +17,7 @@ internal sealed unsafe class AngleLibrary
     internal readonly nint Display;
     internal readonly nint Config;
     internal readonly bool SupportsEs3;
+    internal readonly bool UsesVulkan;
     internal const int Es2Bit = 0x0004, Es3Bit = 0x0040;
     internal readonly nint[] Gl;
     internal readonly nint MapBufferRange;
@@ -113,6 +114,7 @@ internal sealed unsafe class AngleLibrary
                 {
                     attribs[i++] = 0x3203;
                     attribs[i++] = 0x3450; // Vulkan
+                    UsesVulkan = true;
                 }
                 if (_nativePlatform != 0)
                 {

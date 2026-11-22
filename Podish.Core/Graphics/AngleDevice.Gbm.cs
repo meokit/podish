@@ -60,16 +60,19 @@ internal sealed unsafe partial class AngleDevice
         try
         {
             Span<uint> ids = stackalloc uint[GbmSlots];
+            Span<nint> pbuffers = stackalloc nint[GbmSlots];
             for (var i = 0; i < GbmSlots; i++)
             {
                 var backing = _kms.CreatePbuffer(width, height);
                 if (backing == 0) return AngleError();
+                pbuffers[i] = backing;
                 var slot = new GbmSlot(_angle, _kms, backing, width, height);
                 buffers.Slots[i] = slot;
                 slot.Handle = card.RegisterGpuBuffer(file, slot);
                 if (slot.Handle == 0) return -0x3003;
                 ids[i] = slot.Handle;
             }
+            if (!_kms.InitializePbuffers(pbuffers)) return -0x3003; // EGL_BAD_ALLOC
             guest.Write(handles, MemoryMarshal.AsBytes(ids));
             var id = session.NextId++;
             session.Surfaces.Add(id, new Surface(buffers.Slots[0]!.Surface, width, height, Gbm)

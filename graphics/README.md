@@ -68,7 +68,7 @@ The game probe selects SDL2's `opengles2` backend, checks for a nonuniform frame
 
 `--kmsdrm` exposes `/dev/dri/card0` and `/dev/dri/renderD128` and mounts the guest `libgbm.so.1`. The virtual card has one 640×480 output with legacy modesetting, a universal primary plane, CPU-backed linear BOs, and vblank-timed page-flip events. The distribution's libdrm can discover both nodes and use PRIME to share linear buffers between open file descriptions. The render node can allocate and import buffers without acquiring DRM master.
 
-Combine `--kmsdrm --gles` to open a host SDL window and enable GPU-backed GBM surfaces. A GBM surface has three texture-bindable EGL pbuffers. Guest EGL swap publishes a finished BO, then KMS modeset or flip selects the BO to present. The host ANGLE context samples it into the window using `eglBindTexImage`. The virtual flip event follows the GPU fence. Frame pixels stay in ANGLE during this path.
+Combine `--kmsdrm --gles` to open a host SDL window and enable GPU-backed GBM surfaces. A GBM surface has three texture-bindable EGL pbuffers, initialized to black at allocation so a swap immediately after surface recreation cannot expose stale pixels. Guest EGL swap publishes a BO, then KMS modeset or flip selects it for presentation. The host ANGLE context samples it into the window using `eglBindTexImage`, correcting the sampled Y coordinate on Vulkan. The virtual flip event follows the GPU fence. Frame pixels stay in ANGLE during this path.
 
 The macOS Metal path is tested with Chocolate Doom and SuperTux. The Windows and Linux KMS path requires a Vulkan-enabled ANGLE build, a Vulkan driver, and a real SDL window. SDL supplies Win32 or X11 window handles; a native Wayland window also requires both SDL and ANGLE to be built with Wayland support. The window and pbuffer config must support binding the pbuffer to a texture, and ANGLE must support EGL fence sync. See [the cross-platform media probes](../tests/media/README.md) for setup and SuperTuxKart.
 
@@ -81,7 +81,7 @@ dotnet "$cli" run --rm --kmsdrm --rootfs "$rootfs" -- /usr/local/bin/podish-kmsd
 dotnet "$cli" run --rm --kmsdrm --gles --rootfs "$rootfs" -- /usr/local/bin/podish-kmsdrm-egl-probe
 ```
 
-The GPU probe checks that EGL swap leaves the active KMS framebuffer alone. It then verifies modeset, page flip, the active BO's lifetime after the GBM lock is released, three-slot pool reuse and clean teardown.
+The GPU probe checks that EGL swap leaves the active KMS framebuffer alone. It then verifies modeset, page flip, the active BO's lifetime after the GBM lock is released, three-slot pool reuse, black contents before the first draw on a recreated surface, and clean teardown.
 
 ### Run a DRM Wayland compositor
 

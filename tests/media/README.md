@@ -58,6 +58,10 @@ The runner uses guest SDL KMSDRM at 640×480 and checks that the 30-second
 Lighthouse profile completes and at least eight direct host EGL swaps occur.
 Use `--require-renderer 'Radeon'` (substitute your adapter name) to reject a
 software Vulkan device; the host renderer is recorded from `GL_RENDERER`.
+Swap counts alone do not check image contents. For a visual check, make sure
+the loading text and race HUD are upright. At the loading-to-race transition
+SDL KMSDRM may submit a newly recreated surface before drawing to it; that
+frame should be black, not a corrupted copy of an earlier loading frame.
 
 On WSL2, the default Vulkan loader may pick Mesa's CPU renderer. To exercise
 the physical GPU, use a Mesa build with the Dozen Vulkan ICD, select its JSON

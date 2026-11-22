@@ -95,6 +95,32 @@ internal sealed unsafe partial class KmsEglOutput : IDisposable
         return _angle.CreatePbufferSurface(_angle.Display, Config, attributes);
     }
 
+    internal bool InitializePbuffers(ReadOnlySpan<nint> buffers)
+    {
+        var previousContext = _getContext();
+        var draw = _getSurface(0x3059); // EGL_DRAW
+        var read = _getSurface(0x305A); // EGL_READ
+        var clear = (delegate* unmanaged[Cdecl]<uint, void>)Gl("glClear");
+        try
+        {
+            // SDL KMSDRM can recreate its GBM surface inside SwapWindow and immediately
+            // submit it without drawing. Clear with the private context's default color
+            // and write masks so the new buffers cannot expose uninitialized pixels.
+            foreach (var buffer in buffers)
+            {
+                if (_angle.MakeCurrent(_angle.Display, buffer, buffer, _context) == 0) return false;
+                clear(0x4000 /* GL_COLOR_BUFFER_BIT */);
+            }
+            // This context owns the clears; wait once per new pool before handing it to guest contexts.
+            ((delegate* unmanaged[Cdecl]<void>)Gl("glFinish"))();
+            return GlError() == 0;
+        }
+        finally
+        {
+            Require(_angle.MakeCurrent(_angle.Display, draw, read, previousContext) != 0, "restore guest EGL binding");
+        }
+    }
+
     internal nint Fence()
     {
         var fence = _createSync(_angle.Display, 0x30F9 /* EGL_SYNC_FENCE */, null);
@@ -163,7 +189,7 @@ internal sealed unsafe partial class KmsEglOutput : IDisposable
     private void BuildPipeline()
     {
         const uint ArrayBuffer = 0x8892;
-        var vertex = Compile(0x8B31, "attribute vec2 p; varying vec2 uv; void main(){gl_Position=vec4(p,0.,1.);uv=p*.5+.5;}"u8);
+        var vertex = Compile(0x8B31, "attribute vec2 p; varying vec2 uv; uniform float ySign; void main(){gl_Position=vec4(p,0.,1.);uv=vec2(p.x,p.y*ySign)*.5+.5;}"u8);
         var fragment = Compile(0x8B30, "precision mediump float; varying vec2 uv; uniform sampler2D image; void main(){gl_FragColor=vec4(texture2D(image,uv).rgb,1.);}"u8);
         var program = ((delegate* unmanaged[Cdecl]<uint>)Gl("glCreateProgram"))();
         var attach = (delegate* unmanaged[Cdecl]<uint, uint, void>)Gl("glAttachShader");
@@ -179,6 +205,13 @@ internal sealed unsafe partial class KmsEglOutput : IDisposable
         deleteShader(fragment);
         if (linked == 0) throw new InvalidOperationException("Could not link the ANGLE KMS presentation shader.");
         ((delegate* unmanaged[Cdecl]<uint, void>)Gl("glUseProgram"))(program);
+        // ANGLE Vulkan flips the default framebuffer for GLES, but eglBindTexImage
+        // exposes the underlying pbuffer image directly. Only the texture's Y needs correction.
+        fixed (byte* name = "ySign\0"u8)
+        {
+            var location = ((delegate* unmanaged[Cdecl]<uint, byte*, int>)Gl("glGetUniformLocation"))(program, name);
+            ((delegate* unmanaged[Cdecl]<int, float, void>)Gl("glUniform1f"))(location, _angle.UsesVulkan ? -1f : 1f);
+        }
 
         uint vertexBuffer, texture;
         ((delegate* unmanaged[Cdecl]<int, uint*, void>)Gl("glGenBuffers"))(1, &vertexBuffer);

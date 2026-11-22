@@ -34,6 +34,17 @@ static void require_active(int fd, uint32_t crtc, uint32_t expected) {
     drmModeFreeCrtc(active);
 }
 
+static void require_fresh_back_buffer(GLsizei width, GLsizei height) {
+    size_t size = (size_t)width * height * 4;
+    GLubyte* pixels = malloc(size);
+    require(pixels != NULL, "allocate fresh GBM pixel check");
+    glReadPixels(0, 0, width, height, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    require(glGetError() == GL_NO_ERROR, "read fresh GBM pbuffer");
+    for (size_t i = 0; i < size; i += 4)
+        require(!(pixels[i] | pixels[i + 1] | pixels[i + 2]), "fresh GBM pbuffer is black before rendering");
+    free(pixels);
+}
+
 struct fb_entry {
     uint32_t handle, id;
 };
@@ -124,6 +135,19 @@ int main(void) {
     for (unsigned i = 0; i < 3; ++i)
         if (entries[i].id)
             require(drmModeRmFB(fd, entries[i].id) == 0, "release framebuffer reference");
+    gbm_surface_destroy(gbm);
+
+    // SDL KMSDRM can recreate its surface in the middle of a swap. The guest
+    // has not drawn to the replacement yet, and it must not expose old pixels.
+    gbm = gbm_surface_create(device, mode.hdisplay, mode.vdisplay, GBM_FORMAT_ARGB8888, usage);
+    require(gbm != NULL, "recreate GBM surface");
+    surface = eglCreatePlatformWindowSurface(display, config, gbm, NULL);
+    require(surface != EGL_NO_SURFACE && eglMakeCurrent(display, surface, surface, context),
+            "bind replacement GBM surface");
+    require_fresh_back_buffer(mode.hdisplay, mode.vdisplay);
+    require(eglMakeCurrent(display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT) &&
+                eglDestroySurface(display, surface),
+            "release replacement GBM surface");
     require(eglDestroyContext(display, context) && eglTerminate(display), "release EGL context");
     gbm_surface_destroy(gbm);
     gbm_device_destroy(device);
