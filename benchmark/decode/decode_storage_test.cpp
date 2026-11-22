@@ -152,7 +152,8 @@ static bool CheckReturnSlots(bool narrow, bool immediate) {
     const auto cpu = state.get();
     cpu->status = EmuStatus::Running;
     auto* page = X86_AllocatePage(cpu, code_address, static_cast<uint8_t>(mem::Property::RX));
-    if (!page) return false;
+    if (!page)
+        return false;
     X86_MemMap(cpu, stack_address, 4096, 3);
     const std::array<uint8_t, 4> code{0x66, uint8_t(immediate ? 0xc2 : 0xc3), 0x34, 0x12};
     const uint8_t* bytes = code.data() + !narrow;
@@ -169,15 +170,16 @@ static bool CheckReturnSlots(bool narrow, bool immediate) {
     }
     auto* op = block->FirstOp();
     auto* link = op + immediate;
-    if (link->LoadBlockLink() != cpu->mmu.invalid_code_block()) return false;
+    if (link->LoadBlockLink() != cpu->mmu.invalid_code_block())
+        return false;
     link->StoreBlockLink(block);
     const auto restored = block->ReadOp(0);
     if (restored.modrm != (immediate ? 2 : 3) || restored.prefixes.flags.opsize != narrow ||
         GetExtKind(&restored) != ExtKind::ControlFlow || GetImm(&restored) != (immediate ? adjustment : 0) ||
         DecodedOperandShape::Read(&restored).immediate != (immediate ? adjustment : 0) ||
         block->NextOp(op) != block->Sentinel()) {
-        std::fprintf(stderr, "RET restore failed (opcode bits=%u, prefixes=%u, metadata=%u, imm=%x)\n",
-                     restored.modrm, restored.prefixes.all, restored.meta.all, GetImm(&restored));
+        std::fprintf(stderr, "RET restore failed (opcode bits=%u, prefixes=%u, metadata=%u, imm=%x)\n", restored.modrm,
+                     restored.prefixes.all, restored.meta.all, GetImm(&restored));
         return false;
     }
 
@@ -185,9 +187,10 @@ static bool CheckReturnSlots(bool narrow, bool immediate) {
     X86_RegWrite(cpu, ESP, stack_address);
     X86_Run(cpu, target, 8);
     const auto esp = stack_address + (narrow ? 2 : 4) + (immediate ? adjustment : 0);
-    if (X86_GetEIP(cpu) == target && X86_RegRead(cpu, ESP) == esp) return true;
-    std::fprintf(stderr, "RET execution failed (eip=%x, esp=%x, expected esp=%x)\n",
-                 X86_GetEIP(cpu), X86_RegRead(cpu, ESP), esp);
+    if (X86_GetEIP(cpu) == target && X86_RegRead(cpu, ESP) == esp)
+        return true;
+    std::fprintf(stderr, "RET execution failed (eip=%x, esp=%x, expected esp=%x)\n", X86_GetEIP(cpu),
+                 X86_RegRead(cpu, ESP), esp);
     return false;
 }
 
@@ -198,9 +201,13 @@ static bool CheckTestBranches() {
     for (bool branch_on_zero : {true, false}) {
         const uint32_t address = branch_on_zero ? 0x1000 : 0x2000;
         const uint8_t code[] = {
-            0x85, 0xc0,                                            // test eax, eax
-            0x0f, uint8_t(branch_on_zero ? 0x84 : 0x85), 5, 0, 0, 0,  // je/jne end
-            0xba, 1, 0, 0, 0,                                      // mov edx, 1
+            0x85, 0xc0, // test eax, eax
+            0x0f, uint8_t(branch_on_zero ? 0x84 : 0x85),
+            5,    0,
+            0,    0, // je/jne end
+            0xba, 1,
+            0,    0,
+            0, // mov edx, 1
         };
         X86_MemMap(cpu, address, 4096, 7);
         X86_MemWrite(cpu, address, code, sizeof(code));
@@ -440,6 +447,60 @@ static bool CheckMemoryFaultEip(bool write, bool single_step, bool concat = fals
            X86_RegRead(state.get(), EDX) == 1 && state->mem_op_type == PendingMemOp::None;
 }
 
+static bool CheckPageLocalBlockCache() {
+    constexpr uintptr_t host_page = 0x11000;
+    constexpr uintptr_t alias_backing = 0x22000;
+    constexpr uintptr_t second_host_page = 0x33000;
+    constexpr uint32_t guest_page = 0x3ff000;
+    // The first three offsets collide at the final bucket of a four-slot table.
+    constexpr mem::BlockCacheKey keys[] = {
+        {host_page, guest_page + 3},
+        {host_page, guest_page + 7},
+        {host_page, guest_page + 11},
+        {alias_backing, guest_page + 11},
+        {host_page, guest_page + mem::PAGE_SIZE + 11},
+    };
+    constexpr size_t spanning_block = 2;
+    std::array<BasicBlock, std::size(keys)> blocks{};
+    BasicBlock replacement{};
+    mem::CodeCacheState cache;
+    const auto publish = [&](size_t index, BasicBlock& block) {
+        mem::HostPageSet host_pages;
+        host_pages.push_unique(keys[index].host_page_base);
+        if (index == spanning_block)
+            host_pages.push_unique(second_host_page);
+        block.set_start_eip(keys[index].guest_eip);
+        block.set_valid(true);
+        return cache.CacheDecodedBlock(keys[index], host_pages, &block) == &block;
+    };
+    for (size_t i = 0; i < blocks.size(); ++i) {
+        if (!publish(i, blocks[i]))
+            return false;
+    }
+
+    cache.EraseBlock(keys[0]);
+    cache.EraseBlock(keys[1]);
+    const auto& readonly_cache = std::as_const(cache);
+    for (size_t i = 0; i < blocks.size(); ++i) {
+        const auto* expected = i < spanning_block ? nullptr : &blocks[i];
+        if (readonly_cache.LookupBlock(keys[i]) != expected)
+            return false;
+    }
+
+    cache.InvalidateHostPage(second_host_page);
+    if (blocks[2].is_valid() || !blocks[3].is_valid() || !blocks[4].is_valid() ||
+        readonly_cache.LookupBlock(keys[spanning_block]) != &blocks[spanning_block] ||
+        !publish(spanning_block, replacement) || readonly_cache.LookupBlock(keys[spanning_block]) != &replacement)
+        return false;
+
+    cache.ResetReachability();
+    for (const auto& key : keys) {
+        if (readonly_cache.LookupBlock(key))
+            return false;
+    }
+    return true;
+}
+
 int main() {
     constexpr uint32_t address = 0x1000;
     auto* state = X86_Create();
@@ -461,6 +522,10 @@ int main() {
               check(address + 17, 0, 17, address + 17) && CheckCompactSlots(state);
     if (!CheckBoundScalarWidths()) {
         std::fprintf(stderr, "LEA or immediate MOV width binding failed\n");
+        ok = false;
+    }
+    if (!CheckPageLocalBlockCache()) {
+        std::fprintf(stderr, "Page-local block cache check failed\n");
         ok = false;
     }
     // Invalid 15-byte prefix sequence at the last available decoded-op slot.

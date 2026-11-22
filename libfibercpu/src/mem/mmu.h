@@ -13,6 +13,7 @@
 #include <vector>
 #include "../common.h"
 #include "../decoder.h"
+#include "block_page_hash_index.h"
 #include "tlb.h"
 #include "types.h"
 
@@ -325,7 +326,7 @@ struct CodeCacheState {
     };
 
     std::pmr::monotonic_buffer_resource block_pool;
-    ankerl::unordered_dense::map<BlockCacheKey, uint32_t, BlockCacheKeyHash> block_cache;
+    BlockPageHashIndex<BlockCacheKey> block_cache;
     std::vector<BlockCacheEntry> block_entries;
     std::vector<BasicBlock*> all_blocks;
     BasicBlock dummy_invalid_block;
@@ -423,13 +424,12 @@ struct CodeCacheState {
     }
 
     BasicBlock* LookupBlock(const BlockCacheKey& key) {
-        auto it = block_cache.find(key);
-        return it == block_cache.end() ? nullptr : block_entries[it->second].block;
+        return const_cast<BasicBlock*>(std::as_const(*this).LookupBlock(key));
     }
 
     const BasicBlock* LookupBlock(const BlockCacheKey& key) const {
-        auto it = block_cache.find(key);
-        return it == block_cache.end() ? nullptr : block_entries[it->second].block;
+        const auto* index = block_cache.find(key);
+        return index ? block_entries[*index].block : nullptr;
     }
 
 #if FIBERCPU_BLOCK_COMPILATION
@@ -440,21 +440,20 @@ struct CodeCacheState {
         fallback.reserve(members.size());
         std::optional<uint32_t> previous;
         for (const auto& member : members) {
-            if ((member.eip & ~PAGE_MASK) != guest_page || (previous && member.eip <= *previous) ||
-                !member.block || !member.handler)
+            if ((member.eip & ~PAGE_MASK) != guest_page || (previous && member.eip <= *previous) || !member.block ||
+                !member.handler)
                 return false;
             previous = member.eip;
-            const auto cached = block_cache.find(BlockCacheKey{host_page, member.eip});
-            if (cached == block_cache.end()) return false;
-            const auto& entry = block_entries[cached->second];
+            const auto* index = block_cache.find(BlockCacheKey{host_page, member.eip});
+            if (!index) return false;
+            const auto& entry = block_entries[*index];
             if (entry.block != member.block || entry.host_pages.size() != 1 ||
                 entry.host_pages.front().host_page_base != host_page)
                 return false;
             const auto& block = *entry.block;
             if (!block.is_valid() || block.start_eip() != member.eip ||
                 block.invalidation_revision != member.revision || !block.entry || !block.inst_count() ||
-                block.end_eip <= member.eip ||
-                ((block.end_eip - 1) & ~PAGE_MASK) != guest_page)
+                block.end_eip <= member.eip || ((block.end_eip - 1) & ~PAGE_MASK) != guest_page)
                 return false;
             fallback.push_back({member.block, member.fallback ? member.fallback : block.entry});
         }
@@ -472,11 +471,11 @@ struct CodeCacheState {
 
     void EnsureBlockHostPagesRegistered(const BlockCacheKey& cache_key, const HostPageSet& host_page_bases,
                                         HostPageSet* affected_host_pages = nullptr) {
-        auto it = block_cache.find(cache_key);
-        if (it == block_cache.end()) return;
-        auto& entry = block_entries[it->second];
+        const auto* index = block_cache.find(cache_key);
+        if (!index) return;
+        auto& entry = block_entries[*index];
         if (!entry.host_pages.empty()) return;
-        RegisterBlockHostPages(it->second, host_page_bases);
+        RegisterBlockHostPages(*index, host_page_bases);
         if (affected_host_pages) {
             for (uintptr_t host_page_base : host_page_bases) {
                 affected_host_pages->push_unique(host_page_base);
@@ -527,9 +526,9 @@ struct CodeCacheState {
     }
 
     void RemoveBlockHostPages(const BlockCacheKey& cache_key, HostPageSet* affected_host_pages = nullptr) {
-        auto block_it = block_cache.find(cache_key);
-        if (block_it == block_cache.end()) return;
-        RemoveBlockHostPagesByIndex(block_it->second, affected_host_pages);
+        if (const auto* index = block_cache.find(cache_key)) {
+            RemoveBlockHostPagesByIndex(*index, affected_host_pages);
+        }
     }
 
     void FixupMovedBlockIndex(uint32_t block_index) {
@@ -550,11 +549,11 @@ struct CodeCacheState {
 
     BasicBlock* CacheDecodedBlock(const BlockCacheKey& cache_key, const HostPageSet& host_page_bases, BasicBlock* block,
                                   HostPageSet* affected_host_pages = nullptr) {
-        auto [it, inserted] = block_cache.try_emplace(cache_key, static_cast<uint32_t>(block_entries.size()));
+        auto [index, inserted] = block_cache.try_emplace(cache_key, static_cast<uint32_t>(block_entries.size()));
         if (inserted) {
             block_entries.push_back(BlockCacheEntry{cache_key, block, {}});
         } else {
-            auto& entry = block_entries[it->second];
+            auto& entry = block_entries[*index];
             BasicBlock* existing = entry.block;
             if (existing != nullptr && existing->is_valid() && existing != block) {
                 if (affected_host_pages) {
@@ -566,10 +565,10 @@ struct CodeCacheState {
             }
 
             entry.block = block;
-            RemoveBlockHostPagesByIndex(it->second, affected_host_pages);
+            RemoveBlockHostPagesByIndex(*index, affected_host_pages);
         }
 
-        RegisterBlockHostPages(it->second, host_page_bases);
+        RegisterBlockHostPages(*index, host_page_bases);
         if (affected_host_pages) {
             for (uintptr_t host_page_base : host_page_bases) {
                 affected_host_pages->push_unique(host_page_base);
@@ -579,10 +578,10 @@ struct CodeCacheState {
     }
 
     void EraseBlock(const BlockCacheKey& cache_key, HostPageSet* affected_host_pages = nullptr) {
-        auto it = block_cache.find(cache_key);
-        if (it == block_cache.end()) return;
+        const auto* index = block_cache.find(cache_key);
+        if (!index) return;
 
-        const uint32_t block_index = it->second;
+        const uint32_t block_index = *index;
         auto& entry = block_entries[block_index];
         if (entry.block != nullptr) {
             if (page_regions) ++page_regions->invalidation_epoch;
@@ -590,15 +589,14 @@ struct CodeCacheState {
         }
 
         RemoveBlockHostPagesByIndex(block_index, affected_host_pages);
-        block_cache.erase(it);
+        block_cache.erase(cache_key);
 
         const uint32_t last_index = static_cast<uint32_t>(block_entries.size() - 1);
         if (block_index != last_index) {
             const BlockCacheKey moved_key = block_entries[last_index].cache_key;
             block_entries[block_index] = std::move(block_entries[last_index]);
-            auto moved_it = block_cache.find(moved_key);
-            if (moved_it != block_cache.end()) {
-                moved_it->second = block_index;
+            if (auto* moved_index = block_cache.find(moved_key)) {
+                *moved_index = block_index;
             }
             FixupMovedBlockIndex(block_index);
         }
@@ -944,8 +942,7 @@ public:
     void invalidate_code_before_permission_change(HostAddr page, Property old_perms, Property new_perms) {
         if (!page || !code_cache().page_regions || !has_property(old_perms, Property::Exec)) return;
         constexpr auto region_permissions = Property::Exec | Property::Write | Property::External;
-        if ((old_perms & region_permissions) == (new_perms & region_permissions))
-            return;
+        if ((old_perms & region_permissions) == (new_perms & region_permissions)) return;
         const auto backing = reinterpret_cast<uintptr_t>(page);
         invalidate_code_cache_host_pages(&backing, 1);
     }
@@ -1511,8 +1508,12 @@ public:
         if (!backing) return std::nullopt;
         auto& cache = code_cache();
         if (!cache.page_regions) cache.page_regions = std::make_unique<CodeCacheState::PageRegions>();
-        return PageRegionStamp{core_->identity, *backing, eip & ~uint32_t(PAGE_MASK), cache.generation,
-                               cache.page_regions->invalidation_epoch, cache.llvm_cache_epoch};
+        return PageRegionStamp{core_->identity,
+                               *backing,
+                               eip & ~uint32_t(PAGE_MASK),
+                               cache.generation,
+                               cache.page_regions->invalidation_epoch,
+                               cache.llvm_cache_epoch};
     }
 
     [[nodiscard]] bool publish_page_region(const PageRegionStamp& snapshot,
