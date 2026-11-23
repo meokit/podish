@@ -8,6 +8,7 @@ internal sealed unsafe partial class KmsEglOutput
     private const uint ReadFramebuffer = 0x8CA8;
     private const uint DrawFramebuffer = 0x8CA9;
     private const uint ColorAttachment = 0x8CE0;
+    private readonly Lock _textureGate = new();
     private readonly HashSet<uint> _textures = [];
     private readonly HashSet<uint> _imageSamplers = [];
     private long _texturePixels;
@@ -37,7 +38,11 @@ internal sealed unsafe partial class KmsEglOutput
         return _textureContext;
     }
 
-    internal bool OwnsTexture(uint name) => _textures.Contains(name);
+    internal bool OwnsTexture(uint name)
+    {
+        lock (_textureGate)
+            return _textures.Contains(name);
+    }
     internal bool OwnsSampler(uint name) => _imageSamplers.Contains(name);
 
     private nint GetProc(ReadOnlySpan<byte> name)
@@ -75,6 +80,12 @@ internal sealed unsafe partial class KmsEglOutput
 
     internal TextureBo? AllocateTexture(uint width, uint height, uint format)
     {
+        lock (_textureGate)
+            return AllocateTextureCore(width, height, format);
+    }
+
+    private TextureBo? AllocateTextureCore(uint width, uint height, uint format)
+    {
         if (_textureContext == 0 || width is 0 or > FramebufferDevice.DimensionLimit ||
             height is 0 or > FramebufferDevice.DimensionLimit || _textures.Count >= 32 ||
             _texturePixels + (long)width * height > 16 * 1024 * 1024)
@@ -86,6 +97,7 @@ internal sealed unsafe partial class KmsEglOutput
         ((delegate* unmanaged[Cdecl]<uint, uint, void>)Gl("glBindTexture"))(Texture2D, name);
         ((delegate* unmanaged[Cdecl]<uint, int, int, int, int, int, uint, uint, void*, void>)Gl("glTexImage2D"))
             (Texture2D, 0, 0x8058 /* RGBA8 */, (int)width, (int)height, 0, 0x1908, 0x1401, null);
+        ((delegate* unmanaged[Cdecl]<uint, uint, int, void>)Gl("glTexParameteri"))(Texture2D, 0x2801, 0x2601);
         if (format == 0x34325258) // XRGB has a constant opaque alpha when sampled.
             ((delegate* unmanaged[Cdecl]<uint, uint, int, void>)Gl("glTexParameteri"))(Texture2D, 0x8E45, 1);
         ((delegate* unmanaged[Cdecl]<uint, uint, void>)Gl("glBindTexture"))(Texture2D, 0);
@@ -201,15 +213,34 @@ internal sealed unsafe partial class KmsEglOutput
 
     private TextureBinding BindTextureContext(nint surface)
     {
-        var previous = new TextureBinding(this, _getContext(), _getSurface(0x3059), _getSurface(0x305A));
-        Require(_angle.MakeCurrent(_angle.Display, surface, surface, _textureContext) != 0, "bind texture scanout");
-        return previous;
+        _textureGate.Enter();
+        try
+        {
+            var previous = new TextureBinding(this, _getContext(), _getSurface(0x3059), _getSurface(0x305A));
+            Require(_angle.MakeCurrent(_angle.Display, surface, surface, _textureContext) != 0, "bind texture scanout");
+            return previous;
+        }
+        catch
+        {
+            _textureGate.Exit();
+            throw;
+        }
     }
 
     private readonly record struct TextureBinding(KmsEglOutput Output, nint Context, nint Draw, nint Read) : IDisposable
     {
-        public void Dispose() => Output.Require(
-            Output._angle.MakeCurrent(Output._angle.Display, Draw, Read, Context) != 0, "restore EGL binding");
+        public void Dispose()
+        {
+            try
+            {
+                Output.Require(Output._angle.MakeCurrent(Output._angle.Display, Draw, Read, Context) != 0,
+                    "restore EGL binding");
+            }
+            finally
+            {
+                Output._textureGate.Exit();
+            }
+        }
     }
 
     internal sealed class TextureBo(KmsEglOutput owner, uint texture, uint width, uint height, uint format)
@@ -221,6 +252,8 @@ internal sealed unsafe partial class KmsEglOutput
         private nint _consumerFence;
         private bool _waylandFrame;
         private bool _sampleWaitPending;
+        private readonly Lock _producerGate = new();
+        private nint _compositorImage;
         public override uint PrimeFormat => format;
         public override bool Ready => ProducerFence != 0;
         public override bool Present() => owner.PresentTexture(this);
@@ -229,9 +262,27 @@ internal sealed unsafe partial class KmsEglOutput
         {
             var fence = owner.Fence();
             if (fence == 0) return false;
-            owner.DestroyFence(ProducerFence);
-            ProducerFence = fence;
+            lock (_producerGate)
+            {
+                owner.DestroyFence(ProducerFence);
+                ProducerFence = fence;
+            }
             return true;
+        }
+
+        // The caller has its own EGL share group and retains the BO during import.
+        internal nint ImportForCompositor()
+        {
+            lock (_producerGate)
+            {
+                if (!Ready || !owner.WaitForFence(ProducerFence)) return 0;
+                if (_compositorImage != 0) return _compositorImage;
+                var create = (delegate* unmanaged[Cdecl]<nint, nint, uint, nint, nint*, nint>)owner._angle.Egl("eglCreateImage");
+                nint* attributes = stackalloc nint[] { 0x30D2, 1, 0x3038 }; // EGL_IMAGE_PRESERVED
+                _compositorImage = create(owner._angle.Display, owner._textureContext,
+                    0x30B1 /* EGL_GL_TEXTURE_2D */, (nint)texture, attributes);
+                return _compositorImage;
+            }
         }
 
         internal bool SubmitWaylandFrame()
@@ -272,13 +323,21 @@ internal sealed unsafe partial class KmsEglOutput
 
         protected override void Destroy()
         {
-            owner._textures.Remove(texture);
-            owner._texturePixels -= (long)Width * Height;
-            if (owner._textureContext == 0) return;
-            using var binding = owner.BindTextureContext(0);
-            owner.DestroyFence(ProducerFence);
-            owner.DestroyFence(_consumerFence);
-            owner.DeleteTexture(texture);
+            lock (owner._textureGate)
+            {
+                owner._textures.Remove(texture);
+                owner._texturePixels -= (long)Width * Height;
+                if (owner._textureContext == 0) return;
+                using var binding = owner.BindTextureContext(0);
+                owner.DestroyFence(ProducerFence);
+                owner.DestroyFence(_consumerFence);
+                if (_compositorImage != 0)
+                {
+                    var destroy = (delegate* unmanaged[Cdecl]<nint, nint, uint>)owner._angle.Egl("eglDestroyImage");
+                    destroy(owner._angle.Display, _compositorImage);
+                }
+                owner.DeleteTexture(texture);
+            }
         }
     }
 }

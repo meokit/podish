@@ -18,10 +18,10 @@ public abstract class DrmScanoutBuffer(uint width, uint height, uint pitch)
     public abstract bool Present();
     protected abstract void Destroy();
 
-    public void Retain() => _references++;
+    public void Retain() => Interlocked.Increment(ref _references);
     public void Release()
     {
-        if (--_references == 0) Destroy();
+        if (Interlocked.Decrement(ref _references) == 0) Destroy();
     }
 
     internal void Pin() => _scanoutPins++;

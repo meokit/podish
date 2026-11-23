@@ -12,7 +12,7 @@ internal static class ContainerGraphics
 
     internal static AngleDevice? Mount(SyscallManager syscalls, KernelScheduler scheduler,
         FramebufferDevice? framebuffer, VirtualConsoleInput? kmsInput, bool gles, bool kmsDrm,
-        KmsEglWindow? kmsWindow, ILogger logger)
+        KmsEglWindow? kmsWindow, VirtualDrmScanout? compositorScanout, KmsEglOutput? compositorTextures, ILogger logger)
     {
         if (gles && (OperatingSystem.IsBrowser() || OperatingSystem.IsIOS()))
             throw new ContainerConfigurationException("ANGLE GLES is only available in a desktop host process.");
@@ -25,34 +25,20 @@ internal static class ContainerGraphics
 
         try
         {
-            using var source = new MountFile(syscalls.CreateDetachedTmpfsMount("podish-gles"));
-            var root = source.Mount!.Root;
-            var libraries = new List<(string Soname, string Alias)>();
-            if (gles) libraries.AddRange([("libEGL.so.1", "libEGL.so"), ("libGLESv2.so.2", "libGLESv2.so")]);
-            if (kmsDrm) libraries.Add(("libgbm.so.1", "libgbm.so"));
-            foreach (var (soname, alias) in libraries)
-            {
-                var image = File.ReadAllBytes(Path.Combine(guest, soname));
-                if (image.Length < 20 || !image.AsSpan(0, 7).SequenceEqual("\u007fELF\u0001\u0001\u0001"u8) ||
-                    image[16] != 3 || image[17] != 0 || image[18] != 3 || image[19] != 0)
-                    throw new IOException($"{soname} is not an IA-32 ELF shared library.");
-                syscalls.WriteFileInDetachedMount(source.Mount!, soname, image);
-                var link = new Dentry(FsName.FromString(alias), null, root, root.SuperBlock);
-                var rc = root.Inode!.Symlink(link, soname, 0, 0);
-                if (rc != 0) throw new IOException($"Could not create {alias}: rc={rc}");
-            }
+            if (gles || kmsDrm)
+                MountGuestLibraries(syscalls, guest, gles, kmsDrm || compositorTextures != null);
 
-            var device = gles ? new AngleDevice(Path.GetFullPath(angle!), framebuffer, kmsWindow, logger) : null;
+            var device = gles ? new AngleDevice(Path.GetFullPath(angle!), framebuffer, kmsWindow, logger, compositorTextures) : null;
             try
             {
-                syscalls.BindMountSubtree(source.Mount!, "", GuestPath, readOnly: true);
                 if (device != null) syscalls.RegisterVirtualCharacterDevice(AngleDevice.Name, device.CreateInode);
-                if (kmsDrm)
+                if (kmsDrm || compositorScanout != null)
                 {
                     DrmCardInode? card = null;
+                    bool gpuBuffers = device?.HasKmsOutput == true || compositorTextures != null;
                     syscalls.RegisterVirtualCharacterDevice("dri/card0",
-                        sb => card = new DrmCardInode(sb, scheduler, device?.HasKmsOutput == true, framebuffer,
-                            device is { HasKmsOutput: true } ? device.AllocateTextureBo : null));
+                        sb => card = new DrmCardInode(sb, scheduler, gpuBuffers, framebuffer,
+                            gpuBuffers && device != null ? device.AllocateTextureBo : null, compositorScanout));
                     syscalls.RegisterVirtualCharacterDevice("dri/renderD128", _ => card!.CreateRenderNode());
                     var input = framebuffer?.Input ?? kmsInput;
                     input?.RegisterEvdev(syscalls, scheduler);
@@ -71,6 +57,28 @@ internal static class ContainerGraphics
         {
             throw new ContainerConfigurationException($"Could not start guest graphics. {ex.Message}");
         }
+    }
+
+    private static void MountGuestLibraries(SyscallManager syscalls, string guest, bool gles, bool kmsDrm)
+    {
+        using var source = new MountFile(syscalls.CreateDetachedTmpfsMount("podish-gles"));
+        var root = source.Mount!.Root;
+        var libraries = new List<(string Soname, string Alias)>();
+        if (gles) libraries.AddRange([("libEGL.so.1", "libEGL.so"), ("libGLESv2.so.2", "libGLESv2.so")]);
+        if (kmsDrm) libraries.Add(("libgbm.so.1", "libgbm.so"));
+        foreach (var (soname, alias) in libraries)
+        {
+            var image = File.ReadAllBytes(Path.Combine(guest, soname));
+            if (image.Length < 20 || !image.AsSpan(0, 7).SequenceEqual("\u007fELF\u0001\u0001\u0001"u8) ||
+                image[16] != 3 || image[17] != 0 || image[18] != 3 || image[19] != 0)
+                throw new IOException($"{soname} is not an IA-32 ELF shared library.");
+            syscalls.WriteFileInDetachedMount(source.Mount!, soname, image);
+            var link = new Dentry(FsName.FromString(alias), null, root, root.SuperBlock);
+            var rc = root.Inode!.Symlink(link, soname, 0, 0);
+            if (rc != 0) throw new IOException($"Could not create {alias}: rc={rc}");
+        }
+
+        syscalls.BindMountSubtree(source.Mount!, "", GuestPath, readOnly: true);
     }
 
     private static void MountGraphicsSysfs(SyscallManager syscalls, bool input)

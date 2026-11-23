@@ -31,12 +31,12 @@ internal sealed unsafe class AngleLibrary
     internal readonly delegate* unmanaged[Cdecl]<nint, nint, uint> SwapBuffers;
     internal readonly delegate* unmanaged[Cdecl]<int> GetError;
 
-    internal static AngleLibrary Acquire(string directory, KmsEglWindow? window = null)
+    internal static AngleLibrary Acquire(string directory, KmsEglWindow? window = null, bool hardwareCompositor = false)
     {
         lock (Gate)
         {
             if (_active == null)
-                _active = new AngleLibrary(directory, window);
+                _active = new AngleLibrary(directory, window, hardwareCompositor);
             else if (_active._directory != directory ||
                      (window is { } requested && (_active._nativeDisplay != requested.Display ||
                                                  _active._nativePlatform != requested.Platform)))
@@ -58,7 +58,7 @@ internal sealed unsafe class AngleLibrary
         }
     }
 
-    private AngleLibrary(string directory, KmsEglWindow? window)
+    private AngleLibrary(string directory, KmsEglWindow? window, bool hardwareCompositor)
     {
         _directory = directory;
         _nativeDisplay = window?.Display ?? 0;
@@ -100,21 +100,24 @@ internal sealed unsafe class AngleLibrary
                 var platformDisplay = (delegate* unmanaged[Cdecl]<uint, nint, int*, nint>)getProc(name);
                 if (platformDisplay == null)
                     throw new InvalidOperationException("ANGLE does not export eglGetPlatformDisplayEXT.");
-                // KMS scanout needs a window config that supports texture-bound
-                // pbuffers and EGL fence sync. ANGLE's default D3D11 (Windows)
-                // and GLX (Linux/X11) backends do not provide both.
-                int* attribs = stackalloc int[5];
+                // Keep guest EGL and native window output on the same backend.
+                int* attribs = stackalloc int[7];
                 var i = 0;
                 if (OperatingSystem.IsMacOS())
                 {
                     attribs[i++] = 0x3203; // EGL_PLATFORM_ANGLE_TYPE_ANGLE
                     attribs[i++] = 0x3489; // Metal
                 }
-                else if (window != null && (OperatingSystem.IsWindows() || OperatingSystem.IsLinux()))
+                else if (OperatingSystem.IsWindows() || OperatingSystem.IsLinux())
                 {
                     attribs[i++] = 0x3203;
                     attribs[i++] = 0x3450; // Vulkan
                     UsesVulkan = true;
+                }
+                if (hardwareCompositor)
+                {
+                    attribs[i++] = 0x3209; // EGL_PLATFORM_ANGLE_DEVICE_TYPE_ANGLE
+                    attribs[i++] = 0x320A; // EGL_PLATFORM_ANGLE_DEVICE_TYPE_HARDWARE_ANGLE
                 }
                 if (_nativePlatform != 0)
                 {
@@ -127,7 +130,7 @@ internal sealed unsafe class AngleLibrary
 
             var initialize = (delegate* unmanaged[Cdecl]<nint, int*, int*, uint>)Egl("eglInitialize");
             if (Display == 0 || initialize(Display, null, null) == 0)
-                throw new InvalidOperationException($"ANGLE eglInitialize failed (0x{GetError():X}).");
+                throw new InvalidOperationException($"ANGLE{(UsesVulkan ? " Vulkan" : "")} eglInitialize failed (0x{GetError():X}).");
 
             var select = (delegate* unmanaged[Cdecl]<nint, int*, nint*, int, int*, uint>)Egl("eglChooseConfig");
             int* configAttrs = stackalloc int[]
@@ -159,6 +162,7 @@ internal sealed unsafe class AngleLibrary
     }
 
     internal nint Egl(string name) => NativeLibrary.GetExport(_egl, name);
+    internal nint Gles(string name) => NativeLibrary.GetExport(_gles, name);
     private void Terminate(nint display) =>
         ((delegate* unmanaged[Cdecl]<nint, uint>)Egl("eglTerminate"))(display);
 }
