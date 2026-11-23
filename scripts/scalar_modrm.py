@@ -71,6 +71,7 @@ def constraints(family, spec):
 
 def scalar_modrm_plans(catalog):
     has_modrm, imm_type = decoder_tables()
+    extended_encodings = {int(key): entry for key, entry in catalog.get("extended_encodings", {}).items()}
     sources = defaultdict(list)
     names = instruction_targets(catalog)
     for opcode, name in catalog["fallbacks"].items():
@@ -93,9 +94,15 @@ def scalar_modrm_plans(catalog):
         keys = set()
         slot_counts = {2} if all(opcode in branch_links for opcode, _, _, _ in targets) else {1}
         for opcode, form, reg, rm in extended:
-            if not 0 <= opcode < 512:
+            if opcode in extended_encodings:
+                has_modrm_byte = True
+                has_immediate = extended_encodings[opcode]["imm8"]
+            elif 0 <= opcode < len(has_modrm):
+                has_modrm_byte = has_modrm[opcode]
+                has_immediate = imm_type[opcode] not in (0, 1)
+            else:
                 raise ValueError(f"no decoder row for handler {name} at {opcode:#x}")
-            if not has_modrm[opcode]:
+            if not has_modrm_byte:
                 continue
             for raw in range(256):
                 register = raw >= 0xc0
@@ -105,7 +112,7 @@ def scalar_modrm_plans(catalog):
                     continue
                 value = raw if register else raw & mem_mask
                 keys.add(0x100 | value)
-                if not register and imm_type[opcode] not in (0, 1):
+                if not register and has_immediate:
                     keys.add(0x200 | value)
                     slot_counts.add(2)
         plans[name] = ScalarModRMPlan(mem_mask, frozenset(slot_counts), frozenset(keys))

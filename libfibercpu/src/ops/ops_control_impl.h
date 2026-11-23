@@ -298,17 +298,13 @@ FORCE_INLINE LogicFlow OpCpuid(LogicFuncParams) {
             edx |= (1u << 15);  // CMOV
             edx |= (1u << 19);  // CLFLUSH (supported as no-op in 0F AE /7)
             edx |= (1u << 23);  // MMX
+            edx |= (1u << 24);  // FXSR (FXSAVE/FXRSTOR)
             edx |= (1u << 25);  // SSE
             edx |= (1u << 26);  // SSE2
             break;
         case 0x00000007:
-            // Structured extended features. We currently expose no additional feature bits.
-            if (ecx_in == 0) {
-                eax = 0;
-                ebx = 0;
-                ecx = 0;
-                edx = 0;
-            }
+            // Structured extended features.
+            if (ecx_in == 0) ebx = 1u << 29;  // SHA-NI
             break;
         case 0x80000000:
             eax = 0x80000001;

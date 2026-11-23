@@ -135,6 +135,20 @@ static bool IsValidLockModRM(uint16_t opcode, uint8_t modrm) {
     }
 }
 
+struct ExtendedOpcode {
+    uint16_t handler_index;
+    uint8_t imm_type;
+    bool require_66;
+};
+
+static ExtendedOpcode DecodeExtendedOpcode(uint8_t escape, uint8_t opcode) {
+    switch ((uint16_t{escape} << 8) | opcode) {
+#include "extended_decode.inc"
+        default:
+            return {};
+    }
+}
+
 // Decoder Logic
 // Distinguishes an invalid encoding from a valid but incomplete byte sequence.
 InstructionDecodeResult DecodeInstructionBounded(const uint8_t* code, size_t available, DecodedInstTmp* inst,
@@ -210,17 +224,30 @@ InstructionDecodeResult DecodeInstructionBounded(const uint8_t* code, size_t ava
     // 2. Opcode Dispatch
     uint8_t map = 0;
     uint8_t opcode = *ptr;
+    ExtendedOpcode extended{};
 
     if (opcode == 0x0F) {
         map = 1;
         ptr++;
         if (auto result = require(1); result != InstructionDecodeResult::Success) return result;
         opcode = *ptr;  // Next byte is opcode
+        if (opcode == 0x38 || opcode == 0x3A) [[unlikely]] {
+            const auto escape = opcode;
+            ++ptr;
+            if (auto result = require(1); result != InstructionDecodeResult::Success) return result;
+            opcode = *ptr;
+            extended = DecodeExtendedOpcode(escape, opcode);
+            if (!extended.handler_index ||
+                (extended.require_66 &&
+                 (op->prefixes.all & (prefix::REP | prefix::REPNE | prefix::OPSIZE)) != prefix::OPSIZE))
+                return InstructionDecodeResult::Invalid;
+            map = escape == 0x38 ? 2 : 3;
+        }
     }
     ptr++;
 
-    // Set Handler Index (Map 0 or 1) - Local, not stored in op
-    *handler_index = (map << 8) | opcode;
+    // Handler indices for extended maps come from the instruction catalog.
+    *handler_index = extended.handler_index ? extended.handler_index : (map << 8) | opcode;
     if (raw_opcode) *raw_opcode = *handler_index;
     if (op->prefixes.flags.lock && !IsLockableOpcode(*handler_index)) return InstructionDecodeResult::Invalid;
     if (UsesControlFlowCacheStorage(*handler_index)) {
@@ -228,7 +255,7 @@ InstructionDecodeResult DecodeInstructionBounded(const uint8_t* code, size_t ava
     }
 
     // 3. ModRM
-    uint8_t has_modrm = kHasModRM[map][opcode];
+    uint8_t has_modrm = map > 1 ? 1 : kHasModRM[map][opcode];
     if (has_modrm) {
         op->meta.flags.has_modrm = 1;
         if (auto result = require(1); result != InstructionDecodeResult::Success) return result;
@@ -326,7 +353,7 @@ InstructionDecodeResult DecodeInstructionBounded(const uint8_t* code, size_t ava
     }
 
     // 4. Immediate
-    uint8_t imm_type = kImmType[map][opcode];
+    uint8_t imm_type = map > 1 ? extended.imm_type : kImmType[map][opcode];
     int imm_len = GetImmLength(imm_type, op);
 
     // Override for MOV moffs (A0-A3) - Address Size determines Imm Size
@@ -368,7 +395,7 @@ InstructionDecodeResult DecodeInstructionBounded(const uint8_t* code, size_t ava
     const bool scalar_single = map == 1 &&
                                (op->prefixes.all & (prefix::REP | prefix::REPNE | prefix::OPSIZE)) == prefix::REP &&
                                (opcode == 0x10 || opcode == 0x11 || opcode == 0x58 || opcode == 0x59);
-    bool is_rep = (op->prefixes.flags.rep || op->prefixes.flags.repne) && !scalar_single;
+    bool is_rep = map <= 1 && (op->prefixes.flags.rep || op->prefixes.flags.repne) && !scalar_single;
 
     // Rule 2: Table-based lookup for branching opcodes
     // Access bitmap using map & 1 to ensure safe indexing.
@@ -773,8 +800,9 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
         uint16_t h_idx = index_storage[i];
         uint32_t reads = 0;
         uint32_t writes = 0;
-        uint16_t flat_idx = h_idx & 0x1FF;
-        const auto& info = kOpFlagTable[flat_idx];
+        const uint16_t flat_idx = h_idx;
+        // The supported 0F 38/3A SIMD forms do not read or modify flags.
+        const auto info = flat_idx < std::size(kOpFlagTable) ? kOpFlagTable[flat_idx] : DfeOpInfo{};
 
         switch (info.type) {
             case DFE_TYPE_SIMPLE:

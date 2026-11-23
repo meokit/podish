@@ -405,7 +405,16 @@ F	507	op::OpPsubq_Mmx
 F	508	op::OpPaddb_Mmx
 F	509	op::OpPaddw_Mmx
 F	510	op::OpPaddd_Mmx
+F	516	op::OpPshufb_Sse
 F	700	op::OpBsf_Tzcnt_GvEv
+F	712	op::OpSha1Nexte
+F	713	op::OpSha1Msg1
+F	714	op::OpSha1Msg2
+F	715	op::OpSha256Rnds2
+F	716	op::OpSha256Msg1
+F	717	op::OpSha256Msg2
+F	783	op::OpPalignr_Sse
+F	972	op::OpSha1Rnds4
 V	352	op::OpPunpcklbw_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0	0	0
 V	353	op::OpPunpcklwd_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0	0	0
 V	354	op::OpPunpckldq_Sse	0	0	0	0	0	0	64	64	0	0	0	0	0	0	0	0	0	0	0

@@ -579,7 +579,27 @@
     "508": "OpPaddb_Mmx",
     "509": "OpPaddw_Mmx",
     "510": "OpPaddd_Mmx",
-    "700": "OpBsf_Tzcnt_GvEv"
+    "516": "OpPshufb_Sse",
+    "700": "OpBsf_Tzcnt_GvEv",
+    "712": "OpSha1Nexte",
+    "713": "OpSha1Msg1",
+    "714": "OpSha1Msg2",
+    "715": "OpSha256Rnds2",
+    "716": "OpSha256Msg1",
+    "717": "OpSha256Msg2",
+    "783": "OpPalignr_Sse",
+    "972": "OpSha1Rnds4"
+  },
+  "extended_encodings": {
+    "516": {"escape": 56, "opcode": 0, "imm8": false, "require_66": true},
+    "712": {"escape": 56, "opcode": 200, "imm8": false, "require_66": false},
+    "713": {"escape": 56, "opcode": 201, "imm8": false, "require_66": false},
+    "714": {"escape": 56, "opcode": 202, "imm8": false, "require_66": false},
+    "715": {"escape": 56, "opcode": 203, "imm8": false, "require_66": false},
+    "716": {"escape": 56, "opcode": 204, "imm8": false, "require_66": false},
+    "717": {"escape": 56, "opcode": 205, "imm8": false, "require_66": false},
+    "783": {"escape": 58, "opcode": 15, "imm8": true, "require_66": true},
+    "972": {"escape": 58, "opcode": 204, "imm8": true, "require_66": false}
   },
   "group1_immediates": {
     "128": "Byte",
@@ -752,6 +772,15 @@
     ],
     "FIBERCPU_BIND_OPS_GROUPS_IMPL_2": [
       {"name": "OpXadd_Byte", "kernel": "OpXadd_T_Internal", "arguments": ["uint8_t"]}
+    ],
+    "FIBERCPU_BIND_OPS_SHA_IMPL": [
+      {"name": "OpSha1Nexte", "kernel": "OpSha", "arguments": ["ShaOperation::Sha1Nexte"]},
+      {"name": "OpSha1Msg1", "kernel": "OpSha", "arguments": ["ShaOperation::Sha1Msg1"]},
+      {"name": "OpSha1Msg2", "kernel": "OpSha", "arguments": ["ShaOperation::Sha1Msg2"]},
+      {"name": "OpSha1Rnds4", "kernel": "OpSha", "arguments": ["ShaOperation::Sha1Rnds4"]},
+      {"name": "OpSha256Msg1", "kernel": "OpSha", "arguments": ["ShaOperation::Sha256Msg1"]},
+      {"name": "OpSha256Msg2", "kernel": "OpSha", "arguments": ["ShaOperation::Sha256Msg2"]},
+      {"name": "OpSha256Rnds2", "kernel": "OpSha", "arguments": ["ShaOperation::Sha256Rnds2"]}
     ],
     "FIBERCPU_BIND_OPS_SSE_CVT_IMPL_0": [
       {"name": "OpCvt_2C", "kernel": "OpCvtScalarToInt32", "arguments": ["true"]},
