@@ -1,4 +1,5 @@
 #include "bindings.h"
+#include "instruction_variants.h"
 #include "operand_specialization.h"
 #include "specialization.h"
 #include <cstdio>
@@ -8,6 +9,7 @@ namespace fiberish {
 HandlerFunc FindSpecializedHandlerReference(uint16_t, DecodedInstruction*);
 bool MatchesCompiledForTest(const SpecCriteria&, const DecodedInstruction*);
 bool ValidateSpecializationWildcardIndex();
+bool ValidateScalarBindingIndices();
 #ifdef FIBERCPU_TEST_GENERATED_SUPEROPCODES
 bool ValidateGeneratedSequenceLookup();
 #endif
@@ -100,6 +102,10 @@ int main() {
         std::fprintf(stderr, "Wildcard liveness/memory specialization index mismatch\n");
         return 1;
     }
+    if (!fiberish::ValidateScalarBindingIndices()) {
+        std::fprintf(stderr, "Generated scalar binding index mismatch\n");
+        return 1;
+    }
     std::mt19937 rng(12345);
     for (unsigned opcode = 0; opcode < 1024; ++opcode) {
         for (unsigned encoded = 0; encoded <= 256; ++encoded) {
@@ -114,7 +120,8 @@ int main() {
                     fiberish::GetExt(&op)->data.ea_desc = rng();
                     auto actual = fiberish::FindSpecializedHandler(opcode, &op);
                     auto expected = fiberish::FindSpecializedHandlerReference(opcode, &op);
-                    if (actual != expected) {
+                    if (actual.handler != expected ||
+                        (expected && actual.binding == fiberish::ScalarBindingIndex::Unknown)) {
                         std::fprintf(stderr, "Mismatch opcode=%u modrm=%u flags=%u sample=%u\n", opcode, encoded, flags,
                                      sample);
                         return 1;
@@ -159,10 +166,19 @@ int main() {
     auto fallback = g_Handlers[0x90];
     auto registered = g_Handlers[0x05];
     RegisterSpecializedHandler(0x90, SpecCriteria{.prefix_mask = 0xff, .prefix_val = 0x40}, registered, 0);
-    if (FindSpecializedHandler(0x90, &runtime_op) == registered)
+    if (FindSpecializedHandler(0x90, &runtime_op).handler == registered)
         return 1;
     runtime_op.prefixes.all = 0x40;
-    if (!fallback || FindSpecializedHandler(0x90, &runtime_op) != registered)
+    const auto selection = FindSpecializedHandler(0x90, &runtime_op);
+    if (!fallback || selection.handler != registered || selection.binding != ScalarBindingIndex::Unknown)
+        return 1;
+    runtime_op.handler = fallback;
+    FinalizeDecodedInstruction(nullptr, 0, 0x90, &runtime_op);
+    if (runtime_op.handler != registered)
+        return 1;
+    const auto dynamic = BindScalarHandler(runtime_op, selection.binding);
+    const auto direct = BindScalarHandler(runtime_op, kOpcodeBindings[0x05].fallback);
+    if (!dynamic.handler || dynamic.handler != direct.handler || dynamic.id != direct.id)
         return 1;
     std::puts("Specialization and generated superopcode lookups match reference");
 }

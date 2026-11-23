@@ -61,6 +61,9 @@ struct GprCache;
 struct DecodedOp;
 struct DecodedInstruction;
 
+// Index into the generated scalar binding table. Used only during decoding.
+enum class ScalarBindingIndex : uint16_t { Unknown };
+
 // Handler Function (Preserve None ABI, functionality + dispatch)
 using HandlerFunc = int64_t(ATTR_PRESERVE_NONE*)(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
                                                  mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
@@ -674,7 +677,7 @@ struct alignas(16) BasicBlock {
     }
 
     void WriteOps(BlockSlotLayout layout, std::span<const DecodedInstruction> ops, BasicBlock* invalid,
-                  bool preserve_handlers = false);
+                  bool preserve_handlers = false, std::span<const ScalarBindingIndex> binding_indices = {});
     DecodedInstruction ReadOp(size_t slot) const;
 
     BlockTerminalKind terminal_kind() const { return static_cast<BlockTerminalKind>(terminal_kind_raw); }

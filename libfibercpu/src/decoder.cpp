@@ -498,18 +498,21 @@ static RelativeBranchWidth GetRelativeBranchWidth(uint16_t opcode, bool operand1
     return operand16 ? RelativeBranchWidth::Word : RelativeBranchWidth::Dword;
 }
 
-static void ApplySpecializedHandler(uint16_t handler_index, DecodedInstruction& op) {
-    HandlerFunc specialized_h = FindSpecializedHandler(handler_index, &op);
-    if (specialized_h) {
-        op.handler = specialized_h;
-    }
-}
-
-static void FinalizeDecodedInstructionAt(uint32_t eip, uint16_t handler_index, DecodedInstruction* op,
-                                         DecodeHandlerMode mode) {
+static ScalarBindingIndex FinalizeDecodedInstructionAt(uint32_t eip, uint16_t handler_index, DecodedInstruction* op,
+                                                       DecodeHandlerMode mode) {
     op->next_eip = eip + op->GetLength();
+    auto binding = ScalarBindingIndex::Unknown;
     if (mode == DecodeHandlerMode::Native) {
-        ApplySpecializedHandler(handler_index, *op);
+        if (handler_index < kOpcodeBindings.size()) {
+            const auto& opcode = kOpcodeBindings[handler_index];
+            binding = opcode.fallback;
+            if (opcode.has_variants || g_HasRuntimeSpecializations.load(std::memory_order_acquire)) {
+                if (const auto selected = FindSpecializedHandler(handler_index, op); selected.handler) {
+                    op->handler = selected.handler;
+                    binding = selected.binding;
+                }
+            }
+        }
     } else if (auto generic = FindGenericInstructionHandler(handler_index, op)) {
         op->handler = generic;
     }
@@ -519,6 +522,7 @@ static void FinalizeDecodedInstructionAt(uint32_t eip, uint16_t handler_index, D
         op->ext.control.target_eip = RelativeBranchTarget(op->next_eip, GetImm(op), width);
         op->ext.control.relative_width = width;
     }
+    return binding;
 }
 
 void FinalizeDecodedInstruction(EmuState*, uint32_t eip, uint16_t handler_index, DecodedInstruction* op,
@@ -604,7 +608,8 @@ bool RedecodeGenericInstruction(EmuState* state, const DecodedInstruction& publi
 static bool BasicBlockMatchesDecodedCandidate(const BasicBlock* candidate, uint32_t start_eip, uint32_t end_eip,
                                               uint32_t inst_count, uint32_t slot_count, BlockTerminalKind terminal_kind,
                                               uint32_t branch_target_eip, uint32_t fallthrough_eip, bool compare_scalar,
-                                              std::span<const DecodedInstTmp> temp_ops) {
+                                              std::span<const DecodedInstTmp> temp_ops,
+                                              std::span<const ScalarBindingIndex> binding_indices) {
     if (!candidate || candidate->is_valid()) return false;
     if (candidate->canonical_start_eip() != start_eip || candidate->end_eip != end_eip ||
         candidate->inst_count() != inst_count || candidate->terminal_kind() != terminal_kind ||
@@ -620,7 +625,8 @@ static bool BasicBlockMatchesDecodedCandidate(const BasicBlock* candidate, uint3
         }
         auto decoded = temp_ops[i].head;
         if (!compare_scalar && i < inst_count) {
-            if (const auto binding = BindScalarHandler(decoded); binding.handler) decoded.handler = binding.handler;
+            if (const auto binding = BindScalarHandler(decoded, binding_indices[i]); binding.handler)
+                decoded.handler = binding.handler;
         }
         if (!DecodedInstructionSemanticallyEquals(decoded, slot)) return false;
     }
@@ -642,6 +648,7 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
     std::array<DecodedInstTmp, MAX_INSTS + 1> op_storage;
     size_t op_count = 0;
     std::array<uint16_t, MAX_INSTS> index_storage;
+    std::array<ScalarBindingIndex, MAX_INSTS> binding_storage;
     size_t index_count = 0;
 
     uint32_t current_eip = start_eip;
@@ -699,6 +706,7 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
             inst.head.handler = ud2;
 
             inst.head.next_eip = current_eip;
+            binding_storage[op_count] = kOpcodeBindings[0x10B].fallback;
             op_storage[op_count++] = inst;
             inst_count++;  // The synthetic #UD op must be executable, not an empty block.
 
@@ -719,7 +727,8 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
             goto finalize;
         }
 
-        FinalizeDecodedInstruction(state, current_eip, handler_index, &inst.head);
+        const auto binding = FinalizeDecodedInstructionAt(current_eip, handler_index, &inst.head,
+                                                          DecodeHandlerMode::Native);
 
         index_storage[index_count++] = raw_opcode;
 
@@ -740,6 +749,7 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
             }
         }
 
+        binding_storage[op_count] = binding;
         op_storage[op_count++] = inst;
         inst_count++;
         uint32_t inst_len = inst.head.GetLength();
@@ -906,6 +916,7 @@ finalize:
     const uint32_t slot_count = static_cast<uint32_t>(op_count);
     const uint32_t decoded_inst_count = slot_count == 0 ? 0 : slot_count - 1;
     auto* scalar_ops = reinterpret_cast<DecodedInstruction*>(op_storage.data());
+    const auto binding_indices = std::span(binding_storage).first(decoded_inst_count);
 
     BlockTerminalKind terminal_kind = BlockTerminalKind::None;
     uint32_t branch_target_eip = 0;
@@ -927,7 +938,7 @@ finalize:
     const auto matches_candidate = [&](bool compare_scalar) {
         return BasicBlockMatchesDecodedCandidate(invalidated_candidate, start_eip, end_eip, inst_count, slot_count,
                                                  terminal_kind, branch_target_eip, fallthrough_eip, compare_scalar,
-                                                 std::span(op_storage.data(), op_count));
+                                                 std::span(op_storage.data(), op_count), binding_indices);
     };
     const bool candidate_has_jit = invalidated_candidate && invalidated_candidate->has_unfused_handlers &&
                                    invalidated_candidate->entry != invalidated_candidate->FirstOp()->handler;
@@ -944,7 +955,7 @@ finalize:
         for (uint32_t i = 0; i < decoded_inst_count; ++i) scalar_handlers[i] = scalar_ops[i].handler;
     }
 #endif
-    ApplySuperOpcodesToBlockOps(scalar_ops, decoded_inst_count);
+    ApplySuperOpcodesToBlockOps(scalar_ops, decoded_inst_count, false, binding_indices);
     if (!candidate_has_jit && matches_candidate(false)) {
         invalidated_candidate->Revalidate();
         return invalidated_candidate;
@@ -983,7 +994,7 @@ finalize:
     block->has_unfused_handlers = hot_count != 0;
     block->chain.has_region_context = retain_region_context;
 
-    block->WriteOps(layout, final_ops, state->mmu.invalid_code_block());
+    block->WriteOps(layout, final_ops, state->mmu.invalid_code_block(), false, binding_indices);
     if (retain_region_context) block->SetRegionContext(nullptr);
 #if FIBERCPU_BLOCK_COMPILATION
     if (hot_count) std::copy_n(scalar_handlers.data(), decoded_inst_count, block->UnfusedHandlers());
@@ -1031,7 +1042,7 @@ BlockSlotLayout BlockSlotLayout::Inspect(uint32_t start_eip, std::span<const Dec
 }
 
 void BasicBlock::WriteOps(BlockSlotLayout layout, std::span<const DecodedInstruction> ops, BasicBlock* invalid,
-                          bool preserve_handlers) {
+                          bool preserve_handlers, std::span<const ScalarBindingIndex> binding_indices) {
     slot_count = static_cast<uint8_t>(layout.PhysicalSlotCount());
     sentinel_slot_index = slot_count - 1;
     set_inst_count(layout.logical_slot_count - 1);
@@ -1070,7 +1081,8 @@ void BasicBlock::WriteOps(BlockSlotLayout layout, std::span<const DecodedInstruc
         }
         slot.handler = op.handler;
         if (!preserve_handlers) {
-            const auto binding = BindScalarHandler(op);
+            const auto index = binding_indices.empty() ? ScalarBindingIndex::Unknown : binding_indices[i];
+            const auto binding = BindScalarHandler(op, index);
             if (binding.handler) slot.handler = binding.handler;
         }
         const bool branch_link = HasBranchLinkSlot(op.meta.all);

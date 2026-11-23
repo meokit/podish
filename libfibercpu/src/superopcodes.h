@@ -12,7 +12,8 @@ uint32_t FindFusionTrainingId(HandlerFunc handler);
 #if FIBERCPU_HAVE_GENERATED_SUPEROPCODES
 HandlerFunc GeneratedFindSuperOpcode(const DecodedInstruction* ops);
 #endif
-void ApplySuperOpcodesToBlockOps(DecodedInstruction* ops, uint32_t op_count, bool previously_lowered = false);
+void ApplySuperOpcodesToBlockOps(DecodedInstruction* ops, uint32_t op_count, bool previously_lowered = false,
+                                std::span<const ScalarBindingIndex> binding_indices = {});
 
 template <bool TakenOnZero, class Result>
 FORCE_INLINE LogicFlow BranchOnZeroResult(LogicFuncParams, Result flags) {

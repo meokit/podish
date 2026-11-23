@@ -6,6 +6,7 @@
 #endif
 
 #include <ankerl/unordered_dense.h>
+#include <algorithm>
 #include <vector>
 
 namespace fiberish {
@@ -61,7 +62,8 @@ static std::vector<DecodedInstruction> BuildFusionLookupView(const DecodedInstru
 }
 #endif
 
-void ApplySuperOpcodesToBlockOps(DecodedInstruction* ops, uint32_t op_count, bool previously_lowered) {
+void ApplySuperOpcodesToBlockOps(DecodedInstruction* ops, uint32_t op_count, [[maybe_unused]] bool previously_lowered,
+                                [[maybe_unused]] std::span<const ScalarBindingIndex> binding_indices) {
     if (!ops) return;
 #if FIBERCPU_LOWER_OPERANDS || FIBERCPU_DYNAMIC_OPERANDS
     if (previously_lowered) {
@@ -84,7 +86,11 @@ void ApplySuperOpcodesToBlockOps(DecodedInstruction* ops, uint32_t op_count, boo
 #endif
 
 #if FIBERCPU_ENABLE_SUPEROPCODES
-    const auto view = BuildFusionLookupView(ops, op_count);
+    assert(binding_indices.empty() || binding_indices.size() == op_count);
+    // The generated indices identify canonical handlers selected during fresh decode.
+    const bool known_canonical = !previously_lowered && !binding_indices.empty() &&
+                                 std::ranges::find(binding_indices, ScalarBindingIndex::Unknown) == binding_indices.end();
+    const auto view = known_canonical ? std::vector<DecodedInstruction>{} : BuildFusionLookupView(ops, op_count);
     const auto* fusion_ops = view.empty() ? ops : view.data();
 #endif
 
@@ -117,7 +123,10 @@ void ApplySuperOpcodesToBlockOps(DecodedInstruction* ops, uint32_t op_count, boo
     }
 #elif FIBERCPU_ENABLE_SUPEROPCODES
     for (uint32_t i = 0; i + 1 < op_count; ++i) {
-        if (auto handler = FindSuperOpcode(&fusion_ops[i])) ops[i].handler = handler;
+        if (auto handler = FindSuperOpcode(&fusion_ops[i])) {
+            ops[i].handler = handler;
+            ops[i].meta.flags.operand_lowered = 1;
+        }
     }
 #endif
 }

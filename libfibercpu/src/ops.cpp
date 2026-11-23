@@ -277,10 +277,12 @@ struct CompiledSpecialization {
     uint16_t prefix_mask;
     uint16_t prefix_value;
     bool requires_mem;
+    ScalarBindingIndex binding;
 };
 // Pack the decoded-memory fields once; values outside the constrained field
 // bits cannot match the reference predicate and are discarded.
-static bool CompileSpecialization(const SpecCriteria& c, HandlerFunc handler, CompiledSpecialization& out) {
+static bool CompileSpecialization(const SpecCriteria& c, HandlerFunc handler, CompiledSpecialization& out,
+                                  ScalarBindingIndex binding = ScalarBindingIndex::Unknown) {
     const uint32_t base = c.base_offset_mask & 0x3f;
     const uint32_t index = c.index_offset_mask & 0x3f;
     const uint32_t scale = c.scale_mask & 0x03;
@@ -294,7 +296,7 @@ static bool CompileSpecialization(const SpecCriteria& c, HandlerFunc handler, Co
                            ((c.index_offset_mask ? c.index_offset_val : 0u) << memdesc::kIndexShift) |
                            ((c.scale_mask ? c.scale_val : 0u) << memdesc::kScaleShift) |
                            ((c.segment_mask ? c.segment_val : 0u) << memdesc::kSegmentShift);
-    out = {handler, mask, value, c.prefix_mask, c.prefix_val, c.RequiresMemShape() || c.memory_only};
+    out = {handler, mask, value, c.prefix_mask, c.prefix_val, c.RequiresMemShape() || c.memory_only, binding};
     return true;
 }
 
@@ -314,7 +316,7 @@ struct RuntimeSpecializations {
 };
 static std::array<std::unique_ptr<RuntimeSpecializations>, 1024> g_RuntimeSpecializations;
 static std::shared_mutex g_RuntimeSpecializationMutex;
-static std::atomic<bool> g_HasRuntimeSpecializations{false};
+constinit std::atomic<bool> g_HasRuntimeSpecializations{false};
 static HandlerInit _init;
 
 static void SortSpecializations(std::vector<SpecializedEntry>& list) {
@@ -349,17 +351,18 @@ static void CompileSpecializationList(const std::vector<SpecializedEntry>& entri
     compiled.reserve(entries.size());
     for (const auto& entry : entries) {
         CompiledSpecialization item{};
-        if (!CompileSpecialization(entry.criteria, entry.handler, item)) continue;
+        if (!CompileSpecialization(entry.criteria, entry.handler, item, entry.binding)) continue;
         compiled.push_back(item);
         IndexSpecialization(entry.criteria, &compiled.back(), buckets);
     }
 }
 
-void RegisterSpecializedHandler(uint16_t opcode, SpecCriteria criteria, HandlerFunc handler, int priority) {
+void RegisterSpecializedHandler(uint16_t opcode, SpecCriteria criteria, HandlerFunc handler, int priority,
+                                ScalarBindingIndex binding) {
     if (opcode >= 1024 || !handler) return;
     if (!g_SpecializationReady.load(std::memory_order_acquire)) {
         auto& list = g_OpSpecializations[opcode];
-        list.push_back({opcode, criteria, handler, priority});
+        list.push_back({opcode, criteria, handler, priority, binding});
         SortSpecializations(list);
         return;
     }
@@ -388,25 +391,25 @@ static void BuildSpecializationIndex() {
     }
 }
 
-static HandlerFunc LookupSpecialization(const SpecializationBuckets& buckets, const DecodedInstruction* op) {
+static HandlerSelection LookupSpecialization(const SpecializationBuckets& buckets, const DecodedInstruction* op) {
     const unsigned encoded = op->meta.flags.has_modrm ? unsigned(op->modrm) + 1 : 0;
     const auto& bucket = buckets[encoded * 2 + op->meta.flags.no_flags];
     for (const auto* entry : bucket) {
         if (!MatchesCompiled(*entry, op)) continue;
-        return entry->handler;
+        return {entry->handler, entry->binding};
     }
-    return nullptr;
+    return {};
 }
 
-HandlerFunc FindSpecializedHandler(uint16_t handler_index, DecodedInstruction* op) {
-    if (handler_index >= 1024) return nullptr;
+HandlerSelection FindSpecializedHandler(uint16_t handler_index, const DecodedInstruction* op) {
+    if (handler_index >= 1024) return {};
     if (g_HasRuntimeSpecializations.load(std::memory_order_acquire)) {
         std::shared_lock lock(g_RuntimeSpecializationMutex);
         if (const auto& index = g_RuntimeSpecializations[handler_index])
             return LookupSpecialization(index->buckets, op);
     }
     const auto& index = g_SpecializationIndex[handler_index];
-    return index ? LookupSpecialization(*index, op) : nullptr;
+    return index ? LookupSpecialization(*index, op) : HandlerSelection{};
 }
 
 #ifdef FIBERCPU_VALIDATE_SPECIALIZATION_INDEX

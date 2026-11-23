@@ -33,6 +33,7 @@ struct Fallback {
     uint16_t opcode;
     HandlerFunc handler;
     const char* logic;
+    ScalarBindingIndex binding;
 };
 #include "instruction_catalog.inc"
 
@@ -55,7 +56,7 @@ struct ScalarBinding {
 
 constexpr size_t kScalarBindingCount = std::bit_ceil(6 * std::size(training_operations));
 
-size_t ScalarBindingIndex(HandlerFunc handler) {
+size_t ScalarBindingHashSlot(HandlerFunc handler) {
     const auto address = reinterpret_cast<uintptr_t>(handler) >> 2;
     return (address ^ (address >> 13)) & (kScalarBindingCount - 1);
 }
@@ -64,14 +65,14 @@ const TrainingOperation* FindScalarBinding(HandlerFunc handler) {
     static const auto bindings = [] {
         std::array<ScalarBinding, kScalarBindingCount> result{};
         for (const auto& op : training_operations) {
-            auto index = ScalarBindingIndex(op.handler);
+            auto index = ScalarBindingHashSlot(op.handler);
             while (result[index].handler && result[index].handler != op.handler)
                 index = (index + 1) & (kScalarBindingCount - 1);
             if (!result[index].handler) result[index] = {op.handler, &op};
         }
         return result;
     }();
-    auto index = ScalarBindingIndex(handler);
+    auto index = ScalarBindingHashSlot(handler);
     while (bindings[index].handler && bindings[index].handler != handler)
         index = (index + 1) & (kScalarBindingCount - 1);
     if (const auto* operation = bindings[index].operation) return operation;
@@ -146,20 +147,37 @@ const char* InstructionCatalogHash() { return FIBERCPU_INSTRUCTION_CATALOG_SHA25
 
 const std::vector<X86_InstructionVariant>& InstructionVariantCatalog() { return MutableCatalog(); }
 
-void RegisterInstructionVariant(uint16_t opcode, SpecCriteria criteria, HandlerFunc handler, const char* logic,
-                                const char* family, const char* parent, bool bake, int rank) {
-    RegisterSpecializedHandler(opcode, criteria, handler, rank);
-    AppendMetadata(opcode, handler, logic, family, parent, bake, false, rank, criteria);
+constinit const std::array<OpcodeBinding, 1024> kOpcodeBindings = [] {
+    std::array<OpcodeBinding, 1024> bindings{};
+    for (const auto& fallback : fallbacks) bindings[fallback.opcode].fallback = fallback.binding;
+    for (const auto& variant : variants) bindings[variant.opcode].has_variants = true;
+    return bindings;
+}();
+
+#ifdef FIBERCPU_VALIDATE_SPECIALIZATION_INDEX
+bool ValidateScalarBindingIndices() {
+    const auto matches = [](HandlerFunc handler, ScalarBindingIndex index) {
+        const auto offset = static_cast<uint16_t>(index) - 1u;
+        return offset < std::size(training_operations) &&
+               FindScalarBinding(handler) == &training_operations[offset];
+    };
+    for (const auto& fallback : fallbacks)
+        if (!matches(fallback.handler, kOpcodeBindings[fallback.opcode].fallback)) return false;
+    for (const auto& variant : variants)
+        if (!kOpcodeBindings[variant.opcode].has_variants || !matches(variant.handler, variant.binding)) return false;
+    return true;
 }
-void RegisterInstructionFallback(uint16_t opcode, HandlerFunc handler, const char* logic) {
-    g_Handlers[opcode] = handler;
-    AppendMetadata(opcode, handler, logic, logic, logic, false, true, 0);
-}
+#endif
 
 void RegisterInstructionVariants() {
-    for (const auto& f : fallbacks) RegisterInstructionFallback(f.opcode, f.handler, f.logic);
-    for (const auto& v : variants)
-        RegisterInstructionVariant(v.opcode, v.criteria, v.handler, v.logic, v.family, v.parent, v.bake, v.rank);
+    for (const auto& f : fallbacks) {
+        g_Handlers[f.opcode] = f.handler;
+        AppendMetadata(f.opcode, f.handler, f.logic, f.logic, f.logic, false, true, 0);
+    }
+    for (const auto& v : variants) {
+        RegisterSpecializedHandler(v.opcode, v.criteria, v.handler, v.rank, v.binding);
+        AppendMetadata(v.opcode, v.handler, v.logic, v.family, v.parent, v.bake, false, v.rank, v.criteria);
+    }
 }
 
 HandlerFunc FindGenericInstructionHandler(uint16_t opcode, const DecodedInstruction* op) {
@@ -177,9 +195,14 @@ HandlerFunc FindGenericInstructionHandler(uint16_t opcode, const DecodedInstruct
     return best ? best->handler : nullptr;
 }
 
-BoundScalarHandler BindScalarHandler(const DecodedInstruction& op) {
+BoundScalarHandler BindScalarHandler(const DecodedInstruction& op, ScalarBindingIndex index) {
     const auto shape = BoundOperandShape::Read(op);
-    const auto* binding = FindScalarBinding(op.handler);
+    const bool indexed = index != ScalarBindingIndex::Unknown;
+    // An operand-lowered handler already has the executable ABI and slot width.
+    if (indexed && op.meta.flags.operand_lowered) return {nullptr, 0, shape};
+    const auto offset = static_cast<uint16_t>(index) - 1u;
+    assert(!indexed || (offset < std::size(training_operations) && training_operations[offset].handler == op.handler));
+    const auto* binding = indexed ? &training_operations[offset] : FindScalarBinding(op.handler);
     if (!binding) return {nullptr, 0, shape};
     const auto& table = *binding->scalar;
     if (!table.exact.empty()) {

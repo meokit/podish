@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include "decoder.h"
 #include "instruction_kernel_spec.h"
@@ -123,13 +124,22 @@ struct SpecializedEntry {
     SpecCriteria criteria;
     HandlerFunc handler;  // Wrapper pointer
     int priority = 0;
+    ScalarBindingIndex binding = ScalarBindingIndex::Unknown;
 };
+
+struct HandlerSelection {
+    HandlerFunc handler = nullptr;
+    ScalarBindingIndex binding = ScalarBindingIndex::Unknown;
+};
+
+extern std::atomic<bool> g_HasRuntimeSpecializations;
 
 // Runtime registrations update future decodes. The caller retains ownership of
 // handler code for as long as decoded blocks can reference it.
-void RegisterSpecializedHandler(uint16_t opcode, SpecCriteria criteria, HandlerFunc handler, int priority);
+void RegisterSpecializedHandler(uint16_t opcode, SpecCriteria criteria, HandlerFunc handler, int priority,
+                                ScalarBindingIndex binding = ScalarBindingIndex::Unknown);
 
 // Lookup
-HandlerFunc FindSpecializedHandler(uint16_t handler_index, DecodedInstruction* op);
+HandlerSelection FindSpecializedHandler(uint16_t handler_index, const DecodedInstruction* op);
 
 }  // namespace fiberish
