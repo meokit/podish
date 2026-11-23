@@ -25,6 +25,29 @@ block, decoded instructions/s and input bytes/s. Compare results on the same
 machine and build configuration. CMake may need network access to fetch its
 normal dependencies on the first build.
 
+## Block cache index benchmark
+
+```sh
+cmake --build build/decode --target block_cache_benchmark -j
+./build/decode/block_cache_benchmark 30
+```
+
+The optional argument sets the number of lookup passes. The benchmark reports
+nanoseconds per operation as CSV. It compares the runtime `unordered_dense`
+hash with two alternative mixers. It also compares `unordered_dense`, a flat
+linear-probing index, and `std::unordered_map` using the rotate-and-multiply
+hash. All indexes store the same complete pair of host page address and guest
+EIP and return an index into the same block entry array.
+
+The synthetic keys cover contiguous pages, several guest pages sharing one
+host page, one guest page with several host backings, and scattered host pages.
+`mixed` performs 87.5% hits. `dependent_hit` uses the block header to choose the
+next lookup. `erase_insert` measures one erase followed by one insert with a
+reserved table. These measurements isolate the backing index after the
+interpreter's 128-entry lookup cache.
+
+## Specialization lookup equivalence
+
 To check the specialization index against the original ordered linear lookup:
 
 ```sh
