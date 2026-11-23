@@ -65,6 +65,7 @@ public readonly record struct DisplayInputEvent(
 {
     public int DeltaX { get; init; }
     public int DeltaY { get; init; }
+    public bool HandledByIme { get; init; }
 }
 
 public readonly record struct DisplayOutputOptions(

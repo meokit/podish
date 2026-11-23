@@ -2,6 +2,12 @@
 
 This document lists all third-party libraries used in this project along with their authors and licenses.
 
+## Window decorations
+
+The bundled Catppuccin Latte window decoration uses the Catppuccin for Openbox theme and titlebar icons. [Upstream revision](https://github.com/catppuccin/openbox/tree/bb1c8662898b156e2b5425d4616bcc8ae4cfeeb2/themes/catppuccin-latte/openbox-3) · [MIT license](Podish.Wayland/Themes/catppuccin-latte/LICENSE)
+
+The compositor rasterizes SVG application icons with Svg.Skia. [Svg.Skia 1.0.0.18 and MIT license](https://www.nuget.org/packages/Svg.Skia/1.0.0.18)
+
 ## Guest graphics headers
 
 The EGL, GLES2, GLES3 and KHR headers under `graphics/guest/include` come from the Khronos EGL and OpenGL registries and retain their MIT and Apache 2.0 notices. [Apache 2.0 license](licenses/Apache-2.0.txt) [MIT license for gl2.h and gl3.h](graphics/guest/include/GLES2/LICENSE) [EGL Registry](https://github.com/KhronosGroup/EGL-Registry) · [OpenGL Registry](https://github.com/KhronosGroup/OpenGL-Registry) · [GLES3 header revision](https://github.com/KhronosGroup/OpenGL-Registry/tree/6af574a14089ccfee87efe230ebcdd8742859813/api/GLES3)

@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.Runtime.InteropServices;
+using System.Text;
 using Microsoft.Extensions.Logging;
 using Podish.Display;
 using Podish.Core.Graphics;
@@ -22,6 +23,18 @@ internal sealed unsafe class SdlDisplayBackend : IDisplayBackend
     }
 
     public string Name => "sdl";
+
+    internal void ConfigureTextInput()
+    {
+        _sdl.SetHint("SDL_IME_SUPPORT_EXTENDED_TEXT", "1");
+        _sdl.SetHint("SDL_IME_SHOW_UI", "1");
+    }
+
+    internal void ConfigureHighDpi()
+    {
+        if (OperatingSystem.IsWindows())
+            _sdl.SetHint("SDL_WINDOWS_DPI_SCALING", "1");
+    }
 
     public IDisplayOutput CreateOutput(DisplayOutputOptions options)
     {
@@ -66,6 +79,7 @@ internal sealed unsafe class SdlDisplayOutput : IDisplayOutput
     private readonly Sdl _sdl;
     private readonly ILogger _logger;
     private readonly Window* _window;
+    private readonly uint _windowId;
     private readonly SdlDisplayRenderer? _renderer;
     private void* _metalView;
     private nint _waylandLibrary;
@@ -79,6 +93,8 @@ internal sealed unsafe class SdlDisplayOutput : IDisplayOutput
     private bool _cursorIsSystem;
     private bool _disposed;
     private bool _isClosed;
+    private bool _textInputEnabled;
+    private DisplayRect? _lastTextInputRect;
     private readonly bool _hideSystemCursor;
     private readonly bool _restoreCursorVisibility;
 
@@ -102,6 +118,7 @@ internal sealed unsafe class SdlDisplayOutput : IDisplayOutput
 
         if (_window == null)
             throw new InvalidOperationException($"SDL create window failed: {GetError()}");
+        _windowId = _sdl.GetWindowID(_window);
 
         try
         {
@@ -126,6 +143,37 @@ internal sealed unsafe class SdlDisplayOutput : IDisplayOutput
     public bool IsClosed => _isClosed;
     public DisplayVSyncMode VSyncMode { get; }
     public IDisplayRenderer Renderer => _renderer ?? throw new InvalidOperationException("This window has an EGL renderer.");
+
+    internal void Show()
+    {
+        _sdl.ShowWindow(_window);
+        Volatile.Write(ref _visible, 1);
+    }
+
+    internal DisplaySize GetPixelSize()
+    {
+        int width = Width, height = Height;
+        Silk.NET.SDL.Version version;
+        _sdl.GetVersion(&version);
+        if (version.Major > 2 || version is { Major: 2, Minor: >= 26 })
+            _sdl.GetWindowSizeInPixels(_window, &width, &height);
+        else if (_metalView != null)
+            _sdl.MetalGetDrawableSize(_window, &width, &height);
+
+        return width > 0 && height > 0 ? new DisplaySize(width, height) : new DisplaySize(Width, Height);
+    }
+
+    internal void SetWindowSize(DisplaySize size)
+    {
+        _sdl.SetWindowSize(_window, size.Width, size.Height);
+        int width, height;
+        _sdl.GetWindowSize(_window, &width, &height);
+        if (width > 0 && height > 0)
+        {
+            Width = width;
+            Height = height;
+        }
+    }
 
     public void PumpEvents()
     {
@@ -208,7 +256,7 @@ internal sealed unsafe class SdlDisplayOutput : IDisplayOutput
                         Key: mappedKey));
                     break;
                 }
-                case EventType.Textinput:
+                case EventType.Textinput when _textInputEnabled && ev.Text.WindowID == _windowId:
                 {
                     byte* textPtr = ev.Text.Text;
                     string text = Marshal.PtrToStringUTF8((nint)textPtr) ?? string.Empty;
@@ -221,19 +269,25 @@ internal sealed unsafe class SdlDisplayOutput : IDisplayOutput
                         Text: text));
                     break;
                 }
-                case EventType.Textediting:
+                case EventType.Textediting when _textInputEnabled && ev.Edit.WindowID == _windowId:
                 {
-                    byte* textPtr = ev.Edit.Text;
-                    string text = Marshal.PtrToStringUTF8((nint)textPtr) ?? string.Empty;
-                    _pendingInputEvents.Add(new DisplayInputEvent(
-                        DisplayInputEventKind.TextEditing,
-                        Timestamp: ev.Edit.Timestamp,
-                        Text: text,
-                        CursorBegin: ev.Edit.Start,
-                        CursorEnd: ev.Edit.Start + ev.Edit.Length));
+                    AddTextEditingEvent(ev.Edit.Text, ev.Edit.Start, ev.Edit.Length, ev.Edit.Timestamp);
                     break;
                 }
-                case EventType.Windowevent:
+                case EventType.TexteditingExt:
+                {
+                    try
+                    {
+                        if (_textInputEnabled && ev.EditExt.WindowID == _windowId)
+                            AddTextEditingEvent(ev.EditExt.Text, ev.EditExt.Start, ev.EditExt.Length, ev.EditExt.Timestamp);
+                    }
+                    finally
+                    {
+                        _sdl.Free(ev.EditExt.Text);
+                    }
+                    break;
+                }
+                case EventType.Windowevent when ev.Window.WindowID == _windowId:
                     _logger.LogDebug("SDL window event event={Event} data1={Data1} data2={Data2} timestamp={Timestamp}",
                         (WindowEventID)ev.Window.Event, ev.Window.Data1, ev.Window.Data2, ev.Window.Timestamp);
                     switch ((WindowEventID)ev.Window.Event)
@@ -246,6 +300,10 @@ internal sealed unsafe class SdlDisplayOutput : IDisplayOutput
                         case WindowEventID.Restored:
                         case WindowEventID.Maximized:
                             Volatile.Write(ref _visible, 1);
+                            break;
+                        case WindowEventID.Exposed when _renderer == null:
+                        case WindowEventID.DisplayChanged when _renderer == null:
+                            _pendingResizeEvents.Enqueue(new DisplaySize(Width, Height));
                             break;
                         case WindowEventID.Close:
                             Volatile.Write(ref _visible, 0);
@@ -280,6 +338,37 @@ internal sealed unsafe class SdlDisplayOutput : IDisplayOutput
         UpdateCursorVisibility();
     }
 
+    private void AddTextEditingEvent(byte* text, int start, int length, uint timestamp)
+    {
+        string composition = Marshal.PtrToStringUTF8((nint)text) ?? string.Empty;
+        // Native SDL2 Windows and Cocoa use UTF-16 positions. Linux IME backends use code points.
+        bool usesUtf16Offsets = OperatingSystem.IsWindows() || OperatingSystem.IsMacOS();
+        int end = length >= 0 && start >= 0 ? (int)Math.Min((long)start + length, int.MaxValue) : start;
+        _pendingInputEvents.Add(new DisplayInputEvent(
+            DisplayInputEventKind.TextEditing,
+            Timestamp: timestamp,
+            Text: composition,
+            CursorBegin: ToUtf8Offset(composition, start, usesUtf16Offsets),
+            CursorEnd: ToUtf8Offset(composition, end, usesUtf16Offsets)));
+    }
+
+    internal static int ToUtf8Offset(string text, int offset, bool usesUtf16Offsets)
+    {
+        if (offset < 0)
+            return -1;
+
+        int units = 0;
+        int bytes = 0;
+        foreach (Rune rune in text.EnumerateRunes())
+        {
+            units += usesUtf16Offsets ? rune.Utf16SequenceLength : 1;
+            if (units > offset)
+                break;
+            bytes += rune.Utf8SequenceLength;
+        }
+        return bytes;
+    }
+
     private void UpdateCursorVisibility()
     {
         if (_restoreCursorVisibility)
@@ -293,8 +382,43 @@ internal sealed unsafe class SdlDisplayOutput : IDisplayOutput
 
         var events = _pendingInputEvents.ToArray();
         _pendingInputEvents.Clear();
+        MarkImeHandledKeys(events);
         return events;
     }
+
+    private static void MarkImeHandledKeys(Span<DisplayInputEvent> events)
+    {
+        int pendingKey = -1;
+        for (int index = 0; index < events.Length; index++)
+        {
+            DisplayInputEvent input = events[index];
+            switch (input.Kind)
+            {
+                case DisplayInputEventKind.KeyboardKey when input.Pressed:
+                    pendingKey = IsTextEditingKey(input.Key) ? index : -1;
+                    break;
+                case DisplayInputEventKind.TextEditing or DisplayInputEventKind.TextInput when pendingKey >= 0:
+                    if (!string.IsNullOrEmpty(input.Text))
+                    {
+                        events[pendingKey] = events[pendingKey] with { HandledByIme = true };
+                        pendingKey = -1;
+                    }
+                    break;
+                case DisplayInputEventKind.PointerButton:
+                case DisplayInputEventKind.WindowFocusLost:
+                case DisplayInputEventKind.WindowFocusGained:
+                    pendingKey = -1;
+                    break;
+            }
+        }
+    }
+
+    private static bool IsTextEditingKey(uint key) => key is
+        >= 2 and <= 13 or
+        >= 16 and <= 27 or
+        >= 30 and <= 53 or
+        14 or 15 or 28 or 57 or
+        >= 71 and <= 83 or 96;
 
     public bool TryDequeueResize(out DisplaySize size)
     {
@@ -312,17 +436,43 @@ internal sealed unsafe class SdlDisplayOutput : IDisplayOutput
 
     public void StartTextInput()
     {
+        _textInputEnabled = true;
         _sdl.StartTextInput();
+        // Cocoa creates its field editor when text input starts.
+        if (_lastTextInputRect is DisplayRect windowRect)
+            ApplyTextInputRect(windowRect);
     }
 
     public void StopTextInput()
     {
+        _textInputEnabled = false;
+        _lastTextInputRect = null;
         _sdl.StopTextInput();
     }
 
     public void SetTextInputRect(DisplayRect rect)
     {
-        var sdlRect = new Rectangle<int>(rect.X, rect.Y, rect.Width, rect.Height);
+        DisplayRect windowRect = _renderer?.LogicalToWindow(rect) ?? rect;
+        if (OperatingSystem.IsWindows() && Width > 0 && Height > 0)
+        {
+            // SDL2's Windows backend hands the rectangle to IMM in native client pixels.
+            DisplaySize pixels = GetPixelSize();
+            int left = (int)((long)windowRect.X * pixels.Width / Width);
+            int top = (int)((long)windowRect.Y * pixels.Height / Height);
+            int right = (int)(((long)windowRect.X + windowRect.Width) * pixels.Width / Width);
+            int bottom = (int)(((long)windowRect.Y + windowRect.Height) * pixels.Height / Height);
+            windowRect = new DisplayRect(left, top, Math.Max(1, right - left), Math.Max(1, bottom - top));
+        }
+        if (_lastTextInputRect == windowRect)
+            return;
+
+        _lastTextInputRect = windowRect;
+        ApplyTextInputRect(windowRect);
+    }
+
+    private void ApplyTextInputRect(DisplayRect windowRect)
+    {
+        var sdlRect = new Rectangle<int>(windowRect.X, windowRect.Y, windowRect.Width, windowRect.Height);
         _sdl.SetTextInputRect(in sdlRect);
     }
 
@@ -437,11 +587,22 @@ internal sealed unsafe class SdlDisplayOutput : IDisplayOutput
             _waylandLibrary = NativeLibrary.Load("libwayland-egl.so.1");
             var create = (delegate* unmanaged[Cdecl]<void*, int, int, nint>)
                 NativeLibrary.GetExport(_waylandLibrary, "wl_egl_window_create");
-            _waylandWindow = create(wm.Info.Wayland.Surface, Width, Height);
+            DisplaySize pixels = GetPixelSize();
+            _waylandWindow = create(wm.Info.Wayland.Surface, pixels.Width, pixels.Height);
             if (_waylandWindow == 0) throw new InvalidOperationException("Could not create the native Wayland EGL window.");
             return new KmsEglWindow(_waylandWindow, (nint)wm.Info.Wayland.Display, 0x31D8, canPresent);
         }
         throw new InvalidOperationException($"SDL window system {wm.Subsystem} has no ANGLE window adapter.");
+    }
+
+    internal void ResizeNativeEglWindow()
+    {
+        if (_waylandWindow == 0)
+            return;
+        DisplaySize pixels = GetPixelSize();
+        var resize = (delegate* unmanaged[Cdecl]<nint, int, int, int, int, void>)
+            NativeLibrary.GetExport(_waylandLibrary, "wl_egl_window_resize");
+        resize(_waylandWindow, pixels.Width, pixels.Height, 0, 0);
     }
 
     private void DestroyNativeEglWindow()
@@ -491,6 +652,7 @@ internal sealed unsafe class SdlDisplayOutput : IDisplayOutput
 
 internal sealed unsafe class SdlDisplayRenderer : IDisplayRenderer
 {
+    private const uint Argb8888 = 372645892u;
     private readonly Sdl _sdl;
     private readonly ILogger _logger;
     private readonly Renderer* _renderer;
@@ -529,6 +691,14 @@ internal sealed unsafe class SdlDisplayRenderer : IDisplayRenderer
     }
 
     public DisplayRendererKind Kind { get; }
+    public DisplayRect LogicalToWindow(DisplayRect rect)
+    {
+        int left, top, right, bottom;
+        _sdl.RenderLogicalToWindow(_renderer, rect.X, rect.Y, &left, &top);
+        _sdl.RenderLogicalToWindow(_renderer, (float)rect.X + rect.Width, (float)rect.Y + rect.Height, &right, &bottom);
+        return new DisplayRect(left, top, Math.Max(right - left, 1), Math.Max(bottom - top, 1));
+    }
+
 
     public void SetLogicalSize(int width, int height)
     {
@@ -540,8 +710,8 @@ internal sealed unsafe class SdlDisplayRenderer : IDisplayRenderer
     {
         uint format = descriptor.Format switch
         {
-            DisplayPixelFormat.Argb8888 => 372645892u,
-            DisplayPixelFormat.Xrgb8888 => 372645892u,
+            DisplayPixelFormat.Argb8888 => Argb8888,
+            DisplayPixelFormat.Xrgb8888 => Argb8888,
             _ => throw new NotSupportedException($"Unsupported display pixel format {descriptor.Format}.")
         };
 

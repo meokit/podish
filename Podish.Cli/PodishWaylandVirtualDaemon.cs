@@ -17,13 +17,14 @@ internal sealed class PodishWaylandVirtualDaemon : IVirtualDaemon
     private readonly bool _enableHostDisplay;
     private readonly WaylandDisplayIngressBridge? _displayIngressBridge;
     private readonly WaylandServer _server;
+    private WaylandApplicationIcons? _applicationIcons;
     private int _displayIngressScheduled;
 
     public PodishWaylandVirtualDaemon(string unixPath, int ownerPid, ILoggerFactory loggerFactory,
         IWaylandFramePresenter? framePresenter = null,
         WaylandDisplayIngressBridge? displayIngressBridge = null,
         bool enableHostDisplay = true,
-        WaylandDesktopOptions? desktopOptions = null)
+        WaylandDesktopOptions? desktopOptions = null, bool enableGpuBuffers = false, uint scale120 = 120)
     {
         UnixPath = unixPath;
         _ownerPid = ownerPid;
@@ -34,11 +35,11 @@ internal sealed class PodishWaylandVirtualDaemon : IVirtualDaemon
         _server = new WaylandServer(framePresenter, new WaylandServer.OutputInfo(
             desktop.Width,
             desktop.Height,
-            1,
+            (int)((scale120 + 119) / 120),
             "WL-1",
             "Podish Virtual Output",
             "Podish",
-            "SDL Desktop"), _logger);
+            "Virtual KMS") { Scale120 = scale120 }, _logger, appId => _applicationIcons?.Resolve(appId), enableGpuBuffers);
     }
 
     public string Name => "podish-wayland";
@@ -47,7 +48,11 @@ internal sealed class PodishWaylandVirtualDaemon : IVirtualDaemon
     public void OnStart(VirtualDaemonContext context)
     {
         if (_enableHostDisplay)
+        {
+            int iconPixels = (int)((18 * _server.Output.Scale120 + 60) / 120);
+            _applicationIcons = new WaylandApplicationIcons(context.Syscalls, _logger, iconPixels);
             _displayIngressBridge?.Bind(ingress => PostDisplayIngress(context, ingress));
+        }
 
         ScheduleAcceptLoop(context);
     }
@@ -224,7 +229,7 @@ internal sealed class PodishWaylandVirtualDaemon : IVirtualDaemon
                 await _server.ClearPointerFocusAsync();
                 break;
             case DisplayInputEventKind.KeyboardKey:
-                await _server.HandleKeyboardKeyAsync(inputEvent.Key, inputEvent.Pressed, inputEvent.Timestamp);
+                await _server.HandleKeyboardKeyAsync(inputEvent.Key, inputEvent.Pressed, inputEvent.Timestamp, inputEvent.HandledByIme);
                 break;
             case DisplayInputEventKind.TextInput:
                 await _server.HandleTextInputCommitAsync(inputEvent.Text ?? string.Empty);
@@ -251,10 +256,6 @@ internal sealed class PodishWaylandVirtualDaemon : IVirtualDaemon
             case WaylandDisplayIngressKind.BufferConsumed:
                 await _server.HandleBufferConsumedAsync(ingress.LeaseToken);
                 return true;
-            case WaylandDisplayIngressKind.Resize:
-                if (_server.FramePresenter is IWaylandDesktopSceneController desktopSceneController)
-                    desktopSceneController.ResizeDesktop(ingress.Size.Width, ingress.Size.Height);
-                return true;
             case WaylandDisplayIngressKind.WindowClosed:
                 _logger.LogInformation("Wayland display output closed, exiting wayland compositor");
                 context?.Exit(0);
@@ -262,7 +263,7 @@ internal sealed class PodishWaylandVirtualDaemon : IVirtualDaemon
             case WaylandDisplayIngressKind.VSyncTick:
                 await _server.HandlePresentationTickAsync(ingress.Timestamp != 0
                     ? ingress.Timestamp
-                    : unchecked((uint)Environment.TickCount64));
+                    : unchecked((uint)Environment.TickCount64), ingress.FrameSequence);
                 return true;
             default:
                 return true;

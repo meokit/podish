@@ -1,18 +1,21 @@
+using Fiberish.VFS;
 using Microsoft.Extensions.Logging;
 using Podish.Display;
 using Podish.Wayland;
 
 namespace Podish.Cli.Wayland;
 
-internal sealed class WaylandSdlFramePresenter : IWaylandFramePresenter, IWaylandCursorPresenter, IWaylandTextInputPresenter, IWaylandSceneView, IWaylandSceneDebugView, IWaylandDesktopSceneController, IDisposable
+internal sealed class WaylandSdlFramePresenter : IWaylandFramePresenter, IWaylandGpuFramePresenter, IWaylandFrameScheduler, IWaylandCursorPresenter, IWaylandTextInputPresenter, IWaylandSceneView, IWaylandSceneDebugView, IWaylandDesktopSceneController, IWaylandDecorationInputPresenter, IDisposable
 {
     private readonly Microsoft.Extensions.Logging.ILogger _logger;
     private int _desktopWidth;
     private int _desktopHeight;
     private readonly WaylandUiTheme _theme;
     private readonly Action<WaylandDisplayCommand> _enqueueCommand;
+    private readonly Func<DrmScanoutBuffer, bool>? _canImportGpuBuffer;
     private readonly Dictionary<ulong, SurfaceState> _surfaces = [];
     private readonly List<ulong> _zOrder = [];
+    private ulong _frameSequence;
 
     public WaylandSdlFramePresenter(WaylandDesktopOptions desktopOptions, Action<WaylandDisplayCommand> enqueueCommand)
     {
@@ -26,13 +29,22 @@ internal sealed class WaylandSdlFramePresenter : IWaylandFramePresenter, IWaylan
     public WaylandSdlFramePresenter(
         WaylandDesktopOptions desktopOptions,
         Action<WaylandDisplayCommand> enqueueCommand,
-        Microsoft.Extensions.Logging.ILogger logger)
+        Microsoft.Extensions.Logging.ILogger logger,
+        Func<DrmScanoutBuffer, bool>? canImportGpuBuffer = null)
     {
         _desktopWidth = desktopOptions.Width;
         _desktopHeight = desktopOptions.Height;
         _theme = desktopOptions.Theme;
         _enqueueCommand = enqueueCommand;
         _logger = logger;
+        _canImportGpuBuffer = canImportGpuBuffer;
+    }
+
+    public ulong ScheduleFrame()
+    {
+        ulong sequence = ++_frameSequence;
+        _enqueueCommand(new WaylandDisplayCommand(WaylandDisplayCommandKind.ScheduleFrame, FrameSequence: sequence));
+        return sequence;
     }
 
     public ValueTask PresentSurfaceAsync(ulong sceneSurfaceId, WaylandShmFrame? frame,
@@ -48,15 +60,42 @@ internal sealed class WaylandSdlFramePresenter : IWaylandFramePresenter, IWaylan
             return ValueTask.CompletedTask;
         }
 
+        var bounds = SetSurfaceFrameSize(sceneSurfaceId, frame.Value.LogicalWidth, frame.Value.LogicalHeight);
+        _enqueueCommand(new WaylandDisplayCommand(WaylandDisplayCommandKind.PresentSurface, sceneSurfaceId, frame.Value, bounds));
+        return ValueTask.CompletedTask;
+    }
+
+    public bool CanImportGpuBuffer(DrmScanoutBuffer buffer) => _canImportGpuBuffer?.Invoke(buffer) == true;
+
+    public ValueTask PresentGpuSurfaceAsync(ulong sceneSurfaceId, WaylandGpuFrame frame)
+    {
+        var bounds = SetSurfaceFrameSize(sceneSurfaceId, frame.LogicalWidth, frame.LogicalHeight);
+        _enqueueCommand(new WaylandDisplayCommand(WaylandDisplayCommandKind.PresentGpuSurface, sceneSurfaceId,
+            Bounds: bounds, GpuFrame: frame));
+        return ValueTask.CompletedTask;
+    }
+
+    public void UpdateGpuSurfaceMapping(ulong sceneSurfaceId, WaylandSurfaceMapping mapping)
+    {
+        if (_surfaces.ContainsKey(sceneSurfaceId))
+        {
+            var bounds = SetSurfaceFrameSize(sceneSurfaceId, mapping.Width, mapping.Height);
+            _enqueueCommand(new WaylandDisplayCommand(WaylandDisplayCommandKind.UpdateSurfaceMapping, sceneSurfaceId,
+                Bounds: bounds, Mapping: mapping));
+        }
+    }
+
+    private WaylandSurfaceBounds SetSurfaceFrameSize(ulong sceneSurfaceId, int width, int height)
+    {
         SurfaceState state;
         if (_surfaces.TryGetValue(sceneSurfaceId, out SurfaceState? existing))
         {
             state = existing;
-            state.Width = frame.Value.Width;
-            state.Height = frame.Value.Height;
+            state.Width = width;
+            state.Height = height;
             if (state.AutoCentered)
             {
-                WaylandSurfaceBounds centered = ComputeCenteredContentRect(frame.Value.Width, frame.Value.Height, state.Decoration);
+                WaylandSurfaceBounds centered = ComputeCenteredContentRect(width, height, state.Decoration);
                 state.ContentBounds = centered;
             }
             else
@@ -64,25 +103,24 @@ internal sealed class WaylandSdlFramePresenter : IWaylandFramePresenter, IWaylan
                 state.ContentBounds = new WaylandSurfaceBounds(
                     state.ContentBounds.X,
                     state.ContentBounds.Y,
-                    frame.Value.Width,
-                    frame.Value.Height);
+                    width,
+                    height);
             }
         }
         else
         {
-            state = new SurfaceState(frame.Value.Width, frame.Value.Height)
+            state = new SurfaceState(width, height)
             {
                 SceneSurfaceId = sceneSurfaceId,
-                ContentBounds = ComputeCenteredContentRect(frame.Value.Width, frame.Value.Height, default),
+                ContentBounds = ComputeCenteredContentRect(width, height, default),
                 AutoCentered = true
             };
             _surfaces[sceneSurfaceId] = state;
         }
 
-        _zOrder.Remove(sceneSurfaceId);
-        _zOrder.Add(sceneSurfaceId);
-        _enqueueCommand(new WaylandDisplayCommand(WaylandDisplayCommandKind.PresentSurface, sceneSurfaceId, frame.Value, state.ContentBounds));
-        return ValueTask.CompletedTask;
+        if (!_zOrder.Contains(sceneSurfaceId))
+            PlaceAtTopOfLayer(sceneSurfaceId, state.Layer);
+        return state.ContentBounds;
     }
 
     public ValueTask UpdateCursorAsync(ulong sceneSurfaceId, WaylandCursorFrame? cursor, CancellationToken cancellationToken = default)
@@ -114,14 +152,20 @@ internal sealed class WaylandSdlFramePresenter : IWaylandFramePresenter, IWaylan
         return ValueTask.CompletedTask;
     }
 
-    public ValueTask UpdateTextInputAsync(bool enabled, WaylandRect? cursorRectangle, CancellationToken cancellationToken = default)
+    public ValueTask UpdateTextInputAsync(ulong sceneSurfaceId, WaylandRect? cursorRectangle, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
         _enqueueCommand(new WaylandDisplayCommand(
             WaylandDisplayCommandKind.UpdateTextInput,
-            TextInputRect: enabled ? cursorRectangle : null,
-            Hidden: !enabled));
+            sceneSurfaceId,
+            TextInputRect: cursorRectangle));
         return ValueTask.CompletedTask;
+    }
+
+    public void UpdateDecorationPointer(WaylandSceneHit hovered, WaylandSceneHit pressed)
+    {
+        _enqueueCommand(new WaylandDisplayCommand(WaylandDisplayCommandKind.UpdateDecorationPointer,
+            HoveredDecoration: hovered, PressedDecoration: pressed));
     }
 
     public bool TryGetSurfaceAt(int desktopX, int desktopY, out WaylandSurfaceHit hit)
@@ -203,12 +247,30 @@ internal sealed class WaylandSdlFramePresenter : IWaylandFramePresenter, IWaylan
 
     public void RaiseSurface(ulong sceneSurfaceId)
     {
-        if (!_surfaces.ContainsKey(sceneSurfaceId))
+        if (!_surfaces.TryGetValue(sceneSurfaceId, out SurfaceState? state))
             return;
 
-        _zOrder.Remove(sceneSurfaceId);
-        _zOrder.Add(sceneSurfaceId);
+        PlaceAtTopOfLayer(sceneSurfaceId, state.Layer);
         _enqueueCommand(new WaylandDisplayCommand(WaylandDisplayCommandKind.RaiseSurface, sceneSurfaceId));
+    }
+
+    public void SetSurfaceLayer(ulong sceneSurfaceId, WaylandSceneLayer layer)
+    {
+        SurfaceState state = GetOrCreateState(sceneSurfaceId);
+        if (state.Layer == layer)
+            return;
+
+        state.Layer = layer;
+        if (_zOrder.Contains(sceneSurfaceId))
+            PlaceAtTopOfLayer(sceneSurfaceId, layer);
+        _enqueueCommand(new WaylandDisplayCommand(WaylandDisplayCommandKind.SetSurfaceLayer, sceneSurfaceId, Layer: layer));
+    }
+
+    private void PlaceAtTopOfLayer(ulong sceneSurfaceId, WaylandSceneLayer layer)
+    {
+        _zOrder.Remove(sceneSurfaceId);
+        int index = _zOrder.FindIndex(id => _surfaces[id].Layer > layer);
+        _zOrder.Insert(index < 0 ? _zOrder.Count : index, sceneSurfaceId);
     }
 
     public void SetSurfaceBounds(ulong sceneSurfaceId, WaylandSurfaceBounds bounds)
@@ -311,6 +373,17 @@ internal sealed class WaylandSdlFramePresenter : IWaylandFramePresenter, IWaylan
             return false;
         }
 
+        int radius = WaylandDecorationLayout.GetWindowCornerRadius(windowBounds, surface.Decoration, _theme);
+        float localX = desktopX - windowBounds.X + 0.5f;
+        float localY = desktopY - windowBounds.Y + 0.5f;
+        float dx = Math.Max(0, radius - Math.Min(localX, windowBounds.Width - localX));
+        float dy = Math.Max(0, radius - localY);
+        if (dx * dx + dy * dy > radius * radius)
+        {
+            hit = default;
+            return false;
+        }
+
         int surfaceX = desktopX - contentBounds.X;
         int surfaceY = desktopY - contentBounds.Y;
         if (desktopX >= contentBounds.X && desktopY >= contentBounds.Y &&
@@ -398,5 +471,6 @@ internal sealed class WaylandSdlFramePresenter : IWaylandFramePresenter, IWaylan
         public bool AutoCentered { get; set; }
         public WaylandDecorationSceneState Decoration { get; set; }
         public bool Hidden { get; set; }
+        public WaylandSceneLayer Layer { get; set; }
     }
 }

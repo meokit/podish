@@ -213,6 +213,7 @@ public static class ContainerLaunchSpecResolver
             WaylandServer = spec.WaylandServer,
             WaylandDesktopWidth = spec.WaylandDesktopWidth,
             WaylandDesktopHeight = spec.WaylandDesktopHeight,
+            WaylandTheme = spec.WaylandTheme,
             Fbdev = spec.Fbdev,
             Gles = spec.Gles,
             KmsDrm = spec.KmsDrm,
