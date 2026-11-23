@@ -270,7 +270,7 @@ public class HostMappedPageCacheGeometryTests
     }
 
     [Fact]
-    public async Task Hostfs_WriteV_16KGeometry_WritesFourGuestPagesInSingleWindow()
+    public async Task Hostfs_MappedWriteV_16KGeometry_WritesFourGuestPagesInSingleWindow()
     {
         var root = Path.Combine(Path.GetTempPath(), $"hostfs-writev-16k-{Guid.NewGuid():N}");
         Directory.CreateDirectory(root);
@@ -290,6 +290,10 @@ public class HostMappedPageCacheGeometryTests
             var file = new LinuxFile(loc.Dentry!, FileFlags.O_RDWR, loc.Mount!);
             loc.Dentry!.Inode!.Open(file);
             var inode = Assert.IsType<HostInode>(loc.Dentry!.Inode);
+
+            // Use the mapped write path without prepopulating a host window.
+            inode.AcquireMappingRef().Release();
+            Assert.Equal(0, inode.GetMappedPageCacheDiagnostics().WindowCount);
 
             const uint baseAddr = 0x48000000;
             for (var i = 0; i < 4; i++)
