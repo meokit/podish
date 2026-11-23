@@ -373,9 +373,9 @@ internal class Program
                 return;
             }
 
-            var existing = PodishContainerMetadataStore.ReadAll(containersDir);
             if (!string.IsNullOrWhiteSpace(containerName) &&
-                existing.Any(x => string.Equals(x.Name, containerName, StringComparison.Ordinal)))
+                PodishContainerMetadataStore.ReadAll(containersDir)
+                    .Any(x => string.Equals(x.Name, containerName, StringComparison.Ordinal)))
             {
                 Console.Error.WriteLine($"[Podish.Cli] container name already exists: {containerName}");
                 context.ExitCode = 125;
@@ -1304,13 +1304,18 @@ internal class Program
 
     private static void SetupLogging(LogLevel logLevel, string? logFile)
     {
+        if (string.IsNullOrEmpty(logFile))
+        {
+            ProgramLoggerFactory = NullLoggerFactory.Instance;
+            Logger = NullLogger<Program>.Instance;
+            return;
+        }
+
         ProgramLoggerFactory = LoggerFactory.Create(builder =>
         {
             builder.ClearProviders();
             builder.SetMinimumLevel(logLevel);
-            if (!string.IsNullOrEmpty(logFile))
-                // Write only to file; never emit engine logs to console.
-                builder.AddProvider(new FileLoggerProvider(logFile));
+            builder.AddProvider(new FileLoggerProvider(logFile));
         });
         Logger = ProgramLoggerFactory.CreateLogger<Program>();
     }

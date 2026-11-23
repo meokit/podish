@@ -263,7 +263,7 @@ public sealed class ContainerRuntimeService
             {
                 throw new ContainerConfigurationException(ex.Message);
             }
-            runtime = KernelRuntime.BootstrapBare(request.Strace, ttyDiag, memoryContext);
+            runtime = KernelRuntime.BootstrapBare(request.Strace, ttyDiag, memoryContext, initializeVdso: false);
             runtime.Syscalls.Framebuffer = request.Framebuffer;
             scheduler.Runtime = runtime;
             runtime.EnableGuestStatsCollection = !string.IsNullOrWhiteSpace(request.GuestStatsExportDir);
@@ -630,13 +630,15 @@ public sealed class ContainerRuntimeService
         {
             request.KmsInput?.Detach();
             _logger.LogDebug("Container teardown starting containerId={ContainerId}", request.ContainerId);
-            try
+            // ConsoleTtyDriver writes and flushes headless output synchronously.
+            if (OperatingSystem.IsBrowser())
             {
-                if (OperatingSystem.IsBrowser()) await Task.Delay(50);
-                else Task.Delay(50).Wait();
+                await Task.Delay(50);
             }
-            catch
+            else if (request.UseTty || request.TerminalBridge != null || request.Framebuffer != null ||
+                     request.KmsWindow != null || request.EnableWaylandServer)
             {
+                Task.Delay(50).Wait();
             }
 
             _logger.LogTrace("Container teardown flushing stdio containerId={ContainerId}", request.ContainerId);

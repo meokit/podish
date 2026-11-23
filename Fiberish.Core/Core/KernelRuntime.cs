@@ -135,13 +135,20 @@ public sealed class KernelRuntime : IDisposable
     public static KernelRuntime BootstrapBare(bool strace, TtyDiscipline? tty = null,
         MemoryRuntimeContext? memoryContext = null)
     {
+        return BootstrapBare(strace, tty, memoryContext, initializeVdso: true);
+    }
+
+    /// <summary>Bootstrap an empty runtime, optionally deferring the vDSO until the first exec.</summary>
+    public static KernelRuntime BootstrapBare(bool strace, TtyDiscipline? tty, MemoryRuntimeContext? memoryContext,
+        bool initializeVdso)
+    {
         var configuration = new Configuration();
         memoryContext ??= new MemoryRuntimeContext();
         var engine = new Engine(memoryContext);
         var mm = new VMAManager(memoryContext);
         var deviceNumbers = new DeviceNumberManager();
 
-        var sys = new SyscallManager(engine, mm, 0, tty, deviceNumbers)
+        var sys = new SyscallManager(engine, mm, 0, tty, deviceNumbers, initializeVdso)
         {
             Strace = strace
         };

@@ -644,6 +644,7 @@ public class Process
             stagedMem.BindAddressSpaceHandle(ProcessAddressSpaceHandle.CaptureAttachedEngine(stagedEngine));
             Syscalls.Mem = stagedMem;
             Syscalls.CurrentSyscallEngine = stagedEngine;
+            Syscalls.RestoreVdsoAddresses(0, 0);
             identity = LoadExecutableImage(dentry, guestPathRaw, argsRaw, envsRaw, mount,
                 execFnPathRaw ?? guestPathRaw, takeArgvOwnership: true, knownElf: knownElf);
 

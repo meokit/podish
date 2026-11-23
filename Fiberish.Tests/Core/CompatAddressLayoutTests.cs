@@ -166,11 +166,15 @@ public sealed class CompatAddressLayoutTests
         Assert.True(layout.InterpreterBaseHint < layout.VdsoBaseHint);
     }
 
-    [Fact]
-    public void CreateInitProcess_DynamicPie_UsesLayoutPieAndInterpreterHints()
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void CreateInitProcess_DynamicPie_UsesLayoutPieAndInterpreterHints(bool initializeVdso)
     {
-        using var runtime = KernelRuntime.BootstrapBare(false,
-            memoryContext: TestRuntimeFactory.CreateDeterministicMemoryContext(0x4444_3333_2222_1111));
+        using var runtime = KernelRuntime.BootstrapBare(false, tty: null,
+            memoryContext: TestRuntimeFactory.CreateDeterministicMemoryContext(0x4444_3333_2222_1111),
+            initializeVdso: initializeVdso);
+        Assert.Equal(initializeVdso, runtime.Syscalls.RtSigReturnAddr != 0);
         MountTmpfsRoot(runtime, "compat-layout-dynamic-root");
         runtime.Syscalls.WriteFileInDetachedMount(runtime.Syscalls.RootMount!, DynamicMainRelativeName,
             BuildDynamicPieElf(DynamicInterpreterPath), 0x1ED);
@@ -202,6 +206,8 @@ public sealed class CompatAddressLayoutTests
             v => ReferenceEquals(v.LogicalInode, mainLoc.Dentry!.Inode) && v.Start == layout.PieBase);
         Assert.Contains(runtime.Memory.VMAs,
             v => ReferenceEquals(v.LogicalInode, interpLoc.Dentry!.Inode) && v.Start == layout.InterpreterBaseHint);
+        Assert.Equal(layout.VdsoBaseHint, runtime.Syscalls.SigReturnAddr);
+        Assert.Equal(layout.VdsoBaseHint + 16, runtime.Syscalls.RtSigReturnAddr);
         Assert.Equal(layout.InterpreterBaseHint + DynamicInterpreterEntryOffset, runtime.Engine.Eip);
     }
 

@@ -46,6 +46,12 @@ public partial class SyscallManager
 
     public SyscallManager(Engine engine, VMAManager mem, uint brk, TtyDiscipline? tty = null,
         DeviceNumberManager? deviceNumbers = null)
+        : this(engine, mem, brk, tty, deviceNumbers, initializeVdso: true)
+    {
+    }
+
+    internal SyscallManager(Engine engine, VMAManager mem, uint brk, TtyDiscipline? tty,
+        DeviceNumberManager? deviceNumbers, bool initializeVdso)
     {
         ArgumentNullException.ThrowIfNull(engine);
         ArgumentNullException.ThrowIfNull(mem);
@@ -130,7 +136,8 @@ public partial class SyscallManager
             Options = "rw"
         };
 
-        SetupVDSO();
+        if (initializeVdso)
+            SetupVDSO();
     }
 
     private SyscallManager(VMAManager mem, SharedFdTable sharedFdTable,
@@ -525,13 +532,13 @@ public partial class SyscallManager
 
         // Write trampolines
         // __kernel_sigreturn: pop eax; mov eax, 119; int 0x80
-        byte[] sigret = [0x58, 0xB8, 0x77, 0x00, 0x00, 0x00, 0xCD, 0x80];
+        ReadOnlySpan<byte> sigret = [0x58, 0xB8, 0x77, 0x00, 0x00, 0x00, 0xCD, 0x80];
         if (!CurrentSyscallEngine.CopyToUser(vdsoAddr, sigret))
             Logger.LogError("Failed to write sigreturn trampoline to vDSO");
         SigReturnAddr = vdsoAddr;
 
         // __kernel_rt_sigreturn: mov eax, 173; int 0x80
-        byte[] rtsigret = [0xB8, 0xAD, 0x00, 0x00, 0x00, 0xCD, 0x80];
+        ReadOnlySpan<byte> rtsigret = [0xB8, 0xAD, 0x00, 0x00, 0x00, 0xCD, 0x80];
         if (!CurrentSyscallEngine.CopyToUser(vdsoAddr + 16, rtsigret))
             Logger.LogError("Failed to write rt_sigreturn trampoline to vDSO");
         RtSigReturnAddr = vdsoAddr + 16;
@@ -542,8 +549,9 @@ public partial class SyscallManager
         if (mprotectRc != 0)
             throw new InvalidOperationException($"Failed to reprotect vDSO page: rc={mprotectRc}");
 
-        Logger.LogInformation("vDSO mapped at 0x{Addr:x}, sigreturn=0x{S:x}, rt_sigreturn=0x{R:x}", vdsoAddr,
-            SigReturnAddr, RtSigReturnAddr);
+        if (Logger.IsEnabled(LogLevel.Information))
+            Logger.LogInformation("vDSO mapped at 0x{Addr:x}, sigreturn=0x{S:x}, rt_sigreturn=0x{R:x}", vdsoAddr,
+                SigReturnAddr, RtSigReturnAddr);
     }
 
     private static PathLocation EnsureDirectory(PathLocation parent, FsName name)
