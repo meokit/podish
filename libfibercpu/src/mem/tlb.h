@@ -33,9 +33,7 @@ struct alignas(16) MicroTLB {
     }
 };
 
-inline constexpr MicroTlbAbiWord EncodeMicroTlbTags(const MicroTLB& utlb) {
-    return utlb.tags;
-}
+inline constexpr MicroTlbAbiWord EncodeMicroTlbTags(const MicroTLB& utlb) { return utlb.tags; }
 
 inline constexpr MicroTlbAbiWord EncodeMicroTlbAddend(const MicroTLB& utlb) {
     return static_cast<MicroTlbAbiWord>(utlb.addend);
@@ -50,9 +48,7 @@ inline constexpr MicroTLB DecodeMicroTlbAbi(MicroTlbAbiWord tags, MicroTlbAbiWor
     return {tags, static_cast<std::uintptr_t>(addend)};
 }
 
-inline void InvalidateMicroTLB(MicroTLB* utlb) {
-    utlb->invalidate();
-}
+inline void InvalidateMicroTLB(MicroTLB* utlb) { utlb->invalidate(); }
 
 struct alignas(16) TlbEntry {
     uint32_t tag = std::numeric_limits<uint32_t>::max();  // Mismatch by default (odd value for even aligned vars)
@@ -67,23 +63,20 @@ constexpr size_t TLB_INDEX_MASK = TLB_ENTRIES - 1;
 class SoftTlb {
 public:
     // Split 3-way TLB
-    std::array<TlbEntry, TLB_ENTRIES> read_tlb;
-    std::array<TlbEntry, TLB_ENTRIES> write_tlb;
+    std::array<MicroTLB, TLB_ENTRIES> read_tlb;
+    std::array<MicroTLB, TLB_ENTRIES> write_tlb;
     std::array<TlbEntry, TLB_ENTRIES> exec_tlb;
 
     SoftTlb() { flush(); }
 
     // Clear TLB
     void flush() {
-        auto invalidate = [&](auto& arr) {
-            for (auto& entry : arr) {
-                entry.tag = std::numeric_limits<decltype(entry.tag)>::max();
-                entry.addend = 0;
-            }
-        };
-        invalidate(read_tlb);
-        invalidate(write_tlb);
-        invalidate(exec_tlb);
+        for (auto& entry : read_tlb) entry.invalidate();
+        for (auto& entry : write_tlb) entry.invalidate();
+        for (auto& entry : exec_tlb) {
+            entry.tag = std::numeric_limits<uint32_t>::max();
+            entry.addend = 0;
+        }
     }
 
     // Invalidate a single page in all TLBs
@@ -91,12 +84,8 @@ public:
         const size_t idx = (vaddr >> PAGE_SHIFT) & TLB_INDEX_MASK;
         const uint32_t tag = vaddr & ~PAGE_MASK;
 
-        if (read_tlb[idx].tag == tag) {
-            read_tlb[idx].tag = std::numeric_limits<uint32_t>::max();
-        }
-        if (write_tlb[idx].tag == tag) {
-            write_tlb[idx].tag = std::numeric_limits<uint32_t>::max();
-        }
+        if (read_tlb[idx].ReadTag() == tag) read_tlb[idx].invalidate();
+        if (write_tlb[idx].WriteTag() == tag) write_tlb[idx].invalidate();
         if (exec_tlb[idx].tag == tag) {
             exec_tlb[idx].tag = std::numeric_limits<uint32_t>::max();
         }
@@ -108,16 +97,15 @@ public:
         const size_t idx = (vaddr >> PAGE_SHIFT) & TLB_INDEX_MASK;
         const std::uintptr_t addend = reinterpret_cast<std::uintptr_t>(hptr) - static_cast<std::uintptr_t>(tag);
 
-        if (has_property(property, Property::Read)) {
-            read_tlb[idx] = {tag, property, addend};
-        }
-
-        // Write fast path is permission-bit only: callers must precompute
-        // ForceWriteSlow before reaching TLB fill.
-        if (has_property(property, Property::Write) && has_property(property, Property::Dirty) &&
-            !has_property(property, Property::ForceWriteSlow)) {
-            write_tlb[idx] = {tag, property, addend};
-        }
+        const bool readable = has_property(property, Property::Read);
+        // Clean pages and pages that require write interception must go through the slow path.
+        const bool writable = has_property(property, Property::Write) && has_property(property, Property::Dirty) &&
+                              !has_property(property, Property::ForceWriteSlow);
+        // L2 hits can forward this entry directly to the MicroTLB.
+        const MicroTLB entry{
+            PackMicroTlbTags(readable ? tag : kInvalidMicroTlbTag, writable ? tag : kInvalidMicroTlbTag), addend};
+        if (readable) read_tlb[idx] = entry;
+        if (writable) write_tlb[idx] = entry;
 
         if (has_property(property, Property::Exec)) {
             exec_tlb[idx] = {tag, property, addend};

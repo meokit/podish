@@ -164,10 +164,11 @@ FORCE_INLINE void Mmu::sync_dirty(GuestAddr vaddr) {
     const size_t idx = (addr >> PAGE_SHIFT) & TLB_INDEX_MASK;
     const uint32_t tag = addr & ~PAGE_MASK;
 
-    const auto& tlb_array = (req_perm == Property::Read) ? tlb.read_tlb : tlb.write_tlb;
+    const bool read = req_perm == Property::Read;
+    const auto& tlb_array = read ? tlb.read_tlb : tlb.write_tlb;
     const auto entry = tlb_array[idx];
 
-    if (entry.tag == tag) [[likely]] {
+    if ((read ? entry.ReadTag() : entry.WriteTag()) == tag) [[likely]] {
         return reinterpret_cast<HostAddr>(entry.addend + addr);
     }
 
@@ -184,7 +185,7 @@ template <typename T>
     const size_t idx = (addr >> PAGE_SHIFT) & TLB_INDEX_MASK;
     const auto entry = tlb.read_tlb[idx];
 
-    if (((entry.tag ^ target_tag) | cross_page_mask) == 0) [[likely]] {
+    if (((entry.ReadTag() ^ target_tag) | cross_page_mask) == 0) [[likely]] {
 #ifdef ENABLE_TLB_STATS
         stats.l2_read_hits++;
         stats.total_reads++;
@@ -211,7 +212,7 @@ template <typename T>
     const size_t idx = (addr >> PAGE_SHIFT) & TLB_INDEX_MASK;
     const auto entry = tlb.write_tlb[idx];
 
-    if (((entry.tag ^ target_tag) | cross_page_mask) == 0) [[likely]] {
+    if (((entry.WriteTag() ^ target_tag) | cross_page_mask) == 0) [[likely]] {
 #ifdef ENABLE_TLB_STATS
         stats.l2_write_hits++;
         stats.total_writes++;
@@ -240,7 +241,10 @@ bool Mmu::try_cross_page_dword_tlb(GuestAddr addr, std::byte* value) {
     const auto& entries = Store ? tlb.write_tlb : tlb.read_tlb;
     const auto& first = entries[(first_tag >> PAGE_SHIFT) & TLB_INDEX_MASK];
     const auto& second = entries[(second_tag >> PAGE_SHIFT) & TLB_INDEX_MASK];
-    if (first.tag != first_tag || second.tag != second_tag) return false;
+    if ((Store ? first.WriteTag() : first.ReadTag()) != first_tag ||
+        (Store ? second.WriteTag() : second.ReadTag()) != second_tag) {
+        return false;
+    }
 
     auto* first_ptr = reinterpret_cast<std::byte*>(first.addend + addr);
     auto* second_ptr = reinterpret_cast<std::byte*>(second.addend + second_tag);
@@ -285,24 +289,13 @@ struct MicroTlbAccessGuard {
     GuestAddr tag = addr & ~PAGE_MASK;
 
     FORCE_INLINE bool can_probe() const {
-#if defined(__x86_64__) || defined(_M_X64)
-        // Reject straddles (including guest address wrap) before either probe.
-        // This keeps the offset check independent of the tag compare on x64.
+        // Check the offset once, independently of either cached tag.
         return (addr & PAGE_MASK) <= PAGE_SIZE - sizeof(T);
-#else
-        return true;
-#endif
     }
 
     FORCE_INLINE bool matches(GuestAddr cached_tag) const {
-#if defined(__x86_64__) || defined(_M_X64)
-        // Compare the whole tag: the unaligned invalid sentinel cannot match.
+        // Compare all bits so the unaligned invalid tag cannot match.
         return cached_tag == tag;
-#else
-        const GuestAddr end_addr = addr + sizeof(T) - 1;
-        const GuestAddr cross_page_mask = (addr ^ end_addr) & ~PAGE_MASK;
-        return ((cached_tag ^ tag) | cross_page_mask) == 0;
-#endif
     }
 };
 
@@ -323,7 +316,7 @@ MemResult<T> Mmu::read_tlb_only(GuestAddr addr, MicroTLB* utlb) {
         const size_t idx = (addr >> PAGE_SHIFT) & TLB_INDEX_MASK;
         const auto entry = tlb.read_tlb[idx];
 
-        if (guard.matches(entry.tag)) [[likely]] {
+        if (guard.matches(entry.ReadTag())) [[likely]] {
 #ifdef ENABLE_TLB_STATS
             stats.l2_read_hits++;
             stats.total_reads++;
@@ -331,14 +324,7 @@ MemResult<T> Mmu::read_tlb_only(GuestAddr addr, MicroTLB* utlb) {
             T val;
             std::memcpy(&val, (const void*)(entry.addend + addr), sizeof(T));
 
-            // Write fast-path eligibility must match TLB::fill: a clean (not Dirty)
-            // page must take the slow path so the write can mark it dirty, otherwise
-            // the store is invisible to file writeback/eviction.
-            const bool writable = has_property(entry.perm, Property::Write) &&
-                                  has_property(entry.perm, Property::Dirty) &&
-                                  !has_property(entry.perm, Property::ForceWriteSlow);
-            utlb->tags = PackMicroTlbTags(guard.tag, writable ? guard.tag : kInvalidMicroTlbTag);
-            utlb->addend = entry.addend;
+            *utlb = entry;
             return val;
         }
     }
@@ -386,7 +372,7 @@ MemResult<std::conditional_t<Store, void, HostAddr>> Mmu::write_tlb_impl(GuestAd
         const size_t idx = (addr >> PAGE_SHIFT) & TLB_INDEX_MASK;
         const auto entry = tlb.write_tlb[idx];
 
-        if (guard.matches(entry.tag)) [[likely]] {
+        if (guard.matches(entry.WriteTag())) [[likely]] {
 #ifdef ENABLE_TLB_STATS
             stats.l2_write_hits++;
             stats.total_writes++;
@@ -396,9 +382,7 @@ MemResult<std::conditional_t<Store, void, HostAddr>> Mmu::write_tlb_impl(GuestAd
             auto* host = reinterpret_cast<HostAddr>(entry.addend + addr);
             if constexpr (Store) StoreGuestValue(get_state(), host, val);
 
-            const bool readable = has_property(entry.perm, Property::Read);
-            utlb->tags = PackMicroTlbTags(readable ? guard.tag : kInvalidMicroTlbTag, guard.tag);
-            utlb->addend = entry.addend;
+            *utlb = entry;
             if constexpr (Store)
                 return {};
             else
