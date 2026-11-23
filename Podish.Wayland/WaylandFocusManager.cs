@@ -1,6 +1,6 @@
 namespace Podish.Wayland;
 
-internal sealed class WaylandFocusManager
+internal sealed partial class WaylandFocusManager
 {
     private enum InteractiveMode
     {
@@ -10,6 +10,9 @@ internal sealed class WaylandFocusManager
     }
 
     private readonly WaylandServer _server;
+    private XdgPopupResource? _grabbedPopup;
+    private LayerSurfaceResource? _exclusiveLayer;
+    private uint? _dismissedPopupButton;
     private ulong? _focusedPointerSceneSurfaceId;
     private ulong? _grabbedPointerSceneSurfaceId;
     private ulong? _focusedKeyboardSceneSurfaceId;
@@ -39,7 +42,7 @@ internal sealed class WaylandFocusManager
 
         if (_interactiveMode == InteractiveMode.Move)
         {
-            ProcessInteractiveMove();
+            await ProcessInteractiveMoveAsync();
             return;
         }
 
@@ -67,6 +70,7 @@ internal sealed class WaylandFocusManager
                 WaylandSceneHitKind.Surface,
                 desktopX - grabbedBounds.X,
                 desktopY - grabbedBounds.Y);
+            UpdateDecorationPointer(default);
             await SetCompositorCursorOverrideAsync(null);
             await DispatchPointerMotionAsync(grabbedSurface, desktopX - grabbedBounds.X, desktopY - grabbedBounds.Y, time);
             return;
@@ -87,6 +91,7 @@ internal sealed class WaylandFocusManager
 
         _focusedPointerSceneSurfaceId = hit.SceneSurfaceId;
         _focusedSceneHit = hit;
+        UpdateDecorationPointer(hit);
 
         if (hit.Kind == WaylandSceneHitKind.Surface)
         {
@@ -101,8 +106,27 @@ internal sealed class WaylandFocusManager
 
     public async ValueTask HandlePointerButtonAsync(uint button, bool pressed, uint time)
     {
+        if (!pressed)
+            UpdateDecorationPress(false);
+        if (!pressed && _dismissedPopupButton == button)
+        {
+            _dismissedPopupButton = null;
+            return;
+        }
         if (pressed && _focusedPointerSceneSurfaceId == null)
             await HandlePointerMotionAsync(_pointerDesktopX, _pointerDesktopY, time);
+
+        if (pressed && _grabbedPopup != null &&
+            (_focusedPointerSceneSurfaceId is not ulong target ||
+             !_server.TryGetSceneSurface(target, out WlSurfaceResource? focus) ||
+             !ReferenceEquals(focus.Client, _grabbedPopup.Client) ||
+             _focusedSceneHit.Kind != WaylandSceneHitKind.Surface))
+        {
+            while (_grabbedPopup is { } popup)
+                await popup.DismissAsync();
+            _dismissedPopupButton = button;
+            return;
+        }
 
         if (pressed &&
             _focusedPointerSceneSurfaceId is ulong focusedSceneSurfaceId &&
@@ -123,12 +147,15 @@ internal sealed class WaylandFocusManager
                         await BeginInteractiveResizeAsync(toplevel, _focusedSceneHit.ResizeEdges);
                         return;
                     case WaylandSceneHitKind.CloseButton:
+                        UpdateDecorationPress(true);
                         await toplevel.SendCloseAsync();
                         return;
                     case WaylandSceneHitKind.MaximizeButton:
+                        UpdateDecorationPress(true);
                         await toplevel.SetMaximizedAsync(!toplevel.IsMaximized);
                         return;
                     case WaylandSceneHitKind.MinimizeButton:
+                        UpdateDecorationPress(true);
                         await toplevel.SetMinimizedAsync(true);
                         return;
                 }
@@ -139,7 +166,7 @@ internal sealed class WaylandFocusManager
         {
             _pressedPointerButtons++;
             _grabbedPointerSceneSurfaceId ??= _focusedPointerSceneSurfaceId;
-            if (_focusedPointerSceneSurfaceId is ulong focusedSurfaceId)
+            if (_grabbedPopup == null && _focusedPointerSceneSurfaceId is ulong focusedSurfaceId)
                 await FocusKeyboardSurfaceAsync(focusedSurfaceId);
         }
         else if (_pressedPointerButtons > 0)
@@ -180,6 +207,7 @@ internal sealed class WaylandFocusManager
 
     public async ValueTask ClearPointerFocusAsync()
     {
+        UpdateDecorationPointer(default);
         if (_pressedPointerButtons > 0)
             return;
 
@@ -199,6 +227,7 @@ internal sealed class WaylandFocusManager
         {
             _focusedPointerSceneSurfaceId = null;
             _focusedSceneHit = default;
+            UpdateDecorationPointer(default);
             affected = true;
         }
 
@@ -271,8 +300,17 @@ internal sealed class WaylandFocusManager
         _grabOffsetY = _pointerDesktopY - borderY;
     }
 
-    private async ValueTask FocusKeyboardSurfaceAsync(ulong sceneSurfaceId)
+    public async ValueTask FocusKeyboardSurfaceAsync(ulong sceneSurfaceId)
     {
+        if (!_server.TryGetSceneSurface(sceneSurfaceId, out WlSurfaceResource? newSurface))
+            return;
+        WlSurfaceResource newRoot = GetRootSurface(newSurface);
+        if (_exclusiveLayer is { } exclusive && !ReferenceEquals(newRoot.LayerSurface, exclusive))
+            return;
+        if (newRoot.LayerSurface?.KeyboardInteractivity == ZwlrLayerSurfaceV1KeyboardInteractivity.None &&
+            newSurface.XdgSurface?.Popup is not { IsGrabbing: true })
+            return;
+
         if (_focusedKeyboardSceneSurfaceId == sceneSurfaceId)
         {
             if (_server.FramePresenter is IWaylandDesktopSceneController desktopSceneController)
@@ -280,36 +318,87 @@ internal sealed class WaylandFocusManager
             return;
         }
 
+        XdgToplevelResource? newToplevel = newRoot.XdgSurface?.Toplevel;
         if (_focusedKeyboardSceneSurfaceId is ulong oldSceneSurfaceId &&
             _server.TryGetSceneSurface(oldSceneSurfaceId, out WlSurfaceResource? oldSurface) &&
-            oldSurface.XdgSurface?.Toplevel is XdgToplevelResource oldToplevel)
+            GetRootSurface(oldSurface).XdgSurface?.Toplevel is XdgToplevelResource oldToplevel &&
+            !ReferenceEquals(oldToplevel, newToplevel))
             await oldToplevel.SetActivatedAsync(false);
 
         _focusedKeyboardSceneSurfaceId = sceneSurfaceId;
 
-        if (_server.TryGetSceneSurface(sceneSurfaceId, out WlSurfaceResource? newSurface))
-        {
-            if (newSurface.XdgSurface?.Toplevel is XdgToplevelResource newToplevel)
-                await newToplevel.SetActivatedAsync(true);
+        if (newToplevel != null)
+            await newToplevel.SetActivatedAsync(true);
 
-            foreach (WaylandClient client in _server.Clients)
+        foreach (WaylandClient client in _server.Clients)
+        {
+            bool ownsSurface = ReferenceEquals(client, newSurface.Client);
+            foreach (WlKeyboardResource keyboard in client.Objects.All.OfType<WlKeyboardResource>())
             {
-                bool ownsSurface = ReferenceEquals(client, newSurface.Client);
-                foreach (WlKeyboardResource keyboard in client.Objects.All.OfType<WlKeyboardResource>())
-                {
-                    if (ownsSurface)
-                        await keyboard.FocusAsync(newSurface.ObjectId);
-                    else
-                        await keyboard.ClearFocusAsync();
-                }
+                if (ownsSurface)
+                    await keyboard.FocusAsync(newSurface.ObjectId);
+                else
+                    await keyboard.ClearFocusAsync();
             }
         }
 
         if (_server.FramePresenter is IWaylandDesktopSceneController sceneController)
+        {
+            if (!ReferenceEquals(newRoot, newSurface))
+                sceneController.RaiseSurface(newRoot.SceneSurfaceId);
             sceneController.RaiseSurface(sceneSurfaceId);
+            newRoot.UpdateChildSubsurfacePlacements();
+        }
 
         await _server.HandleKeyboardFocusSelectionChangedAsync();
         await _server.HandleKeyboardFocusTextInputChangedAsync();
+    }
+
+    public ValueTask<bool> TryGrabPopupAsync(XdgPopupResource popup, uint serial)
+    {
+        if (!popup.Client.HasRecentInputSerial(serial) || popup.Parent == null ||
+            (_grabbedPopup != null && !ReferenceEquals(_grabbedPopup.XdgSurface.Surface, popup.Parent)))
+            return ValueTask.FromResult(false);
+        _grabbedPopup = popup;
+        return ValueTask.FromResult(true);
+    }
+
+    public async ValueTask ReleasePopupGrabAsync(XdgPopupResource popup)
+    {
+        if (!ReferenceEquals(popup, _grabbedPopup))
+            return;
+
+        WlSurfaceResource? parent = popup.Parent;
+        _grabbedPopup = parent?.XdgSurface?.Popup;
+        if (_focusedKeyboardSceneSurfaceId == popup.XdgSurface.Surface.SceneSurfaceId &&
+            parent is { CurrentBuffer: not null, Destroyed: false })
+            await FocusKeyboardSurfaceAsync(parent.SceneSurfaceId);
+    }
+
+    public async ValueTask SetExclusiveLayerAsync(LayerSurfaceResource? layer)
+    {
+        if (ReferenceEquals(_exclusiveLayer, layer))
+            return;
+
+        LayerSurfaceResource? previous = _exclusiveLayer;
+        _exclusiveLayer = layer;
+        if (layer != null)
+            await FocusKeyboardSurfaceAsync(layer.Surface.SceneSurfaceId);
+        else if (previous != null && _focusedKeyboardSceneSurfaceId == previous.Surface.SceneSurfaceId)
+            await HandleSurfaceDestroyedAsync(previous.Surface.SceneSurfaceId);
+    }
+
+    public void ForgetClientPopups(WaylandClient client)
+    {
+        if (ReferenceEquals(_grabbedPopup?.Client, client))
+            _grabbedPopup = null;
+    }
+
+    private static WlSurfaceResource GetRootSurface(WlSurfaceResource surface)
+    {
+        while ((surface.XdgSurface?.Popup?.Parent ?? surface.Subsurface?.ParentSurface) is { } parent)
+            surface = parent;
+        return surface;
     }
 
     private async ValueTask DispatchPointerMotionAsync(WlSurfaceResource targetSurface, int surfaceX, int surfaceY, uint time)
@@ -393,7 +482,7 @@ internal sealed class WaylandFocusManager
         }
     }
 
-    private void ProcessInteractiveMove()
+    private async ValueTask ProcessInteractiveMoveAsync()
     {
         if (_grabbedPointerSceneSurfaceId is not ulong grabbedSceneSurfaceId ||
             _server.FramePresenter is not IWaylandDesktopSceneController desktopSceneController ||
@@ -409,7 +498,9 @@ internal sealed class WaylandFocusManager
         desktopSceneController.SetWindowBounds(grabbedSceneSurfaceId, bounds);
         desktopSceneController.RaiseSurface(grabbedSceneSurfaceId);
         surface.UpdateChildSubsurfacePlacements();
+        await _server.ReconfigureChildPopupsAsync(surface);
         _focusedPointerSceneSurfaceId = grabbedSceneSurfaceId;
+        UpdateDecorationPointer(default);
     }
 
     private async ValueTask ProcessInteractiveResizeAsync()
@@ -472,7 +563,9 @@ internal sealed class WaylandFocusManager
         desktopSceneController.SetWindowBounds(grabbedSceneSurfaceId, bounds);
         desktopSceneController.RaiseSurface(grabbedSceneSurfaceId);
         surface.UpdateChildSubsurfacePlacements();
+        await _server.ReconfigureChildPopupsAsync(surface);
         _focusedPointerSceneSurfaceId = grabbedSceneSurfaceId;
+        UpdateDecorationPointer(default);
 
         if (surface.XdgSurface?.Toplevel is XdgToplevelResource toplevel &&
             _server.FramePresenter is IWaylandSceneView sceneView &&

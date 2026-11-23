@@ -453,37 +453,50 @@ public sealed class WaylandDispatcher
     }
 }
 
-public sealed class WaylandServer
+public sealed partial class WaylandServer
 {
     public sealed record OutputInfo(int Width = 1024, int Height = 768, int Scale = 1, string Name = "WL-1",
-        string Description = "Podish Virtual Output", string Make = "Podish", string Model = "Virtual Display");
+        string Description = "Podish Virtual Output", string Make = "Podish", string Model = "Virtual Display")
+    {
+        public uint Scale120 { get; init; } = (uint)Math.Max(1, Scale) * 120;
+        public int PixelWidth => ScaleToPixels(Width);
+        public int PixelHeight => ScaleToPixels(Height);
+        private int ScaleToPixels(int size) => (int)((size * (long)Scale120 + 60) / 120);
+    }
 
     private readonly List<WaylandClient> _clients = [];
-    private readonly List<WlCallbackResource> _pendingFrameCallbacks = [];
+    private readonly List<(WlCallbackResource Callback, ulong FrameSequence)> _pendingFrameCallbacks = [];
     private readonly Dictionary<ulong, WlSurfaceResource> _sceneSurfaces = [];
     private readonly WaylandKeyboardKeymap _keyboardKeymap = new();
     private readonly ILogger? _logger;
     private WlDataSourceResource? _selectionSource;
     private ZwpPrimarySelectionSourceV1Resource? _primarySelectionSource;
-    private uint _nextTextInputDoneSerial = 1;
     private bool _hostTextInputFocused = true;
+    private readonly Dictionary<uint, bool> _imeKeySuppression = [];
     private long _nextDisplayLeaseToken;
     private long _nextSceneSurfaceId;
 
-    public WaylandServer(IWaylandFramePresenter? framePresenter = null, OutputInfo? output = null, ILogger? logger = null)
+    public WaylandServer(IWaylandFramePresenter? framePresenter = null, OutputInfo? output = null, ILogger? logger = null,
+        Func<string, WaylandApplicationIcon?>? resolveApplicationIcon = null, bool enableGpuBuffers = false)
     {
         FramePresenter = framePresenter;
         Output = output ?? new OutputInfo();
         _logger = logger;
+        ResolveApplicationIcon = resolveApplicationIcon;
         Globals = new WaylandGlobalRegistry();
         Focus = new WaylandFocusManager(this);
         RegisterCoreGlobals();
+        RegisterScalingGlobals();
+        if (enableGpuBuffers && framePresenter is IWaylandGpuFramePresenter)
+            Globals.Add(ZwpLinuxDmabufV1Protocol.InterfaceName, ZwpLinuxDmabufV1Protocol.Version,
+                static (client, id, version) => client.Register(new LinuxDmabufResource(client, id, version)));
     }
 
     public IWaylandFramePresenter? FramePresenter { get; private set; }
-    public OutputInfo Output { get; }
+    public OutputInfo Output { get; private set; }
     public WaylandGlobalRegistry Globals { get; }
     internal ILogger? Logger => _logger;
+    internal Func<string, WaylandApplicationIcon?>? ResolveApplicationIcon { get; }
     internal WaylandKeyboardKeymap KeyboardKeymap => _keyboardKeymap;
     internal WaylandFocusManager Focus { get; }
     internal IReadOnlyList<WaylandClient> Clients => _clients;
@@ -500,13 +513,16 @@ public sealed class WaylandServer
         if (!_clients.Remove(client))
             return;
 
-        _pendingFrameCallbacks.RemoveAll(callback => ReferenceEquals(callback.Client, client));
+        _pendingFrameCallbacks.RemoveAll(entry => ReferenceEquals(entry.Callback.Client, client));
+        Focus.ForgetClientPopups(client);
 
         var surfaces = client.Objects.All.OfType<WlSurfaceResource>().ToArray();
         try
         {
             foreach (WlSurfaceResource surface in surfaces)
             {
+                if (surface.XdgSurface?.Toplevel is { } toplevel)
+                    await CloseForeignToplevelAsync(toplevel);
                 if (surface.IsCursorRole && FramePresenter is IWaylandCursorPresenter cursorPresenter)
                     await cursorPresenter.UpdateCursorAsync(surface.SceneSurfaceId, null);
                 else if (FramePresenter != null)
@@ -515,6 +531,7 @@ public sealed class WaylandServer
                 UnregisterSceneSurface(surface);
                 await Focus.HandleSurfaceDestroyedAsync(surface.SceneSurfaceId);
             }
+            await ArrangeLayersAsync();
         }
         finally
         {
@@ -522,7 +539,7 @@ public sealed class WaylandServer
                 surface.ReleaseBuffers();
 
             foreach (WaylandResource resource in client.Objects.All
-                         .Where(static resource => resource is WlBufferResource or WlShmPoolResource).ToArray())
+                         .Where(static resource => resource is WlBufferResource or WlShmPoolResource or LinuxBufferParamsResource).ToArray())
                 resource.Destroy();
 
             client.HandleClosed();
@@ -565,6 +582,10 @@ public sealed class WaylandServer
             static (client, objectId, version) => client.Register(new WpCursorShapeManagerV1Resource(client, objectId, version)));
         Globals.Add(ZxdgDecorationManagerV1Protocol.InterfaceName, ZxdgDecorationManagerV1Protocol.Version,
             static (client, objectId, version) => client.Register(new ZxdgDecorationManagerV1Resource(client, objectId, version)));
+        Globals.Add(ZwlrLayerShellV1Protocol.InterfaceName, ZwlrLayerShellV1Protocol.Version,
+            static (client, objectId, version) => client.Register(new LayerShellResource(client, objectId, version)));
+        Globals.Add(ZwlrForeignToplevelManagerV1Protocol.InterfaceName, ZwlrForeignToplevelManagerV1Protocol.Version,
+            static (client, objectId, version) => client.Register(new ForeignToplevelManagerResource(client, objectId, version)));
     }
 
     public async ValueTask HandlePointerMotionAsync(int desktopX, int desktopY, uint time)
@@ -582,9 +603,9 @@ public sealed class WaylandServer
         await Focus.ClearPointerFocusAsync();
     }
 
-    public async ValueTask HandleKeyboardKeyAsync(uint key, bool pressed, uint time)
+    public async ValueTask HandleKeyboardKeyAsync(uint key, bool pressed, uint time, bool handledByIme = false)
     {
-        if (ShouldSuppressKeyboardKey(key))
+        if (ShouldSuppressKeyboardKey(key, pressed, handledByIme))
             return;
 
         await Focus.HandleKeyboardKeyAsync(key, pressed, time);
@@ -599,8 +620,7 @@ public sealed class WaylandServer
         if (textInput == null)
             return;
 
-        textInput.SetHasActivePreedit(false);
-        await textInput.SendCommitStringAsync(text, NextTextInputDoneSerial());
+        await textInput.SendCommitStringAsync(text);
     }
 
     public async ValueTask HandleTextInputPreeditAsync(string text, int cursorBegin, int cursorEnd)
@@ -609,8 +629,7 @@ public sealed class WaylandServer
         if (textInput == null)
             return;
 
-        textInput.SetHasActivePreedit(!string.IsNullOrEmpty(text));
-        await textInput.SendPreeditStringAsync(text, cursorBegin, cursorEnd, NextTextInputDoneSerial());
+        await textInput.SendPreeditStringAsync(text, cursorBegin, cursorEnd);
     }
 
     internal async ValueTask SetClipboardSelectionAsync(WlDataSourceResource? source)
@@ -643,12 +662,16 @@ public sealed class WaylandServer
 
     internal ValueTask SendClipboardSelectionAsync(WlDataDeviceResource device)
     {
-        return device.SendSelectionAsync(ReferenceEquals(device.Client, GetFocusedKeyboardClient()) ? _selectionSource : null);
+        return ReferenceEquals(device.Client, GetFocusedKeyboardClient())
+            ? device.SendSelectionAsync(_selectionSource)
+            : device.ClearSelectionAsync();
     }
 
     internal ValueTask SendPrimarySelectionAsync(ZwpPrimarySelectionDeviceV1Resource device)
     {
-        return device.SendSelectionAsync(ReferenceEquals(device.Client, GetFocusedKeyboardClient()) ? _primarySelectionSource : null);
+        return ReferenceEquals(device.Client, GetFocusedKeyboardClient())
+            ? device.SendSelectionAsync(_primarySelectionSource)
+            : device.ClearSelectionAsync();
     }
 
     internal async ValueTask HandleKeyboardFocusSelectionChangedAsync()
@@ -659,55 +682,52 @@ public sealed class WaylandServer
 
     internal async ValueTask HandleKeyboardFocusTextInputChangedAsync()
     {
-        WaylandClient? focusedClient = GetFocusedKeyboardClient();
-        uint? focusedSurfaceId = GetFocusedKeyboardSurfaceObjectId();
+        WaylandClient? focusedClient = _hostTextInputFocused ? GetFocusedKeyboardClient() : null;
+        uint? focusedSurfaceId = focusedClient != null ? GetFocusedKeyboardSurfaceObjectId() : null;
+        ZwpTextInputV3Resource[] textInputs =
+            [.. _clients.SelectMany(static client => client.Objects.All.OfType<ZwpTextInputV3Resource>())];
 
-        foreach (WaylandClient client in _clients.ToArray())
-        {
-            ZwpTextInputV3Resource[] textInputs = [.. client.Objects.All.OfType<ZwpTextInputV3Resource>()];
+        foreach (ZwpTextInputV3Resource textInput in textInputs)
+            if (!ReferenceEquals(textInput.Client, focusedClient) || textInput.FocusedSurfaceId != focusedSurfaceId)
+                await textInput.ClearFocusAsync();
+
+        if (focusedSurfaceId is uint surfaceId)
             foreach (ZwpTextInputV3Resource textInput in textInputs)
-            {
-                if (ReferenceEquals(client, focusedClient) && focusedSurfaceId is uint surfaceId)
+                if (ReferenceEquals(textInput.Client, focusedClient))
                     await textInput.SetFocusAsync(surfaceId);
-                else
-                    await textInput.ClearFocusAsync();
-            }
-        }
+
+        await HandleTextInputStateChangedAsync();
     }
 
     public async ValueTask HandleHostTextInputFocusLostAsync()
     {
         _hostTextInputFocused = false;
-
-        WaylandClient[] clients = [.. _clients];
-        foreach (WaylandClient client in clients)
-        {
-            ZwpTextInputV3Resource[] textInputs = [.. client.Objects.All.OfType<ZwpTextInputV3Resource>()];
-            foreach (ZwpTextInputV3Resource textInput in textInputs)
-                await textInput.ClearFocusAsync();
-        }
+        await HandleKeyboardFocusTextInputChangedAsync();
     }
 
     public async ValueTask HandleHostTextInputFocusGainedAsync()
     {
         _hostTextInputFocused = true;
         await HandleKeyboardFocusTextInputChangedAsync();
-        await HandleTextInputStateChangedAsync();
     }
 
-    internal async ValueTask HandleTextInputStateChangedAsync()
+    internal async ValueTask HandleTextInputStateChangedAsync(bool restart = false)
     {
         if (FramePresenter is not IWaylandTextInputPresenter textInputPresenter)
             return;
 
-        ZwpTextInputV3Resource? textInput = _hostTextInputFocused ? GetFocusedEnabledTextInput() : null;
-        if (textInput == null)
+        ZwpTextInputV3Resource? textInput = GetFocusedEnabledTextInput();
+        if (textInput?.FocusedSurfaceId is not uint surfaceId ||
+            !textInput.Client.Objects.TryGet(surfaceId, out WaylandResource? resource) ||
+            resource is not WlSurfaceResource surface)
         {
-            await textInputPresenter.UpdateTextInputAsync(false, null);
+            await textInputPresenter.UpdateTextInputAsync(0, null);
             return;
         }
 
-        await textInputPresenter.UpdateTextInputAsync(true, textInput.CursorRectangle);
+        if (restart)
+            await textInputPresenter.UpdateTextInputAsync(0, null);
+        await textInputPresenter.UpdateTextInputAsync(surface.SceneSurfaceId, textInput.CursorRectangle);
     }
 
     internal void HandleClipboardSourceDestroyed(WlDataSourceResource source)
@@ -798,9 +818,9 @@ public sealed class WaylandServer
         return TryGetSceneSurface(sceneSurfaceId, out WlSurfaceResource? surface) ? surface.ObjectId : null;
     }
 
-    private ZwpTextInputV3Resource? GetFocusedEnabledTextInput()
+    internal ZwpTextInputV3Resource? GetFocusedEnabledTextInput()
     {
-        WaylandClient? focusedClient = GetFocusedKeyboardClient();
+        WaylandClient? focusedClient = _hostTextInputFocused ? GetFocusedKeyboardClient() : null;
         if (focusedClient == null)
             return null;
 
@@ -808,37 +828,32 @@ public sealed class WaylandServer
             .FirstOrDefault(static textInput => textInput.IsFocused && textInput.IsEnabled);
     }
 
-    private uint NextTextInputDoneSerial()
+    private bool ShouldSuppressKeyboardKey(uint key, bool pressed, bool handledByIme)
     {
-        return _nextTextInputDoneSerial++;
-    }
+        if (!pressed)
+            return _imeKeySuppression.Remove(key, out bool wasSuppressed) && wasSuppressed;
+        if (_imeKeySuppression.TryGetValue(key, out bool suppressed))
+            return suppressed;
 
-    internal uint NextTextInputDoneSerialForResource()
-    {
-        return NextTextInputDoneSerial();
-    }
-
-    private bool ShouldSuppressKeyboardKey(uint key)
-    {
         ZwpTextInputV3Resource? textInput = GetFocusedEnabledTextInput();
-        if (textInput is not { HasActivePreedit: true })
-            return false;
-
-        if (WaylandKeyboardLayout.TryGetByEvdevKey(key, out WaylandKeyboardKeyDescriptor descriptor) &&
-            descriptor.ModifierRole != WaylandKeyboardModifierRole.None)
-            return false;
-
-        return true;
+        suppressed = textInput != null && (handledByIme || textInput.HasActivePreedit)
+            && (!WaylandKeyboardLayout.TryGetByEvdevKey(key, out WaylandKeyboardKeyDescriptor descriptor)
+                || descriptor.ModifierRole == WaylandKeyboardModifierRole.None);
+        _imeKeySuppression.Add(key, suppressed);
+        return suppressed;
     }
 
     internal void EnqueueFrameCallbacks(IEnumerable<WlCallbackResource> callbacks)
     {
         int added = 0;
+        ulong frameSequence = 0;
         foreach (WlCallbackResource callback in callbacks)
         {
             if (!callback.Destroyed)
             {
-                _pendingFrameCallbacks.Add(callback);
+                if (added == 0 && FramePresenter is IWaylandFrameScheduler scheduler)
+                    frameSequence = scheduler.ScheduleFrame();
+                _pendingFrameCallbacks.Add((callback, frameSequence));
                 added++;
             }
         }
@@ -850,16 +865,24 @@ public sealed class WaylandServer
         }
     }
 
-    public async ValueTask HandlePresentationTickAsync(uint timeMs)
+    public ValueTask HandlePresentationTickAsync(uint timeMs) => HandlePresentationTickAsync(timeMs, ulong.MaxValue);
+
+    public async ValueTask HandlePresentationTickAsync(uint timeMs, ulong frameSequence)
     {
         if (_pendingFrameCallbacks.Count == 0)
             return;
 
-        List<WlCallbackResource> callbacks = [.. _pendingFrameCallbacks];
-        _pendingFrameCallbacks.Clear();
-        _logger?.LogDebug("Wayland frame callback flush count={Count} timeMs={TimeMs}", callbacks.Count, timeMs);
+        int count = _pendingFrameCallbacks.FindIndex(entry => entry.FrameSequence > frameSequence);
+        if (count < 0)
+            count = _pendingFrameCallbacks.Count;
+        if (count == 0)
+            return;
 
-        foreach (WlCallbackResource callback in callbacks)
+        var callbacks = _pendingFrameCallbacks.GetRange(0, count);
+        _pendingFrameCallbacks.RemoveRange(0, count);
+        _logger?.LogDebug("Wayland frame callback flush count={Count} timeMs={TimeMs}", count, timeMs);
+
+        foreach (var (callback, _) in callbacks)
         {
             if (callback.Destroyed)
                 continue;
@@ -891,6 +914,7 @@ public sealed class WaylandClient
     private readonly Func<WaylandOutgoingMessage, ValueTask<int>> _sendAsync;
     private readonly WaylandDispatcher _dispatcher;
     private uint _nextSerial = 1;
+    private readonly Queue<uint> _recentInputSerials = new();
     private uint _nextServerObjectId = 0xfeffffff;
 
     public WaylandClient(WaylandServer server, Func<WaylandOutgoingMessage, ValueTask<int>> sendAsync)
@@ -909,6 +933,17 @@ public sealed class WaylandClient
     internal void HandleClosed() => OnClosed?.Invoke();
 
     public uint NextSerial() => _nextSerial++;
+
+    internal uint NextInputSerial()
+    {
+        uint serial = NextSerial();
+        if (_recentInputSerials.Count >= 16)
+            _recentInputSerials.Dequeue();
+        _recentInputSerials.Enqueue(serial);
+        return serial;
+    }
+
+    internal bool HasRecentInputSerial(uint serial) => _recentInputSerials.Contains(serial);
 
     public uint AllocateServerObjectId()
     {

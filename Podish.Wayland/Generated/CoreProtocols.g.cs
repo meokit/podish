@@ -5,6 +5,12 @@
 // Source protocol: cursor_shape_v1 (spec/wayland/cursor-shape-v1.xml)
 // Source protocol: wp_primary_selection_unstable_v1 (spec/wayland/primary-selection-unstable-v1.xml)
 // Source protocol: text_input_unstable_v3 (spec/wayland/text-input-unstable-v3.xml)
+// Source protocol: wlr_layer_shell_unstable_v1 (spec/wayland/wlr-layer-shell-unstable-v1.xml)
+// Source protocol: wlr_foreign_toplevel_management_unstable_v1 (spec/wayland/wlr-foreign-toplevel-management-unstable-v1.xml)
+// Source protocol: linux_dmabuf_v1 (spec/wayland/linux-dmabuf-v1.xml)
+// Source protocol: fractional_scale_v1 (spec/wayland/fractional-scale-v1.xml)
+// Source protocol: viewporter (spec/wayland/viewporter.xml)
+// Source protocol: xdg_output_unstable_v1 (spec/wayland/xdg-output-unstable-v1.xml)
 #nullable enable
 namespace Podish.Wayland;
 
@@ -314,6 +320,48 @@ public enum XdgWmBaseError : uint
     Unresponsive = 6,
 }
 
+public enum XdgPositionerError : uint
+{
+    InvalidInput = 0,
+}
+
+public enum XdgPositionerAnchor : uint
+{
+    None = 0,
+    Top = 1,
+    Bottom = 2,
+    Left = 3,
+    Right = 4,
+    TopLeft = 5,
+    BottomLeft = 6,
+    TopRight = 7,
+    BottomRight = 8,
+}
+
+public enum XdgPositionerGravity : uint
+{
+    None = 0,
+    Top = 1,
+    Bottom = 2,
+    Left = 3,
+    Right = 4,
+    TopLeft = 5,
+    BottomLeft = 6,
+    TopRight = 7,
+    BottomRight = 8,
+}
+
+public enum XdgPositionerConstraintAdjustment : uint
+{
+    None = 0,
+    SlideX = 1,
+    SlideY = 2,
+    FlipX = 4,
+    FlipY = 8,
+    ResizeX = 16,
+    ResizeY = 32,
+}
+
 public enum XdgSurfaceError : uint
 {
     NotConstructed = 1,
@@ -367,6 +415,11 @@ public enum XdgToplevelWmCapabilities : uint
     Maximize = 2,
     Fullscreen = 3,
     Minimize = 4,
+}
+
+public enum XdgPopupError : uint
+{
+    InvalidGrab = 0,
 }
 
 public enum ZxdgToplevelDecorationV1Error : uint
@@ -465,6 +518,95 @@ public enum ZwpTextInputV3ContentPurpose : uint
     Time = 11,
     Datetime = 12,
     Terminal = 13,
+}
+
+public enum ZwlrLayerShellV1Error : uint
+{
+    Role = 0,
+    InvalidLayer = 1,
+    AlreadyConstructed = 2,
+}
+
+public enum ZwlrLayerShellV1Layer : uint
+{
+    Background = 0,
+    Bottom = 1,
+    Top = 2,
+    Overlay = 3,
+}
+
+public enum ZwlrLayerSurfaceV1KeyboardInteractivity : uint
+{
+    None = 0,
+    Exclusive = 1,
+    OnDemand = 2,
+}
+
+public enum ZwlrLayerSurfaceV1Error : uint
+{
+    InvalidSurfaceState = 0,
+    InvalidSize = 1,
+    InvalidAnchor = 2,
+    InvalidKeyboardInteractivity = 3,
+}
+
+public enum ZwlrLayerSurfaceV1Anchor : uint
+{
+    Top = 1,
+    Bottom = 2,
+    Left = 4,
+    Right = 8,
+}
+
+public enum ZwlrForeignToplevelHandleV1State : uint
+{
+    Maximized = 0,
+    Minimized = 1,
+    Activated = 2,
+    Fullscreen = 3,
+}
+
+public enum ZwlrForeignToplevelHandleV1Error : uint
+{
+    InvalidRectangle = 0,
+}
+
+public enum ZwpLinuxBufferParamsV1Error : uint
+{
+    AlreadyUsed = 0,
+    PlaneIdx = 1,
+    PlaneSet = 2,
+    Incomplete = 3,
+    InvalidFormat = 4,
+    InvalidDimensions = 5,
+    OutOfBounds = 6,
+    InvalidWlBuffer = 7,
+    InvalidDevTSize = 8,
+}
+
+public enum ZwpLinuxBufferParamsV1Flags : uint
+{
+    YInvert = 1,
+    Interlaced = 2,
+    BottomFirst = 4,
+}
+
+public enum WpFractionalScaleManagerV1Error : uint
+{
+    FractionalScaleExists = 0,
+}
+
+public enum WpViewporterError : uint
+{
+    ViewportExists = 0,
+}
+
+public enum WpViewportError : uint
+{
+    BadValue = 0,
+    BadSize = 1,
+    OutOfBuffer = 2,
+    NoSurface = 3,
 }
 
 public static class WlDisplayProtocol
@@ -1674,7 +1816,7 @@ public readonly record struct WlSubsurfacePlaceBelowRequest(uint Sibling);
 public static class XdgWmBaseProtocol
 {
     public const string InterfaceName = "xdg_wm_base";
-    public const uint Version = 1;
+    public const uint Version = 3;
 
     public static readonly ReadOnlyCollection<WaylandMessageMetadata> Requests = new([
         new WaylandMessageMetadata(InterfaceName, "destroy", 0, 1, []),
@@ -1736,10 +1878,139 @@ public static class XdgWmBaseEventWriter
 
 }
 
+public static class XdgPositionerProtocol
+{
+    public const string InterfaceName = "xdg_positioner";
+    public const uint Version = 3;
+
+    public static readonly ReadOnlyCollection<WaylandMessageMetadata> Requests = new([
+        new WaylandMessageMetadata(InterfaceName, "destroy", 0, 1, []),
+        new WaylandMessageMetadata(InterfaceName, "set_size", 1, 1, [
+            new WaylandArgumentMetadata("width", WaylandArgKind.Int),
+            new WaylandArgumentMetadata("height", WaylandArgKind.Int)
+        ]),
+        new WaylandMessageMetadata(InterfaceName, "set_anchor_rect", 2, 1, [
+            new WaylandArgumentMetadata("x", WaylandArgKind.Int),
+            new WaylandArgumentMetadata("y", WaylandArgKind.Int),
+            new WaylandArgumentMetadata("width", WaylandArgKind.Int),
+            new WaylandArgumentMetadata("height", WaylandArgKind.Int)
+        ]),
+        new WaylandMessageMetadata(InterfaceName, "set_anchor", 3, 1, [
+            new WaylandArgumentMetadata("anchor", WaylandArgKind.Uint)
+        ]),
+        new WaylandMessageMetadata(InterfaceName, "set_gravity", 4, 1, [
+            new WaylandArgumentMetadata("gravity", WaylandArgKind.Uint)
+        ]),
+        new WaylandMessageMetadata(InterfaceName, "set_constraint_adjustment", 5, 1, [
+            new WaylandArgumentMetadata("constraint_adjustment", WaylandArgKind.Uint)
+        ]),
+        new WaylandMessageMetadata(InterfaceName, "set_offset", 6, 1, [
+            new WaylandArgumentMetadata("x", WaylandArgKind.Int),
+            new WaylandArgumentMetadata("y", WaylandArgKind.Int)
+        ]),
+        new WaylandMessageMetadata(InterfaceName, "set_reactive", 7, 3, []),
+        new WaylandMessageMetadata(InterfaceName, "set_parent_size", 8, 3, [
+            new WaylandArgumentMetadata("parent_width", WaylandArgKind.Int),
+            new WaylandArgumentMetadata("parent_height", WaylandArgKind.Int)
+        ]),
+        new WaylandMessageMetadata(InterfaceName, "set_parent_configure", 9, 3, [
+            new WaylandArgumentMetadata("serial", WaylandArgKind.Uint)
+        ])
+    ]);
+
+    public static XdgPositionerSetSizeRequest DecodeSetSize(byte[] body, IReadOnlyList<LinuxFile> fds)
+    {
+        var reader = new WaylandWireReader(body, fds);
+        int arg0 = reader.ReadInt();
+        int arg1 = reader.ReadInt();
+        var request = new XdgPositionerSetSizeRequest(arg0, arg1);
+        reader.EnsureExhausted();
+        return request;
+    }
+
+    public static XdgPositionerSetAnchorRectRequest DecodeSetAnchorRect(byte[] body, IReadOnlyList<LinuxFile> fds)
+    {
+        var reader = new WaylandWireReader(body, fds);
+        int arg0 = reader.ReadInt();
+        int arg1 = reader.ReadInt();
+        int arg2 = reader.ReadInt();
+        int arg3 = reader.ReadInt();
+        var request = new XdgPositionerSetAnchorRectRequest(arg0, arg1, arg2, arg3);
+        reader.EnsureExhausted();
+        return request;
+    }
+
+    public static XdgPositionerSetAnchorRequest DecodeSetAnchor(byte[] body, IReadOnlyList<LinuxFile> fds)
+    {
+        var reader = new WaylandWireReader(body, fds);
+        XdgPositionerAnchor arg0 = (XdgPositionerAnchor)reader.ReadUInt();
+        var request = new XdgPositionerSetAnchorRequest(arg0);
+        reader.EnsureExhausted();
+        return request;
+    }
+
+    public static XdgPositionerSetGravityRequest DecodeSetGravity(byte[] body, IReadOnlyList<LinuxFile> fds)
+    {
+        var reader = new WaylandWireReader(body, fds);
+        XdgPositionerGravity arg0 = (XdgPositionerGravity)reader.ReadUInt();
+        var request = new XdgPositionerSetGravityRequest(arg0);
+        reader.EnsureExhausted();
+        return request;
+    }
+
+    public static XdgPositionerSetConstraintAdjustmentRequest DecodeSetConstraintAdjustment(byte[] body, IReadOnlyList<LinuxFile> fds)
+    {
+        var reader = new WaylandWireReader(body, fds);
+        XdgPositionerConstraintAdjustment arg0 = (XdgPositionerConstraintAdjustment)reader.ReadUInt();
+        var request = new XdgPositionerSetConstraintAdjustmentRequest(arg0);
+        reader.EnsureExhausted();
+        return request;
+    }
+
+    public static XdgPositionerSetOffsetRequest DecodeSetOffset(byte[] body, IReadOnlyList<LinuxFile> fds)
+    {
+        var reader = new WaylandWireReader(body, fds);
+        int arg0 = reader.ReadInt();
+        int arg1 = reader.ReadInt();
+        var request = new XdgPositionerSetOffsetRequest(arg0, arg1);
+        reader.EnsureExhausted();
+        return request;
+    }
+
+    public static XdgPositionerSetParentSizeRequest DecodeSetParentSize(byte[] body, IReadOnlyList<LinuxFile> fds)
+    {
+        var reader = new WaylandWireReader(body, fds);
+        int arg0 = reader.ReadInt();
+        int arg1 = reader.ReadInt();
+        var request = new XdgPositionerSetParentSizeRequest(arg0, arg1);
+        reader.EnsureExhausted();
+        return request;
+    }
+
+    public static XdgPositionerSetParentConfigureRequest DecodeSetParentConfigure(byte[] body, IReadOnlyList<LinuxFile> fds)
+    {
+        var reader = new WaylandWireReader(body, fds);
+        uint arg0 = reader.ReadUInt();
+        var request = new XdgPositionerSetParentConfigureRequest(arg0);
+        reader.EnsureExhausted();
+        return request;
+    }
+
+}
+
+public readonly record struct XdgPositionerSetSizeRequest(int Width, int Height);
+public readonly record struct XdgPositionerSetAnchorRectRequest(int X, int Y, int Width, int Height);
+public readonly record struct XdgPositionerSetAnchorRequest(XdgPositionerAnchor Anchor);
+public readonly record struct XdgPositionerSetGravityRequest(XdgPositionerGravity Gravity);
+public readonly record struct XdgPositionerSetConstraintAdjustmentRequest(XdgPositionerConstraintAdjustment ConstraintAdjustment);
+public readonly record struct XdgPositionerSetOffsetRequest(int X, int Y);
+public readonly record struct XdgPositionerSetParentSizeRequest(int ParentWidth, int ParentHeight);
+public readonly record struct XdgPositionerSetParentConfigureRequest(uint Serial);
+
 public static class XdgSurfaceProtocol
 {
     public const string InterfaceName = "xdg_surface";
-    public const uint Version = 1;
+    public const uint Version = 3;
 
     public static readonly ReadOnlyCollection<WaylandMessageMetadata> Requests = new([
         new WaylandMessageMetadata(InterfaceName, "destroy", 0, 1, []),
@@ -1825,7 +2096,7 @@ public static class XdgSurfaceEventWriter
 public static class XdgToplevelProtocol
 {
     public const string InterfaceName = "xdg_toplevel";
-    public const uint Version = 1;
+    public const uint Version = 3;
 
     public static readonly ReadOnlyCollection<WaylandMessageMetadata> Requests = new([
         new WaylandMessageMetadata(InterfaceName, "destroy", 0, 1, []),
@@ -1986,6 +2257,76 @@ public static class XdgToplevelEventWriter
     public static ValueTask CloseAsync(WaylandClient client, uint objectId)
     {
         return client.SendEventAsync(objectId, 1, static _ => { });
+    }
+
+}
+
+public static class XdgPopupProtocol
+{
+    public const string InterfaceName = "xdg_popup";
+    public const uint Version = 3;
+
+    public static readonly ReadOnlyCollection<WaylandMessageMetadata> Requests = new([
+        new WaylandMessageMetadata(InterfaceName, "destroy", 0, 1, []),
+        new WaylandMessageMetadata(InterfaceName, "grab", 1, 1, [
+            new WaylandArgumentMetadata("seat", WaylandArgKind.Object, "wl_seat"),
+            new WaylandArgumentMetadata("serial", WaylandArgKind.Uint)
+        ]),
+        new WaylandMessageMetadata(InterfaceName, "reposition", 2, 3, [
+            new WaylandArgumentMetadata("positioner", WaylandArgKind.Object, "xdg_positioner"),
+            new WaylandArgumentMetadata("token", WaylandArgKind.Uint)
+        ])
+    ]);
+
+    public static XdgPopupGrabRequest DecodeGrab(byte[] body, IReadOnlyList<LinuxFile> fds)
+    {
+        var reader = new WaylandWireReader(body, fds);
+        uint arg0 = reader.ReadObjectId();
+        uint arg1 = reader.ReadUInt();
+        var request = new XdgPopupGrabRequest(arg0, arg1);
+        reader.EnsureExhausted();
+        return request;
+    }
+
+    public static XdgPopupRepositionRequest DecodeReposition(byte[] body, IReadOnlyList<LinuxFile> fds)
+    {
+        var reader = new WaylandWireReader(body, fds);
+        uint arg0 = reader.ReadObjectId();
+        uint arg1 = reader.ReadUInt();
+        var request = new XdgPopupRepositionRequest(arg0, arg1);
+        reader.EnsureExhausted();
+        return request;
+    }
+
+}
+
+public readonly record struct XdgPopupGrabRequest(uint Seat, uint Serial);
+public readonly record struct XdgPopupRepositionRequest(uint Positioner, uint Token);
+
+public static class XdgPopupEventWriter
+{
+    public static ValueTask ConfigureAsync(WaylandClient client, uint objectId, int x, int y, int width, int height)
+    {
+        return client.SendEventAsync(objectId, 0, writer =>
+        {
+            writer.WriteInt(x);
+            writer.WriteInt(y);
+            writer.WriteInt(width);
+            writer.WriteInt(height);
+        });
+    }
+
+    public static ValueTask PopupDoneAsync(WaylandClient client, uint objectId)
+    {
+        return client.SendEventAsync(objectId, 1, static _ => { });
+    }
+
+    public static ValueTask RepositionedAsync(WaylandClient client, uint objectId, uint token)
+    {
+        return client.SendEventAsync(objectId, 2, writer =>
+        {
+            writer.WriteUInt(token);
+        });
     }
 
 }
@@ -2453,3 +2794,677 @@ public static class ZwpTextInputManagerV3Protocol
 }
 
 public readonly record struct ZwpTextInputManagerV3GetTextInputRequest(uint Id, uint Seat);
+
+public static class ZwlrLayerShellV1Protocol
+{
+    public const string InterfaceName = "zwlr_layer_shell_v1";
+    public const uint Version = 4;
+
+    public static readonly ReadOnlyCollection<WaylandMessageMetadata> Requests = new([
+        new WaylandMessageMetadata(InterfaceName, "get_layer_surface", 0, 1, [
+            new WaylandArgumentMetadata("id", WaylandArgKind.NewId, "zwlr_layer_surface_v1"),
+            new WaylandArgumentMetadata("surface", WaylandArgKind.Object, "wl_surface"),
+            new WaylandArgumentMetadata("output", WaylandArgKind.Object, "wl_output", true),
+            new WaylandArgumentMetadata("layer", WaylandArgKind.Uint),
+            new WaylandArgumentMetadata("namespace", WaylandArgKind.String)
+        ]),
+        new WaylandMessageMetadata(InterfaceName, "destroy", 1, 3, [])
+    ]);
+
+    public static ZwlrLayerShellV1GetLayerSurfaceRequest DecodeGetLayerSurface(byte[] body, IReadOnlyList<LinuxFile> fds)
+    {
+        var reader = new WaylandWireReader(body, fds);
+        uint arg0 = reader.ReadNewId();
+        uint arg1 = reader.ReadObjectId();
+        uint arg2 = reader.ReadObjectId();
+        ZwlrLayerShellV1Layer arg3 = (ZwlrLayerShellV1Layer)reader.ReadUInt();
+        string arg4 = reader.ReadString() ?? string.Empty;
+        var request = new ZwlrLayerShellV1GetLayerSurfaceRequest(arg0, arg1, arg2, arg3, arg4);
+        reader.EnsureExhausted();
+        return request;
+    }
+
+}
+
+public readonly record struct ZwlrLayerShellV1GetLayerSurfaceRequest(uint Id, uint Surface, uint Output, ZwlrLayerShellV1Layer Layer, string Namespace);
+
+public static class ZwlrLayerSurfaceV1Protocol
+{
+    public const string InterfaceName = "zwlr_layer_surface_v1";
+    public const uint Version = 4;
+
+    public static readonly ReadOnlyCollection<WaylandMessageMetadata> Requests = new([
+        new WaylandMessageMetadata(InterfaceName, "set_size", 0, 1, [
+            new WaylandArgumentMetadata("width", WaylandArgKind.Uint),
+            new WaylandArgumentMetadata("height", WaylandArgKind.Uint)
+        ]),
+        new WaylandMessageMetadata(InterfaceName, "set_anchor", 1, 1, [
+            new WaylandArgumentMetadata("anchor", WaylandArgKind.Uint)
+        ]),
+        new WaylandMessageMetadata(InterfaceName, "set_exclusive_zone", 2, 1, [
+            new WaylandArgumentMetadata("zone", WaylandArgKind.Int)
+        ]),
+        new WaylandMessageMetadata(InterfaceName, "set_margin", 3, 1, [
+            new WaylandArgumentMetadata("top", WaylandArgKind.Int),
+            new WaylandArgumentMetadata("right", WaylandArgKind.Int),
+            new WaylandArgumentMetadata("bottom", WaylandArgKind.Int),
+            new WaylandArgumentMetadata("left", WaylandArgKind.Int)
+        ]),
+        new WaylandMessageMetadata(InterfaceName, "set_keyboard_interactivity", 4, 1, [
+            new WaylandArgumentMetadata("keyboard_interactivity", WaylandArgKind.Uint)
+        ]),
+        new WaylandMessageMetadata(InterfaceName, "get_popup", 5, 1, [
+            new WaylandArgumentMetadata("popup", WaylandArgKind.Object, "xdg_popup")
+        ]),
+        new WaylandMessageMetadata(InterfaceName, "ack_configure", 6, 1, [
+            new WaylandArgumentMetadata("serial", WaylandArgKind.Uint)
+        ]),
+        new WaylandMessageMetadata(InterfaceName, "destroy", 7, 1, []),
+        new WaylandMessageMetadata(InterfaceName, "set_layer", 8, 2, [
+            new WaylandArgumentMetadata("layer", WaylandArgKind.Uint)
+        ])
+    ]);
+
+    public static ZwlrLayerSurfaceV1SetSizeRequest DecodeSetSize(byte[] body, IReadOnlyList<LinuxFile> fds)
+    {
+        var reader = new WaylandWireReader(body, fds);
+        uint arg0 = reader.ReadUInt();
+        uint arg1 = reader.ReadUInt();
+        var request = new ZwlrLayerSurfaceV1SetSizeRequest(arg0, arg1);
+        reader.EnsureExhausted();
+        return request;
+    }
+
+    public static ZwlrLayerSurfaceV1SetAnchorRequest DecodeSetAnchor(byte[] body, IReadOnlyList<LinuxFile> fds)
+    {
+        var reader = new WaylandWireReader(body, fds);
+        ZwlrLayerSurfaceV1Anchor arg0 = (ZwlrLayerSurfaceV1Anchor)reader.ReadUInt();
+        var request = new ZwlrLayerSurfaceV1SetAnchorRequest(arg0);
+        reader.EnsureExhausted();
+        return request;
+    }
+
+    public static ZwlrLayerSurfaceV1SetExclusiveZoneRequest DecodeSetExclusiveZone(byte[] body, IReadOnlyList<LinuxFile> fds)
+    {
+        var reader = new WaylandWireReader(body, fds);
+        int arg0 = reader.ReadInt();
+        var request = new ZwlrLayerSurfaceV1SetExclusiveZoneRequest(arg0);
+        reader.EnsureExhausted();
+        return request;
+    }
+
+    public static ZwlrLayerSurfaceV1SetMarginRequest DecodeSetMargin(byte[] body, IReadOnlyList<LinuxFile> fds)
+    {
+        var reader = new WaylandWireReader(body, fds);
+        int arg0 = reader.ReadInt();
+        int arg1 = reader.ReadInt();
+        int arg2 = reader.ReadInt();
+        int arg3 = reader.ReadInt();
+        var request = new ZwlrLayerSurfaceV1SetMarginRequest(arg0, arg1, arg2, arg3);
+        reader.EnsureExhausted();
+        return request;
+    }
+
+    public static ZwlrLayerSurfaceV1SetKeyboardInteractivityRequest DecodeSetKeyboardInteractivity(byte[] body, IReadOnlyList<LinuxFile> fds)
+    {
+        var reader = new WaylandWireReader(body, fds);
+        ZwlrLayerSurfaceV1KeyboardInteractivity arg0 = (ZwlrLayerSurfaceV1KeyboardInteractivity)reader.ReadUInt();
+        var request = new ZwlrLayerSurfaceV1SetKeyboardInteractivityRequest(arg0);
+        reader.EnsureExhausted();
+        return request;
+    }
+
+    public static ZwlrLayerSurfaceV1GetPopupRequest DecodeGetPopup(byte[] body, IReadOnlyList<LinuxFile> fds)
+    {
+        var reader = new WaylandWireReader(body, fds);
+        uint arg0 = reader.ReadObjectId();
+        var request = new ZwlrLayerSurfaceV1GetPopupRequest(arg0);
+        reader.EnsureExhausted();
+        return request;
+    }
+
+    public static ZwlrLayerSurfaceV1AckConfigureRequest DecodeAckConfigure(byte[] body, IReadOnlyList<LinuxFile> fds)
+    {
+        var reader = new WaylandWireReader(body, fds);
+        uint arg0 = reader.ReadUInt();
+        var request = new ZwlrLayerSurfaceV1AckConfigureRequest(arg0);
+        reader.EnsureExhausted();
+        return request;
+    }
+
+    public static ZwlrLayerSurfaceV1SetLayerRequest DecodeSetLayer(byte[] body, IReadOnlyList<LinuxFile> fds)
+    {
+        var reader = new WaylandWireReader(body, fds);
+        ZwlrLayerShellV1Layer arg0 = (ZwlrLayerShellV1Layer)reader.ReadUInt();
+        var request = new ZwlrLayerSurfaceV1SetLayerRequest(arg0);
+        reader.EnsureExhausted();
+        return request;
+    }
+
+}
+
+public readonly record struct ZwlrLayerSurfaceV1SetSizeRequest(uint Width, uint Height);
+public readonly record struct ZwlrLayerSurfaceV1SetAnchorRequest(ZwlrLayerSurfaceV1Anchor Anchor);
+public readonly record struct ZwlrLayerSurfaceV1SetExclusiveZoneRequest(int Zone);
+public readonly record struct ZwlrLayerSurfaceV1SetMarginRequest(int Top, int Right, int Bottom, int Left);
+public readonly record struct ZwlrLayerSurfaceV1SetKeyboardInteractivityRequest(ZwlrLayerSurfaceV1KeyboardInteractivity KeyboardInteractivity);
+public readonly record struct ZwlrLayerSurfaceV1GetPopupRequest(uint Popup);
+public readonly record struct ZwlrLayerSurfaceV1AckConfigureRequest(uint Serial);
+public readonly record struct ZwlrLayerSurfaceV1SetLayerRequest(ZwlrLayerShellV1Layer Layer);
+
+public static class ZwlrLayerSurfaceV1EventWriter
+{
+    public static ValueTask ConfigureAsync(WaylandClient client, uint objectId, uint serial, uint width, uint height)
+    {
+        return client.SendEventAsync(objectId, 0, writer =>
+        {
+            writer.WriteUInt(serial);
+            writer.WriteUInt(width);
+            writer.WriteUInt(height);
+        });
+    }
+
+    public static ValueTask ClosedAsync(WaylandClient client, uint objectId)
+    {
+        return client.SendEventAsync(objectId, 1, static _ => { });
+    }
+
+}
+
+public static class ZwlrForeignToplevelManagerV1Protocol
+{
+    public const string InterfaceName = "zwlr_foreign_toplevel_manager_v1";
+    public const uint Version = 3;
+
+    public static readonly ReadOnlyCollection<WaylandMessageMetadata> Requests = new([
+        new WaylandMessageMetadata(InterfaceName, "stop", 0, 1, [])
+    ]);
+
+}
+
+public static class ZwlrForeignToplevelManagerV1EventWriter
+{
+    public static ValueTask ToplevelAsync(WaylandClient client, uint objectId, uint toplevel)
+    {
+        return client.SendEventAsync(objectId, 0, writer =>
+        {
+            writer.WriteNewId(toplevel);
+        });
+    }
+
+    public static ValueTask FinishedAsync(WaylandClient client, uint objectId)
+    {
+        return client.SendEventAsync(objectId, 1, static _ => { });
+    }
+
+}
+
+public static class ZwlrForeignToplevelHandleV1Protocol
+{
+    public const string InterfaceName = "zwlr_foreign_toplevel_handle_v1";
+    public const uint Version = 3;
+
+    public static readonly ReadOnlyCollection<WaylandMessageMetadata> Requests = new([
+        new WaylandMessageMetadata(InterfaceName, "set_maximized", 0, 1, []),
+        new WaylandMessageMetadata(InterfaceName, "unset_maximized", 1, 1, []),
+        new WaylandMessageMetadata(InterfaceName, "set_minimized", 2, 1, []),
+        new WaylandMessageMetadata(InterfaceName, "unset_minimized", 3, 1, []),
+        new WaylandMessageMetadata(InterfaceName, "activate", 4, 1, [
+            new WaylandArgumentMetadata("seat", WaylandArgKind.Object, "wl_seat")
+        ]),
+        new WaylandMessageMetadata(InterfaceName, "close", 5, 1, []),
+        new WaylandMessageMetadata(InterfaceName, "set_rectangle", 6, 1, [
+            new WaylandArgumentMetadata("surface", WaylandArgKind.Object, "wl_surface"),
+            new WaylandArgumentMetadata("x", WaylandArgKind.Int),
+            new WaylandArgumentMetadata("y", WaylandArgKind.Int),
+            new WaylandArgumentMetadata("width", WaylandArgKind.Int),
+            new WaylandArgumentMetadata("height", WaylandArgKind.Int)
+        ]),
+        new WaylandMessageMetadata(InterfaceName, "destroy", 7, 1, []),
+        new WaylandMessageMetadata(InterfaceName, "set_fullscreen", 8, 2, [
+            new WaylandArgumentMetadata("output", WaylandArgKind.Object, "wl_output", true)
+        ]),
+        new WaylandMessageMetadata(InterfaceName, "unset_fullscreen", 9, 2, [])
+    ]);
+
+    public static ZwlrForeignToplevelHandleV1ActivateRequest DecodeActivate(byte[] body, IReadOnlyList<LinuxFile> fds)
+    {
+        var reader = new WaylandWireReader(body, fds);
+        uint arg0 = reader.ReadObjectId();
+        var request = new ZwlrForeignToplevelHandleV1ActivateRequest(arg0);
+        reader.EnsureExhausted();
+        return request;
+    }
+
+    public static ZwlrForeignToplevelHandleV1SetRectangleRequest DecodeSetRectangle(byte[] body, IReadOnlyList<LinuxFile> fds)
+    {
+        var reader = new WaylandWireReader(body, fds);
+        uint arg0 = reader.ReadObjectId();
+        int arg1 = reader.ReadInt();
+        int arg2 = reader.ReadInt();
+        int arg3 = reader.ReadInt();
+        int arg4 = reader.ReadInt();
+        var request = new ZwlrForeignToplevelHandleV1SetRectangleRequest(arg0, arg1, arg2, arg3, arg4);
+        reader.EnsureExhausted();
+        return request;
+    }
+
+    public static ZwlrForeignToplevelHandleV1SetFullscreenRequest DecodeSetFullscreen(byte[] body, IReadOnlyList<LinuxFile> fds)
+    {
+        var reader = new WaylandWireReader(body, fds);
+        uint arg0 = reader.ReadObjectId();
+        var request = new ZwlrForeignToplevelHandleV1SetFullscreenRequest(arg0);
+        reader.EnsureExhausted();
+        return request;
+    }
+
+}
+
+public readonly record struct ZwlrForeignToplevelHandleV1ActivateRequest(uint Seat);
+public readonly record struct ZwlrForeignToplevelHandleV1SetRectangleRequest(uint Surface, int X, int Y, int Width, int Height);
+public readonly record struct ZwlrForeignToplevelHandleV1SetFullscreenRequest(uint Output);
+
+public static class ZwlrForeignToplevelHandleV1EventWriter
+{
+    public static ValueTask TitleAsync(WaylandClient client, uint objectId, string title)
+    {
+        return client.SendEventAsync(objectId, 0, writer =>
+        {
+            writer.WriteString(title);
+        });
+    }
+
+    public static ValueTask AppIdAsync(WaylandClient client, uint objectId, string appId)
+    {
+        return client.SendEventAsync(objectId, 1, writer =>
+        {
+            writer.WriteString(appId);
+        });
+    }
+
+    public static ValueTask OutputEnterAsync(WaylandClient client, uint objectId, uint output)
+    {
+        return client.SendEventAsync(objectId, 2, writer =>
+        {
+            writer.WriteObjectId(output);
+        });
+    }
+
+    public static ValueTask OutputLeaveAsync(WaylandClient client, uint objectId, uint output)
+    {
+        return client.SendEventAsync(objectId, 3, writer =>
+        {
+            writer.WriteObjectId(output);
+        });
+    }
+
+    public static ValueTask StateAsync(WaylandClient client, uint objectId, byte[] state)
+    {
+        return client.SendEventAsync(objectId, 4, writer =>
+        {
+            writer.WriteArray(state);
+        });
+    }
+
+    public static ValueTask DoneAsync(WaylandClient client, uint objectId)
+    {
+        return client.SendEventAsync(objectId, 5, static _ => { });
+    }
+
+    public static ValueTask ClosedAsync(WaylandClient client, uint objectId)
+    {
+        return client.SendEventAsync(objectId, 6, static _ => { });
+    }
+
+    public static ValueTask ParentAsync(WaylandClient client, uint objectId, uint parent)
+    {
+        return client.SendEventAsync(objectId, 7, writer =>
+        {
+            writer.WriteObjectId(parent);
+        });
+    }
+
+}
+
+public static class ZwpLinuxDmabufV1Protocol
+{
+    public const string InterfaceName = "zwp_linux_dmabuf_v1";
+    public const uint Version = 3;
+
+    public static readonly ReadOnlyCollection<WaylandMessageMetadata> Requests = new([
+        new WaylandMessageMetadata(InterfaceName, "destroy", 0, 1, []),
+        new WaylandMessageMetadata(InterfaceName, "create_params", 1, 1, [
+            new WaylandArgumentMetadata("params_id", WaylandArgKind.NewId, "zwp_linux_buffer_params_v1")
+        ])
+    ]);
+
+    public static ZwpLinuxDmabufV1CreateParamsRequest DecodeCreateParams(byte[] body, IReadOnlyList<LinuxFile> fds)
+    {
+        var reader = new WaylandWireReader(body, fds);
+        uint arg0 = reader.ReadNewId();
+        var request = new ZwpLinuxDmabufV1CreateParamsRequest(arg0);
+        reader.EnsureExhausted();
+        return request;
+    }
+
+}
+
+public readonly record struct ZwpLinuxDmabufV1CreateParamsRequest(uint ParamsId);
+
+public static class ZwpLinuxDmabufV1EventWriter
+{
+    public static ValueTask FormatAsync(WaylandClient client, uint objectId, uint format)
+    {
+        return client.SendEventAsync(objectId, 0, writer =>
+        {
+            writer.WriteUInt(format);
+        });
+    }
+
+    public static ValueTask ModifierAsync(WaylandClient client, uint objectId, uint format, uint modifierHi, uint modifierLo)
+    {
+        return client.SendEventAsync(objectId, 1, writer =>
+        {
+            writer.WriteUInt(format);
+            writer.WriteUInt(modifierHi);
+            writer.WriteUInt(modifierLo);
+        });
+    }
+
+}
+
+public static class ZwpLinuxBufferParamsV1Protocol
+{
+    public const string InterfaceName = "zwp_linux_buffer_params_v1";
+    public const uint Version = 3;
+
+    public static readonly ReadOnlyCollection<WaylandMessageMetadata> Requests = new([
+        new WaylandMessageMetadata(InterfaceName, "destroy", 0, 1, []),
+        new WaylandMessageMetadata(InterfaceName, "add", 1, 1, [
+            new WaylandArgumentMetadata("fd", WaylandArgKind.Fd),
+            new WaylandArgumentMetadata("plane_idx", WaylandArgKind.Uint),
+            new WaylandArgumentMetadata("offset", WaylandArgKind.Uint),
+            new WaylandArgumentMetadata("stride", WaylandArgKind.Uint),
+            new WaylandArgumentMetadata("modifier_hi", WaylandArgKind.Uint),
+            new WaylandArgumentMetadata("modifier_lo", WaylandArgKind.Uint)
+        ]),
+        new WaylandMessageMetadata(InterfaceName, "create", 2, 1, [
+            new WaylandArgumentMetadata("width", WaylandArgKind.Int),
+            new WaylandArgumentMetadata("height", WaylandArgKind.Int),
+            new WaylandArgumentMetadata("format", WaylandArgKind.Uint),
+            new WaylandArgumentMetadata("flags", WaylandArgKind.Uint)
+        ]),
+        new WaylandMessageMetadata(InterfaceName, "create_immed", 3, 2, [
+            new WaylandArgumentMetadata("buffer_id", WaylandArgKind.NewId, "wl_buffer"),
+            new WaylandArgumentMetadata("width", WaylandArgKind.Int),
+            new WaylandArgumentMetadata("height", WaylandArgKind.Int),
+            new WaylandArgumentMetadata("format", WaylandArgKind.Uint),
+            new WaylandArgumentMetadata("flags", WaylandArgKind.Uint)
+        ])
+    ]);
+
+    public static ZwpLinuxBufferParamsV1AddRequest DecodeAdd(byte[] body, IReadOnlyList<LinuxFile> fds)
+    {
+        var reader = new WaylandWireReader(body, fds);
+        LinuxFile arg0 = reader.ReadFd();
+        uint arg1 = reader.ReadUInt();
+        uint arg2 = reader.ReadUInt();
+        uint arg3 = reader.ReadUInt();
+        uint arg4 = reader.ReadUInt();
+        uint arg5 = reader.ReadUInt();
+        var request = new ZwpLinuxBufferParamsV1AddRequest(arg0, arg1, arg2, arg3, arg4, arg5);
+        reader.EnsureExhausted();
+        return request;
+    }
+
+    public static ZwpLinuxBufferParamsV1CreateRequest DecodeCreate(byte[] body, IReadOnlyList<LinuxFile> fds)
+    {
+        var reader = new WaylandWireReader(body, fds);
+        int arg0 = reader.ReadInt();
+        int arg1 = reader.ReadInt();
+        uint arg2 = reader.ReadUInt();
+        ZwpLinuxBufferParamsV1Flags arg3 = (ZwpLinuxBufferParamsV1Flags)reader.ReadUInt();
+        var request = new ZwpLinuxBufferParamsV1CreateRequest(arg0, arg1, arg2, arg3);
+        reader.EnsureExhausted();
+        return request;
+    }
+
+    public static ZwpLinuxBufferParamsV1CreateImmedRequest DecodeCreateImmed(byte[] body, IReadOnlyList<LinuxFile> fds)
+    {
+        var reader = new WaylandWireReader(body, fds);
+        uint arg0 = reader.ReadNewId();
+        int arg1 = reader.ReadInt();
+        int arg2 = reader.ReadInt();
+        uint arg3 = reader.ReadUInt();
+        ZwpLinuxBufferParamsV1Flags arg4 = (ZwpLinuxBufferParamsV1Flags)reader.ReadUInt();
+        var request = new ZwpLinuxBufferParamsV1CreateImmedRequest(arg0, arg1, arg2, arg3, arg4);
+        reader.EnsureExhausted();
+        return request;
+    }
+
+}
+
+public readonly record struct ZwpLinuxBufferParamsV1AddRequest(LinuxFile Fd, uint PlaneIdx, uint Offset, uint Stride, uint ModifierHi, uint ModifierLo);
+public readonly record struct ZwpLinuxBufferParamsV1CreateRequest(int Width, int Height, uint Format, ZwpLinuxBufferParamsV1Flags Flags);
+public readonly record struct ZwpLinuxBufferParamsV1CreateImmedRequest(uint BufferId, int Width, int Height, uint Format, ZwpLinuxBufferParamsV1Flags Flags);
+
+public static class ZwpLinuxBufferParamsV1EventWriter
+{
+    public static ValueTask CreatedAsync(WaylandClient client, uint objectId, uint buffer)
+    {
+        return client.SendEventAsync(objectId, 0, writer =>
+        {
+            writer.WriteNewId(buffer);
+        });
+    }
+
+    public static ValueTask FailedAsync(WaylandClient client, uint objectId)
+    {
+        return client.SendEventAsync(objectId, 1, static _ => { });
+    }
+
+}
+
+public static class WpFractionalScaleManagerV1Protocol
+{
+    public const string InterfaceName = "wp_fractional_scale_manager_v1";
+    public const uint Version = 1;
+
+    public static readonly ReadOnlyCollection<WaylandMessageMetadata> Requests = new([
+        new WaylandMessageMetadata(InterfaceName, "destroy", 0, 1, []),
+        new WaylandMessageMetadata(InterfaceName, "get_fractional_scale", 1, 1, [
+            new WaylandArgumentMetadata("id", WaylandArgKind.NewId, "wp_fractional_scale_v1"),
+            new WaylandArgumentMetadata("surface", WaylandArgKind.Object, "wl_surface")
+        ])
+    ]);
+
+    public static WpFractionalScaleManagerV1GetFractionalScaleRequest DecodeGetFractionalScale(byte[] body, IReadOnlyList<LinuxFile> fds)
+    {
+        var reader = new WaylandWireReader(body, fds);
+        uint arg0 = reader.ReadNewId();
+        uint arg1 = reader.ReadObjectId();
+        var request = new WpFractionalScaleManagerV1GetFractionalScaleRequest(arg0, arg1);
+        reader.EnsureExhausted();
+        return request;
+    }
+
+}
+
+public readonly record struct WpFractionalScaleManagerV1GetFractionalScaleRequest(uint Id, uint Surface);
+
+public static class WpFractionalScaleV1Protocol
+{
+    public const string InterfaceName = "wp_fractional_scale_v1";
+    public const uint Version = 1;
+
+    public static readonly ReadOnlyCollection<WaylandMessageMetadata> Requests = new([
+        new WaylandMessageMetadata(InterfaceName, "destroy", 0, 1, [])
+    ]);
+
+}
+
+public static class WpFractionalScaleV1EventWriter
+{
+    public static ValueTask PreferredScaleAsync(WaylandClient client, uint objectId, uint scale)
+    {
+        return client.SendEventAsync(objectId, 0, writer =>
+        {
+            writer.WriteUInt(scale);
+        });
+    }
+
+}
+
+public static class WpViewporterProtocol
+{
+    public const string InterfaceName = "wp_viewporter";
+    public const uint Version = 1;
+
+    public static readonly ReadOnlyCollection<WaylandMessageMetadata> Requests = new([
+        new WaylandMessageMetadata(InterfaceName, "destroy", 0, 1, []),
+        new WaylandMessageMetadata(InterfaceName, "get_viewport", 1, 1, [
+            new WaylandArgumentMetadata("id", WaylandArgKind.NewId, "wp_viewport"),
+            new WaylandArgumentMetadata("surface", WaylandArgKind.Object, "wl_surface")
+        ])
+    ]);
+
+    public static WpViewporterGetViewportRequest DecodeGetViewport(byte[] body, IReadOnlyList<LinuxFile> fds)
+    {
+        var reader = new WaylandWireReader(body, fds);
+        uint arg0 = reader.ReadNewId();
+        uint arg1 = reader.ReadObjectId();
+        var request = new WpViewporterGetViewportRequest(arg0, arg1);
+        reader.EnsureExhausted();
+        return request;
+    }
+
+}
+
+public readonly record struct WpViewporterGetViewportRequest(uint Id, uint Surface);
+
+public static class WpViewportProtocol
+{
+    public const string InterfaceName = "wp_viewport";
+    public const uint Version = 1;
+
+    public static readonly ReadOnlyCollection<WaylandMessageMetadata> Requests = new([
+        new WaylandMessageMetadata(InterfaceName, "destroy", 0, 1, []),
+        new WaylandMessageMetadata(InterfaceName, "set_source", 1, 1, [
+            new WaylandArgumentMetadata("x", WaylandArgKind.Fixed),
+            new WaylandArgumentMetadata("y", WaylandArgKind.Fixed),
+            new WaylandArgumentMetadata("width", WaylandArgKind.Fixed),
+            new WaylandArgumentMetadata("height", WaylandArgKind.Fixed)
+        ]),
+        new WaylandMessageMetadata(InterfaceName, "set_destination", 2, 1, [
+            new WaylandArgumentMetadata("width", WaylandArgKind.Int),
+            new WaylandArgumentMetadata("height", WaylandArgKind.Int)
+        ])
+    ]);
+
+    public static WpViewportSetSourceRequest DecodeSetSource(byte[] body, IReadOnlyList<LinuxFile> fds)
+    {
+        var reader = new WaylandWireReader(body, fds);
+        int arg0 = reader.ReadFixed();
+        int arg1 = reader.ReadFixed();
+        int arg2 = reader.ReadFixed();
+        int arg3 = reader.ReadFixed();
+        var request = new WpViewportSetSourceRequest(arg0, arg1, arg2, arg3);
+        reader.EnsureExhausted();
+        return request;
+    }
+
+    public static WpViewportSetDestinationRequest DecodeSetDestination(byte[] body, IReadOnlyList<LinuxFile> fds)
+    {
+        var reader = new WaylandWireReader(body, fds);
+        int arg0 = reader.ReadInt();
+        int arg1 = reader.ReadInt();
+        var request = new WpViewportSetDestinationRequest(arg0, arg1);
+        reader.EnsureExhausted();
+        return request;
+    }
+
+}
+
+public readonly record struct WpViewportSetSourceRequest(int X, int Y, int Width, int Height);
+public readonly record struct WpViewportSetDestinationRequest(int Width, int Height);
+
+public static class ZxdgOutputManagerV1Protocol
+{
+    public const string InterfaceName = "zxdg_output_manager_v1";
+    public const uint Version = 3;
+
+    public static readonly ReadOnlyCollection<WaylandMessageMetadata> Requests = new([
+        new WaylandMessageMetadata(InterfaceName, "destroy", 0, 1, []),
+        new WaylandMessageMetadata(InterfaceName, "get_xdg_output", 1, 1, [
+            new WaylandArgumentMetadata("id", WaylandArgKind.NewId, "zxdg_output_v1"),
+            new WaylandArgumentMetadata("output", WaylandArgKind.Object, "wl_output")
+        ])
+    ]);
+
+    public static ZxdgOutputManagerV1GetXdgOutputRequest DecodeGetXdgOutput(byte[] body, IReadOnlyList<LinuxFile> fds)
+    {
+        var reader = new WaylandWireReader(body, fds);
+        uint arg0 = reader.ReadNewId();
+        uint arg1 = reader.ReadObjectId();
+        var request = new ZxdgOutputManagerV1GetXdgOutputRequest(arg0, arg1);
+        reader.EnsureExhausted();
+        return request;
+    }
+
+}
+
+public readonly record struct ZxdgOutputManagerV1GetXdgOutputRequest(uint Id, uint Output);
+
+public static class ZxdgOutputV1Protocol
+{
+    public const string InterfaceName = "zxdg_output_v1";
+    public const uint Version = 3;
+
+    public static readonly ReadOnlyCollection<WaylandMessageMetadata> Requests = new([
+        new WaylandMessageMetadata(InterfaceName, "destroy", 0, 1, [])
+    ]);
+
+}
+
+public static class ZxdgOutputV1EventWriter
+{
+    public static ValueTask LogicalPositionAsync(WaylandClient client, uint objectId, int x, int y)
+    {
+        return client.SendEventAsync(objectId, 0, writer =>
+        {
+            writer.WriteInt(x);
+            writer.WriteInt(y);
+        });
+    }
+
+    public static ValueTask LogicalSizeAsync(WaylandClient client, uint objectId, int width, int height)
+    {
+        return client.SendEventAsync(objectId, 1, writer =>
+        {
+            writer.WriteInt(width);
+            writer.WriteInt(height);
+        });
+    }
+
+    public static ValueTask DoneAsync(WaylandClient client, uint objectId)
+    {
+        return client.SendEventAsync(objectId, 2, static _ => { });
+    }
+
+    public static ValueTask NameAsync(WaylandClient client, uint objectId, string name)
+    {
+        return client.SendEventAsync(objectId, 3, writer =>
+        {
+            writer.WriteString(name);
+        });
+    }
+
+    public static ValueTask DescriptionAsync(WaylandClient client, uint objectId, string description)
+    {
+        return client.SendEventAsync(objectId, 4, writer =>
+        {
+            writer.WriteString(description);
+        });
+    }
+
+}
