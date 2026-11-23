@@ -83,4 +83,13 @@
         <NativeLibrary Include="synchronization.lib"/>
     </ItemGroup>
 
+    <Target Name="DisableNativeAotIdenticalComdatFolding" BeforeTargets="LinkNative"
+            Condition="'$(PublishAot)' == 'true' and $(RuntimeIdentifier.StartsWith('win'))">
+        <!-- libfibercpu uses distinct handler addresses to identify instruction variants. -->
+        <ItemGroup>
+            <LinkerArg Remove="/OPT:ICF"/>
+            <LinkerArg Include="/OPT:NOICF"/>
+        </ItemGroup>
+    </Target>
+
 </Project>

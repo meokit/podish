@@ -545,6 +545,15 @@ set(FIBERCPU_FINAL_SOURCES
 
 add_library(fibercpu ${FIBERCPU_LIBRARY_TYPE} ${FIBERCPU_FINAL_SOURCES})
 
+# Instruction variant lookup uses handler addresses as identities.
+if(MSVC)
+    if(FIBERCPU_BUILD_STATIC)
+        target_link_options(fibercpu INTERFACE /OPT:NOICF)
+    else()
+        target_link_options(fibercpu PRIVATE /OPT:NOICF)
+    endif()
+endif()
+
 set(FIBERCPU_MODRM_TRAIN_PODISH "" CACHE FILEPATH "Published Podish.Cli.dll for short ModRM training")
 set(FIBERCPU_MODRM_TRAIN_ROOTFS "" CACHE PATH "Prepared IA-32 Node/Webpack rootfs for short ModRM training")
 set(FIBERCPU_MODRM_TRAIN_SUITE_ROOTFS "" CACHE PATH "Prepared IA-32 GNU and CoreMark rootfs for full ModRM training")

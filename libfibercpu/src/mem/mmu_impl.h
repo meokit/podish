@@ -62,7 +62,7 @@ inline void* Mmu::try_allocate_block_bytes(size_t size, uint32_t guest_eip) {
         return nullptr;
     }
 
-    void* block_mem = cache.block_pool.allocate(size);
+    void* block_mem = cache.block_pool.allocate(size, alignof(BasicBlock));
     cache.NoteAllocatedBlockBytes(size);
     return block_mem;
 }
