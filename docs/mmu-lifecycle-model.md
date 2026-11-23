@@ -1,61 +1,72 @@
-# MMU Lifecycle Model
+# Native MMU ownership and code-cache lifetime
 
-## Summary
+## MMU attachment
 
-The runtime now uses an intrusive refcounted native MMU core with C#-managed attachment semantics.
+The native `MmuCore` owns the page directory, host-page alias index and
+decoded-block cache. Attached engines and standalone `MmuHandle`s hold
+intrusive references. The native runtime deletes the core when the last
+reference drops. Managed `Engine` tracks attachments by MMU identity and
+rejects attempts to attach a disposed handle.
 
-- `CLONE_VM` shares the same MMU core.
-- Non-shared clone/fork copies the mappings into a new MMU core. Both cores borrow the same backing pages. The caller implements copy-on-write when needed.
+| Operation | MMU behavior |
+|---|---|
+| `X86_MmuCreateEmpty` | Return a standalone handle for a new core with an empty page directory. |
+| `X86_Clone` with shared memory (`CLONE_VM`) | Attach the child engine to the parent's core. |
+| `X86_Clone` without shared memory | Create a core, copy the mappings and borrow the same backing pointers. The guest fork path applies managed copy-on-write rules. |
+| `X86_EngineGetMmu` | Return a retained handle to the attached core. |
+| `X86_EngineDetachMmu` | Transfer the old attachment to a handle and bind the engine to an empty core. |
+| `X86_EngineAttachMmu` | Attach the target core at an idle boundary. |
+| `X86_EngineAttachMmuForExec` | Replace the address space during guest `execve`. If native execution still borrows blocks from the old core, retain that core until execution exits. |
 
-## Ownership Rules
+Use `X86_MmuRetain` and `X86_MmuRelease` for standalone handle lifetime and
+`X86_MmuGetIdentity` to inspect the core's identity. Detach leaves a live
+engine with an empty MMU. The caller owns guest page backing. Pass a 4 KiB backing span and an aligned
+guest address to `X86_MemMapHostPage`. Keep the backing alive until every
+mapping and clone has finished using it. `X86_MemProtect` changes R/W/X on
+existing mappings. `X86_MemUnmap` removes mappings and invalidates cached
+translations. The mapping enumeration reports R/W/X and the dirty flag. See [C API declarations](../libfibercpu/src/bindings.h),
+[MMU core and cache](../libfibercpu/src/mem/mmu.h), and
+[managed attachment code](../Fiberish.Core/Core/Engine.cs).
 
-- The native core owns its page tables, TLB metadata and code cache. The caller owns guest page backing and keeps it alive while any alias or clone can use it.
-- C# side owns engine/MMU binding semantics (`CurrentMmu`, `ReplaceMmu`, `ShareMmuFrom`, `DetachMmu`).
-- Engines always have a valid MMU; no `NoMMU` state is exposed.
+## Native code-cache borrowing
 
-## Native APIs
+The guest scheduler serializes execution on its host thread. `X86_Run` and
+`X86_Step` reject recursive entry on that thread, including calls for a
+different engine from an execution callback. The normal APIs reject destroying
+or rebinding a running engine. `ResetMemory` rejects replacement of a core
+with active guest execution. The scheduler and MMU require separate
+synchronization for parallel host-thread use of a shared core.
 
-- `X86_MmuCreateEmpty`
-- `X86_MemMapHostPage` installs a caller-provided 4 KiB backing span at an aligned guest address.
-- `X86_MemProtect` changes R/W/X on existing mappings.
-- `X86_MemUnmap` removes mappings and invalidates cached translations.
-- `X86_MmuRetain` / `X86_MmuRelease`
-- `X86_MmuGetIdentity`
-- `X86_EngineGetMmu`
-- `X86_EngineDetachMmu`
-- `X86_EngineAttachMmu`
+`X86_Run` borrows decoded-block and operation pointers until it returns.
+During decode and concatenation, the allocator can refuse a request that would
+exceed the core's block budget and mark the cache for a flush. Execution can
+finish the available block or run an instruction from stack storage. If the
+guest remains runnable, the run can return `CachePressure`. The scheduler
+then reschedules the task. A caller running to `endEip` checks the
+exit status and resumes if needed.
 
-## Invariants
+Before the next `X86_Run` obtains a block pointer, the MMU releases any pending
+block pool and advances its generation. A callback-time reset invalidates
+cached blocks and defers pool release to that boundary. An idle reset releases
+the pool in the same call. The block budget counts requested block bytes.
+`-XX:BlockCacheSize` sets that budget for the core. A block too large for an
+empty pool can use stack execution without a flush loop.
 
-- `Engine.CurrentMmu` is always valid while engine is alive.
-- `Engine.GetAttachmentCount(mmuId)` reflects the number of engines attached to that MMU identity.
-- Disposed `MmuHandle` cannot be attached again (fail-fast).
+The MMU keys cached blocks by host page base and guest EIP. It tries the
+engine's small lookup cache before consulting the core's per-host-page hash
+index. The core tracks which host pages each block spans so an executable
+write can invalidate affected blocks. The monotonic pool allocates these
+blocks at `alignof(BasicBlock)`.
 
-## Native Code Cache Borrowing
+## Translation caches
 
-The guest scheduler serializes native execution on one host thread. `X86_Run`
-and `X86_Step` reject recursive execution from callbacks, including execution
-of a different engine. An engine cannot be destroyed or rebound while it is
-executing; `ResetMemory` rejects replacement of a core whose guest code is
-active. These restrictions also apply when callbacks invoke native APIs.
-
-`X86_Run` may borrow raw decoded-block and operation pointers for the entire
-call, including speculative decoding and concatenation. No budget allocation
-may free the code cache during that call. If an allocation would exceed the
-budget, it is refused, the shared core records a pending flush, and the guest
-finishes the available block or executes one instruction from stack storage.
-`X86_Run` then returns `CachePressure` at a safe point. The scheduler treats
-this as a normal reschedulable exit; callers with an `endEip` must run again
-until they reach the requested endpoint.
-
-The next `X86_Run` on the shared core releases the block pool **before** it
-obtains any block pointer. A cache reset requested in an execution callback
-immediately invalidates block reachability, but also defers storage release to
-the next `Run`. A reset requested while the core is idle remains immediate.
-Generation changes only when the pool is actually released. The cache budget
-counts requested block bytes, not the monotonic allocator's bookkeeping.
-
-If a single block cannot fit an empty cache, guest execution proceeds from
-stack storage without repeatedly flushing the empty pool. The budget and
-native cache controls do not make parallel host-thread access to a shared
-core safe; that still requires separate synchronization.
+`MicroTlbAccessGuard` checks once that the operand fits in its guest page.
+The MMU then probes the micro-TLB threaded through the handler ABI. A miss
+there probes the matching read or write table in the engine's direct-mapped
+L2 TLB. An L2 hit copies both prepacked tags and the host-pointer addend into
+the micro-TLB. The L2 TLB also has a separate execute table. Write tags cover
+dirty, writable pages eligible for the fast path. Clean pages and pages
+that require write interception take the slow path. The core publishes
+translation invalidations to other attached engines through its TLB
+shootdown ring. See [TLB entries](../libfibercpu/src/mem/tlb.h) and
+[data access guards](../libfibercpu/src/mem/mmu_impl.h).

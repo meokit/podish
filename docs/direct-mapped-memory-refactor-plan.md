@@ -1,279 +1,155 @@
-# Direct-mapped memory compatibility: implementation plan
+# Direct-mapped memory compatibility refactor
 
-Date: 2026-11-12
-Status: implementation authorized on 2026-11-12; P0 starts first.
-Working branch: `fix/ltp-memory-mapping`; prior local repairs committed as `1ef3259`.
+The November 12, 2026 plan preserved direct host-cache mappings for
+hostfs and SilkFS while adding guest Linux memory semantics. The
+implementation landed in `2f14ebc5`. This record keeps the phase boundaries
+and acceptance criteria. For current behavior, see [guest memory management](memory-management.md)
+and the [native MMU lifecycle](mmu-lifecycle-model.md).
 
-## Goal and scope
+The [backend test plan](../tests/ltp/MAPPED_FILESYSTEM_TEST_PLAN.md) defines
+cases T01–T19. The [LTP fix report](../tests/ltp/MEMORY_FIX_REPORT.md) records the
+original baseline, local repairs and the follow-up runs. The local repair
+checkpoint was `1ef32592`.
 
-Preserve hostfs/SilkFS mappings backed directly by the host OS file cache while
-implementing Linux application-visible memory semantics. Do not introduce a
-mandatory second buffer cache for ordinary shared file pages.
+## Mapping and lifetime requirements
 
-Companion: [hostfs/SilkFS test plan](../tests/ltp/MAPPED_FILESYSTEM_TEST_PLAN.md).
-Current implementation: [memory-management.md](memory-management.md),
-[MMU lifecycle](mmu-lifecycle-model.md).
-Current tmpfs results: [memory fix report](../tests/ltp/MEMORY_FIX_REPORT.md).
+- Shared regular-file faults use host-cache leases when the backend supports
+  mapped windows. Diagnose and test buffered fallback as a distinct provider.
+- Private writes and fork COW can allocate backing pages. Shared-file
+  zero-copy coverage applies to the mapped provider.
+- `AddressSpace` and `AnonVma` own page contents and claims. The native MMU
+  and `ProcessPageManager` track installed bindings that can be invalidated
+  and rebuilt.
+- A view lease keeps a pointer valid. A managed pin protects backing lifetime.
+  An OS lock covers host RAM residency. Count guest memory in 4 KiB pages and
+  align native views and locks to the host geometry.
+- Record actual residency, dirty state, lock operations and host failures.
+  Keep upstream cases, assertions and timeouts intact so partial or missing
+  coverage stays visible.
 
-The user authorized committing prior repairs and starting refactoring/testing.
-Keep baseline capture and new semantic fixes separate. The prior repair set is
-preserved in `1ef3259`; do not quietly fold it into a new test baseline. Work
-starts on the dedicated repair branch without merging or pushing. Promotion of
-the baseline to `main` and a subsequent repair branch must preserve the earlier
-baseline-first workflow and requires approval for that integration. Each
-milestone should be reviewable independently.
+## Identity and host capabilities
 
-## Non-negotiable invariants
+| Record | Identity and state |
+|---|---|
+| VMA | Guest range and backing offsets, permissions, inheritance, lock policy, stack bounds and guest limits. |
+| Logical page | File device, inode number and page index, or anonymous owner and index. Dirty state, COW and invalidation follow the owner. |
+| Installed guest binding | Guest address, owner and index, leased pointer and the native mapping's effective permissions. |
+| Host view | Backend window ID and coverage, refcount, retirement and native lock coverage. |
 
-1. Shared regular-file mappings use mapped host-cache leases on supported hosts.
-   A copied fallback must be explicit, diagnosed and separately tested.
-2. Private writes and fork COW may allocate independent pages. Zero-copy is not
-   a requirement for private modifications, anonymous memory or import buffers.
-3. Existing `AddressSpace`, `AnonVma`, rmap, owned backing handles and the native
-   external-page MMU model remain the starting point, not disposable scaffolding.
-4. A lease keeps a view/pointer alive; an internal pin protects managed lifetime;
-   an OS lock guarantees host RAM residency. None substitutes for another.
-5. Native MMU entries and `ProcessPageManager` are installed-mapping caches,
-   not a new authoritative owner of memory contents. Durable semantic state
-   must survive native mapping invalidation.
-6. Guest page size remains 4 KiB. Host page and mapping-window granularity are
-   separate. Reference counts and locks use the actual host coverage required.
-7. Never fabricate residency, physical page numbers, dirty flags, swap, memory
-   controllers or successful locks to satisfy a test.
-8. Preserve upstream tests, assertions, case selection and timeouts. Unsupported
-   facilities and partial assertion coverage remain visible, not green XFAILs.
+`FilePageIdentity` carries the logical file-page key. The pointer-keyed slot
+table describes a live host page. A backend can change the pointer or use
+more than one view for the same file page. View retirement and slot
+generations keep later users of a reused address separate from prior holders.
+See [file-page identity](../Fiberish.Core/Memory/FilePageIdentity.cs),
+[slot metadata](../Fiberish.Core/Memory/HostPageRef.cs) and
+[mapped windows](../Fiberish.Core/Memory/WindowedMappedFilePageBackend.cs).
 
-## Target state model
+`IFilePageBackend` supports lease acquire and release, prefaulting, residency
+queries, native lock and unlock, flush and trim. Internally a residency query
+distinguishes resident, nonresident and unknown. The guest `mincore` path
+selects the page source and applies guest semantics. Inspecting a native
+view should avoid faulting it in. Linux `mincore` and Windows working-set
+queries have different scopes. A view's existence and the number of bytes
+released by trim give no measure of reclaimed RAM. See
+[backend contract](../Fiberish.Core/Memory/IFilePageBackend.cs).
 
-Use four related records, not four copies of page data:
+## Completed phases
 
-- **VMA semantic state:** range, effective and maximum allowed permissions,
-  backing offsets, lock policy, fork policy, stack bounds and resource charges.
-- **Logical owner/page state:** stable file object plus page offset, or concrete
-  anonymous owner plus index; dirty/writeback state, COW and invalidation state.
-- **Installed guest binding:** guest page address, owner/index and currently
-  leased pointer, plus the effective MMU permissions and synchronization state.
-- **Host view state:** live view identity/generation, address/length, leases,
-  native lock coverage and supported host operations.
+### P0. Baseline and backend routing
 
-A logical file-page key should be based on a retained file/inode identity and
-page index, not a pathname or pointer. Use backing incarnation/version checks
-where objects can be replaced or cached host information becomes stale. A view
-generation changes when a view is replaced; it must not indiscriminately create
-a different logical file page on every resize or protection change.
+Commit `cef7b2ee` added the backend fixture, scoped diagnostics and runner
+coverage. `tests/ltp/run.py` selects Podish storage with `--fs-backend hostfs`,
+`tmpfs` or `silkfs`. Record the backing of the test file, `/tmp` and
+`/dev/shm` before assigning results to a storage backend. T01–T03
+use provider, window and copy evidence to verify direct mapping. RSS alone
+cannot establish that a guest binding borrowed a host-cache page. See
+[LTP runner](../tests/ltp/run.py).
 
-The pointer-keyed slots described by [hostpage-slot-ownership-design.md](hostpage-slot-ownership-design.md)
-remain useful for one **live host view/binding**. This plan narrows their identity
-scope: two pointers can refer to the same file-cache page, and a reused address
-must not resurrect old logical state. Do not replace the entire slot store just
-to add file-page identity. Preserve its short-lived metadata access discipline.
+### P1. File identity and view leases
 
-### Host capability contract
+Commit `ec9bbefd` separated logical file pages, backing leases and host
+capabilities. T01–T03, T06, T11 and T18 cover retained file identity across
+aliases and rename, orphaned mappings, permission changes, window retirement
+and failure while a borrower still holds a view. A read-only and a writable
+window can represent the same logical file page. Keep mapping and in-flight
+I/O leases alive through view replacement.
 
-Extend `IFilePageBackend`, or add a narrowly scoped host-memory service alongside
-it, for residency queries, prefetch, prefault, native lock/unlock and advisory
-cache release. API names and placement are to be settled in P1, not preselected
-as a new general-purpose abstraction layer.
+### P2. VMA edits and reference-preserving remap
 
-- Query results distinguish known resident/nonresident from unavailable/unknown
-  internally, identify their scope and do not fault pages merely to inspect them.
-- Linux native `mincore` can assist file residency queries. Windows working-set
-  queries are not a complete global file-cache oracle.
-- `mincore` has no public unknown bit: a provider must implement the selected
-  guest semantic contract, or report an explicitly documented unsupported path;
-  it must not silently encode unknown as zero or mark every mapped page resident.
-- Document guest modeled residency separately from host physical residency.
-  Allocating a view, holding a pointer or releasing a window proves neither.
-- Native pin failure, partial acquisition and release failures have explicit
-  handling. Guest limits and host working-set/privilege limits are independent.
-- `Trim` reports released view coverage separately from actual RAM reclamation.
+Commit `99814923` added `max_map_count` accounting, reference-preserving
+`mremap` and VMA-based `remap_file_pages`. Range edits preserve backing
+offsets, private COW, holes, permission ceilings and inheritance flags.
+Retarget rmap and native translations while keeping the owner references
+needed to recover page contents. Validate overlapping remaps before
+destructive changes. Linux allows some range operations to have partial
+effects. T04–T07, T14–T15 and T18 cover COW, nonsequential file offsets,
+remap of lazy ranges, VMA limits and failure handling.
 
-## Steps
+### P3. File mutation and writeback
 
-- [x] P0 — establish hostfs/SilkFS baselines and structural test observability.
-- [x] P1 — separate logical page identity, view leases and host capabilities.
-- [x] P2 — unify VMA edits and reference-preserving remap operations.
-- [x] P3 — unify file mutation, invalidation and writeback error handling.
-- [x] P4 — implement prefault, residency and real lock lifecycles.
-- [x] P5 — integrate advice, inheritance and guest procfs projections.
-- [x] P6 — close the cross-backend regression and compatibility report.
+Commit `dffae6d8` added the hole-punch and mapped-range mutation paths.
+Capture dirty state, coordinate users of the affected range, retire views
+where needed, apply the backing operation and reconcile the resulting file
+size and bindings. Truncation invalidates ranges past EOF and retains private
+data where the guest contract requires it. Return guest `SIGBUS` for a
+fault past the backing. If a host mutation succeeds, recovery uses the
+resulting file state even if a later step fails.
 
-### P0 — baseline and harness, before semantic refactoring
+Track guest dirtiness, host writeback and durable completion separately.
+Check error propagation for `msync`, `fsync` and `fdatasync`. Scope the
+writeback operations to their requested ranges and handle dirty flags on
+failure. T08–T11, T16 and T18 cover shrink, regrow, private COW, flushes,
+supported external host operations and injected failures. Verify SilkFS
+durability by reopening after a completed sync and checking the bytes,
+size and metadata.
 
-Changes:
+### P4. Prefaulting, residency and locking
 
-- Inventory and retain existing Hostfs/SilkFS tests listed in the companion plan.
-- Add a reusable backend fixture without rewriting existing tests in bulk.
-- Add SilkFS image execution to `tests/ltp/run.py`; the CLI supports it, but the
-  runner currently accepts only hostfs/tmpfs and hardcodes tmpfs image execution.
-- Verify each test's data mount/backing, not merely the selected root backend.
-  Record `/tmp`, `/dev/shm` and test file routing independently.
-- Provide scoped diagnostic hooks for provider choice, leased view range,
-  COW/copy counts, lock operations and reference snapshots. Hooks must not alter
-  syscall results. Do not rely on process-wide RSS to prove zero-copy.
-- Collect Windows hostfs/SilkFS/tmpfs and Linux hostfs/SilkFS baselines where
-  available, keeping unavailable hosts explicit. Use identical guest binaries.
+Commit `3f7604a1` added `MAP_POPULATE`, residency queries and native lock
+tracking. A resident file page can lack an installed translation in the
+calling address space. Prefaulting writable private pages can require a
+COW copy. The lock tracker aggregates references by host page coverage.
+Per-address-space guest limits still apply to overlapping ranges and
+future mappings. Propagate failures and roll back partially acquired host
+coverage.
 
-Exit: T01–T03 can prove the selected direct backend is actually exercised; runner
-tests cover backend argument/image routing and unchanged classification rules;
-immutable baseline reports exist before implementation fixes. New failing tests
-are evidence, not a reason to edit upstream or claim a baseline is already green.
+Review lock transfer on COW, remap, resize, unmap and exit, and lock
+non-inheritance across fork. Distinguish managed I/O pins from lock claims.
+T12–T14 and T18 cover provider results and alias lock release. Simulated
+large-page geometry tests cover alignment arithmetic. They provide no
+measurement on an actual large-page host.
 
-### P1 — identity, lease and capability boundaries
+### P5. Advice, inheritance and procfs
 
-Depends on P0. Main areas: `HostPageRef.cs`, `BackingPageHandle.cs`,
-`OwnerPageSlots.cs`, `LinuxMemoryObjects.cs`, `IFilePageBackend.cs`,
-`WindowedMappedFilePageBackend.cs`, and both mapped inodes.
+Commit `07048f9d` added memory advice and inheritance work with grow-down
+stack and `/dev/zero` changes. `MADV_WIPEONFORK` resets selected private
+anonymous pages in the child. `MADV_KEEPONFORK` clears that policy.
+`MADV_DONTNEED` drops pages through the address-space path. `MADV_REMOVE`
+uses the file mutation path on eligible tmpfs ranges. The syscall accepts
+`MADV_FREE` for private anonymous ranges and returns success after validation.
+The lazy-discard tracking from the plan remains pending. `MADV_WILLNEED`
+also returns success after validation. Guest procfs uses managed range and
+residency state for maps, status, smaps and pagemap. T12–T15 cover the
+planned contracts. Full `madvise09` coverage needs a memory-pressure
+controller. See [memory advice handling](../Fiberish.Core/Syscalls/SyscallHandlers.Memory.cs).
 
-Changes:
+### P6. Verification and review
 
-- Define logical owner/index and host-view identity lifetimes, including path
-  rename, hard-link aliases, replacement and orphaned-but-mapped files.
-- Audit old/new read-only and writable windows, retired views and address reuse;
-  shared logical state cannot split merely because a pointer changes.
-- Specify capability and error contracts above. Add fake providers for controlled
-  failure tests plus native provider probes; neither replaces real-host tests.
-- Define lock acquisition order, scheduler safe points and in-flight user-buffer
-  lease behavior before adding new invalidation or OS-lock operations.
+The [LTP fix report](../tests/ltp/MEMORY_FIX_REPORT.md) records 59 of 66
+passes on Windows Podish for each of tmpfs and SilkFS, and 57 of 66 with hostfs.
+The WSL native reference passed all 66. The report identifies remaining
+failures, broken cases and skips. It covers the measured configurations.
+The [backend matrix](../tests/ltp/MAPPED_FILESYSTEM_TEST_PLAN.md#execution-matrix-and-applicability)
+lists additional host and provider combinations and the evidence needed
+to claim support. Compare unchanged LTP manifests, check direct mapping
+through leases and provider diagnostics, and check resource counts after
+map, lock and unmap stress. Track skipped and unrun cases in the result.
 
-Exit: T01–T03, T06, T11 and T18 show no stale/reused identity, premature release
-or leaked retired views; shared file faulting introduces no duplicate data buffer.
-Retain existing native MMU attachment and external ownership invariants.
+## Compatibility boundaries
 
-### P2 — VMA edits, limits and binding migration
-
-Depends on P1. Main areas: `VmArea.cs`, `VMAManager.cs`,
-`ProcessPageManager.cs`, `ProcessAddressSpaceSync.cs`, memory syscalls.
-
-Changes:
-
-- Share range arithmetic, edit planning, split/merge attribute preservation and
-  map-count reservation across mmap/munmap/mprotect/madvise/mremap.
-- Implement actual `max_map_count` policy and matching procfs reporting. Count
-  guest VMAs, not host windows, and test split failures near the limit.
-- Move mremap's existing owner/page references without reading or copying guest
-  contents; preserve COW, holes, restricted permissions and shared-anon aliases.
-- Retarget rmap and native mappings across all attached engines; preserve TB
-  coherence, maximum permissions, locks and inheritance flags through edits.
-- Implement `remap_file_pages` initially through VMA/file-offset remapping;
-  evaluate Linux's current emulation behavior before adding a nonlinear index.
-- Audit existing grow-down indexing, guard gap and stack limits in this model.
-
-Internal consistency is transactional where possible, but do not invent a public
-all-or-nothing guarantee for every syscall: Linux permits partial effects for
-some range operations. Native differential tests specify those effects. Reject
-invalid overlapping remaps before their destructive steps.
-
-Exit: T04–T07, T14–T15 and T18; selected mremap tests stay passing; `munmap04`
-cannot escape a real VMA limit. Large lazy/PROT_NONE moves preserve content and
-allocate no content copies proportional to the moved address range.
-
-### P3 — file mutation and writeback protocol
-
-Depends on P1/P2. Main areas: `Structs.cs`, `Hostfs.cs`,
-`SilkFileSystemAdapter.cs`, mapped backend and address-space synchronization.
-
-Changes:
-
-- Generalize existing resize suspension into explicit coordination of affected
-  ranges: quiesce users, capture dirty state, retire/release views as needed,
-  mutate backing, reconcile actual size/version, invalidate and restore bindings.
-- Define guest truncate, extension, partial EOF-page zeroing and hole-punch
-  semantics against native Linux. Preserve private data where Linux does; do
-  not assume every private page survives truncation beyond EOF.
-- Never return an apparently restored old file state after an irreversible host
-  mutation succeeded. Failure recovery must reconcile actual backing/metadata.
-- Track guest dirty, host writeback and durable completion distinctly. Preserve
-  dirty state on failure and propagate `SyncCachedPages`/flush errors to callers
-  instead of discarding them.
-- Audit fsync, fdatasync, msync and close separately. Do not add forced durable
-  flushing on every close or shared write as a zero-copy/coherence workaround.
-- Scope unsupported external-host operations honestly; SilkFS direct editing of
-  repository internals is not an ordinary supported guest file mutation API.
-
-Exit: T08–T11, T16 and T18; correct SIGBUS rather than host-process access faults;
-shrink/regrow does not revive old bytes or leak views; remount verifies SilkFS
-data and metadata after completed sync. Injected failures preserve recoverability.
-
-### P4 — population, residency and locking
-
-Depends on P1/P2/P3 (resize must understand locked views). Main areas: fault
-resolution, VMA attributes, host-memory providers, pressure and owner-page code.
-
-Changes:
-
-- Add a common prefault engine for `MAP_POPULATE`, mlock and applicable advice;
-  distinguish readahead from completed faulting, including writable private COW.
-- Implement mincore's anonymous/private/file-source selection and cross-process
-  file-cache observation. A missing caller binding is not proof of absence.
-- Implement mlock/munlock/mlockall/munlockall, `MAP_LOCKED`, limits, privileges,
-  partial failures, overlap and future allocation behavior. Match Linux's
-  differences between `MAP_LOCKED` and successful mlock guarantees.
-- Aggregate native locks by host coverage without making guest per-mm charges
-  disappear; preserve alias locks until their last relevant reference is gone.
-- Integrate fork's non-inheritance of memory locks, COW lock transfer, mremap,
-  resize, exit and every reclaim/unmap path. Handle pinned I/O users separately.
-- Test large host pages using simulated geometry; native validation is required
-  before claiming support on an actual larger-page host.
-
-Exit: T12–T14 and T18; mincore02–04/mlock05 supported-host assertions use real
-prefault/lock state; host failure cannot be reported as successful RAM locking;
-unlocking one alias does not unlock another's live coverage.
-
-### P5 — advice, inheritance and guest introspection
-
-Depends on P2/P3/P4; implement in small feature-specific slices.
-
-- Add WIPEONFORK/KEEPONFORK for private anonymous ranges, preserving policy on
-  splits and descendants without touching unrelated file-cache pages.
-- Implement MADV_FREE lazy discard and write-after-advice cancellation using
-  genuine pressure/write tracking. Immediate zeroing is not equivalent.
-- Route DONTNEED/REMOVE/WILLNEED and file advice through owner/mutation/provider
-  contracts; honor locked-range rules and advisory vs mandatory effects.
-- Generate maps/status/smaps/pagemap present and lock information from semantic
-  state, not raw host addresses or only installed native translations.
-- Keep actual PFNs/kpageflags, global drop_caches, swap and memcg support separate
-  from these projections. Do not manufacture a virtual PFN solely for msync04.
-
-Exit: T12–T15 plus relevant madvise tests; no fake physical introspection or
-unrelated host-cache purge; unsupported facility reports remain unchanged in
-meaning. Full madvise09 still requires a real memory-pressure/controller model.
-
-### P6 — verification and compatibility boundary
-
-Depends on P0–P5. Run all companion-plan tiers and earlier LTP batches. Publish
-before/after per host/backend/capability, assertion coverage and structural
-direct-mapping evidence. Record unrun cells, skips and native differences.
-
-Exit:
-
-- No previously passing case regresses on its original configuration.
-- All mandatory mapped-file contract tests pass on Windows/Linux hostfs/SilkFS
-  configurations actually claimed as supported, plus the tmpfs control.
-- Direct-mapping invariants survive stress and remain separate from throughput
-  measurements; do not claim completion solely from a higher LTP PASS count.
-- No unbounded view/lease/owner/lock growth after repeated quiescent cycles.
-- Review remaining compatibility boundaries, particularly Windows external file
-  truncation, global file-cache observation and Linux-only kernel facilities.
-
-## Out of this implementation series unless separately approved
-
-- Full guest swap, memory-cgroup controller, hugetlbfs, block-device mounting or
-  hardware memory-failure injection.
-- Exact Windows reproduction of Linux host physical PFN/kpageflags semantics.
-- Globally purging or pinning unrelated host processes' caches.
-- Strong guarantees for unsupervised external edits of SilkFS repository files.
-- Replacing native MMU ownership, the mapped backend or all metadata storage.
-
-These boundaries do not justify deleting their LTP cases or changing expected
-results. `msync03`'s default RLIMIT_DATA difference is a separate policy decision;
-do not falsify EINVAL or silently change the limit merely to match the reference.
-
-## Review and rollout
-
-P0 is the first implementation task after authorization, not P4's syscall stubs.
-Keep baseline capture, harness support and semantic fixes in separate commits.
-For each phase: failing regression first, bounded implementation, targeted tests,
-full affected C# projects, unchanged LTP memory batch and earlier-batch checks.
-Use measured before/after results; no estimated PASS count or schedule is a
-release guarantee. Commit/merge/push requires separate user authorization.
+The refactor scope excluded guest swap, memory cgroups, hugetlbfs,
+block-device mounts and hardware memory-failure injection. Linux physical
+page numbers and `kpageflags` require host-specific support. `msync04` needs
+a block-device fixture. `msync03` depends on the default `RLIMIT_DATA` and
+the resulting test address. External Windows truncation and direct edits
+to SilkFS repository internals need their own compatibility evidence.

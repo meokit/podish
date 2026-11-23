@@ -1,265 +1,209 @@
 # Podish
 
-> A Linux x86 userland container for iOS and Apple Silicon.
+Podish runs unmodified 32-bit x86 Linux programs through a C++ CPU interpreter
+and a C# Linux compatibility layer. Use the CLI on macOS, Linux, or Windows,
+the SwiftUI app on iOS and macOS, or the [browser demo](https://podish.meokit.com).
+For iOS sideloading, use the [AltStore feed](https://github.com/meokit/podish-altstore).
 
-**Podish** runs unmodified 32-bit Linux binaries on modern Apple platforms without JIT compilation. It is built around a from-scratch C++ interpreter core and a C# Linux compatibility layer, optimized specifically for environments where code generation is restricted.
-
-If you have used iSH, the goal is similar, but the code is entirely original and significantly faster on compute-heavy workloads.
-
-A browser demo is available at [podish.meokit.com](https://podish.meokit.com) (performance is lower than native; networking is not yet enabled).
-
-An AltStore source is available at [meokit/podish-altstore](https://github.com/meokit/podish-altstore) for easy sideloading on iOS.
-
----
-
-## What It Is
-
-Podish is not a full-system VM like UTM. It is a **userland container** that emulates an x86 CPU and enough of the Linux kernel to run real-world software: shells, scripting languages, build toolchains, and even some JIT-capable guests.
-
-The interpreter core uses a pre-decoding + direct-threaded dispatch design inspired by [LuaJIT Remake](https://github.com/luajit-remake/luajit-remake). It leverages modern Clang ABI features (`preserve_none`, `[[musttail]]`) to keep dispatch overhead near hand-written-assembly levels without writing a line of assembly.
-
-The result is an interpreter that outperforms QEMU's TCI (Tiny Code Interpreter) by an order of magnitude and approaches the speed of Wasm3 on pure compute benchmarks.
-
----
-
-## Why interpreter
-
-iOS prohibits JIT by blocking `PROT_EXEC | PROT_WRITE` mappings and unsigned code execution. This rules out LuaJIT's JIT mode, fast UTM, and any engine that generates machine code at runtime.
-
-The natural question: **how fast can an interpreter get?**
-
-Podish answers this with a stack of CPU-emulation techniques usually found in JIT research:
-
-- **Pre-decoded IR** with tail-call threading to eliminate the classic decode-dispatch loop
-- **MicroTLB + SoftTLB** to minimize address-translation overhead on every memory access
-- **Block linking** to reduce control-flow exit costs between basic blocks
-- **Profile-guided superopcodes** (≈256 fused instruction pairs) to eliminate redundant internal state updates
-- **Parity-only lazy flags** — a pragmatic compromise that avoids the memory traffic of full lazy EFLAGS
-- **SMC-aware MMU** that invalidates cached code blocks precisely when guest JITs (LuaJIT, V8) patch executable pages
-
-The outcome, measured on CoreMark 1.0:
-
-| Hardware | Podish | iSH | QEMU TCI | Native (arm64) |
-| --- | ---: | ---: | ---: | ---: |
-| iPhone 17 (A19) | **~3,447** | ~1,692 | — | — |
-| MacBook Pro (M3 Max) | **~2,967** | — | ~325 | ~38,087 |
-
-Podish is roughly **2× iSH** and roughly **9× QEMU TCI** on the same class of workload, while remaining a pure interpreter that does not generate host machine code.
-
----
-
-## Tested softwares
-
-| Category | Representative Software | Status | Notes |
-| --- | --- | --- | --- |
-| Shell / base userland | `busybox`, `ash` | Stable | Daily interactive use, including `vim` |
-| Full shell | `bash` | Stable | Used in browser rootfs and local testing |
-| Scripting runtimes | `python3` | Stable | Benchmarked; large projects untested |
-| JIT-capable guests | `LuaJIT` (`-joff`) | Stable | SMC handling validated; forced LuaJIT interpreter mode |
-| Build toolchain | `gcc`, `make` | Verified | CoreMark tree compiles end-to-end |
-| Networking tools | `git`, `OpenSSH` | Verified | `git clone` works; validates VFS / DNS / TLS paths |
-| Framebuffer games | PrBoom (DOOM shareware), SuperTux | Verified | Debian i386 SDL 1.2 fbcon with sound and music through PulseAudio |
-| ANGLE-backed GLES 2.0 and 3.0 | Chocolate Doom, SuperTux | Verified on macOS/Metal | IA-32 EGL over ioctls with [fbdev and Wayland output](graphics/README.md) |
-| ANGLE KMS direct display | SuperTuxKart 1.4 (GLES2) | Verified on Windows and Linux/WSL2 | Virtual KMS/GBM presenting directly to a host EGL window; see the [race probe](tests/media/README.md#supertuxkart) |
-| X11 desktop | X.Org, Openbox, xeyes, xclock, xterm | Verified | Guest fbdev driver with host SDL2 output |
-| Heavy modern runtime | `Node.js` | Starts | Usable for simple scripts; V8 JIT can trigger occasional crashes. Disabling V8 JIT stabilizes it at a steep performance cost. |
-
-**Experimental / in progress:**
-
-- **Wayland bridge** (`Podish.Wayland`): forwards guest Wayland clients to host SDL windows. Shared-memory frames and [ANGLE-backed EGL clients](graphics/README.md) are supported.
-- **PulseAudio bridge** (`Podish.Pulse`): redirects guest audio to host backends. `ffplay -nodisp` plays audio; general desktop audio is rough.
-
----
-
-## Architecture
-
-```text
-Guest i686 Linux Binary
-  -> Predecode / Block Builder
-  -> Interpreter Dispatch + Semantics
-  -> MMU / MicroTLB / SoftTLB
-  -> Linux Runtime / Syscall Layer (C#)
-  -> VFS / Process / Signal / Network
-  -> Host OS (macOS / iOS) or Browser (Wasm)
-```
-
-### Key Components
-
-| Component | Language | Role |
-| --- | --- | --- |
-| `libfibercpu` | C++ | IA-32 interpreter core: decode, dispatch, MMU, block cache |
-| `Fiberish.Core` | C# | Linux runtime: syscalls, VFS, process model, signals, PTY |
-| `Fiberish.Netstack` | Rust | Native TCP/IP stack based on [smoltcp](https://github.com/smoltcp-rs/smoltcp) |
-| `Podish.Core` | C# | Container orchestration, OCI image handling, runtime lifecycle |
-| `Podish.Cli` | C# | Primary user-facing CLI (`run`, `pull`, `ps`, `logs`, …) |
-| `PodishApp` | SwiftUI | Optional iOS/macOS GUI (wraps `Podish.Core.Native`) |
-
-### C++ Core + C# Runtime: How the Boundary Works
-
-The interpreter core is C++ for raw performance; the Linux layer is C# for rapid development and portability. The boundary is intentionally thin:
-
-- **C-only API surface**: `libfibercpu` exposes plain C functions (`X86_Create`, `X86_Run`, `X86_RegRead`, …). C# calls them via `LibraryImport` / `DllImport` with blittable types.
-- **Zero-copy guest memory**: `X86_ResolvePtrForRead/Write` returns host pointers directly; C# operates over them via `Span<byte>` without per-byte P/Invoke.
-- **Pinned callbacks**: C++-to-C# callbacks (faults, interrupts, logs) use `GCHandle.Alloc(this)` as `userdata`, preventing GC movement across the boundary.
-- **Syscall batching**: The interpreter runs hundreds to thousands of guest instructions in C++ before crossing into C# for a syscall. The cross-language cost is workload-dependent, not instruction-dependent.
-
-Real-world profiling shows the boundary overhead stays **below 1%** on compute-intensive workloads; on I/O-heavy workloads the bottleneck is network and VFS, not P/Invoke.
-
-### Concurrency Model
-
-Podish implements Linux `clone`/`fork`/`vfork` and basic `pthread` semantics, but it is **not** an SMP emulator. A single host scheduler thread serializes all guest tasks. Each guest thread gets its own interpreter `Engine` (and private `EmuState`), so the core itself needs no locks. Shared address spaces use a reference-counted `MmuCore` with a lightweight `RuntimeTlbShootdownRing` to keep per-engine TLBs coherent.
-
-This is sufficient for shells, Python, compilers, and `git`. It is not suitable for heavily parallel scientific computing.
-
----
+Podish emulates the CPU and implements Linux syscalls, processes, signals,
+filesystems, and networking in userspace. Give it an IA-32 OCI image or a local
+root filesystem to run a shell, compiler, or application.
 
 ## Quick Start
 
 ### Requirements
 
-- .NET SDK 10+
-- CMake 3.20+
-- A C/C++ toolchain
-- Rust toolchain with Cargo
+- .NET 10 SDK. [global.json](global.json) sets the SDK floor and roll-forward policy.
+- CMake 3.20 or newer, Python 3.10 or newer, and a Clang toolchain with C++23 support.
+- Rust and Cargo for the native network stack.
 
-Optional:
-
-- Python 3.10+, `pytest`, `pexpect` (Python tests)
-- `zig` (integration test assets)
-- `podman` (image/rootfs prep)
-- Xcode / Swift toolchain (for the SwiftUI app)
-
-Verified versions on the current snapshot:
-
-- `.NET SDK 10.0.103`
-- `cargo 1.85.0`
-- `Python 3.12.7`
-- `cmake 3.29.6`
+On macOS, use the Xcode command-line tools. The Linux CI build uses Clang 20
+with libc++ and libc++abi. On Windows x64, install the Visual Studio C++
+toolchain with LLVM (`clang-cl`) and CMake tools (Ninja). See the package lists
+and commands in the [CI workflow](.github/workflows/ci.yml).
 
 ### Build
 
+On macOS and Linux, build the CLI from the repository root.
+
 ```bash
-dotnet build Podish.slnx -c Debug
+dotnet build Podish.Cli/Podish.Cli.csproj -c Debug
 ```
 
-This automatically triggers:
+On Windows x64, specify the runtime identifier and build one project at a time.
 
-- CMake build of `libfibercpu` (via `Fiberish.X86`)
-- Cargo build of `Fiberish.Netstack` (via `Fiberish.Core`)
+```powershell
+dotnet build Podish.Cli/Podish.Cli.csproj -c Debug -r win-x64 -m:1
+```
 
-Guest GPR pinning defaults to off on x86-64 and WebAssembly. On ARM64,
-the production build enables it when Clang supports the required handler ABI.
-To opt in on supported x86-64 builds, use `-p:GprPin=ON` with `dotnet build`
-or `-DFIBERCPU_GPR_PIN=ON` with CMake.
+The CLI build calls CMake through `Fiberish.X86` and Cargo through
+`Fiberish.Core`. For the full solution, follow the CI workflow's macOS job.
+It builds the browser project alongside the native projects and installs the
+`wasm-tools` workload. The [browser build notes](Podish.Browser/README.md)
+cover Emscripten setup. The [Swift app roadmap](docs/podish-swift-app-roadmap.md)
+lists the Apple build commands.
 
 ### Run
 
-Show help:
+Run an IA-32 image. The CLI pulls the image if it is missing from the local store.
 
 ```bash
 dotnet run --project Podish.Cli/Podish.Cli.csproj -- --help
+dotnet run --project Podish.Cli/Podish.Cli.csproj -- run --rm docker.io/i386/alpine:latest /bin/uname -m
 ```
 
-Pull an image and run a command:
+Use `--rootfs` to open a shell in a local IA-32 root filesystem.
 
 ```bash
-dotnet run --project Podish.Cli/Podish.Cli.csproj -- pull docker.io/i386/alpine:latest
-dotnet run --project Podish.Cli/Podish.Cli.csproj -- run docker.io/i386/alpine:latest /bin/uname -a
+dotnet run --project Podish.Cli/Podish.Cli.csproj -- run --rm -i -t --rootfs /path/to/rootfs /bin/sh
 ```
 
-Run from a local rootfs:
-
-```bash
-dotnet run --project Podish.Cli/Podish.Cli.csproj -- run --rootfs /path/to/rootfs /bin/sh
-```
-
-Useful runtime flags:
-
-- `-i`, `-t` — interactive TTY session
-- `-v /host:/guest` — bind mount
-- `--network private` + `-p hostPort:containerPort` — private networking with port publishing
-- `-s` — syscall tracing
-- `--init` — engine-managed PID 1 reaper
-- `--fbdev --fbdev-size 800x600` — display the guest framebuffer and forward keyboard and mouse input. See [IA-32 framebuffer games and X11](tests/fbdev-games/README.md).
+| Option | Behavior |
+| --- | --- |
+| `-i -t` | Keep standard input open and allocate a guest TTY. |
+| `-v /host:/guest` | Bind-mount a host path in the guest. |
+| `--network private -p hostPort:containerPort` | Use private networking and publish a port to the host. |
+| `-s` | Log guest syscalls. |
+| `--init` | Start an engine-managed PID 1 reaper. |
+| `--fbdev --fbdev-size 800x600` | Open a host window for the guest framebuffer and forward input. [Framebuffer and X11 examples](tests/fbdev-games/README.md) |
 
 ### Test
 
-Managed tests:
+Run the managed suites and the isolated CPU tests.
 
 ```bash
-dotnet test Fiberish.Tests/Fiberish.Tests.csproj --no-build
-dotnet test Fiberish.SilkFS.Tests/Fiberish.SilkFS.Tests.csproj --no-build
-```
-
-The isolated CPU instruction suite runs directly against `libfibercpu`, including
-generated integer boundaries, SIMD/addressing cases and pinned FEX regressions:
-
-```bash
+dotnet test Fiberish.Tests/Fiberish.Tests.csproj
+dotnet test Fiberish.SilkFS.Tests/Fiberish.SilkFS.Tests.csproj
 dotnet test Fiberish.X86.Tests/Fiberish.X86.Tests.csproj -c Release --filter "Category!=Exhaustive"
 ```
 
-See [Fiberish.X86.Tests/README.md](Fiberish.X86.Tests/README.md) for exhaustive
-cases, parallelism, state isolation and superopcode build variants.
+The CPU suite calls `libfibercpu` and covers arithmetic boundaries, SIMD,
+addressing, and pinned FEX regressions. See the commands for exhaustive tests
+and the superopcode build variants in the
+[CPU test guide](docs/cpu-instruction-test-strategy.md).
 
-Linux syscall integration tests use a pinned [LTP](https://github.com/linux-test-project/ltp)
-submodule and a curated selection of unmodified static i386 test binaries:
+The Linux syscall integration suite uses a pinned [LTP](https://github.com/linux-test-project/ltp)
+submodule and selected static i386 binaries. Build the assets on Linux or WSL.
+Run the native reference on a Linux host that supports i386 executables.
 
 ```bash
 git submodule update --init tests/ltp/upstream
-bash tests/ltp/build.sh                              # Linux / WSL asset build
-python3 tests/ltp/run.py --backend native             # Linux reference baseline
-python3 tests/ltp/run.py --backend podish             # host-native Podish CLI
+bash tests/ltp/build.sh
+python3 tests/ltp/run.py --backend native
+python3 tests/ltp/run.py --backend podish
 ```
 
-See [tests/ltp/README.md](tests/ltp/README.md) for build prerequisites, Windows/WSL
-instructions, reports and known compatibility failures. The old Python and
-`tests/integration` harnesses are not present in this checkout.
+The [LTP guide](tests/ltp/README.md) covers prerequisites, Windows and WSL
+commands, and compatibility reports.
 
----
+## Tested software
+
+| Workload | Test or reported use |
+| --- | --- |
+| `busybox`, `ash`, `bash`, `vim` | Shell sessions and command-line editing. The browser root filesystem includes Bash. |
+| Python 3 | Benchmark scripts. |
+| LuaJIT | Interpreter mode with `-joff`. |
+| `gcc`, `make` | Build and run CoreMark in the guest. |
+| Git, OpenSSH | Network clients and Git clones. |
+| Node.js | Node 14 runs the allocator regression and Webpack workloads. [Node regression harness](tests/node-crash/README.md) |
+| PrBoom, SuperTux | SDL 1.2 framebuffer output and PulseAudio playback. [Framebuffer game tests](tests/fbdev-games/README.md) |
+| Chocolate Doom, SuperTux | ANGLE-backed GLES on macOS with Metal. [Graphics setup](graphics/README.md) |
+| SuperTuxKart 1.4 (GLES2) | ANGLE with a virtual KMS/GBM device on Windows and Linux/WSL2. [Media smoke tests](tests/media/README.md#supertuxkart) |
+| X.Org, Openbox, xeyes, xclock, xterm | Guest X11 with a framebuffer displayed in a host SDL2 window. [X11 setup](tests/fbdev-games/README.md) |
+
+The Wayland bridge handles shared-memory and ANGLE-backed EGL clients.
+The PulseAudio bridge forwards guest audio to host backends.
+[Graphics setup](graphics/README.md) · [Media smoke tests](tests/media/README.md)
+
+## Architecture
+
+```text
+IA-32 Linux executable
+  -> libfibercpu                 decode, dispatch, and address translation
+  -> Fiberish.Core               syscalls, VFS, scheduler, and signals
+  -> Host OS or WebAssembly      platform I/O
+```
+
+### Interpreter
+
+`libfibercpu` predecodes guest instructions into basic blocks and dispatches
+their handlers with tail calls, a design inspired by [LuaJIT Remake](https://github.com/luajit-remake/luajit-remake).
+Clang's `preserve_none` and `musttail`
+attributes support the threaded handler ABI on compatible native builds.
+The micro-TLB and software TLB cache translations. Block linking reuses a
+resolved successor, and profile-baked superopcodes execute instruction
+sequences in one handler. The MMU invalidates cached blocks when a guest
+write changes their code pages.
+[Superopcodes](docs/superopcode-design.md) · [MMU lifecycle](docs/mmu-lifecycle-model.md)
+
+The default build runs the interpreter without a host JIT. The optional LLVM
+block JIT requires native macOS arm64 with upstream Clang. Guest code
+generation, such as V8 writing IA-32 machine code, operates on guest memory
+and uses the MMU's code invalidation path.
+[Instruction specialization and LLVM JIT](docs/instruction-specialization.txt)
+
+Production builds on ARM64 enable guest GPR pinning when Clang passes the
+handler ABI probe. The default leaves pinning off on x86-64 and WebAssembly.
+To try pinning on a compatible x86-64 build, pass `-p:GprPin=ON` to
+`dotnet build` or `-DFIBERCPU_GPR_PIN=ON` to CMake.
+
+### Linux runtime
+
+C# calls the [native API](libfibercpu/src/bindings.h) through P/Invoke.
+`X86_Run` executes a guest slice, and fault, interrupt, and log callbacks
+carry a `GCHandle` token back to the managed engine. For guest memory
+copies, C# resolves a host pointer for each page-sized span, then copies
+the bytes without crossing the boundary for each byte.
+
+Each container runtime owns a scheduler. One host thread executes its
+guest tasks in slices. Each guest task has its own `Engine` and native
+`EmuState`. Tasks with a shared address space share an `MmuCore`, which
+records translation invalidations in a shootdown ring for their local TLBs.
+[Scheduling and signals](docs/scheduling-and-signals.md) · [Memory management](docs/memory-management.md)
 
 ## Performance Notes
 
-### From 600 to 3,000 CoreMark
+### Early CoreMark results
 
-Early builds scored ~600 on CoreMark, roughly on par with a naive interpreter. The climb to ~3,000 was driven by a series of targeted fixes rather than any single breakthrough:
+The initial public README recorded these CoreMark 1.0 scores. The entries
+describe early interpreter builds and the tests available for each machine.
 
-1. **Fix TLB refill bug** (~600 → ~800): confirmed address translation was the first real bottleneck.
-2. **Hot-path tuning** (~800 → ~1,500): removed redundant per-instruction memory writes; specialized handler templates.
-3. **Memory layout / paired loads** (~1,500 → ~2,000): shifted optimization focus from dispatch to data organization.
-4. **Lazy parity flags** (~2,000 → ~2,200): static def-use pruning + lazy PF evaluation.
-5. **Block linking** (~2,200 → ~2,500): appended short successor blocks to reduce boundary costs.
-6. **Profile-guided superopcodes** (~2,500 → ~3,000): ~256 fused instruction pairs based on anchor instructions and RAW dependencies.
+| Hardware | Podish | iSH | QEMU TCI | Native (arm64) |
+| --- | ---: | ---: | ---: | ---: |
+| iPhone 17 (A19) | ~3,447 | ~1,692 | n/a | n/a |
+| MacBook Pro (M3 Max) | ~2,967 | n/a | ~325 | ~38,087 |
 
----
+The initial README also recorded the following development results.
+
+| Change | Approximate CoreMark score |
+| --- | ---: |
+| Fix TLB refill | 600 to 800 |
+| Remove redundant writes and specialize handlers | 800 to 1,500 |
+| Reorder fields for paired loads | 1,500 to 2,000 |
+| Defer parity calculation and prune flag writes | 2,000 to 2,200 |
+| Append short successor blocks | 2,200 to 2,500 |
+| Bake instruction pairs from profiles | 2,500 to 3,000 |
+
+For a repeatable comparison of the current interpreter variants, use the
+[static CoreMark harness](benchmark/coremark-static.md).
 
 ## Repository Layout
 
-- `Podish.Cli/` — main CLI entrypoint
-- `Podish.Core/` — container runtime and image handling
-- `Podish.Core.Native/` — NativeAOT / static packaging for Apple platforms
-- `PodishApp/` — SwiftUI frontend
-- `Fiberish.Core/` — Linux emulation layer and runtime services
-- `Fiberish.X86/` — .NET wrapper that builds and ships `libfibercpu`
-- `Fiberish.Netstack/` — Rust networking component
-- `Fiberish.SilkFS/` — SQLite-backed filesystem storage
-- `libfibercpu/` — C++ emulator core (CMake)
-- `Fiberish.Tests/` — primary managed test suite
-- `Fiberish.SilkFS.Tests/` — SilkFS tests
-- `tests/` — Python tests, regression generation, integration harnesses
-- `benchmark/` — performance tools and benchmark runners
-- `docs/` — technical deep-dives (including the original Chinese technique report)
-
----
+| Path | Contents |
+| --- | --- |
+| `Podish.Cli/` | CLI commands and options |
+| `Podish.Core/` | Containers and OCI image storage |
+| `Podish.Core.Native/` | NativeAOT C ABI for the Apple app |
+| `PodishApp/` / `Podish.Browser/` | SwiftUI app and WebAssembly browser demo |
+| `Fiberish.Core/` | Linux syscalls, virtual filesystem, scheduler, signals, and TTY |
+| `Fiberish.X86/` / `libfibercpu/` | Managed bindings and C++ CPU core |
+| `Fiberish.Netstack/` | Rust TCP/IP stack based on [smoltcp](https://github.com/smoltcp-rs/smoltcp) |
+| `Fiberish.SilkFS/` | SQLite-backed filesystem |
+| `Fiberish.Tests/`, `Fiberish.SilkFS.Tests/`, `Fiberish.X86.Tests/` | Managed and CPU test suites |
+| `tests/` / `benchmark/` | Integration fixtures, probes, and performance tools |
+| `docs/` | Design and implementation notes |
 
 ## License
 
-Dual-licensed under **GPLv3** (open-source / non-commercial track) and a **commercial license** (proprietary distribution).
-
-- Non-commercial use: freely available under GNU GPLv3.
-- Commercial use: contact `giantneko@icloud.com`.
-
-See the `LICENSE` file for full terms.
-
----
-
-**Questions, bugs, or software you want to see running?** Reach out at `giantneko@icloud.com`.
+[LICENSE.md](LICENSE.md) describes the GPLv3 and commercial license terms.
+For commercial licensing, contact [giantneko@icloud.com](mailto:giantneko@icloud.com).

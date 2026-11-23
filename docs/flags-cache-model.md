@@ -1,74 +1,32 @@
-# Flags Cache Model
+# Flags cache
 
-## Summary
+The interpreter keeps guest flags in the `uint64_t flags_cache` argument while handlers tail-call each other. `X86_Run` and `X86_Step` load that argument from `Context::flags_state` when they enter a handler. The handler that returns to the caller commits its copy.
 
-`flags_cache` is the canonical flags representation while execution remains inside a chained block path.
-Repo code must treat `state->ctx.flags_state` as the only persisted flags state, and treat architectural
-`EFLAGS` as a materialized view of that state.
+## Representation and accessors
 
-The intended model is:
+Bits 0–31 carry the EFLAGS image with a deferred parity flag. Bits 40–47 hold the byte that determines `PF`. Arithmetic handlers can store the low byte of their result there. When the caller supplies a parity bit, `InitFlagsCache` and `SyncParityStateFromFlags` encode it as 0 for set or 1 for clear. `EvaluatePF` returns the even parity of the stored byte in either case.
 
-- Chain-local execution reads and writes only the `uint64_t flags_cache` parameter.
-- `state->ctx.flags_state` is updated only at explicit commit points.
-- Architectural `EFLAGS` are exposed only through accessors.
+Use these helpers when editing an instruction or exposing flags to a caller.
 
-## Canonical State
+| Task | Helper |
+| --- | --- |
+| Read `CF`, `ZF`, `SF`, `OF`, or `AF` | Use `ReadCF`, `ReadZF`, `ReadSF`, `ReadOF`, or `ReadAF`. These helpers emit per-flag reads in LLVM templates. |
+| Read `PF` | Use `EvaluatePF`. `GetFlags32` and `GetFlags32NoPF` both return the raw low word, which can contain a stale `PF` bit. |
+| Read or replace persisted EFLAGS | Use `GetArchitecturalEflags` to materialize `PF` and `SetArchitecturalEflags` to initialize the parity state. The native EFLAGS APIs call these helpers. |
+| Persist the threaded value | Use `CommitFlagsCache`. It stores the entire word, including deferred parity. |
 
-- `Context::flags_state` stores the canonical flags state.
-- The low 32 bits are the architectural `EFLAGS` image.
-- Higher bits store lazy metadata, currently only parity state.
-- `GetArchitecturalEflags()` must materialize lazy parity before exposing an architectural view.
+The helpers live in [exec_utils.h](../libfibercpu/src/exec_utils.h).
 
-Access is centralized through:
+## Handler exits and guest instructions
 
-- `GetStateFlagsCache`
-- `SetStateFlagsCache`
-- `GetArchitecturalEflags`
-- `SetArchitecturalEflags`
-- `CommitFlagsCache`
+Handlers pass the cache through successful links, including links that the slow resolver finds in the block cache. The exit handler commits it when the instruction budget expires, no successor is available, or an instruction returns control with its current or next EIP. A memory replay that stops the chain also commits. Successful replay passes the cache to the restarted or next instruction. See [dispatch.h](../libfibercpu/src/dispatch.h) and [ops.cpp](../libfibercpu/src/ops.cpp).
 
-Op implementations must not read or write flags through `EmuState` directly.
+`PUSHF` commits before reading architectural EFLAGS. `POPF` applies the architectural write mask and updates both the persisted state and the local cache. `LAHF` and `SAHF` handle parity through the local cache. `INT n` commits before invoking the interrupt hook and reloads the cache after it returns, because the hook can replace the guest state. See [ops_control_impl.h](../libfibercpu/src/ops/ops_control_impl.h) and [ops_data_mov_impl.h](../libfibercpu/src/ops/ops_data_mov_impl.h).
 
-## Access Rules
+The carry-dependent memory forms of `ADC`, `SBB`, `RCL`, and `RCR` preserve their input flags when the slow store fails. The slow handler publishes the input before the store and stores the candidate flags on success. Its caller reloads the cache from state. See [ops_carry_rmw_impl.h](../libfibercpu/src/ops/ops_carry_rmw_impl.h) and [CarryRmwSmcTests.cs](../Fiberish.X86.Tests/Regression/CarryRmwSmcTests.cs).
 
-- Hot-path producers update `flags_cache` only.
-- Hot-path consumers read `flags_cache` only.
-- Any consumer of `PF` must materialize parity first through `EvaluatePF()`.
-- Direct tests like `GetFlags32(flags_cache) & PF_MASK` are not allowed in op logic.
-  The only exception is the architectural import path (`InitFlagsCache` / `SetArchitecturalEflags`), where
-  the low 32 bits are known to contain a correct architectural image and may be used to re-sync the
-  lazy parity metadata.
-- Non-lazy flag bits such as `CF/ZF/SF/OF/DF` may be read from `GetFlags32(flags_cache)` when no parity
-  materialization is required. `GetFlags32Raw` is an alias for `GetFlags32`; the name only serves as a
-  reminder that the caller must not depend on the PF bit in the returned value.
+## LLVM block and page-region compilation
 
-Architectural consumers are the only places allowed to force a commit or reload:
+After inlining the instruction kernels, the compiler lowers the symbolic flag reads and writes in `DeferredFlags`. It tracks the arithmetic flag fields and parity byte as separate SSA values, including across control-flow joins. A per-flag read uses its field directly. Uses that require the handler ABI word receive a packed value.
 
-- `pushf/popf`
-- `lahf/sahf`
-- external API accessors
-- fault / interrupt / hook visibility boundaries
-
-## Commit Semantics
-
-`CommitFlagsCache` is only valid at chain exit boundaries:
-
-- `ExitOnCurrentEIP`
-- `ExitOnNextEIP`
-- restart / retry exits
-- resolver miss / limit exits
-- external visibility points
-
-Successful chaining must not commit. `X86_Run()` and `X86_Step()` must not re-commit a stale caller-side
-copy of `flags_cache` after the handler chain returns.
-
-## Review Checklist
-
-When touching flags-related code, verify:
-
-- no op implementation accesses `ctx.eflags`
-- no PF consumer uses `GetFlags32(flags_cache) & PF_MASK`
-- any architectural export path uses `GetArchitecturalEflags()`
-- any architectural import path uses `SetArchitecturalEflags()` / `InitFlagsCache()`
-- new chain exit paths call `CommitFlagsCache` exactly once
-- any direct state read of flags would fail to compile or be caught in review
+When you enable `FIBERCPU_LLVM_SHARED_REGION_EXITS`, the region builder joins compatible exits so the compiler can pack flags at their shared ABI boundary. See [llvm_operand_ir.cpp](../libfibercpu/src/jit/llvm_operand_ir.cpp) and [LLVM block JIT options](instruction-specialization.txt).

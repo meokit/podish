@@ -1,51 +1,47 @@
 Instruction specialization declarations
 ======================================
 
-instruction_catalog.json is the source for decoder fallbacks, specialization
-selectors, named kernel bindings and selection of operations for the LLVM
-prototype. CMake runs scripts/gen_instruction_catalog.py to generate the
-encoding traits, native registration table and named wrappers. Execution
-kernels live in ops/*_impl.h.
+libfibercpu/src/instruction_catalog.json defines decoder fallbacks,
+specialization selectors, named kernel bindings and the operations available
+to the LLVM block compiler. The catalog imports llvm_kernel_policies.json
+for typed kernel policies. CMake runs scripts/gen_instruction_catalog.py to
+emit encoding traits, native registration, scalar bindings and LLVM operation
+IDs. The instruction kernels live in libfibercpu/src/ops/*_impl.h.
 
 Declaring a variant
 -------------------
-Each variants row has a logic name, an encoding family, a spec object and a
-priority. For example:
+Each variants row supplies a logic name, an encoding family, a spec object
+and a priority. The aligned SSE load uses this row.
 
-  {"logic": "OpGroup1_EvIb_Add_32_NoFlags_Eax", "family": "Group1_EvIb_Add",
-   "spec": {"width": ["W32"], "regForm": [], "dst": ["Eax"], "flags": ["Dead"]},
-   "priority": 2}
+  {"logic": "OpMovdqa_Load", "family": "Encoding_16F",
+   "spec": {"mandatory": ["P66"]}, "priority": 0}
 
-The family supplies the handler index, opcode extension and operand roles.
+The family supplies the opcode, opcode extension and operand roles.
 The generator lowers the spec object to a structural C++ Spec value.
 DeclareVariant checks the spec and derives the decoder criteria. The bucket
 sort uses descending specificity followed by ascending priority. The optional
 fusion_parent field permits a bounded expansion of an existing fusion.
 
 A binding row supplies the name of the logic entry, its kernel and template
-arguments. Every bound logic entry has its own name and remains callable from
-generated fusion code.
+arguments. Generated fusions call these named entries.
 
 Typed facts
 -----------
 - Width and r/m form are independent. Register form does not imply 32 bits.
 - dst/src are semantic operands. Family layout maps them onto ModRM.reg or
-  ModRM.rm; an opcode extension is not a GPR operand.
-- Vector operands require a bank-specific policy; SIMD prefix families do not
-  accept a GPR identity as a vector-register label.
+  ModRM.rm. An opcode extension selects a member of an instruction group.
+- Use a bank-specific policy for vector operands.
 - Fixed byte encodings accept EAX..EBX plus ByteLane::Low/High. For example,
   dst8(Gpr::Eax, ByteLane::High) denotes AH, not ESP.
-- Dynamic base/index means unresolved; Absent means known to be missing.
+- Dynamic leaves the base or index unresolved. Absent marks one as missing.
 - Segment::Default means no segment override. It still uses the architectural
   DS/SS base, including non-flat segment bases.
-- Fixed-width encodings, scalar operand-size prefixes and SIMD mandatory
-  prefixes have separate width rules. mandatory(P66/F2/F3) does not stand for
-  an integer operand width.
-- Flags::Live/Dead retain the original strict liveness matching. Flags::Any
-  explicitly permits both and requires a body valid in both situations.
-  Dead flags never remove ADC/SBB's input CF dependency.
-- Inconsistent or unsupported facts fail compile-time validation. The existing
-  selected set remains unchanged except for removing 32 identical MOV entries.
+- Fixed-width encodings and scalar operand-size prefixes select an integer
+  width. SIMD mandatory prefixes select the opcode variant.
+- Flags::Live and Flags::Dead match the corresponding liveness state.
+  Flags::Any requires a body valid in both states. ADC and SBB read input CF
+  even if they discard the output flags.
+- Compile-time validation rejects incompatible facts.
 
 The kernel-side types in instruction_kernel_spec.h include OpsizeSpec,
 AddrModeSpec, FlagsSpec, RmOperandSpec and GroupOpSpec. Their Dynamic cases
@@ -54,9 +50,9 @@ OperandSpec policies bind slot count and trained operands. Opcode and
 mandatory-prefix semantics come from the architectural catalog.
 OperandSpec::Profile binds exact decoded operands for baked fusions.
 
-RegisterSpecializedHandler can publish a rule after initialization. A runtime
-rule affects future decodes, and the caller owns the lifetime of its code.
-The catalog exposes build-time metadata independently of runtime registration.
+Call RegisterSpecializedHandler from native C++ to publish a rule for future
+decodes. Keep the rule's code alive while decoded blocks can reach it.
+The reflection catalog describes the build-time declarations.
 
 Baked instruction variants
 --------------------------
@@ -65,34 +61,39 @@ checked-in scalar and fusion plans, and the machine-code review procedure.
 
 Dynamic operand templates
 -------------------------
-FIBERCPU_DYNAMIC_OPERAND_PLAN_FILE selects profiled operand shapes to generate
-from the same LLVM kernels and operand rules used by the block JIT. At build
-time LLVM specializes, inlines and compiles each handler to an ARM64 object.
-The packer extracts machine-code templates, immediate patches and relocation
-metadata. The interpreter only needs those artifacts when online JIT is off.
-The build requires native macOS arm64 and matching upstream Clang and LLVM
-major versions (21 or newer). Set FIBERCPU_DYNAMIC_SPECIALIZATION=0 to disable
+Set FIBERCPU_DYNAMIC_OPERAND_PLAN_FILE to a profile-derived plan to build
+runtime machine-code templates. The option FIBERCPU_ENABLE_DYNAMIC_SPECIALIZATION
+defaults to ON, and the plan path defaults to empty. LLVM specializes, inlines
+and compiles each selected handler to an ARM64 object. The packer extracts
+machine code, immediate patches and relocations for the interpreter to apply
+at decode time. The templates can run with online LLVM JIT disabled.
+To build them, use native macOS ARM64 and matching major versions of upstream
+Clang and LLVM (21 or newer). Set FIBERCPU_DYNAMIC_SPECIALIZATION=0 to disable
 runtime materialization.
 
 LLVM block JIT
 --------------
-FIBERCPU_ENABLE_LLVM_JIT enables the ORC block compiler on macOS arm64.
-Set FIBERCPU_LLVM_JIT=1 for exact operands or =generic for generic LLVM kernels.
-The default runtime mode is off.
+Set FIBERCPU_ENABLE_LLVM_JIT=ON to build the ORC block compiler. It needs
+native macOS ARM64 and matching upstream Clang and LLVM major versions
+(21 or newer). Use a build with PGO and handler or sequence tracing disabled.
+The build option and runtime mode both default to off. Use JitMode=exact,
+generic, or region to select a compiler mode at launch. Native hosts can also
+set FIBERCPU_LLVM_JIT to 1, generic, or region.
 
-FIBERCPU_LLVM_JIT_HOT_THRESHOLD sets the block entry count before compiling the
-published block, including entries reached by threaded links. The default is
-64. Promotion re-decodes the published slots with architectural fallback
-handlers and uses their operands to specialize LLVM bitcode. The compiled
-prefix retains those generic scalar handlers for memory replay.
-The remaining slots keep their native lowering. If the prefix reaches the
-sentinel, the compiler inlines the normal OpExitBlock semantics.
+The default hot threshold is 64 block entries, including threaded links.
+An asynchronous block enters the ranking queue at the threshold. Synchronous
+compilation and profiling use the threshold for admission. To set a process
+default, use FIBERCPU_LLVM_JIT_HOT_THRESHOLD. Promotion re-decodes the guest
+bytes with architectural handlers. The compiler uses the decoded operands
+to specialize bitcode and inlines OpExitBlock when the compiled prefix
+reaches the sentinel. The prefix keeps scalar handlers for memory replay.
+Any remaining slots keep their native lowering.
 
 Online JIT snapshots the published instruction bytes on the VM thread.
-Two workers re-decode, optimize and emit objects concurrently by default.
-The guest executes the native handlers until a completed block can be
-installed at a dispatch boundary. A cache reset cancels pending publication
-and a block invalidation rejects results for its previous revision.
+Two workers re-decode, optimize and emit objects by default. The guest runs
+native handlers until the VM thread installs a compiled entry at a dispatch
+boundary. A cache reset cancels pending publication and a block invalidation
+rejects results for the previous revision.
 FIBERCPU_LLVM_JIT_WORKERS selects 0–8 workers. Set it to 0 for synchronous
 promotion. Profile collection records block recipes synchronously.
 
@@ -229,8 +230,8 @@ WeightedProfileSamePage=on also samples the valid registered blocks starting
 in the hot block's guest page in the same MMU when the threshold is reached.
 Recipe generation runs at the dispatch boundary. Members that can be
 compiled use the same entry counters, with an export weight of one for
-recipes that were registered but never entered. The offline tool still
-compiles independent blocks.
+registered recipes with zero entries. The weighted profile supplies
+independent block recipes. Supply a region trace to compile page regions.
 
 A block key contains the exit and ordered catalog-assigned operation IDs.
 Exact keys include decoded operand shapes and the relative guest EIP
@@ -252,11 +253,12 @@ The offline tool sorts weighted recipes by descending entry count.
 --top limits the number of independent block objects. --llvm-opt-level and
 --llvm-pass-pipeline are mutually exclusive.
 
-To add page regions to a linked cache, train with JitMode=region and set
-FIBERCPU_LLVM_JIT_SCHEDULER_TRACE to a file. Pass that file as --regions to
-fibercpu_llvm_cache along with the block profile. The trace records the
-relative member offsets and exact recipes of published regions. The tool
-compiles independent fallback objects and links each region as one object.
+To add page regions, collect a block profile with JitMode=profile. Run the
+workload again with JitMode=region and FIBERCPU_LLVM_JIT_SCHEDULER_TRACE set
+to a file. The trace records the relative member offsets and exact recipes of
+published regions. Pass the trace as --regions to fibercpu_llvm_cache along
+with the block profile. The tool emits independent fallback objects and one
+object per compiled region.
 The consumer publishes a region once all registered member blocks match its
 recipes and backing page. FIBERCPU_LINKED_PAGE_REGIONS=0 keeps the
 independent cache active and skips region installation.
@@ -294,14 +296,13 @@ handler-reflection API to inspect individual native symbols within the current
 process. The baked-fusion generator reads the numerical sequences from its
 profile manifest.
 
-Migration evidence (Apple M5 Max, macOS ARM64)
---------------------------------------------
-The pre-refactor registry was captured before conversion. Every one of its 503
-unique selected variants and 411 final fallbacks retains its exact normalized
-constraints and legacy precedence. The regression fixture records this baseline.
-32 duplicate MOV rows selected the same logic under identical constraints and
-were merged. Reflection retains 943 handler entries with the default 71 fused
-sequences, and 872 when generated fusion is disabled.
+Migration evidence (2026-11-17, Apple M5 Max, macOS ARM64)
+---------------------------------------------------------
+The migration preserved the normalized constraints and precedence for the 503
+unique selected variants and 411 final fallbacks in the captured registry.
+The regression fixture records that baseline. The migration combined 32
+duplicate MOV rows. The measured builds reflected 943 handler entries with
+71 fused sequences and 872 with generated fusion disabled.
 
 Final CPU suite: 3145 passed with fusion ON and 3145 passed with fusion OFF,
 including 32 exhaustive cases and four new catalog regression tests.
@@ -313,15 +314,13 @@ all native builds.
 Serial rotating GCC CoreMark comparison, fixed 60000 iterations, three rounds:
   old registry median 3265.306122
   unified registry   3284.971257  (+0.602%)
-All six CRC/timing validations passed. Same managed CLI, rootfs, guest binary,
-compiler and fusion table; only the native library changes. No concurrent build
-or profile ran during measurement.
+All six CRC and timing validations passed. We changed the native library and
+used the same managed CLI, rootfs, guest binary, compiler and fusion table.
+We measured each build in isolation from build and profiling jobs.
 Two-round independent throughput comparison (all 12 output checks passed):
   GNU gzip       -0.285%
   GNU SHA256     +1.144%
   Zig CoreMark   +0.038%
-These are short comparisons, not statistical confidence bounds or new speedups.
-Executable __text: 688372 -> 651212 bytes (-5.398%). Metadata adds read-only
-storage; total library size is not a substitute for executable-code size.
-Raw logs, library hashes and isolated binaries remain in
+Executable __text fell from 688372 to 651212 bytes (-5.398%) in this comparison.
+The migration stored its raw logs, library hashes and isolated binaries under
 artifacts/specialization-refactor-20261117/.

@@ -1,94 +1,79 @@
-# Scheduling and Signal Handling Architecture
+# Scheduling and signals
 
-This document describes the task scheduling, asynchronous system call management, and signal handling mechanisms in the x86emu project.
+## Guest slices
 
-## 1. Task Scheduling
+`KernelScheduler` runs a container's guest tasks one slice at a time. It
+takes a ready `FiberTask` off the run queue and calls `RunSlice` with an
+instruction budget.
 
-The base unit of execution in the emulator is the `FiberTask`. Scheduling is managed by the `KernelScheduler`, which maintains a queue of `Ready` tasks.
+At the start of a slice, `FiberTask` synchronizes its address space and
+delivers pending signals if there is no syscall, completion, or continuation
+in flight. It then resumes a stored continuation, finalizes a completed
+syscall, or starts awaiting a pending syscall, in that order. If none of
+those paths apply and the task can run, it enters the native CPU until the
+budget expires or the CPU exits, for example to yield after a syscall.
+[Scheduler loop](../Fiberish.Core/Core/KernelScheduler.cs) · [Task execution](../Fiberish.Core/Core/FiberTask.cs)
 
-### Core Loop: `RunSlice`
-The primary execution entry point is `FiberTask.RunSlice(instructionLimit)`. Its responsibilities include:
+## Waiting syscalls
 
-1.  **Signal Pre-processing**: Calls `ProcessPendingSignals()` to check for and deliver any signals before guest execution (only if no async syscall or continuation is pending).
-2.  **Continuations**: If a `Continuation` is set (from a waking awaiter), it is invoked.
-3.  **Async Syscall Management**: If a `PendingSyscall` (a `Func<ValueTask<int>>`) is set, it calls `HandleAsyncSyscall()`.
-4.  **Guest Execution**: If no async logic is pending, it resumes the native emulator engine (`native_run`) until a yield (interrupt, syscall, or time slice expiration).
+A handler returns a `ValueTask<int>`. When the handler completes during
+syscall entry, `SyscallManager.Handle` can write the result to guest
+`EAX`. Signal-return syscalls restore the guest registers themselves.
 
-## 2. Asynchronous System Calls
+If a handler has to wait or returns `-ERESTARTSYS`, the syscall manager
+stores the `ValueTask<int>` in `PendingSyscall`, parks the guest task,
+and tells the CPU to yield. `HandleAsyncSyscallAsync` starts the await.
+On completion, `RunIngress` lets the scheduler thread finalize the
+result and update the guest registers. The scheduler can run other
+tasks while the wait is in flight.
+[Syscall entry](../Fiberish.Core/Syscalls/SyscallManager.cs) · [Syscall completion](../Fiberish.Core/Core/FiberTask.cs)
 
-Syscalls that may block (e.g., `nanosleep`, `futex_wait`, `poll`, `read` from TTY) are implemented as C# `async` methods.
+The wait families scan or harvest readiness before suspending. They return
+without waiting when a descriptor is ready or the timeout is zero.
+Otherwise they wait for readiness, timeout, or an interrupting signal.
 
-### Wait-family Syscalls (select/poll/epoll variants)
-The wait-family syscalls now share common async execution paths to reduce duplication and keep signal behavior consistent:
+| Syscalls | Shared path |
+| --- | --- |
+| `select`, `_newselect`, `pselect6`, `pselect6_time64` | `DoSelectWithTimeout` |
+| `poll`, `ppoll`, `ppoll_time64` | `DoPoll` |
+| `epoll_wait`, `epoll_pwait`, `epoll_pwait2` | `DoEpollWait` |
 
-- `select`, `_newselect`, `pselect6`, `pselect6_time64` share `DoSelectWithTimeout(...)`.
-- `poll`, `ppoll`, `ppoll_time64` share `DoPoll(...)`.
-- `epoll_wait`, `epoll_pwait`, `epoll_pwait2` share `DoEpollWait(...)`.
+The timespec helpers reject negative seconds and require nanoseconds from 0
+through 999,999,999. They round valid sub-millisecond remainders up. A non-null
+signal-mask pointer requires the 8-byte i386 `sigset_t` size. The signal-mask
+reader drops SIGKILL and SIGSTOP from the temporary mask.
 
-This allows one scheduling model for all readiness wait operations:
-- First do a synchronous scan/harvest.
-- If nothing is ready and timeout is non-zero, suspend with the corresponding awaiter.
-- Resume on fd readiness, timeout, or signal interruption.
+The masked wait handlers save the old mask. They restore it when the wait
+completes without `-ERESTARTSYS`. On an interruption, they defer restoration
+so the completion path can identify the signal under the wait mask.
+`sigreturn` and `rt_sigreturn` restore the deferred mask after a guest handler
+runs.
+[Select and poll](../Fiberish.Core/Syscalls/SyscallHandlers.Select.cs) · [Epoll](../Fiberish.Core/Syscalls/SyscallHandlers.Epoll.cs)
 
-### Time and Signal Mask Handling
-For `pselect6/ppoll` families, timeout and signal-mask decoding is centralized:
+## Signal delivery
 
-- `timespec` (32-bit) and `timespec64` are converted into internal millisecond timeout values.
-- Invalid timespec values (negative sec/nsec or nsec >= 1e9) return `-EINVAL`.
-- The temporary signal mask for `pselect6/ppoll/epoll_pwait/epoll_pwait2` is applied only around the wait call and restored in `finally`.
-- `sigsetsize` must match i386 `sigset_t` size (8), otherwise `-EINVAL`.
-- `SIGKILL`/`SIGSTOP` remain unmaskable (masked out from temporary masks).
+`PostSignalInfo` routes off-thread signals through scheduler ingress.
+On the scheduler thread, it records the signal and can interrupt an
+active wait if the signal is deliverable. A blocked signal stays pending.
+The scheduler discards a deliverable signal with an ignore disposition.
 
-### Lifecycle of an Async Syscall
-1.  **Syscall Entry**: `SyscallManager.HandleSyscall` identifies the syscall and calls the handler.
-2.  **Yielding**: The handler creates an `Awaiter` (e.g., `FutexAwaiter`) and returns a `ValueTask<int>`.
-3.  **Task Suspension**: `HandleSyscall` (via `fiberTask.PendingSyscall`) saves the `ValueTask` and sets the task's state to `Waiting`. The task is removed from the `Ready` queue.
-4.  **Background Processing**: `HandleAsyncSyscall()` (called by `RunSlice` in the next scheduler cycle) `awaits` the `ValueTask`.
-5.  **Wakeup**: When the event occurs (e.g., futex wake, signal), the Awaiter's internal `TaskCompletionSource` is completed. The `KernelScheduler` moves the task back to the `Ready` queue.
-6.  **Resumption**: `HandleAsyncSyscall` finishes its `await`, handles the result (including `-ERESTARTSYS`), and writes the return value to the guest's `EAX` register.
+During ordinary guest execution, `ProcessPendingSignals` checks pending
+thread and process signals against the signal mask. It applies the default
+action or calls `DeliverSignal` to build a guest frame and set EIP to
+the handler. `SA_SIGINFO` selects the real-time frame. The legacy frame
+uses `sigreturn`, and the real-time frame uses `rt_sigreturn`.
+[Signal posting and frame construction](../Fiberish.Core/Core/FiberTask.cs)
 
-## 3. Signal Handling
+An interrupted async syscall leaves a restart result for
+`FinalizeAsyncSyscall`. Before a guest signal handler runs, the completion
+path updates the guest registers that the frame will save. If the restart
+result and the signal action allow a restart, it restores EIP to the saved
+syscall instruction and reloads EAX with the syscall number. Otherwise
+it writes `-EINTR` to EAX. Some waits, including `poll`, `select`, and
+`epoll_wait`, return `EINTR` on interruption by a guest handler even when
+that handler uses `SA_RESTART`.
 
-Signals in x86emu are managed through a combination of `PostSignal` (enqueueing) and `ProcessPendingSignals` (delivery).
-
-### Signal Delivery Types
-There are two ways a signal is delivered to the guest:
-
-#### A. Standard Delivery (`ProcessPendingSignals`)
-Occurs at the start of `RunSlice` if the guest is about to run normal instructions.
-- Checks `PendingSignals` against `SignalMask`.
-- If a signal is found and not ignored, it calls `DeliverSignal(...)`.
-- `DeliverSignal` builds a signal frame on the guest stack (using `SetupOldSigFrame` or `SetupSigContext`) and redirects `EIP` to the signal handler.
-
-#### B. Interrupting Delivery (`HandleAsyncSyscall`)
-Occurs when an async syscall is interrupted (returns `-ERESTARTSYS`).
-- If a signal arrives while a task is `Waiting`, `PostSignal` sets `WakeReason.Signal`.
-- The Awaiter (e.g., `FutexAwaiter`, `SelectAwaiter`, `PollAwaiter`, epoll wait) detects the signal, returns `Interrupted`, and the syscall handler returns `-ERESTARTSYS`.
-- `HandleAsyncSyscall` detects `-ERESTARTSYS` and calls `DeliverSignalForRestart(...)`.
-- **Crucial**: This path adjusts the guest registers (EIP rewound or EAX set to `-EINTR`) *before* building the signal frame, ensuring the state restored after `sigreturn` is the correct "post-syscall" state.
-
-### RunSlice Guard
-To prevent a signal from being delivered twice (and creating nested `sigreturn` frames with stale registers), `RunSlice` contains a guard:
-```csharp
-if (PendingSyscall == null && Continuation == null)
-{
-    ProcessPendingSignals();
-}
-```
-This ensures that if a syscall is currently in-flight, signal handling is deferred to `HandleAsyncSyscall`, which can coordinate the signal delivery with the syscall's return state.
-
-## 4. Register Management during Signals
-
-- **Syscall Restart**: If a syscall returns `-ERESTARTSYS` and `SA_RESTART` is set, `HandleAsyncSyscall` rewinds `EIP` to the `int 0x80` instruction before delivering the signal. After `sigreturn`, the syscall re-executes.
-- **Interruption**: If `SA_RESTART` is NOT set, `HandleAsyncSyscall` sets `EAX = -EINTR` before delivery. After `sigreturn`, userspace receives `EINTR`.
-- **Frame Layouts**:
-    - **Old Sigframe**: Used when `SA_SIGINFO` is not set. Compatible with musl's `sigreturn` (vDSO or `__restore`).
-    - **RT Sigframe**: Used when `SA_SIGINFO` is set. Required for handlers that expect `siginfo_t` and `ucontext_t`.
-
-## 5. Current Wait-syscall Coverage
-
-Implemented wait syscalls relevant to scheduling and signal interaction:
-
-- `select`, `_newselect`, `pselect6`, `pselect6_time64`
-- `poll`, `ppoll`, `ppoll_time64`
-- `epoll_create`, `epoll_create1`, `epoll_ctl`, `epoll_wait`, `epoll_pwait`, `epoll_pwait2`
+When a slice sees a pending syscall, completion, or continuation, it defers
+ordinary signal delivery. This lets the completion path finish updating
+the guest registers before saving them in a signal frame.
+[Restart and interruption logic](../Fiberish.Core/Core/FiberTask.cs) · [Wait syscall tests](../Fiberish.Tests/Syscalls/WaitSyscallTests.cs)
