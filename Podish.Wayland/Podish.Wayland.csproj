@@ -1,6 +1,13 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
+    <EmbeddedResource Include="Themes/catppuccin-latte/openbox-3/*"
+                      LogicalName="Podish.Wayland.Themes.catppuccin-latte.openbox-3.%(Filename)%(Extension)" />
+    <EmbeddedResource Include="Themes/catppuccin-latte/LICENSE"
+                      LogicalName="Podish.Wayland.Themes.catppuccin-latte.LICENSE" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Podish.Core\Podish.Core.csproj">
       <AdditionalProperties Condition="'$(FiberishForceBrowserWasm)' != ''">FiberishForceBrowserWasm=$(FiberishForceBrowserWasm)</AdditionalProperties>
       <AdditionalProperties Condition="'$(RuntimeIdentifier)' != '' and '$(FiberishForceBrowserWasm)' == ''">RuntimeIdentifier=$(RuntimeIdentifier);PublishAot=$(PublishAot);PodishStaticNative=$(PodishStaticNative)</AdditionalProperties>

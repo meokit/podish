@@ -1,5 +1,7 @@
 using System.Collections.Concurrent;
+using Fiberish.VFS;
 using Microsoft.Extensions.Logging;
+using Podish.Core.Graphics;
 using Podish.Display;
 using Podish.Wayland;
 
@@ -7,45 +9,54 @@ namespace Podish.Cli.Wayland;
 
 internal readonly record struct WaylandDesktopOptions(int Width, int Height, WaylandUiTheme Theme)
 {
-    public WaylandDesktopOptions(int Width, int Height) : this(Width, Height, WaylandUiTheme.BreezeLight)
+    public WaylandDesktopOptions(int Width, int Height) : this(Width, Height, WaylandUiTheme.CatppuccinLatte)
     {
     }
 
-    public static WaylandDesktopOptions Default => new(1024, 768, WaylandUiTheme.BreezeLight);
+    public static WaylandDesktopOptions Default => new(1024, 768);
 }
 
 internal sealed class WaylandDisplayServerState : IDisposable
 {
     private readonly WaylandSdlDisplayHost _host;
+    private readonly AutoResetEvent _wake = new(false);
     private readonly ConcurrentQueue<WaylandDisplayCommand> _commands = [];
     private readonly object _commandLock = new();
-    private readonly HashSet<uint> _suppressedImeKeys = [];
     private bool _disposed;
 
-    public WaylandDisplayServerState(ILoggerFactory loggerFactory, WaylandDesktopOptions desktopOptions)
+    public WaylandDisplayServerState(ILoggerFactory loggerFactory, WaylandDesktopOptions desktopOptions,
+        bool enableGles)
     {
         LoggerFactory = loggerFactory;
         Logger = loggerFactory.CreateLogger<WaylandDisplayServerState>();
         DesktopOptions = desktopOptions;
-        _host = new WaylandSdlDisplayHost(loggerFactory, desktopOptions);
+        _host = new WaylandSdlDisplayHost(loggerFactory, desktopOptions, enableGles);
         Presenter = new WaylandSdlFramePresenter(
             desktopOptions,
             EnqueueCommand,
-            loggerFactory.CreateLogger<WaylandSdlFramePresenter>());
+            loggerFactory.CreateLogger<WaylandSdlFramePresenter>(), _host.CanImportGpuBuffer);
     }
 
     public ILoggerFactory LoggerFactory { get; }
     public ILogger Logger { get; }
     public WaylandDesktopOptions DesktopOptions { get; }
     public IWaylandFramePresenter Presenter { get; }
+    internal KmsEglOutput? GuestTextures => _host.GuestTextures;
+    internal VirtualDrmScanout? Scanout => _host.Scanout;
+    internal uint Scale120 => _host.Scale120;
 
-    public void Start() => _host.Start();
+    public void Start()
+    {
+        _host.Start();
+        Scanout!.FrameReady += Wake;
+    }
 
     public void RunMainLoop(Task runtimeTask, WaylandDisplayIngressBridge ingressBridge)
     {
+        bool scanoutDirty = true;
         while (!runtimeTask.IsCompleted)
         {
-            bool dirty = DrainCommands(out List<ulong> consumed, out bool shutdownRequested);
+            bool dirty = DrainCommands(out List<ulong> consumed);
 
             foreach (ulong leaseToken in consumed)
                 ingressBridge.Post(new WaylandDisplayIngressEvent(WaylandDisplayIngressKind.BufferConsumed, LeaseToken: leaseToken));
@@ -54,18 +65,14 @@ internal sealed class WaylandDisplayServerState : IDisposable
             if (inputEvents.Count > 0)
                 Logger.LogDebug("Wayland host drained input events count={Count}", inputEvents.Count);
 
-            foreach (DisplayInputEvent inputEvent in OrderInputEventsForIme(inputEvents))
+            foreach (DisplayInputEvent inputEvent in inputEvents)
             {
                 Logger.LogDebug("Wayland host input kind={Kind} x={X} y={Y} button={Button} key={Key} pressed={Pressed} ts={Timestamp}",
                     inputEvent.Kind, inputEvent.X, inputEvent.Y, inputEvent.Button, inputEvent.Key, inputEvent.Pressed, inputEvent.Timestamp);
                 ingressBridge.Post(new WaylandDisplayIngressEvent(WaylandDisplayIngressKind.Input, inputEvent));
             }
 
-            if (_host.TryDequeueResize(out DisplaySize size))
-            {
-                dirty = true;
-                ingressBridge.Post(new WaylandDisplayIngressEvent(WaylandDisplayIngressKind.Resize, Size: size));
-            }
+            bool outputResized = _host.RefreshOutputSize();
 
             if (_host.IsClosed)
             {
@@ -73,18 +80,18 @@ internal sealed class WaylandDisplayServerState : IDisposable
                 break;
             }
 
-            if (dirty)
+            if (_host.TryPresentScanout(out uint timestamp, out ulong frameSequence))
             {
-                _host.Render();
-                ingressBridge.Post(new WaylandDisplayIngressEvent(
-                    WaylandDisplayIngressKind.VSyncTick,
-                    Timestamp: unchecked((uint)Environment.TickCount64)));
+                ingressBridge.Post(new WaylandDisplayIngressEvent(WaylandDisplayIngressKind.VSyncTick,
+                    Timestamp: timestamp, FrameSequence: frameSequence));
             }
 
-            if (shutdownRequested)
-                break;
+            scanoutDirty |= dirty || outputResized;
+            if (scanoutDirty && _host.TryQueueScanoutFrame())
+                scanoutDirty = false;
 
-            Thread.Sleep(dirty ? 0 : 8);
+            // SDL events still need a poll, while scene and vblank notifications wake immediately.
+            _wake.WaitOne(_host.HasPendingGpuUploads ? 1 : 8);
         }
     }
 
@@ -93,14 +100,17 @@ internal sealed class WaylandDisplayServerState : IDisposable
         lock (_commandLock)
         {
             _disposed = true;
+            if (Scanout is { } scanout)
+                scanout.FrameReady -= Wake;
         }
 
         while (_commands.TryDequeue(out WaylandDisplayCommand command))
-            command.SharedMemoryFile?.Close();
+            command.ReleaseBuffer();
 
         if (Presenter is IDisposable disposablePresenter)
             disposablePresenter.Dispose();
         _host.Dispose();
+        _wake.Dispose();
     }
 
     private void EnqueueCommand(WaylandDisplayCommand command)
@@ -111,15 +121,22 @@ internal sealed class WaylandDisplayServerState : IDisposable
                 return;
 
             // A client can destroy its surface before the display thread finishes uploading it.
-            command.SharedMemoryFile?.Get();
+            command.RetainBuffer();
             _commands.Enqueue(command);
+            _wake.Set();
         }
     }
 
-    private bool DrainCommands(out List<ulong> consumed, out bool shutdownRequested)
+    private void Wake()
+    {
+        lock (_commandLock)
+            if (!_disposed)
+                _wake.Set();
+    }
+
+    private bool DrainCommands(out List<ulong> consumed)
     {
         consumed = [];
-        shutdownRequested = false;
 
         var batch = new List<WaylandDisplayCommand>();
         while (_commands.TryDequeue(out WaylandDisplayCommand command))
@@ -127,81 +144,13 @@ internal sealed class WaylandDisplayServerState : IDisposable
 
         try
         {
-            return _host.DrainCommands(batch, consumed, out shutdownRequested);
+            return _host.DrainCommands(batch, consumed);
         }
         finally
         {
             foreach (WaylandDisplayCommand command in batch)
-                command.SharedMemoryFile?.Close();
+                command.ReleaseBuffer();
         }
     }
 
-    private IEnumerable<DisplayInputEvent> OrderInputEventsForIme(IReadOnlyList<DisplayInputEvent> inputEvents)
-    {
-        if (inputEvents.Any(static ev => ev.Kind is DisplayInputEventKind.WindowFocusLost or DisplayInputEventKind.WindowFocusGained))
-            _suppressedImeKeys.Clear();
-
-        bool containsImePreeditEvent = inputEvents.Any(static ev => ev.Kind == DisplayInputEventKind.TextEditing);
-
-        static int Priority(DisplayInputEventKind kind) => kind switch
-        {
-            DisplayInputEventKind.TextEditing => 0,
-            DisplayInputEventKind.TextInput => 1,
-            DisplayInputEventKind.KeyboardKey => 2,
-            _ => 3
-        };
-
-        return inputEvents
-            .Select(static (ev, index) => (ev, index))
-            .OrderBy(static item => Priority(item.ev.Kind))
-            .ThenBy(static item => item.index)
-            .Select(static item => item.ev)
-            .Where(ev => ShouldEmitOrderedInputEvent(ev, containsImePreeditEvent));
-    }
-
-    private static bool ShouldSuppressKeyboardEventForIme(DisplayInputEvent inputEvent)
-    {
-        if (inputEvent.Kind != DisplayInputEventKind.KeyboardKey)
-            return false;
-
-        if (!WaylandKeyboardLayout.TryGetByEvdevKey(inputEvent.Key, out WaylandKeyboardKeyDescriptor descriptor))
-            return false;
-
-        if (descriptor.ModifierRole != WaylandKeyboardModifierRole.None)
-            return false;
-
-        return descriptor.EvdevKey is
-            >= 2 and <= 13 or
-            >= 16 and <= 27 or
-            >= 30 and <= 53 or
-            14 or
-            15 or
-            28 or
-            57;
-    }
-
-    private bool ShouldEmitOrderedInputEvent(DisplayInputEvent inputEvent, bool containsImePreeditEvent)
-    {
-        if (inputEvent.Kind != DisplayInputEventKind.KeyboardKey)
-            return true;
-
-        if (_suppressedImeKeys.Contains(inputEvent.Key))
-        {
-            if (!inputEvent.Pressed)
-                _suppressedImeKeys.Remove(inputEvent.Key);
-            return false;
-        }
-
-        if (!containsImePreeditEvent)
-            return true;
-
-        if (!inputEvent.Pressed)
-            return true;
-
-        if (!ShouldSuppressKeyboardEventForIme(inputEvent))
-            return true;
-
-        _suppressedImeKeys.Add(inputEvent.Key);
-        return false;
-    }
 }

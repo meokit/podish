@@ -49,7 +49,7 @@ internal sealed unsafe partial class AngleDevice
     private int CreateGbmSurface(Session session, FiberTask task, int width, int height, int fd, uint handles,
         GuestMemory guest)
     {
-        if (_kms == null || task.Process.Syscalls.GetFD(fd, task) is not { OpenedInode: DrmCardInode card } file)
+        if (!HasKmsOutput || _kms == null || task.Process.Syscalls.GetFD(fd, task) is not { OpenedInode: DrmCardInode card } file)
             return -0x300B; // EGL_BAD_NATIVE_WINDOW
         if (!ValidSize(width, height)) return -0x3004;
         if (session.Surfaces.Count >= MaxObjects || !FitsSurfaceBudget(width, height * GbmSlots))

@@ -66,6 +66,8 @@ public sealed class ContainerRunRequest
     public bool EnableKmsDrm { get; init; }
     public KmsEglWindow? KmsWindow { get; init; }
     public VirtualConsoleInput? KmsInput { get; init; }
+    public VirtualDrmScanout? CompositorScanout { get; init; }
+    internal KmsEglOutput? CompositorTextures { get; init; }
     public ushort? TerminalRows { get; init; }
     public ushort? TerminalCols { get; init; }
     public Action<KernelRuntime, KernelScheduler, UTSNamespace?, int>? ConfigureVirtualDaemons { get; init; }
@@ -400,11 +402,12 @@ public sealed class ContainerRuntimeService
                 runtime.Syscalls.MountHostfs(hostPath, guestPath, readOnly);
             }
 
-            if (request.EnableGles || request.EnableKmsDrm)
+            if (request.EnableGles || request.EnableKmsDrm || request.CompositorScanout != null)
             {
                 startupPhase = "mount-graphics";
                 gles = ContainerGraphics.Mount(runtime.Syscalls, scheduler, request.Framebuffer, request.KmsInput,
-                    request.EnableGles, request.EnableKmsDrm, request.KmsWindow, _logger);
+                    request.EnableGles, request.EnableKmsDrm, request.KmsWindow, request.CompositorScanout,
+                    request.CompositorTextures, _logger);
             }
 
             try
@@ -488,7 +491,8 @@ public sealed class ContainerRuntimeService
                 autoEnvs.Add($"{ContainerRunRequest.XdgRuntimeDirEnvVar}=/run");
             }
 
-            if (request.KmsWindow != null) autoEnvs.Add("PODISH_KMSDRM=1");
+            if (request.KmsWindow != null || request.CompositorTextures != null)
+                autoEnvs.Add("PODISH_KMSDRM=1");
 
             if (request.EnableGles || request.EnableKmsDrm)
             {
@@ -628,6 +632,7 @@ public sealed class ContainerRuntimeService
         }
         finally
         {
+            request.CompositorScanout?.Detach();
             request.KmsInput?.Detach();
             _logger.LogDebug("Container teardown starting containerId={ContainerId}", request.ContainerId);
             // ConsoleTtyDriver writes and flushes headless output synchronously.

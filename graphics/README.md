@@ -12,7 +12,7 @@ export PODISH_ANGLE_DIR=/path/to/host/angle/libraries
 dotnet build Podish.Cli -c Release
 ```
 
-An Electron distribution is one way to obtain matching host ANGLE libraries. Use `libEGL.dll` and `libGLESv2.dll` on Windows, `libEGL.so` and `libGLESv2.so` on Linux, or the matching `.dylib` files from Electron's `Libraries` directory on macOS. Podish selects ANGLE's Metal backend on macOS, Vulkan for KMS window output on Windows and Linux, and ANGLE's default backend for other Windows and Linux EGL uses. The guest build targets glibc 2.11 or later. Set `PODISH_GLES_GUEST_DIR` if you build the guest libraries outside `artifacts/podish-gles/guest` or launch Podish from another working directory. [ANGLE build instructions](https://chromium.googlesource.com/angle/angle/+/main/doc/DevSetup.md)
+Use a host ANGLE build that includes **Vulkan on Windows and Linux** or **Metal on macOS**. Supply `libEGL.dll` and `libGLESv2.dll` on Windows, `libEGL.so` and `libGLESv2.so` on Linux, or the matching `.dylib` files on macOS. Some Electron distributions include compatible libraries. The guest build targets glibc 2.11 or later. Set `PODISH_GLES_GUEST_DIR` if you build the guest libraries outside `artifacts/podish-gles/guest` or launch Podish from another working directory. [ANGLE build instructions](https://chromium.googlesource.com/angle/angle/+/main/doc/DevSetup.md)
 
 ```sh
 cli=Podish.Cli/bin/Release/net10.0/Podish.Cli.dll
@@ -24,7 +24,7 @@ On startup Podish read-only bind mounts the guest EGL and GLES libraries at `/ru
 
 For fbdev, create an EGL window surface on `EGL_DEFAULT_DISPLAY`. Podish reads back the ANGLE frame into the visible framebuffer using its current depth and offsets. Clients designed for SDL2's `offscreen` backend can set the guest variable `PODISH_EGL_FBDEV_PBUFFER=1` to scale their pbuffer frames into `/dev/fb0`. That SDL2 backend provides rendering only. Native fbdev apps can use the existing `/dev/tty1` and `/dev/input/mice` input paths.
 
-For Wayland, pass the guest `wl_display` and `wl_egl_window` to EGL. The client uses `libwayland-client.so.0` with `wl_proxy_marshal_flags` (Wayland 1.20+) and the version 3 `wl_egl_window` layout. Swaps commit double-buffered XRGB8888 `wl_shm` buffers to the existing compositor, which releases each buffer for reuse. Input and window management use the same Wayland protocols as other clients.
+For Wayland, pass the guest `wl_display` and `wl_egl_window` to EGL. The client uses `libwayland-client.so.0` with `wl_proxy_marshal_flags` (Wayland 1.20+) and the version 3 `wl_egl_window` layout. Swaps prefer Podish GPU buffers when the virtual render node and the server's `zwp_linux_dmabuf_v1` support XRGB8888. Clients fall back to double-buffered XRGB8888 `wl_shm` otherwise. `wl_buffer.release` allows the client to reuse each buffer.
 
 The guest exposes the GLES 2.0 and 3.0 core entry points through `libGLESv2.so.2` and `eglGetProcAddress`. To request GLES 3.0, select the RGBA8/D24/S8 config with `EGL_OPENGL_ES3_BIT_KHR` in `EGL_RENDERABLE_TYPE` and pass `EGL_CONTEXT_CLIENT_VERSION=3` to `eglCreateContext`. The guest config includes the ES3 bit when the host ANGLE backend supports it. GLES 2.0 clients can continue to select `EGL_OPENGL_ES2_BIT` and request version 2. Rebuild the guest libraries to use GLES 3.0.
 
@@ -82,6 +82,43 @@ dotnet "$cli" run --rm --kmsdrm --gles --rootfs "$rootfs" -- /usr/local/bin/podi
 ```
 
 The GPU probe checks that EGL swap leaves the active KMS framebuffer alone. It then verifies modeset, page flip, the active BO's lifetime after the GBM lock is released, three-slot pool reuse, black contents before the first draw on a recreated surface, and clean teardown.
+
+### Run the built-in Wayland compositor on virtual KMS
+
+Set `PODISH_ANGLE_DIR` to the host ANGLE library directory. `--wayland-server` starts the built-in compositor only when ANGLE can create a hardware OpenGL ES 3 context. This requirement applies to the host compositor. Use `--gles` separately to expose EGL/GLES to guest applications.
+
+```sh
+dotnet "$cli" run --rm --wayland-server --wayland-desktop-size 1280x800 \
+  --rootfs "$rootfs" -- /usr/bin/weston-simple-shm
+```
+
+`--wayland-desktop-size` sets the logical desktop dimensions. At startup, SDL's window pixel density determines the virtual KMS mode. For example, a `1280x800` desktop at 150% has a `1920x1200` GPU scanout. Set the host environment variable `PODISH_WAYLAND_SCALE` to a value such as `1.5` or `2` to override the detected density, including on X11 desktops where SDL may report 1×. The virtual mode and guest scale stay fixed for the session. The host preview sizes itself to match the scanout pixels, including when it moves between monitors. If the host constrains the window, ANGLE scales the preview to the available drawable size.
+
+Wayland clients receive the integer fallback via `wl_output`, the exact fractional scale via `wp_fractional_scale_v1`, and the logical desktop bounds via `zxdg_output_v1`. Client buffer scale and `wp_viewporter` determine the logical size of a surface. ANGLE draws the scene into one of two GPU framebuffers on the Podish virtual card. A completed virtual KMS page flip wakes the display thread, which blits the selected GPU framebuffer into the host EGL window without CPU readback. Pointer and IME coordinates stay in logical units.
+
+Add `--gles` for guest GPU submissions. Podish mounts the guest EGL, GLES and GBM libraries and exposes GPU BO allocation on `/dev/dri/renderD128`. The built-in server accepts single-plane XRGB8888 and premultiplied ARGB8888 Podish PRIME buffers over `zwp_linux_dmabuf_v1` version 3 with the implicit modifier. ANGLE imports the BO into the compositor's own EGL context and copies it on the GPU to a surface texture. A GPU fence gates `wl_buffer.release`, so the client can reuse its BO while the compositor retains the surface content. Applications can also use `wl_shm`, including for custom cursors.
+
+The default Catppuccin Latte server-side titlebars have rounded top corners in their normal state and square corners when maximized. The compositor looks up PNG and SVG application icons from guest desktop entries and common system theme directories using the Wayland `app_id`.
+
+With Waybar installed in the guest, start it and the desktop application in the
+same container. The configuration below uses `wlr/taskbar` for the application
+list. Save it as `/etc/xdg/waybar/podish.jsonc` in the guest.
+
+```json
+{
+  "layer": "top",
+  "position": "bottom",
+  "exclusive": true,
+  "modules-left": ["wlr/taskbar"],
+  "modules-right": ["clock"],
+  "wlr/taskbar": { "on-click": "activate", "on-click-middle": "close" }
+}
+```
+
+```sh
+dotnet "$cli" run --rm --wayland-server --rootfs "$rootfs" -- \
+    /bin/sh -c 'waybar -c /etc/xdg/waybar/podish.jsonc & exec /usr/bin/weston-simple-shm'
+```
 
 ### Run a DRM Wayland compositor
 

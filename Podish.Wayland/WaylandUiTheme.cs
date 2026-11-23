@@ -40,7 +40,17 @@ public readonly record struct WaylandDesktopTheme(
 
 public readonly record struct WaylandTypographyTheme(
     int TitleFontSize,
-    int TitleFontWeight);
+    int TitleFontWeight)
+{
+    public WaylandTitleAlignment Alignment { get; init; }
+}
+
+public enum WaylandTitleAlignment
+{
+    Left,
+    Center,
+    Right
+}
 
 public readonly record struct WaylandSpacingTheme(
     int WindowBorderThickness,
@@ -50,7 +60,10 @@ public readonly record struct WaylandSpacingTheme(
     int ButtonGap,
     int ButtonInset,
     int ResizeGripThickness,
-    int IconStrokeWidth);
+    int IconStrokeWidth)
+{
+    public int? ButtonHeight { get; init; }
+}
 
 public readonly record struct WaylandShadowTheme(
     int BlurRadius,
@@ -65,7 +78,44 @@ public readonly record struct WaylandCornerTheme(
 public readonly record struct WaylandWindowDecorationTheme(
     WaylandSurfaceChromeTheme Active,
     WaylandSurfaceChromeTheme Inactive,
-    WaylandButtonTheme Buttons);
+    WaylandButtonTheme Buttons)
+{
+    public WaylandTitlebarButtonTheme? Close { get; init; }
+    public WaylandTitlebarButtonTheme? Maximize { get; init; }
+    public WaylandTitlebarButtonTheme? Minimize { get; init; }
+
+    public WaylandTitlebarButtonTheme? GetButton(WaylandSceneHitKind kind) => kind switch
+    {
+        WaylandSceneHitKind.CloseButton => Close,
+        WaylandSceneHitKind.MaximizeButton => Maximize,
+        WaylandSceneHitKind.MinimizeButton => Minimize,
+        _ => null
+    };
+}
+
+public sealed record WaylandButtonBitmap(int Width, int Height, ReadOnlyMemory<byte> Bits)
+{
+    public bool IsSet(int x, int y) => (Bits.Span[y * ((Width + 7) / 8) + x / 8] & (1 << (x % 8))) != 0;
+}
+
+public readonly record struct WaylandButtonAppearance(
+    WaylandColor Foreground, WaylandColor Background, WaylandButtonBitmap? Bitmap);
+
+public readonly record struct WaylandButtonAppearances(
+    WaylandButtonAppearance Unpressed, WaylandButtonAppearance Hover, WaylandButtonAppearance Pressed);
+
+public sealed record WaylandTitlebarButtonTheme(
+    WaylandButtonAppearances Active,
+    WaylandButtonAppearances Inactive,
+    WaylandButtonAppearances ActiveToggled,
+    WaylandButtonAppearances InactiveToggled)
+{
+    public WaylandButtonAppearance GetAppearance(bool active, bool toggled, bool hover, bool pressed)
+    {
+        var states = toggled ? (active ? ActiveToggled : InactiveToggled) : (active ? Active : Inactive);
+        return pressed ? states.Pressed : hover ? states.Hover : states.Unpressed;
+    }
+}
 
 public readonly record struct WaylandUiTheme(
     WaylandColorTheme Colors,
@@ -76,6 +126,17 @@ public readonly record struct WaylandUiTheme(
     WaylandShadowTheme Shadow,
     WaylandCornerTheme Corners)
 {
+    private static readonly Lazy<WaylandUiTheme> Latte = new(WaylandThemerc.LoadCatppuccinLatte);
+
+    public static WaylandUiTheme CatppuccinLatte => Latte.Value;
+
+    public static WaylandUiTheme Load(string? theme) => theme?.Trim().ToLowerInvariant() switch
+    {
+        null or "" or "catppuccin-latte" => CatppuccinLatte,
+        "breeze-light" => BreezeLight,
+        _ => WaylandThemerc.Load(theme!.Trim())
+    };
+
     public static WaylandUiTheme BreezeLight => new(
         Colors: new WaylandColorTheme(
             Background: new WaylandColor(236, 239, 244),
