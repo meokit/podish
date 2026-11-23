@@ -163,29 +163,56 @@ records translation invalidations in a shootdown ring for their local TLBs.
 
 ## Performance Notes
 
-### Early CoreMark results
+Use the [emulator comparison harness](benchmark/emulator-comparison/README.md)
+to run Podish, QEMU Usermode, QEMU system emulation, and iSH with one shared
+i386 root filesystem.
 
-The initial public README recorded these CoreMark 1.0 scores. The entries
-describe early interpreter builds and the tests available for each machine.
+### CoreMark 1.0
 
-| Hardware | Podish | iSH | QEMU TCI | Native (arm64) |
-| --- | ---: | ---: | ---: | ---: |
-| iPhone 17 (A19) | ~3,447 | ~1,692 | n/a | n/a |
-| MacBook Pro (M3 Max) | ~2,967 | n/a | ~325 | ~38,087 |
+All configurations use the same Debian i386 root filesystem and the same
+CoreMark ELF. Alpine GCC 15.2.0 builds the ELF with
+`-O3 -static -fno-pie -no-pie` and statically linked musl. Both Podish modes
+use baked instruction specialization and extended superopcodes. The LLVM
+JIT mode compiles hot blocks in exact mode with two workers.
 
-The initial README also recorded the following development results.
+Each score is the median of three validated 190,000-iteration runs at Podish
+revision `37cea465`, in iterations per second. Each Linux Docker run used one
+logical CPU. iSH ran as a native arm64 CLI on the M5 Max.
 
-| Change | Approximate CoreMark score |
-| --- | ---: |
-| Fix TLB refill | 600 to 800 |
-| Remove redundant writes and specialize handlers | 800 to 1,500 |
-| Reorder fields for paired loads | 1,500 to 2,000 |
-| Defer parity calculation and prune flag writes | 2,000 to 2,200 |
-| Append short successor blocks | 2,200 to 2,500 |
-| Bake instruction pairs from profiles | 2,500 to 3,000 |
+| Environment | Podish interpreter | Podish LLVM JIT | QEMU Usermode TCG | QEMU system TCG | iSH |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| M5 Max / native macOS | 4705.2 | 8932.3 | — | — | 2036.4 |
+| M5 Max / ARM64 Linux Docker | 4952.7 | — | 12939.3 | 4262.3 | — |
+| Ryzen AI Max+ 395 / x86-64 Linux Docker | 3898.1 | — | 16712.1 | 9655.5 | — |
 
-For a repeatable comparison of the current interpreter variants, use the
-[static CoreMark harness](benchmark/coremark-static.md).
+The [early public results](benchmark/emulator-comparison/README.md#early-public-results)
+document earlier builds and test setups.
+
+### CoreMark interpreter specialization
+
+Different builds of CoreMark can produce different registers, addressing
+forms, and instruction sequences. The interpreter's static specialization
+and fusion apply where those forms match the baked tables. Changing the
+table can change the score for the same ELF.
+
+These runs used an M5 Max, two statically linked i386 ELFs from the same
+CoreMark source revision, and the same Debian rootfs. Both ELFs use `-O3`.
+All four interpreter builds used the same register pinning and had Host
+JIT compiled out. Each score is the median of three 100,000-iteration runs,
+in iterations per second.
+
+| Interpreter configuration | GCC 12.2 / glibc | GCC 15.2 / musl |
+| --- | ---: | ---: |
+| No specialization or fusion | 1,855.4 | 1,969.7 |
+| Repository defaults | 4,102.6 | 5,127.7 |
+| Trained on the GCC 12.2 ELF | **7,542.0** | 3,557.2 |
+| Trained on the GCC 15.2 ELF | 3,496.3 | **8,397.7** |
+
+The score gap between the ELFs was 6% with specialization and fusion
+disabled and 25% with the repository defaults. Bold entries use a plan
+trained on the measured ELF. Each targeted plan scored below the repository
+defaults when used on the other ELF.
+[Build settings, ELF hashes, and profile coverage](benchmark/emulator-comparison/README.md#coremark-interpreter-specialization)
 
 ## Repository Layout
 

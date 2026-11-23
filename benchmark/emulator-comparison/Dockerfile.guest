@@ -1,0 +1,73 @@
+# Build this fixture once on an x86-64 Linux Docker engine with IA-32 support.
+FROM i386/debian:bookworm-slim AS runtime
+RUN apt-get update && apt-get install -y --no-install-recommends busybox-static libstdc++6 \
+    && rm -rf /var/lib/apt/lists/*
+
+FROM runtime AS build
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential ca-certificates curl git linux-image-686-pae python3 unzip xz-utils
+WORKDIR /source
+COPY build-guest.sh make-fixture.py cases.json ./
+RUN bash build-guest.sh
+
+FROM build AS sha
+RUN apt-get install -y --no-install-recommends libssl-dev \
+    && curl -fsSL --retry 3 https://ftp.gnu.org/gnu/coreutils/coreutils-9.7.tar.xz -o coreutils.tar.xz \
+    && echo 'e8bb26ad0293f9b5a1fc43fb42ba970e312c66ce92c1b0b16713d7500db251bf  coreutils.tar.xz' | sha256sum -c - \
+    && tar -xJf coreutils.tar.xz \
+    && cd coreutils-9.7 \
+    && FORCE_UNSAFE_CONFIGURE=1 ./configure --with-openssl > /tmp/coreutils-configure.log \
+    && make -j8 > /tmp/coreutils-build.log \
+    && ldd src/sha256sum | grep -q libcrypto \
+    && install -m 755 src/sha256sum /opt/bench/sha256sum
+
+FROM build AS webpack
+WORKDIR /webpack
+COPY package.json package-lock.json ./
+RUN curl -fsSL --retry 3 https://registry.npmjs.org/npm/-/npm-9.9.4.tgz -o npm.tgz \
+    && echo '640bdd76a0b9d92e9da6e391abae75fd2f168478e416847f3acdb8373737e0ee  npm.tgz' | sha256sum -c - \
+    && tar -xzf npm.tgz \
+    && /opt/bench/node package/bin/npm-cli.js ci --ignore-scripts --no-audit --no-fund \
+    && rm -rf node_modules/.bin
+
+FROM i386/alpine:3.23 AS coremark
+RUN apk add --no-cache gcc=15.2.0-r2 musl-dev make curl
+WORKDIR /source
+RUN set -eu; \
+    revision=1f483d5b8316753a742cbf5590caf5bd0a4e4777; \
+    curl -fsSL --retry 3 "https://codeload.github.com/eembc/coremark/tar.gz/$revision" -o coremark.tar.gz; \
+    echo '4067e7f260218df13f2875d8f821a8ff32a84153c6e0759d7c89f96c0a8bf987  coremark.tar.gz' | sha256sum -c -; \
+    tar -xzf coremark.tar.gz --strip-components=1; \
+    link_flags='-static -fno-pie -no-pie'; \
+    make compile PORT_DIR=linux CC=gcc PORT_CFLAGS=-O3 XCFLAGS="$link_flags" NO_LIBRT=1; \
+    install -Dm755 coremark.exe /coremark/coremark; \
+    printf 'compiler=Alpine GCC %s\nflags=-O3 %s\nlinkage=static musl, non-PIE\nsource=%s\n' \
+        "$(gcc -dumpfullversion)" "$link_flags" "$revision" > /coremark/coremark-build
+
+FROM runtime AS fixture
+RUN apt-get update && apt-get install -y --no-install-recommends libssl3 \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=sha /opt/bench /opt/bench
+COPY --from=coremark /coremark/coremark /opt/bench/coremark
+COPY --from=coremark /coremark/coremark-build /opt/bench/expected/coremark-build
+COPY --from=webpack /webpack/node_modules /opt/bench/webpack/node_modules
+COPY webpack.cjs /opt/bench/webpack/build.cjs
+COPY system-init /opt/bench/system-init
+RUN cd /opt/bench && ./sha256sum --version | head -n1 > expected/sha256sum-version \
+    && ./node --random-seed=20261119 --v8-pool-size=1 webpack/build.cjs \
+    > expected/webpack && rm out/bundle.js \
+    && sha256sum coremark scimark-x87 scimark-sse2 gemm node > expected/guest-elf-sha256
+
+FROM runtime AS pack
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+RUN apt-get update && apt-get install -y --no-install-recommends cpio
+COPY --from=fixture / /rootfs/
+COPY --from=build /kernel /bundle/kernel
+RUN set -eu; cd /rootfs; \
+    tar --sort=name --numeric-owner -cf - . | gzip -n > /bundle/rootfs.tar.gz; \
+    find . -print0 | LC_ALL=C sort -z | cpio --null --quiet -o -H newc | gzip -n > /bundle/rootfs.cpio.gz; \
+    cd /bundle; sha256sum rootfs.tar.gz rootfs.cpio.gz kernel > SHA256SUMS
+
+FROM scratch
+COPY --from=pack /bundle/ /bundle/
+CMD ["/unused"]

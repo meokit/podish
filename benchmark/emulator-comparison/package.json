@@ -1,0 +1,9 @@
+{
+  "name": "podish-benchmark-fixture",
+  "private": true,
+  "version": "1.0.0",
+  "dependencies": {
+    "webpack": "5.97.1",
+    "terser-webpack-plugin": "5.3.11"
+  }
+}

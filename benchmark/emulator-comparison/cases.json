@@ -1,0 +1,10 @@
+{
+  "coremark": ["./coremark", "0x0", "0x0", "0x66", "{iterations}", "7", "1", "2000"],
+  "sha256sum": ["./sha256sum", "input/sha.bin"],
+  "sort": ["/usr/bin/sort", "--parallel=1", "-S", "96M", "-o", "out/sort.txt", "input/sort.txt"],
+  "gzip": ["/usr/bin/gzip", "-n", "-6", "-c", "input/sort.txt"],
+  "webpack": ["./node", "--random-seed=20261119", "--v8-pool-size=1", "webpack/build.cjs"],
+  "scimark-x87": ["./scimark-x87", "0.6"],
+  "scimark-sse2": ["./scimark-sse2", "0.6"],
+  "gemm": ["./gemm"]
+}
