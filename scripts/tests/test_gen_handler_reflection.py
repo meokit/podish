@@ -60,5 +60,26 @@ class SymbolToolSelectionTests(unittest.TestCase):
                 reflection.run_tool(["llvm-nm", "module.obj"])
 
 
+class HandlerSignatureTests(unittest.TestCase):
+    def test_windows_reflection_includes_handler_without_restrict(self):
+        args = ("struct fiberish::EmuState *, struct fiberish::DecodedOp *, __int64, "
+                "unsigned __int64, unsigned __int64, unsigned int, unsigned __int64")
+        template = f"__int64 fiberish::MemoryOpRestart({args.replace('*', '*__restrict')})"
+        identity = f"__int64 fiberish::DispatchWrapper<&fiberish::op::OpAdd_EbGb>({args})"
+        wrong_args = args.replace("unsigned int,", "unsigned short,")
+        wrong_handler = f"__int64 fiberish::WrongHandler({wrong_args})"
+        symbols = [("?template", template), ("?identity", identity), ("?wrong", wrong_handler)]
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp) / "reflection.cpp"
+            argv = ["gen_handler_reflection.py", "--nm", "llvm-nm", "--output", str(output), "host.obj"]
+            with mock.patch.object(reflection.sys, "argv", argv), \
+                 mock.patch.object(reflection, "run_nm", return_value=symbols):
+                self.assertEqual(0, reflection.main())
+            generated = output.read_text(encoding="utf-8")
+        self.assertIn(f'"{identity}"', generated)
+        self.assertIn(f'"{template}"', generated)
+        self.assertNotIn(f'"{wrong_handler}"', generated)
+
+
 if __name__ == "__main__":
     unittest.main()

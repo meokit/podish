@@ -139,6 +139,12 @@ def extract_signature_suffix(name: str, function_name: str | None = None) -> str
     return name[paren_index:]
 
 
+def strip_pointer_restrict(name: str) -> str:
+    # MSVC demangling prints __restrict on by-value pointer parameters.
+    # The qualifier does not affect the handler ABI.
+    return name.replace("*__restrict", "*")
+
+
 def escape_cpp_string(value: str) -> str:
     return value.replace("\\", "\\\\").replace('"', '\\"')
 
@@ -176,6 +182,7 @@ def main() -> int:
         name = demangled.get(mangled_name, "")
         template_signature = extract_signature_suffix(name, TEMPLATE_NAME)
         if template_signature is not None:
+            template_signature = strip_pointer_restrict(template_signature)
             break
 
     if template_signature is None:
@@ -186,7 +193,7 @@ def main() -> int:
         name = demangled.get(mangled_name, "")
         # Mandatory scalar bindings share their catalog identity. Exporting every
         # encoding would duplicate the catalog and publish the private table ABI.
-        if name.endswith(template_signature):
+        if strip_pointer_restrict(name).endswith(template_signature):
             matches.append((mangled_name, name))
 
     matches.sort(key=lambda item: item[0])
