@@ -1,5 +1,5 @@
-#include "bindings.h"
 #include "state.h"
+#include "test_page_backing.h"
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
@@ -54,12 +54,15 @@ int main(int argc, char** argv) {
     }
     constexpr uint32_t address = 0x1000;
     constexpr int per_batch = 1000;
+    TestPageBacking pages;
     auto* state = X86_Create();
     state->status = EmuStatus::Running;
 
-    auto* page = state->mmu.allocate_page(address, static_cast<uint8_t>(mem::Property::RX));
-    if (!page)
+    auto* page = pages.MapPage(state, address, static_cast<uint8_t>(mem::Property::RX));
+    if (!page) {
+        X86_Destroy(state);
         return 1;
+    }
     std::memcpy(page, code.data(), code.size());
     uint64_t instructions = 0, bytes = 0;
     double seconds = 0;

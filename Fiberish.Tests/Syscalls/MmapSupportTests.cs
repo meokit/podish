@@ -570,7 +570,7 @@ public class MmapSupportTests
         Assert.Equal(1UL, trimmedVma.VmPgoff);
 
         env.Vma.TearDownNativeMappings(env.Engine, secondPage, LinuxConstants.PageSize,
-            captureDirtySharedPages: false, invalidateCodeRange: true, releaseExternalPages: true,
+            captureDirtySharedPages: false, invalidateCodeRange: true,
             preserveOwnerBinding: true);
 
         var probe = new byte[1];

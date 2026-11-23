@@ -14,10 +14,10 @@ public sealed class SmcAliasTests
     public void DistantWritableAlias_ModifiesNextInstructionInAlreadyDecodedBlock(bool crossPage)
     {
         using var cpu = new CpuSandbox(mapDefaults: false);
-        cpu.MapExternalMemory(CpuSandbox.CodeAddress, 7);
-        cpu.MapExternalMemory(CpuSandbox.CodeAddress + CpuSandbox.PageSize, 7);
-        cpu.MapExternalAlias(AliasAddress, CpuSandbox.CodeAddress);
-        cpu.MapExternalAlias(AliasAddress + CpuSandbox.PageSize, CpuSandbox.CodeAddress + CpuSandbox.PageSize);
+        cpu.MapMemory(CpuSandbox.CodeAddress, CpuSandbox.PageSize, 7);
+        cpu.MapMemory(CpuSandbox.CodeAddress + CpuSandbox.PageSize, CpuSandbox.PageSize, 7);
+        cpu.MapAlias(AliasAddress, CpuSandbox.CodeAddress);
+        cpu.MapAlias(AliasAddress + CpuSandbox.PageSize, CpuSandbox.CodeAddress + CpuSandbox.PageSize);
 
         // The first instruction overwrites the immediate of the next instruction.
         // A cross-page dword store starts one byte before the boundary. Both
@@ -59,12 +59,12 @@ public sealed class SmcAliasTests
     public void CrossPageStore_OnlySecondFragmentAliasesActiveCode()
     {
         using var cpu = new CpuSandbox(mapDefaults: false);
-        cpu.MapExternalMemory(CpuSandbox.CodeAddress, 7);
-        cpu.MapExternalMemory(CpuSandbox.CodeAddress + CpuSandbox.PageSize, 7);
+        cpu.MapMemory(CpuSandbox.CodeAddress, CpuSandbox.PageSize, 7);
+        cpu.MapMemory(CpuSandbox.CodeAddress + CpuSandbox.PageSize, CpuSandbox.PageSize, 7);
         // Unlike the first test, the first writable page is ordinary data and
         // is never SMC-armed. Only the store's second fragment aliases code.
-        cpu.MapExternalMemory(AliasAddress, 3);
-        cpu.MapExternalAlias(AliasAddress + CpuSandbox.PageSize, CpuSandbox.CodeAddress + CpuSandbox.PageSize);
+        cpu.MapMemory(AliasAddress, CpuSandbox.PageSize, 3);
+        cpu.MapAlias(AliasAddress + CpuSandbox.PageSize, CpuSandbox.CodeAddress + CpuSandbox.PageSize);
         uint start = CpuSandbox.CodeAddress + CpuSandbox.PageSize - 2;
         byte[] code = [0x89, 0x0F, 0xB8, 0x01, 0x00, 0x00, 0x00]; // mov [edi],ecx; mov eax,1
         cpu.WriteMemory(start, code);

@@ -5,19 +5,20 @@
 The runtime now uses an intrusive refcounted native MMU core with C#-managed attachment semantics.
 
 - `CLONE_VM` shares the same MMU core.
-- Non-shared clone/fork creates a new MMU core by cloning pages while skipping external pages.
-- External pages are never converted into owned pages.
+- Non-shared clone/fork copies the mappings into a new MMU core. Both cores borrow the same backing pages. The caller implements copy-on-write when needed.
 
 ## Ownership Rules
 
-- Native side owns MMU core lifetime via intrusive refcount (`retain/release`).
+- The native core owns its page tables, TLB metadata and code cache. The caller owns guest page backing and keeps it alive while any alias or clone can use it.
 - C# side owns engine/MMU binding semantics (`CurrentMmu`, `ReplaceMmu`, `ShareMmuFrom`, `DetachMmu`).
 - Engines always have a valid MMU; no `NoMMU` state is exposed.
 
 ## Native APIs
 
 - `X86_MmuCreateEmpty`
-- `X86_MmuCloneSkipExternal`
+- `X86_MemMapHostPage` installs a caller-provided 4 KiB backing span at an aligned guest address.
+- `X86_MemProtect` changes R/W/X on existing mappings.
+- `X86_MemUnmap` removes mappings and invalidates cached translations.
 - `X86_MmuRetain` / `X86_MmuRelease`
 - `X86_MmuGetIdentity`
 - `X86_EngineGetMmu`

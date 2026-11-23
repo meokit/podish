@@ -305,9 +305,8 @@ static BasicBlock* BuildBlockConcat(EmuState* state, const BasicBlock* a, const 
 #endif
     const auto layout = BlockSlotLayout::Inspect(start_eip, ops);
     const bool retain_region_context = a->chain.has_region_context && b->chain.has_region_context;
-    void* mem =
-        state->mmu.try_allocate_block_bytes(
-            BasicBlock::CalculateSize(layout, retain_scalar_handlers, retain_region_context), start_eip);
+    void* mem = state->mmu.try_allocate_block_bytes(
+        BasicBlock::CalculateSize(layout, retain_scalar_handlers, retain_region_context), start_eip);
     if (!mem) return nullptr;
     // Static scalar lowering depends on each instruction's original operands.
     // In this build the published slots already carry the correct handlers.
@@ -504,8 +503,8 @@ EmuState* X86_Clone(EmuState* parent, int share_mem) {
         (void)state->mmu.attach_core(parent->mmu.core_handle(), true);
     } else {
         // Independent Memory (Fork)
-        // Clone MMU with fork semantics: copy owned pages, preserve external mappings.
-        (void)state->mmu.attach_core(mem::Mmu::CloneCorePreserveExternal(parent->mmu.core_handle()), false);
+        // The child borrows the same backing pages through its own page table.
+        (void)state->mmu.attach_core(mem::Mmu::CloneCoreMappings(parent->mmu.core_handle()), false);
     }
 
     // 3. Set Callbacks (Bridge to same handlers, but new 'state' passed)
@@ -654,17 +653,12 @@ void X86_SegBaseWrite(EmuState* state, int seg_index, uint32_t base) {
 // Memory Access
 // ----------------------------------------------------------------------------
 
-void X86_MemMap(EmuState* state, uint32_t addr, uint32_t size, uint8_t perms) { state->mmu.mmap(addr, size, perms); }
-
-void X86_ReprotectMappedRange(EmuState* state, uint32_t addr, uint32_t size, uint8_t perms) {
-    if (!state) return;
-    state->mmu.reprotect_mapped_range(addr, size, perms);
+int X86_MemMapHostPage(EmuState* state, uint32_t addr, void* host_page, uint8_t perms) {
+    return state && state->mmu.map_host_page(addr, static_cast<mem::HostAddr>(host_page), perms) ? 1 : 0;
 }
 
-void* X86_AllocatePage(EmuState* state, uint32_t addr, uint8_t perms) { return state->mmu.allocate_page(addr, perms); }
-
-extern "C" int X86_InternalMapManagedPage(EmuState* state, uint32_t addr, void* host_page, uint8_t perms) {
-    return state->mmu.map_external_page(addr, static_cast<mem::HostAddr>(host_page), perms) ? 1 : 0;
+void X86_MemProtect(EmuState* state, uint32_t addr, uint32_t size, uint8_t perms) {
+    if (state) state->mmu.protect_mapped_range(addr, size, perms);
 }
 
 static X86_MmuHandle* X86_NewMmuHandle(mem::MmuCore* core, bool add_ref) {
@@ -676,11 +670,6 @@ static X86_MmuHandle* X86_NewMmuHandle(mem::MmuCore* core, bool add_ref) {
 }
 
 X86_MmuHandle* X86_MmuCreateEmpty() { return X86_NewMmuHandle(mem::Mmu::CreateEmptyCore(), false); }
-
-X86_MmuHandle* X86_MmuCloneSkipExternal(X86_MmuHandle* mmu) {
-    if (!mmu || !mmu->core) return nullptr;
-    return X86_NewMmuHandle(mem::Mmu::CloneCoreSkipExternal(mmu->core), false);
-}
 
 X86_MmuHandle* X86_MmuRetain(X86_MmuHandle* mmu) {
     if (!mmu || !mmu->core) return nullptr;
@@ -727,6 +716,7 @@ int X86_EngineAttachMmuForExec(EmuState* state, X86_MmuHandle* mmu) {
 }
 
 void X86_MemUnmap(EmuState* state, uint32_t addr, uint32_t size) {
+    if (!state || size == 0) return;
     auto host_page_bases = state->mmu.collect_host_page_bases_for_guest_range(addr, size);
     state->mmu.munmap(addr, size);
     state->mmu.invalidate_code_cache_host_pages(host_page_bases);
@@ -783,7 +773,7 @@ size_t X86_CollectMappedPages(EmuState* state, uint32_t addr, uint32_t size, X86
     constexpr uint64_t kPageMask = static_cast<uint64_t>(~mem::PAGE_MASK);
 
     const uint64_t start_page = static_cast<uint64_t>(addr) & kPageMask;
-    const uint64_t end_exclusive = static_cast<uint64_t>(addr) + static_cast<uint64_t>(size);
+    const uint64_t end_exclusive = std::min(uint64_t{addr} + size, uint64_t{1} << 32);
     const uint64_t end_page = (end_exclusive + mem::PAGE_MASK) & kPageMask;
 
     size_t count = 0;
@@ -801,10 +791,9 @@ size_t X86_CollectMappedPages(EmuState* state, uint32_t addr, uint32_t size, X86
         const auto perms = chunk->permissions[l2_idx];
         uint8_t flags = 0;
         if (mem::has_property(perms, mem::Property::Dirty)) flags |= X86_PAGE_FLAG_DIRTY;
-        if (mem::has_property(perms, mem::Property::External)) flags |= X86_PAGE_FLAG_EXTERNAL;
 
         buffer[count].guest_page = page_addr;
-        buffer[count].perms = static_cast<uint8_t>(static_cast<uint32_t>(perms));
+        buffer[count].perms = static_cast<uint8_t>(perms & mem::Property::RWX);
         buffer[count].flags = flags;
         buffer[count].reserved = 0;
         buffer[count].host_page = page_ptr;

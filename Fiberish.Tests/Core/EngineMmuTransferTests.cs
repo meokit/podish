@@ -10,7 +10,7 @@ using Xunit;
 
 namespace Fiberish.Tests.Core;
 
-public class EngineMmuTransferTests
+public class EngineMmuTransferTests : IDisposable
 {
     private const uint CodeAddr = 0x00401000;
     private const uint CrossPageCodeAddr = CodeAddr + LinuxConstants.PageSize - 1;
@@ -18,6 +18,21 @@ public class EngineMmuTransferTests
     // Holds the source and successor, with pressure triggered by the concatenated block.
     private const ulong DirectJmpConcatBudget = 288;
     private static readonly byte[] SimpleCode = [0x90, 0x90];
+    private readonly List<UnmanagedPageFixture> _backingPages = [];
+
+    public void Dispose()
+    {
+        foreach (var page in _backingPages)
+            page.Dispose();
+    }
+
+    private nint AllocateTestPage(Engine engine, uint address, byte permissions)
+    {
+        var backing = new UnmanagedPageFixture([]);
+        _backingPages.Add(backing);
+        Assert.True(engine.MemMapHostPage(address, backing.Pointer, permissions));
+        return backing.Pointer;
+    }
 
     [Fact]
     public void DetachThenAttach_RestoresMappings_AndConsumesHandle()
@@ -26,7 +41,7 @@ public class EngineMmuTransferTests
         using var engine = runtime.CreateEngine();
         const uint addr = 0x00400000;
         var perms = (byte)(Protection.Read | Protection.Write);
-        var page = engine.AllocatePage(addr, perms);
+        var page = AllocateTestPage(engine, addr, perms);
         Assert.NotEqual(IntPtr.Zero, page);
         Marshal.WriteByte(page, 0x5A);
 
@@ -132,7 +147,7 @@ public class EngineMmuTransferTests
     }
 
     [Fact]
-    public void ExternalAlias_ResetAllCodeCache_SelfHealsOnFirstWrite()
+    public void HostPageAlias_ResetAllCodeCache_SelfHealsOnFirstWrite()
     {
         var runtime = new TestRuntimeFactory();
         using var engine = runtime.CreateEngine();
@@ -140,8 +155,8 @@ public class EngineMmuTransferTests
 
         const uint rwAddr = 0x00408000;
         const uint rxAddr = 0x00409000;
-        MapExternalPage(engine, rwAddr, codePage.Pointer, Protection.Read | Protection.Write);
-        MapExternalPage(engine, rxAddr, codePage.Pointer, Protection.Read | Protection.Exec);
+        MapHostPage(engine, rwAddr, codePage.Pointer, Protection.Read | Protection.Write);
+        MapHostPage(engine, rxAddr, codePage.Pointer, Protection.Read | Protection.Exec);
 
         RunPair(engine, rxAddr, 10, 12);
         Assert.True(ReadCodeCacheStats(engine).BlockCacheSize > 0);
@@ -165,7 +180,7 @@ public class EngineMmuTransferTests
     }
 
     [Fact]
-    public void ExternalAlias_ResetAllCodeCache_CrossPageWriteSelfHealsAllTouchedPages()
+    public void HostPageAlias_ResetAllCodeCache_CrossPageWriteSelfHealsAllTouchedPages()
     {
         var runtime = new TestRuntimeFactory();
         using var engine = runtime.CreateEngine();
@@ -177,8 +192,8 @@ public class EngineMmuTransferTests
         for (var i = 0; i < codePages.Count; i++)
         {
             var pageAddr = (uint)(i * LinuxConstants.PageSize);
-            MapExternalPage(engine, rwAddr + pageAddr, codePages[i], Protection.Read | Protection.Write);
-            MapExternalPage(engine, rxAddr + pageAddr, codePages[i], Protection.Read | Protection.Exec);
+            MapHostPage(engine, rwAddr + pageAddr, codePages[i], Protection.Read | Protection.Write);
+            MapHostPage(engine, rxAddr + pageAddr, codePages[i], Protection.Read | Protection.Exec);
         }
 
         RunPair(engine, codeAddr, 10, 12);
@@ -228,7 +243,7 @@ public class EngineMmuTransferTests
     }
 
     [Fact]
-    public void ExternalAlias_CodeCacheBudgetFlush_SelfHealsOnFirstWrite()
+    public void HostPageAlias_CodeCacheBudgetFlush_SelfHealsOnFirstWrite()
     {
         var runtime = new TestRuntimeFactory();
         using var engine = runtime.CreateEngine();
@@ -236,8 +251,8 @@ public class EngineMmuTransferTests
 
         const uint rwAddr = 0x0040E000;
         const uint rxAddr = 0x0040F000;
-        MapExternalPage(engine, rwAddr, codePage.Pointer, Protection.Read | Protection.Write);
-        MapExternalPage(engine, rxAddr, codePage.Pointer, Protection.Read | Protection.Exec);
+        MapHostPage(engine, rwAddr, codePage.Pointer, Protection.Read | Protection.Write);
+        MapHostPage(engine, rxAddr, codePage.Pointer, Protection.Read | Protection.Exec);
 
         RunPair(engine, rxAddr, 10, 12);
         Assert.True(engine.HasSlowWrite(rwAddr));
@@ -287,7 +302,7 @@ public class EngineMmuTransferTests
     }
 
     [Fact]
-    public void ExternalAlias_ResetAllCodeCache_ExplicitInvalidationSelfHealsRequestedPages()
+    public void HostPageAlias_ResetAllCodeCache_ExplicitInvalidationSelfHealsRequestedPages()
     {
         var runtime = new TestRuntimeFactory();
         using var engine = runtime.CreateEngine();
@@ -295,8 +310,8 @@ public class EngineMmuTransferTests
 
         const uint rwAddr = 0x00430000;
         const uint rxAddr = 0x00431000;
-        MapExternalPage(engine, rwAddr, codePage.Pointer, Protection.Read | Protection.Write);
-        MapExternalPage(engine, rxAddr, codePage.Pointer, Protection.Read | Protection.Exec);
+        MapHostPage(engine, rwAddr, codePage.Pointer, Protection.Read | Protection.Write);
+        MapHostPage(engine, rxAddr, codePage.Pointer, Protection.Read | Protection.Exec);
 
         RunPair(engine, rxAddr, 10, 12);
         Assert.True(engine.HasSlowWrite(rwAddr));
@@ -429,7 +444,7 @@ public class EngineMmuTransferTests
         var runtime = new TestRuntimeFactory();
         using var engine = runtime.CreateEngine();
         const uint addr = BudgetTestCodeBaseAddr;
-        var page = engine.AllocatePage(addr, (byte)(Protection.Read | Protection.Write | Protection.Exec));
+        var page = AllocateTestPage(engine, addr, (byte)(Protection.Read | Protection.Write | Protection.Exec));
         Marshal.Copy(new byte[] { 0x74, 0x02, 0x40, 0x40, 0x40, 0x40 }, 0, page, 6);
         engine.SetCodeCacheBudgetBytesForTesting(320);
         engine.Eflags = branchTaken ? 0x40u : 0u;
@@ -455,7 +470,7 @@ public class EngineMmuTransferTests
         InstallSimpleCode(engine);
         WarmSimpleCode(engine);
         engine.ResetCodeCacheByRange(CodeAddr, (uint)SimpleCode.Length);
-        engine.ReprotectMappedRange(CodeAddr, LinuxConstants.PageSize, (byte)Protection.Read);
+        engine.MemProtect(CodeAddr, LinuxConstants.PageSize, (byte)Protection.Read);
 
         var resetDuringFetch = false;
         engine.FaultHandler = (cpu, addr, _) =>
@@ -463,7 +478,7 @@ public class EngineMmuTransferTests
             if (addr != CodeAddr) return false;
             cpu.ResetAllCodeCache();
             resetDuringFetch = true;
-            cpu.ReprotectMappedRange(CodeAddr, LinuxConstants.PageSize, (byte)(Protection.Read | Protection.Exec));
+            cpu.MemProtect(CodeAddr, LinuxConstants.PageSize, (byte)(Protection.Read | Protection.Exec));
             return true;
         };
 
@@ -488,7 +503,7 @@ public class EngineMmuTransferTests
         using var engine = runtime.CreateEngine();
         const uint source = BudgetTestCodeBaseAddr;
         const uint missingSuccessor = source + LinuxConstants.PageSize;
-        var page = engine.AllocatePage(source, (byte)(Protection.Read | Protection.Write | Protection.Exec));
+        var page = AllocateTestPage(engine, source, (byte)(Protection.Read | Protection.Write | Protection.Exec));
         // JMP rel32 to the unmapped next page.
         Marshal.Copy(new byte[] { 0xE9, 0xFB, 0x0F, 0x00, 0x00 }, 0, page, 5);
         var resetDuringSuccessor = false;
@@ -547,7 +562,7 @@ public class EngineMmuTransferTests
             try { cpu.Dispose(); }
             catch (InvalidOperationException) { rejectedDestroy = true; }
             sibling.ResetAllCodeCache();
-            var page = cpu.AllocatePage(dataAddr, (byte)(Protection.Read | Protection.Write));
+            var page = AllocateTestPage(cpu, dataAddr, (byte)(Protection.Read | Protection.Write));
             Marshal.WriteByte(page, 0x5A);
             return true;
         };
@@ -631,8 +646,8 @@ public class EngineMmuTransferTests
         const uint rwAddr = 0x00412000;
         const uint rxAddr = 0x00413000;
         const uint writerAddr = 0x00414000;
-        MapExternalPage(parent, rwAddr, codePage.Pointer, Protection.Read | Protection.Write);
-        MapExternalPage(parent, rxAddr, codePage.Pointer, Protection.Read | Protection.Exec);
+        MapHostPage(parent, rwAddr, codePage.Pointer, Protection.Read | Protection.Write);
+        MapHostPage(parent, rxAddr, codePage.Pointer, Protection.Read | Protection.Exec);
         InstallAbsoluteAlByteWriter(parent, writerAddr, rwAddr);
 
         using var child = parent.Clone(true);
@@ -663,8 +678,8 @@ public class EngineMmuTransferTests
         const uint rwAddr = 0x00415000;
         const uint rxAddr = 0x00416000;
         const uint writerAddr = 0x00417000;
-        MapExternalPage(parent, rwAddr, codePage.Pointer, Protection.Read | Protection.Write);
-        MapExternalPage(parent, rxAddr, codePage.Pointer, Protection.Read | Protection.Exec);
+        MapHostPage(parent, rwAddr, codePage.Pointer, Protection.Read | Protection.Write);
+        MapHostPage(parent, rxAddr, codePage.Pointer, Protection.Read | Protection.Exec);
         InstallAbsoluteAlByteWriter(parent, writerAddr, rwAddr);
 
         using var child = parent.Clone(true);
@@ -861,10 +876,10 @@ public class EngineMmuTransferTests
         var rangeLength = pages * LinuxConstants.PageSize;
         var lastPage = rangeStart + rangeLength - LinuxConstants.PageSize;
 
-        MapExternalPage(parent, rangeStart, codePage.Pointer, Protection.Read | Protection.Exec);
-        MapExternalPage(parent, aliasAddr, codePage.Pointer, Protection.Read | Protection.Write);
+        MapHostPage(parent, rangeStart, codePage.Pointer, Protection.Read | Protection.Exec);
+        MapHostPage(parent, aliasAddr, codePage.Pointer, Protection.Read | Protection.Write);
         Assert.NotEqual(IntPtr.Zero,
-            parent.AllocatePage(lastPage, (byte)(Protection.Read | Protection.Write)));
+            AllocateTestPage(parent, lastPage, (byte)(Protection.Read | Protection.Write)));
         InstallAbsoluteAlByteWriter(parent, writerAddr, lastPage);
 
         using var child = parent.Clone(true);
@@ -874,7 +889,7 @@ public class EngineMmuTransferTests
 
         // Dropping execute permission disarms the writable alias during the
         // range update. The sibling must also invalidate the range's last page.
-        parent.ReprotectMappedRange(rangeStart, rangeLength, (byte)Protection.Read);
+        parent.MemProtect(rangeStart, rangeLength, (byte)Protection.Read);
         Assert.False(child.HasSlowWrite(aliasAddr));
 
         child.RegWrite(Reg.EAX, 0xA5);
@@ -895,7 +910,7 @@ public class EngineMmuTransferTests
         const uint codeAddr = 0x00418000;
         using var codePage = new UnmanagedPageFixture(TwoSamePagePatchesThenTail(codeAddr));
 
-        MapExternalPage(engine, codeAddr, codePage.Pointer, Protection.Read | Protection.Write | Protection.Exec);
+        MapHostPage(engine, codeAddr, codePage.Pointer, Protection.Read | Protection.Write | Protection.Exec);
 
         engine.RegWrite(Reg.EAX, 0);
         engine.Eip = codeAddr;
@@ -973,7 +988,7 @@ public class EngineMmuTransferTests
     }
 
     [Fact]
-    public void ForkedOrClonedMmu_StartsWithEmptyCodeCache()
+    public void ForkedMmu_BorrowsMappedPagesAndStartsWithAnEmptyCodeCache()
     {
         var runtime = new TestRuntimeFactory();
         using var parent = runtime.CreateEngine();
@@ -981,20 +996,35 @@ public class EngineMmuTransferTests
         WarmSimpleCode(parent);
         Assert.True(parent.GetBlockCount() > 0);
 
-        using (var forked = parent.Clone(false))
-        {
-            Assert.NotEqual(parent.CurrentMmuIdentity, forked.CurrentMmuIdentity);
-            Assert.Equal(0, forked.GetBlockCount());
-            Assert.Equal(0, ReadCodeCacheStats(forked).BlockCacheSize);
-            WarmSimpleCode(forked);
-            Assert.True(forked.GetBlockCount() > 0);
-        }
+        using var forked = parent.Clone(false);
+        Assert.NotEqual(parent.CurrentMmuIdentity, forked.CurrentMmuIdentity);
+        Assert.Equal(parent.GetPhysicalAddressSafe(CodeAddr, false), forked.GetPhysicalAddressSafe(CodeAddr, false));
+        Assert.Equal(0, forked.GetBlockCount());
+        Assert.Equal(0, ReadCodeCacheStats(forked).BlockCacheSize);
+        WarmSimpleCode(forked);
+        Assert.True(forked.GetBlockCount() > 0);
+    }
 
-        using var freshEngine = runtime.CreateEngine();
-        using var cloned = parent.CurrentMmu.CloneSkipExternal();
-        freshEngine.ReplaceMmu(cloned);
-        Assert.Equal(0, freshEngine.GetBlockCount());
-        Assert.Equal(0, ReadCodeCacheStats(freshEngine).BlockCacheSize);
+    [Fact]
+    public void MemProtect_RestoresAccessToTheSameBackingAtTheTopOfTheAddressSpace()
+    {
+        var runtime = new TestRuntimeFactory();
+        using var backing = new UnmanagedPageFixture([0x5A]);
+        using var engine = runtime.CreateEngine();
+        const uint address = 0xFFFFF000;
+        MapHostPage(engine, address, backing.Pointer, Protection.None);
+        Assert.Equal(IntPtr.Zero, engine.GetPhysicalAddressSafe(address, false));
+        var mappings = new X86Native.PageMapping[1];
+        Assert.Equal(1, engine.CollectMappedPages(address, LinuxConstants.PageSize, mappings));
+        Assert.Equal(backing.Pointer, mappings[0].HostPage);
+        Assert.Equal(0, mappings[0].Perms);
+
+        engine.MemProtect(address, LinuxConstants.PageSize, (byte)Protection.Read);
+        Assert.Equal(backing.Pointer, engine.GetPhysicalAddressSafe(address, false));
+
+        engine.MemUnmap(address, LinuxConstants.PageSize);
+        Assert.Equal(0, engine.CollectMappedPages(address, LinuxConstants.PageSize, mappings));
+        Assert.Equal((byte)0x5A, Marshal.ReadByte(backing.Pointer));
     }
 
     [Fact]
@@ -1075,7 +1105,7 @@ public class EngineMmuTransferTests
     }
 
     [Fact]
-    public void ForkedClone_ExternalMappingsStartDisarmedUntilChildDecodes()
+    public void ForkedClone_HostPageMappingsStartDisarmedUntilChildDecodes()
     {
         var runtime = new MemoryRuntimeContext();
         using var fixture = new TmpfsFileFixture(runtime, IncEaxTwice());
@@ -1106,7 +1136,7 @@ public class EngineMmuTransferTests
             using var childEngine = parentEngine.Clone(false);
             var childMm = parentMm.Clone();
             childMm.BindOrAssertAddressSpaceHandle(childEngine);
-            childMm.RebuildExternalMappingsFromNative(childEngine, childMm.VMAs);
+            childMm.RebuildPageBindingsFromNative(childEngine, childMm.VMAs);
             childEngine.PageFaultResolver =
                 (addr, isWrite) => childMm.HandleFaultDetailed(addr, isWrite, childEngine) == FaultResult.Handled;
 
@@ -1135,7 +1165,7 @@ public class EngineMmuTransferTests
     }
 
     [Fact]
-    public void ExternalAlias_ReprotectDroppingExec_DisarmsSlowWriteWithoutInvalidatingLiveBlocks()
+    public void HostPageAlias_ReprotectDroppingExec_DisarmsSlowWriteWithoutInvalidatingLiveBlocks()
     {
         var runtime = new TestRuntimeFactory();
         using var engine = runtime.CreateEngine();
@@ -1143,14 +1173,14 @@ public class EngineMmuTransferTests
 
         const uint rwAddr = 0x00420000;
         const uint rxAddr = 0x00421000;
-        MapExternalPage(engine, rwAddr, codePage.Pointer, Protection.Read | Protection.Write);
-        MapExternalPage(engine, rxAddr, codePage.Pointer, Protection.Read | Protection.Exec);
+        MapHostPage(engine, rwAddr, codePage.Pointer, Protection.Read | Protection.Write);
+        MapHostPage(engine, rxAddr, codePage.Pointer, Protection.Read | Protection.Exec);
 
         RunPair(engine, rxAddr, 10, 12);
         Assert.True(ReadCodeCacheStats(engine).BlockCacheSize > 0);
         Assert.True(engine.HasSlowWrite(rwAddr));
 
-        engine.ReprotectMappedRange(rxAddr, LinuxConstants.PageSize, (byte)Protection.Read);
+        engine.MemProtect(rxAddr, LinuxConstants.PageSize, (byte)Protection.Read);
 
         Assert.False(engine.HasSlowWrite(rwAddr));
         Assert.True(ReadCodeCacheStats(engine).BlockCacheSize > 0);
@@ -1161,7 +1191,7 @@ public class EngineMmuTransferTests
     }
 
     [Fact]
-    public void ExternalAlias_UnmappingExecAlias_DisarmsSlowWriteWithoutInvalidatingLiveBlocks()
+    public void HostPageAlias_UnmappingExecAlias_DisarmsSlowWriteWithoutInvalidatingLiveBlocks()
     {
         var runtime = new TestRuntimeFactory();
         using var engine = runtime.CreateEngine();
@@ -1169,8 +1199,8 @@ public class EngineMmuTransferTests
 
         const uint rwAddr = 0x00422000;
         const uint rxAddr = 0x00423000;
-        MapExternalPage(engine, rwAddr, codePage.Pointer, Protection.Read | Protection.Write);
-        MapExternalPage(engine, rxAddr, codePage.Pointer, Protection.Read | Protection.Exec);
+        MapHostPage(engine, rwAddr, codePage.Pointer, Protection.Read | Protection.Write);
+        MapHostPage(engine, rxAddr, codePage.Pointer, Protection.Read | Protection.Exec);
 
         RunPair(engine, rxAddr, 10, 12);
         Assert.True(ReadCodeCacheStats(engine).BlockCacheSize > 0);
@@ -1187,7 +1217,7 @@ public class EngineMmuTransferTests
     }
 
     [Fact]
-    public void ExternalAlias_RemapWritableAliasToDifferentHostPage_DisarmsOldExecCoupling()
+    public void HostPageAlias_RemapWritableAliasToDifferentHostPage_DisarmsOldExecCoupling()
     {
         var runtime = new TestRuntimeFactory();
         using var engine = runtime.CreateEngine();
@@ -1196,14 +1226,14 @@ public class EngineMmuTransferTests
 
         const uint rwAddr = 0x00424000;
         const uint rxAddr = 0x00425000;
-        MapExternalPage(engine, rwAddr, codePage.Pointer, Protection.Read | Protection.Write);
-        MapExternalPage(engine, rxAddr, codePage.Pointer, Protection.Read | Protection.Exec);
+        MapHostPage(engine, rwAddr, codePage.Pointer, Protection.Read | Protection.Write);
+        MapHostPage(engine, rxAddr, codePage.Pointer, Protection.Read | Protection.Exec);
 
         RunPair(engine, rxAddr, 10, 12);
         Assert.True(ReadCodeCacheStats(engine).BlockCacheSize > 0);
         Assert.True(engine.HasSlowWrite(rwAddr));
 
-        MapExternalPage(engine, rwAddr, replacementPage.Pointer, Protection.Read | Protection.Write);
+        MapHostPage(engine, rwAddr, replacementPage.Pointer, Protection.Read | Protection.Write);
 
         Assert.False(engine.HasSlowWrite(rwAddr));
         Assert.True(ReadCodeCacheStats(engine).BlockCacheSize > 0);
@@ -1225,7 +1255,7 @@ public class EngineMmuTransferTests
         const uint baseAddr = 0x00430000;
         for (var i = 0; i < pages.Count; i++)
         {
-            MapExternalPage(engine, baseAddr + (uint)(i * LinuxConstants.PageSize), pages[i], Protection.Read | Protection.Exec);
+            MapHostPage(engine, baseAddr + (uint)(i * LinuxConstants.PageSize), pages[i], Protection.Read | Protection.Exec);
             RunPair(engine, baseAddr + (uint)(i * LinuxConstants.PageSize), 10, 12);
         }
 
@@ -1260,33 +1290,33 @@ public class EngineMmuTransferTests
         Assert.Equal(5, X86Native.DebugHostPageSetUniqueCount(hostPages));
     }
 
-    private static void InstallSimpleCode(Engine engine)
+    private void InstallSimpleCode(Engine engine)
     {
         InstallSimpleCode(engine, CodeAddr);
     }
 
-    private static void InstallSimpleCode(Engine engine, uint addr)
+    private void InstallSimpleCode(Engine engine, uint addr)
     {
         var perms = (byte)(Protection.Read | Protection.Write | Protection.Exec);
-        var page = engine.AllocatePage(addr, perms);
+        var page = AllocateTestPage(engine, addr, perms);
         Assert.NotEqual(IntPtr.Zero, page);
         Marshal.Copy(SimpleCode, 0, page, SimpleCode.Length);
     }
 
-    private static void InstallConcatDirectJmpCode(Engine engine, uint addr)
+    private void InstallConcatDirectJmpCode(Engine engine, uint addr)
     {
         var perms = (byte)(Protection.Read | Protection.Write | Protection.Exec);
-        var page = engine.AllocatePage(addr, perms);
+        var page = AllocateTestPage(engine, addr, perms);
         Assert.NotEqual(IntPtr.Zero, page);
         byte[] code = [0xEB, 0x02, 0x90, 0x90, 0x40, 0x40];
         Marshal.Copy(code, 0, page, code.Length);
     }
 
-    private static void InstallCrossPageCode(Engine engine)
+    private void InstallCrossPageCode(Engine engine)
     {
         var perms = (byte)(Protection.Read | Protection.Write | Protection.Exec);
-        var firstPage = engine.AllocatePage(CodeAddr, perms);
-        var secondPage = engine.AllocatePage(CodeAddr + LinuxConstants.PageSize, perms);
+        var firstPage = AllocateTestPage(engine, CodeAddr, perms);
+        var secondPage = AllocateTestPage(engine, CodeAddr + LinuxConstants.PageSize, perms);
         Assert.NotEqual(IntPtr.Zero, firstPage);
         Assert.NotEqual(IntPtr.Zero, secondPage);
 
@@ -1311,7 +1341,7 @@ public class EngineMmuTransferTests
         Assert.Equal(addr + (uint)SimpleCode.Length, engine.Eip);
     }
 
-    private static void WarmUniqueSimpleBlocks(Engine engine, uint baseAddr, int count)
+    private void WarmUniqueSimpleBlocks(Engine engine, uint baseAddr, int count)
     {
         for (var i = 0; i < count; i++)
         {
@@ -1357,10 +1387,10 @@ public class EngineMmuTransferTests
         return code;
     }
 
-    private static void InstallAbsoluteAlByteWriter(Engine engine, uint addr, uint targetAddr)
+    private void InstallAbsoluteAlByteWriter(Engine engine, uint addr, uint targetAddr)
     {
         var perms = (byte)(Protection.Read | Protection.Write | Protection.Exec);
-        var page = engine.AllocatePage(addr, perms);
+        var page = AllocateTestPage(engine, addr, perms);
         Assert.NotEqual(IntPtr.Zero, page);
 
         Span<byte> code = stackalloc byte[5];
@@ -1369,10 +1399,10 @@ public class EngineMmuTransferTests
         Assert.True(engine.CopyToUser(addr, code));
     }
 
-    private static void InstallAbsoluteAlByteReader(Engine engine, uint addr, uint targetAddr)
+    private void InstallAbsoluteAlByteReader(Engine engine, uint addr, uint targetAddr)
     {
         var perms = (byte)(Protection.Read | Protection.Write | Protection.Exec);
-        var page = engine.AllocatePage(addr, perms);
+        var page = AllocateTestPage(engine, addr, perms);
         Assert.NotEqual(IntPtr.Zero, page);
 
         Span<byte> code = stackalloc byte[5];
@@ -1409,9 +1439,9 @@ public class EngineMmuTransferTests
         Assert.Equal(addr + 5, engine.Eip);
     }
 
-    private static void MapExternalPage(Engine engine, uint addr, nint hostPage, Protection perms)
+    private static void MapHostPage(Engine engine, uint addr, nint hostPage, Protection perms)
     {
-        Assert.True(engine.MapManagedPage(addr, hostPage, (byte)perms));
+        Assert.True(engine.MemMapHostPage(addr, hostPage, (byte)perms));
     }
 
     private static void RunPair(Engine engine, uint codeAddr, uint initialEax, uint expectedEax)

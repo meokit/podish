@@ -14,8 +14,8 @@ public sealed class RevalidatedBlockCoherenceTests
         const uint source = caller + CpuSandbox.PageSize;
         const uint successor = source + 0x100;
         const uint end = successor + 64;
-        cpu.MapExternalMemory(caller, 7);
-        cpu.MapExternalMemory(source, 7);
+        cpu.MapMemory(caller, CpuSandbox.PageSize, 7);
+        cpu.MapMemory(source, CpuSandbox.PageSize, 7);
         cpu.WriteMemory(caller, Jump(caller, source));
         cpu.WriteMemory(source, [0xB8, 7, 0, 0, 0, .. Jump(source + 5, successor)]);
         // Source has two instructions; successor has 64. Their direct-jump
@@ -55,8 +55,8 @@ public sealed class RevalidatedBlockCoherenceTests
         const uint source = caller + CpuSandbox.PageSize;
         const uint successor = source + 0x100;
         const uint end = successor + 64;
-        cpu.MapExternalMemory(caller, 7);
-        cpu.MapExternalMemory(source, 7);
+        cpu.MapMemory(caller, CpuSandbox.PageSize, 7);
+        cpu.MapMemory(source, CpuSandbox.PageSize, 7);
 
         // Warm the source alone: two instructions plus the 64-instruction
         // successor exceed the concat limit.

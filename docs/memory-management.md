@@ -426,14 +426,7 @@ Current behavior is:
 
 ### 5.3 Native mapping install path
 
-Actual native installation is funneled through `EnsureExternalMapping(...)`.
-
-Important current semantics:
-
-- if the same host pointer is already installed for that guest page, only permissions are refreshed with `engine.MemMap(...)`;
-- if a different page is already installed, `ProcessPageManager.Release(...)` is called first;
-- successful install adds a `MappedPageBinding` to `ProcessPageManager` and maps the host pointer into the MMU;
-- `MapCount` changes are therefore tied to `ProcessPageManager`, not to `OwnerPageSlots`.
+`EnsureNativeMapping` uses `Engine.MemProtect` if the installed pointer matches. For a different pointer, it installs the new mapping with `MemMapHostPage` while the old managed binding retains the backing. It then releases the old binding and records the new one. `ProcessPageManager` tracks the resulting changes to `MapCount`.
 
 ## 6. Lifecycle
 
@@ -499,10 +492,10 @@ This is why `fork()` can share a private host page across parent/child descendan
 Current non-`CLONE_VM` fork behavior is:
 
 1. parent captures dirty private pages with `CaptureDirtyPrivatePages(...)`;
-2. native CPU/MMU is cloned with external mappings preserved;
+2. the native clone copies mappings and borrows their backing pointers;
 3. managed `VMAManager` is cloned;
 4. `VmArea.Clone()` clones file references and calls `VmAnonVma?.CloneForFork()`;
-5. child `ProcessPageManager` is rebuilt from native installed mappings via `RebuildExternalMappingsFromNative(...)`;
+5. child `ProcessPageManager` is rebuilt from native installed mappings via `RebuildPageBindingsFromNative(...)`;
 6. parent and child private ranges are reprotected read-only to enforce later COW;
 7. mappings are not torn down at fork time.
 

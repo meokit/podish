@@ -33,7 +33,7 @@ typedef struct {
     void* host_page;
 } X86_PageMapping;
 
-enum { X86_PAGE_FLAG_DIRTY = 1 << 0, X86_PAGE_FLAG_EXTERNAL = 1 << 1 };
+enum { X86_PAGE_FLAG_DIRTY = 1 << 0 };
 
 // Creation / Destruction
 enum { X86_CREATE_NO_FATAL_SIGNAL_HANDLERS = 1u };
@@ -47,7 +47,7 @@ int X86_FinishRun(const X86_RunContext* run, char* error, size_t error_size);
 void X86_DestroyRun(X86_RunContext* run);
 // Options affect this creation only; no environment variables are modified.
 EmuState* X86_CreateWithOptions(uint32_t options);
-// share_mem=1: Threads (CLONE_VM), share_mem=0: Fork (copy owned pages, preserve external mappings)
+// share_mem=1 shares the MMU. share_mem=0 copies its mappings and borrows the same backing pages.
 EmuState* X86_Clone(EmuState* parent, int share_mem);
 int X86_Destroy(EmuState* state);
 
@@ -82,9 +82,13 @@ uint32_t X86_SegBaseRead(EmuState* state, int seg_index);
 void X86_SegBaseWrite(EmuState* state, int seg_index, uint32_t base);
 
 // Memory Access
-void X86_MemMap(EmuState* state, uint32_t addr, uint32_t size, uint8_t perms);
+// Map one 4 KiB guest page. The guest address must be page-aligned and the host
+// pointer must cover 4 KiB. The caller keeps the backing alive for every mapping,
+// including aliases and clones. Returns 1 on success.
+int X86_MemMapHostPage(EmuState* state, uint32_t addr, void* host_page, uint8_t perms);
 void X86_MemUnmap(EmuState* state, uint32_t addr, uint32_t size);
-void X86_ReprotectMappedRange(EmuState* state, uint32_t addr, uint32_t size, uint8_t perms);
+// Update the access permissions (R/W/X) of existing mappings.
+void X86_MemProtect(EmuState* state, uint32_t addr, uint32_t size, uint8_t perms);
 // DEPRECATED: Use ResolvePtrForRead/ResolvePtrForWrite + direct memcpy instead. These are slow (byte-by-byte) and for
 // testing only.
 void X86_MemWrite(EmuState* state, uint32_t addr, const uint8_t* data, uint32_t size);
@@ -96,11 +100,8 @@ void* X86_ResolvePtrForRead(EmuState* state, uint32_t addr);
 void* X86_ResolvePtrForWrite(EmuState* state, uint32_t addr);
 // Collect present page mappings in [addr, addr + size), one record per mapped page.
 size_t X86_CollectMappedPages(EmuState* state, uint32_t addr, uint32_t size, X86_PageMapping* buffer, size_t max_count);
-// Allocate a single page with given permissions, returns host pointer to page
-void* X86_AllocatePage(EmuState* state, uint32_t addr, uint8_t perms);
 // MMU handle management (intrusive refcount in native core).
 X86_MmuHandle* X86_MmuCreateEmpty();
-X86_MmuHandle* X86_MmuCloneSkipExternal(X86_MmuHandle* mmu);
 X86_MmuHandle* X86_MmuRetain(X86_MmuHandle* mmu);
 void X86_MmuRelease(X86_MmuHandle* mmu);
 uintptr_t X86_MmuGetIdentity(X86_MmuHandle* mmu);

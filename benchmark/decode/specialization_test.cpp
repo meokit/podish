@@ -76,7 +76,11 @@ int main() {
     auto* state = X86_CreateWithOptions(X86_CREATE_NO_FATAL_SIGNAL_HANDLERS);
     constexpr uint8_t cpuid[] = {0x0f, 0xa2};
     constexpr uint32_t address = 0x10000;
-    X86_MemMap(state, address, 4096, 7);
+    uint8_t page[4096]{};
+    if (!X86_MemMapHostPage(state, address, page, 7)) {
+        X86_Destroy(state);
+        return 1;
+    }
     X86_MemWrite(state, address, cpuid, sizeof(cpuid));
     X86_SetEIP(state, address);
     X86_Run(state, address + sizeof(cpuid), 8);

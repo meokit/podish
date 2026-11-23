@@ -42,8 +42,7 @@ public unsafe partial class X86Native
     public enum PageMappingFlags : byte
     {
         None = 0,
-        Dirty = 1 << 0,
-        External = 1 << 1
+        Dirty = 1 << 0
     }
 
     [LibraryImport(LibName, EntryPoint = "X86_Create")]
@@ -94,10 +93,6 @@ public unsafe partial class X86Native
     [LibraryImport(LibName, EntryPoint = "X86_SegBaseWrite")]
     [SuppressGCTransition]
     public static partial void SegBaseWrite(IntPtr state, int segIndex, uint baseAddr);
-
-    [LibraryImport(LibName, EntryPoint = "X86_MemMap")]
-    [SuppressGCTransition]
-    public static partial void MemMap(IntPtr state, uint addr, uint size, byte perms);
 
     [LibraryImport(LibName, EntryPoint = "X86_MemUnmap")]
     [SuppressGCTransition]
@@ -168,21 +163,13 @@ public unsafe partial class X86Native
     public static partial nuint CollectMappedPages(IntPtr state, uint addr, uint size, PageMapping* buffer,
         nuint maxCount);
 
-    [LibraryImport(LibName, EntryPoint = "X86_AllocatePage")]
+    [LibraryImport(LibName, EntryPoint = "X86_MemMapHostPage")]
     [SuppressGCTransition]
-    public static partial void* AllocatePage(IntPtr state, uint addr, byte perms);
-
-    [LibraryImport(LibName, EntryPoint = "X86_InternalMapManagedPage")]
-    [SuppressGCTransition]
-    internal static partial int MapManagedPage(IntPtr state, uint addr, void* hostPage, byte perms);
+    public static partial int MemMapHostPage(IntPtr state, uint addr, void* hostPage, byte perms);
 
     [LibraryImport(LibName, EntryPoint = "X86_MmuCreateEmpty")]
     [SuppressGCTransition]
     public static partial IntPtr MmuCreateEmpty();
-
-    [LibraryImport(LibName, EntryPoint = "X86_MmuCloneSkipExternal")]
-    [SuppressGCTransition]
-    public static partial IntPtr MmuCloneSkipExternal(IntPtr mmuHandle);
 
     [LibraryImport(LibName, EntryPoint = "X86_MmuRetain")]
     [SuppressGCTransition]
@@ -230,9 +217,9 @@ public unsafe partial class X86Native
     [LibraryImport(LibName, EntryPoint = "X86_SetCodeCacheBudgetBytes")]
     internal static partial void SetCodeCacheBudgetBytes(IntPtr state, ulong bytes);
 
-    [LibraryImport(LibName, EntryPoint = "X86_ReprotectMappedRange")]
+    [LibraryImport(LibName, EntryPoint = "X86_MemProtect")]
     [SuppressGCTransition]
-    public static partial void ReprotectMappedRange(IntPtr state, uint addr, uint size, byte perms);
+    public static partial void MemProtect(IntPtr state, uint addr, uint size, byte perms);
 
     [LibraryImport(LibName, EntryPoint = "X86_SetLogCallback")]
     public static partial void SetLogCallback(IntPtr state, delegate* unmanaged<int, IntPtr, IntPtr, void> callback,

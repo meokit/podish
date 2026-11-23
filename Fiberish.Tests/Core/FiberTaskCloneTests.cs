@@ -28,7 +28,7 @@ public class FiberTaskCloneTests
     }
 
     [Fact]
-    public async Task Fork_ChildPrivateMapping_PreservesMappedExternalPages()
+    public async Task Fork_ChildPrivateMapping_PreservesMappedBacking()
     {
         using var env = new TestEnv();
         const uint addr = 0x00410000;

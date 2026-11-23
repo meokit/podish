@@ -17,9 +17,9 @@ public sealed class DeferredWriteTlbMissTests
     {
         using var cpu = new CpuSandbox(mapDefaults: false);
         cpu.MapMemory(CpuSandbox.CodeAddress, CpuSandbox.PageSize, 7);
-        cpu.MapExternalMemory(CpuSandbox.DataAddress);
+        cpu.MapMemory(CpuSandbox.DataAddress, CpuSandbox.PageSize);
         bool crossPage = form == "cross-page";
-        if (crossPage) cpu.MapExternalMemory(CpuSandbox.DataAddress + CpuSandbox.PageSize);
+        if (crossPage) cpu.MapMemory(CpuSandbox.DataAddress + CpuSandbox.PageSize, CpuSandbox.PageSize);
         uint address = CpuSandbox.DataAddress + (crossPage ? CpuSandbox.PageSize - 2 : 0);
         const uint oldValue = 0x11223344;
         const uint value = 0x89ABCDEF;
@@ -93,7 +93,7 @@ public sealed class DeferredWriteTlbMissTests
                 (address & ~(CpuSandbox.PageSize - 1)) != context.Page)
                 throw new InvalidOperationException($"Unexpected write fault at {address:X8}.");
             if (context.Reject) return 0;
-            context.Cpu.ReplaceExternalMemory(context.Page, context.Replacement, 3);
+            context.Cpu.ReplaceBackingPage(context.Page, context.Replacement, 3);
             return 1;
         }
         catch (Exception error)

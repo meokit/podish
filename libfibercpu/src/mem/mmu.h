@@ -36,49 +36,10 @@ void RetireLLVMJitTrace(const mem::CodeCacheState& cache);
 
 namespace fiberish::mem {
 
-// L2 Chunk: Covers 4MB (1024 * 4KB)
-// Sparse allocation of actual pages
+// Each L2 chunk describes up to 4 MiB of caller-owned backing.
 struct PageTableChunk {
-    std::array<std::byte*, 1024> pages;
-    std::array<Property, 1024> permissions;
-
-    PageTableChunk() {
-        pages.fill(nullptr);
-        permissions.fill(Property::None);
-    }
-
-    // Copy Constructor for Deep Copy (Fork)
-    // External pages are intentionally not copied and not converted to owned pages.
-    // This guarantees cloned MMUs never "internalize" externally managed memory.
-    PageTableChunk(const PageTableChunk& other) {
-        for (size_t i = 0; i < 1024; ++i) {
-            permissions[i] = other.permissions[i] & ~Property::ForceWriteSlow;
-
-            if (!other.pages[i]) {
-                pages[i] = nullptr;
-                continue;
-            }
-
-            if (has_property(permissions[i], Property::External)) {
-                // Do not clone external mappings into owned memory.
-                pages[i] = nullptr;
-                permissions[i] = Property::None;
-                continue;
-            }
-
-            pages[i] = new std::byte[PAGE_SIZE];
-            std::memcpy(pages[i], other.pages[i], PAGE_SIZE);
-        }
-    }
-
-    ~PageTableChunk() {
-        for (size_t i = 0; i < pages.size(); ++i) {
-            auto* ptr = pages[i];
-            if (ptr && !has_property(permissions[i], Property::External)) {
-                delete[] ptr;
-            }
-        }
-    }
+    std::array<HostAddr, 1024> pages{};
+    std::array<Property, 1024> permissions{};
 };
 
 // Callback Signatures
@@ -89,20 +50,6 @@ using MemHook = void (*)(void* opaque, uint32_t addr, uint32_t size, int is_writ
 // Shared Memory State (Page Tables)
 struct PageDirectory {
     std::array<std::unique_ptr<PageTableChunk>, 1024> l1_directory;
-
-    // Deep Copy Constructor for Fork
-    PageDirectory(const PageDirectory& other) {
-        for (size_t i = 0; i < 1024; ++i) {
-            if (other.l1_directory[i]) {
-                l1_directory[i] = std::make_unique<PageTableChunk>(*other.l1_directory[i]);
-            }
-        }
-    }
-
-    PageDirectory() = default;
-
-    // Copy assignment deleted to prevent accidental heavy copies without explicit intent
-    PageDirectory& operator=(const PageDirectory&) = delete;
 };
 
 inline void InitializeInvalidBasicBlock(BasicBlock& block) {
@@ -767,9 +714,8 @@ struct MmuCore {
     // Execution is serialized by the host scheduler. Callback-time cache resets
     // may invalidate reachability, but must not release this core's block pool.
     bool execution_active = false;
-    struct ExternalAliasState {
+    struct HostPageAliases {
         uint32_t exec_count = 0;
-        uint32_t write_count = 0;
         GuestPageSet guest_pages;
     };
     struct RuntimeTlbShootdownRing {
@@ -778,7 +724,7 @@ struct MmuCore {
         std::array<uint32_t, kCapacity> guest_pages{};
         uint64_t write_seq = 0;
     };
-    ankerl::unordered_dense::map<uintptr_t, ExternalAliasState> external_aliases;
+    ankerl::unordered_dense::map<uintptr_t, HostPageAliases> host_page_aliases;
     RuntimeTlbShootdownRing runtime_tlb_shootdown_ring;
     std::shared_ptr<LLVMAsyncState> llvm_async;
 };
@@ -850,36 +796,24 @@ public:
         Mmu* mmu_ = nullptr;
     };
 
-    // ForceWriteSlow is a runtime-only SMC armed bit. Mapping calls must not
-    // persist or clone it; the MMU recomputes it from alias metadata and the
-    // live block cache.
-    static Property normalize_mapping_perms(Property perms) { return perms & ~Property::ForceWriteSlow; }
+    void remove_host_page_alias(GuestAddr guest_page, HostAddr page, Property perms) {
+        if (!core_ || !page) return;
 
-    static bool should_track_external_alias(Property perms, HostAddr page) {
-        return page != nullptr && has_property(perms, Property::External);
-    }
-
-    void remove_external_alias(GuestAddr guest_page, HostAddr page, Property perms) {
-        if (!core_ || !should_track_external_alias(perms, page)) return;
-
-        auto it = core_->external_aliases.find(reinterpret_cast<uintptr_t>(page));
-        if (it == core_->external_aliases.end()) return;
+        auto it = core_->host_page_aliases.find(reinterpret_cast<uintptr_t>(page));
+        if (it == core_->host_page_aliases.end()) return;
 
         auto& guest_pages = it->second.guest_pages;
         guest_pages.erase(guest_page);
         if (has_property(perms, Property::Exec) && it->second.exec_count > 0) it->second.exec_count--;
-        if (has_property(perms, Property::Write) && it->second.write_count > 0) it->second.write_count--;
-        if (it->second.exec_count == 0 && it->second.write_count == 0 && guest_pages.empty())
-            core_->external_aliases.erase(it);
+        if (guest_pages.empty()) core_->host_page_aliases.erase(it);
     }
 
-    void add_external_alias(GuestAddr guest_page, HostAddr page, Property perms) {
-        if (!core_ || !should_track_external_alias(perms, page)) return;
+    void add_host_page_alias(GuestAddr guest_page, HostAddr page, Property perms) {
+        if (!core_ || !page) return;
 
-        auto& state = core_->external_aliases[reinterpret_cast<uintptr_t>(page)];
+        auto& state = core_->host_page_aliases[reinterpret_cast<uintptr_t>(page)];
         state.guest_pages.push_unique(guest_page);
         if (has_property(perms, Property::Exec)) state.exec_count++;
-        if (has_property(perms, Property::Write)) state.write_count++;
     }
 
     [[nodiscard]] bool host_page_has_live_blocks(HostAddr page) const {
@@ -895,8 +829,8 @@ public:
         auto* dir = current_page_directory();
         if (!dir) return;
 
-        auto it = core_->external_aliases.find(reinterpret_cast<uintptr_t>(page));
-        if (it == core_->external_aliases.end()) return;
+        auto it = core_->host_page_aliases.find(reinterpret_cast<uintptr_t>(page));
+        if (it == core_->host_page_aliases.end()) return;
 
         const bool arm_write_slow = it->second.exec_count != 0 && host_page_has_live_blocks(page);
         // Keep the page-table bit as the single source of truth for write-fast-path
@@ -941,24 +875,19 @@ public:
 #if FIBERCPU_BLOCK_COMPILATION
     void invalidate_code_before_permission_change(HostAddr page, Property old_perms, Property new_perms) {
         if (!page || !code_cache().page_regions || !has_property(old_perms, Property::Exec)) return;
-        constexpr auto region_permissions = Property::Exec | Property::Write | Property::External;
+        constexpr auto region_permissions = Property::Exec | Property::Write;
         if ((old_perms & region_permissions) == (new_perms & region_permissions)) return;
         const auto backing = reinterpret_cast<uintptr_t>(page);
         invalidate_code_cache_host_pages(&backing, 1);
     }
 #endif
 
-    void remap_external_alias(GuestAddr guest_page, HostAddr old_page, Property old_perms, HostAddr new_page,
-                              Property new_perms) {
-        remove_external_alias(guest_page, old_page, old_perms);
-        add_external_alias(guest_page, new_page, new_perms);
+    void update_host_page_alias(GuestAddr guest_page, HostAddr old_page, Property old_perms, HostAddr new_page,
+                                Property new_perms) {
+        remove_host_page_alias(guest_page, old_page, old_perms);
+        add_host_page_alias(guest_page, new_page, new_perms);
         refresh_smc_armed_for_host_page(old_page);
         refresh_smc_armed_for_host_page(new_page);
-    }
-
-    [[nodiscard]] bool should_trap_external_alias_write(Property perms, HostAddr page) const {
-        return should_track_external_alias(perms, page) && has_property(perms, Property::Write) &&
-               has_property(perms, Property::ForceWriteSlow);
     }
 
 private:
@@ -1020,7 +949,7 @@ private:
         return entry.block;
     }
 
-    // Slow Path: Resolve address, handle allocation/permissions/faults
+    // Slow Path: Resolve address, permissions and faults
     [[nodiscard]] MemResult<HostAddr> resolve_slow(GuestAddr addr, Property req_perm);
 
     [[nodiscard]] PageDirectory* current_page_directory() {
@@ -1037,11 +966,8 @@ private:
         return identity.fetch_add(1, std::memory_order_relaxed);
     }
 
-    static void RebuildExternalAliasesFromPageDirectory(MmuCore* core) {
-        if (!core || !core->page_directory) return;
-
-        core->external_aliases.clear();
-        auto* dir = core->page_directory.get();
+    static void IndexClonedHostPages(MmuCore& core) {
+        auto* dir = core.page_directory.get();
         for (uint32_t l1_idx = 0; l1_idx < dir->l1_directory.size(); ++l1_idx) {
             const auto& chunk = dir->l1_directory[l1_idx];
             if (!chunk) continue;
@@ -1049,32 +975,14 @@ private:
             for (uint32_t l2_idx = 0; l2_idx < chunk->permissions.size(); ++l2_idx) {
                 const auto perms = chunk->permissions[l2_idx];
                 auto* page = chunk->pages[l2_idx];
-                if (page == nullptr || !has_property(perms, Property::External)) continue;
+                if (!page) continue;
 
                 chunk->permissions[l2_idx] = perms & ~Property::ForceWriteSlow;
 
                 const uint32_t guest_page = (l1_idx << 22) | (l2_idx << 12);
-                auto& state = core->external_aliases[reinterpret_cast<uintptr_t>(page)];
+                auto& state = core.host_page_aliases[reinterpret_cast<uintptr_t>(page)];
                 state.guest_pages.push_unique(guest_page);
                 if (has_property(perms, Property::Exec)) state.exec_count++;
-                if (has_property(perms, Property::Write)) state.write_count++;
-            }
-        }
-
-        // Recompute the runtime-only SMC armed bit from the rebuilt alias graph.
-        for (const auto& [host_page_base, state] : core->external_aliases) {
-            const bool arm_write_slow =
-                state.exec_count != 0 && core->code_cache.page_to_blocks.contains(host_page_base);
-            auto* page = reinterpret_cast<HostAddr>(host_page_base);
-            for (uint32_t guest_page : state.guest_pages) {
-                const uint32_t l1_idx = guest_page >> 22;
-                const uint32_t l2_idx = (guest_page >> 12) & 0x3FF;
-                auto& chunk = dir->l1_directory[l1_idx];
-                if (!chunk || chunk->pages[l2_idx] != page) continue;
-
-                auto perms = chunk->permissions[l2_idx] & ~Property::ForceWriteSlow;
-                if (arm_write_slow && has_property(perms, Property::Write)) perms = perms | Property::ForceWriteSlow;
-                chunk->permissions[l2_idx] = perms;
             }
         }
     }
@@ -1171,11 +1079,11 @@ private:
         }
     }
 
-    void publish_runtime_tlb_flush_range_or_all(uint32_t start, uint32_t end_addr) {
+    void publish_runtime_tlb_flush_range_or_all(uint32_t start, uint64_t end_addr) {
         if (!core_ || end_addr <= start) return;
 
         constexpr size_t capacity = MmuCore::RuntimeTlbShootdownRing::kCapacity;
-        const uint64_t span_pages = (static_cast<uint64_t>(end_addr) - start) / PAGE_SIZE;
+        const uint64_t span_pages = (end_addr - start) / PAGE_SIZE;
         if (span_pages > capacity) {
             publish_runtime_tlb_flush_all();
             return;
@@ -1383,77 +1291,17 @@ public:
 
     static void ReleaseCore(MmuCore* core) { release_core(core); }
 
-    static MmuCore* CloneCoreSkipExternal(MmuCore* core) {
-        if (!core || !core->page_directory) {
-            return CreateEmptyCore();
-        }
+    static MmuCore* CloneCoreMappings(MmuCore* core) {
+        if (!core || !core->page_directory) return CreateEmptyCore();
 
         auto cloned = std::make_unique<PageDirectory>();
-        auto* source = core->page_directory.get();
-        for (size_t l1 = 0; l1 < source->l1_directory.size(); ++l1) {
-            const auto& src_chunk = source->l1_directory[l1];
-            if (!src_chunk) continue;
-
-            std::unique_ptr<PageTableChunk> dst_chunk;
-            for (size_t l2 = 0; l2 < src_chunk->permissions.size(); ++l2) {
-                const auto perms = src_chunk->permissions[l2];
-                if (perms == Property::None) continue;
-                if (has_property(perms, Property::External)) continue;
-
-                if (!dst_chunk) {
-                    dst_chunk = std::make_unique<PageTableChunk>();
-                }
-
-                dst_chunk->permissions[l2] = perms & ~Property::ForceWriteSlow;
-                if (src_chunk->pages[l2]) {
-                    dst_chunk->pages[l2] = new std::byte[PAGE_SIZE];
-                    std::memcpy(dst_chunk->pages[l2], src_chunk->pages[l2], PAGE_SIZE);
-                }
-            }
-
-            if (dst_chunk) cloned->l1_directory[l1] = std::move(dst_chunk);
-        }
-
-        return create_core(std::move(cloned), core);
-    }
-
-    static MmuCore* CloneCorePreserveExternal(MmuCore* core) {
-        if (!core || !core->page_directory) {
-            return CreateEmptyCore();
-        }
-
-        auto cloned = std::make_unique<PageDirectory>();
-        auto* source = core->page_directory.get();
-        for (size_t l1 = 0; l1 < source->l1_directory.size(); ++l1) {
-            const auto& src_chunk = source->l1_directory[l1];
-            if (!src_chunk) continue;
-
-            std::unique_ptr<PageTableChunk> dst_chunk;
-            for (size_t l2 = 0; l2 < src_chunk->permissions.size(); ++l2) {
-                const auto perms = src_chunk->permissions[l2];
-                if (perms == Property::None) continue;
-
-                if (!dst_chunk) {
-                    dst_chunk = std::make_unique<PageTableChunk>();
-                }
-
-                dst_chunk->permissions[l2] = perms & ~Property::ForceWriteSlow;
-                if (!src_chunk->pages[l2]) continue;
-
-                if (has_property(perms, Property::External)) {
-                    dst_chunk->pages[l2] = src_chunk->pages[l2];
-                    continue;
-                }
-
-                dst_chunk->pages[l2] = new std::byte[PAGE_SIZE];
-                std::memcpy(dst_chunk->pages[l2], src_chunk->pages[l2], PAGE_SIZE);
-            }
-
-            if (dst_chunk) cloned->l1_directory[l1] = std::move(dst_chunk);
+        const auto& source = core->page_directory->l1_directory;
+        for (size_t i = 0; i < source.size(); ++i) {
+            if (source[i]) cloned->l1_directory[i] = std::make_unique<PageTableChunk>(*source[i]);
         }
 
         auto* cloned_core = create_core(std::move(cloned), core);
-        RebuildExternalAliasesFromPageDirectory(cloned_core);
+        IndexClonedHostPages(*cloned_core);
         return cloned_core;
     }
 
@@ -1501,9 +1349,7 @@ public:
     [[nodiscard]] std::optional<PageRegionStamp> page_region_stamp(uint32_t eip) {
         if (!core_ || code_cache_flush_pending()) return std::nullopt;
         const auto perms = get_property(eip);
-        if (!has_property(perms, Property::Exec) || !has_property(perms, Property::External) ||
-            has_property(perms, Property::Write))
-            return std::nullopt;
+        if (!has_property(perms, Property::Exec) || has_property(perms, Property::Write)) return std::nullopt;
         const auto backing = try_get_host_page_base(eip);
         if (!backing) return std::nullopt;
         auto& cache = code_cache();
@@ -1528,7 +1374,7 @@ public:
         if (size == 0) return host_page_bases;
 
         const uint64_t start_page = static_cast<uint64_t>(addr) & ~static_cast<uint64_t>(PAGE_MASK);
-        const uint64_t last_addr = static_cast<uint64_t>(addr) + static_cast<uint64_t>(size) - 1;
+        const uint64_t last_addr = std::min(uint64_t{addr} + size, uint64_t{1} << 32) - 1;
         const uint64_t end_page = last_addr & ~static_cast<uint64_t>(PAGE_MASK);
         for (uint64_t page = start_page;; page += PAGE_SIZE) {
             if (auto host_page_base = try_get_host_page_base(static_cast<uint32_t>(page))) {
@@ -1767,194 +1613,92 @@ public:
         return chunk->permissions[l2_idx];
     }
 
-    // API: mmap
-    void mmap(GuestAddr addr, uint32_t size, uint8_t perms_raw) {
+    void protect_mapped_range(GuestAddr addr, uint32_t size, uint8_t perms_raw) {
+        if (size == 0) return;
         [[maybe_unused]] auto runtime_tlb_batch = scoped_runtime_tlb_publish_batch();
         auto* dir = current_page_directory();
-        Property perms = normalize_mapping_perms(static_cast<Property>(perms_raw));
-        uint32_t start = addr & ~PAGE_MASK;
-        uint32_t end_addr = (addr + size + PAGE_MASK) & ~PAGE_MASK;
+        const auto perms = static_cast<Property>(perms_raw) & Property::RWX;
+        const uint32_t start = addr & ~PAGE_MASK;
+        const uint64_t limit = std::min(uint64_t{addr} + size, uint64_t{1} << 32);
+        const uint64_t end = (limit + PAGE_MASK) & ~uint64_t{PAGE_MASK};
 
-        for (uint32_t curr = start; curr < end_addr; curr += PAGE_SIZE) {
-            uint32_t l1_idx = curr >> 22;
-            uint32_t l2_idx = (curr >> 12) & 0x3FF;
+        for (uint64_t curr = start; curr < end; curr += PAGE_SIZE) {
+            const auto guest_page = static_cast<GuestAddr>(curr);
+            auto& chunk = dir->l1_directory[guest_page >> 22];
+            const uint32_t slot = (guest_page >> 12) & 0x3FF;
+            if (!chunk || !chunk->pages[slot]) continue;
 
-            if (!dir->l1_directory[l1_idx]) {
-                dir->l1_directory[l1_idx] = std::make_unique<PageTableChunk>();
-            }
-
-            auto& chunk = dir->l1_directory[l1_idx];
-            auto* page = chunk->pages[l2_idx];
-            auto& entry_perms = chunk->permissions[l2_idx];
+            auto* page = chunk->pages[slot];
+            auto& entry_perms = chunk->permissions[slot];
             const auto old_perms = entry_perms;
-            // Preserve state bits across permission changes.
-            // mprotect/mmap should not clear dirty tracking, and must keep external ownership marker.
-            Property preserved = Property::None;
-            if (has_property(entry_perms, Property::External)) preserved = preserved | Property::External;
-            if (has_property(entry_perms, Property::Dirty)) preserved = preserved | Property::Dirty;
+            const auto new_perms = perms | (old_perms & Property::Dirty);
 #if FIBERCPU_BLOCK_COMPILATION
-            invalidate_code_before_permission_change(page, old_perms, perms | preserved);
+            invalidate_code_before_permission_change(page, old_perms, new_perms);
 #endif
-            entry_perms = normalize_mapping_perms(perms | preserved);
-            if (page && has_property(entry_perms, Property::External)) {
-                remap_external_alias(curr, page, old_perms, page, entry_perms);
-            }
+            entry_perms = new_perms;
+            update_host_page_alias(guest_page, page, old_perms, page, entry_perms);
         }
         tlb.flush();
-        publish_runtime_tlb_flush_range_or_all(start, end_addr);
+        publish_runtime_tlb_flush_range_or_all(start, end);
     }
 
-    void reprotect_mapped_range(GuestAddr addr, uint32_t size, uint8_t perms_raw) {
+    bool map_host_page(GuestAddr addr, HostAddr host_page, uint8_t perms_raw) {
+        if ((addr & PAGE_MASK) || !host_page) return false;
         [[maybe_unused]] auto runtime_tlb_batch = scoped_runtime_tlb_publish_batch();
         auto* dir = current_page_directory();
-        if (!dir || size == 0) return;
+        auto perms = static_cast<Property>(perms_raw) & Property::RWX;
+        auto& chunk = dir->l1_directory[addr >> 22];
+        const uint32_t slot = (addr >> 12) & 0x3FF;
+        if (!chunk) chunk = std::make_unique<PageTableChunk>();
 
-        Property perms = normalize_mapping_perms(static_cast<Property>(perms_raw));
-        uint32_t start = addr & ~PAGE_MASK;
-        uint32_t end_addr = (addr + size + PAGE_MASK) & ~PAGE_MASK;
-
-        for (uint32_t curr = start; curr < end_addr; curr += PAGE_SIZE) {
-            uint32_t l1_idx = curr >> 22;
-            uint32_t l2_idx = (curr >> 12) & 0x3FF;
-
-            auto& chunk = dir->l1_directory[l1_idx];
-            if (!chunk) continue;
-
-            auto* page = chunk->pages[l2_idx];
-            auto& entry_perms = chunk->permissions[l2_idx];
-            if (entry_perms == Property::None) continue;
-
-            const Property old_perms = entry_perms;
-
-            Property preserved = Property::None;
-            if (has_property(entry_perms, Property::External)) preserved = preserved | Property::External;
-            if (has_property(entry_perms, Property::Dirty)) preserved = preserved | Property::Dirty;
+        auto* old_page = chunk->pages[slot];
+        const auto old_perms = chunk->permissions[slot];
+        if (old_page == host_page) {
+            perms = perms | (old_perms & Property::Dirty);
 #if FIBERCPU_BLOCK_COMPILATION
-            invalidate_code_before_permission_change(page, old_perms, perms | preserved);
+            invalidate_code_before_permission_change(old_page, old_perms, perms);
 #endif
-            entry_perms = normalize_mapping_perms(perms | preserved);
-            remap_external_alias(curr, page, old_perms, page, entry_perms);
-        }
-
-        tlb.flush();
-        publish_runtime_tlb_flush_range_or_all(start, end_addr);
-    }
-
-    // API: allocate_page - Allocate a single page and return host pointer
-    // Sets permissions and allocates memory in one call
-    // Returns the host address of the allocated page, or nullptr on failure
-    [[nodiscard]] HostAddr allocate_page(GuestAddr addr, uint8_t perms_raw) {
-        [[maybe_unused]] auto runtime_tlb_batch = scoped_runtime_tlb_publish_batch();
-        auto* dir = current_page_directory();
-        Property perms = normalize_mapping_perms(static_cast<Property>(perms_raw));
-        uint32_t page_addr = addr & ~PAGE_MASK;
-        uint32_t l1_idx = page_addr >> 22;
-        uint32_t l2_idx = (page_addr >> 12) & 0x3FF;
-
-        if (!dir->l1_directory[l1_idx]) {
-            dir->l1_directory[l1_idx] = std::make_unique<PageTableChunk>();
-        }
-
-        auto& chunk = dir->l1_directory[l1_idx];
-
-        // Allocate page if not already allocated
-        if (!chunk->pages[l2_idx]) {
-            chunk->pages[l2_idx] = new std::byte[PAGE_SIZE];
-            std::memset(chunk->pages[l2_idx], 0, PAGE_SIZE);
-        }
-
-#if FIBERCPU_BLOCK_COMPILATION
-        invalidate_code_before_permission_change(chunk->pages[l2_idx], chunk->permissions[l2_idx], perms);
-#endif
-        chunk->permissions[l2_idx] = normalize_mapping_perms(perms);
-        tlb.flush_page(page_addr);
-        publish_runtime_tlb_flush_deduped(page_addr);
-
-        return chunk->pages[l2_idx];
-    }
-
-    // API: map_external_page - Map an external memory page to guest address
-    // The external memory is NOT owned by the MMU (will not be freed on munmap)
-    // The backing allocation is caller-owned and separate from any engine's EmuState.
-    // For mmap passthrough, shared memory, etc.
-    // Returns true on success
-    bool map_external_page(GuestAddr addr, HostAddr external_page, uint8_t perms_raw) {
-        [[maybe_unused]] auto runtime_tlb_batch = scoped_runtime_tlb_publish_batch();
-        auto* dir = current_page_directory();
-        Property perms = normalize_mapping_perms(static_cast<Property>(perms_raw));
-        uint32_t page_addr = addr & ~PAGE_MASK;
-        uint32_t l1_idx = page_addr >> 22;
-        uint32_t l2_idx = (page_addr >> 12) & 0x3FF;
-
-        if (!dir->l1_directory[l1_idx]) {
-            dir->l1_directory[l1_idx] = std::make_unique<PageTableChunk>();
-        }
-
-        auto& chunk = dir->l1_directory[l1_idx];
-
-        auto* old_page = chunk->pages[l2_idx];
-        const Property old_perms = chunk->permissions[l2_idx];
-
-        // Free existing page if owned
-        if (chunk->pages[l2_idx] && !has_property(chunk->permissions[l2_idx], Property::External)) {
-            delete[] chunk->pages[l2_idx];
-        }
-
-        // A translated block that was decoded from the old backing keeps
-        // executing the old instructions even though the guest now sees new
-        // contents. Invalidate those blocks before publishing the new backing.
-        if (old_page != nullptr && old_page != external_page && has_property(old_perms, Property::Exec)) {
+        } else if (old_page && has_property(old_perms, Property::Exec)) {
             HostPageSet affected_host_pages;
             code_cache().InvalidateHostPage(reinterpret_cast<uintptr_t>(old_page), &affected_host_pages);
             refresh_smc_armed_for_host_pages(affected_host_pages);
         }
-#if FIBERCPU_BLOCK_COMPILATION
-        if (old_page == external_page)
-            invalidate_code_before_permission_change(old_page, old_perms, perms | Property::External);
-#endif
 
-        // Set external page (caller owns this memory)
-        chunk->pages[l2_idx] = external_page;
-        chunk->permissions[l2_idx] = normalize_mapping_perms(perms | Property::External);  // Mark as external
-        remap_external_alias(page_addr, old_page, old_perms, external_page, chunk->permissions[l2_idx]);
-        tlb.flush_page(page_addr);
-        publish_runtime_tlb_flush_deduped(page_addr);
-
+        chunk->pages[slot] = host_page;
+        chunk->permissions[slot] = perms;
+        update_host_page_alias(addr, old_page, old_perms, host_page, perms);
+        tlb.flush_page(addr);
+        publish_runtime_tlb_flush_deduped(addr);
         return true;
     }
 
-    // API: munmap - Clear pages and permissions
     void munmap(GuestAddr addr, uint32_t size) {
+        if (size == 0) return;
         [[maybe_unused]] auto runtime_tlb_batch = scoped_runtime_tlb_publish_batch();
         auto* dir = current_page_directory();
-        uint32_t start = addr & ~PAGE_MASK;
-        uint32_t end_addr = (addr + size + PAGE_MASK) & ~PAGE_MASK;
+        const uint32_t start = addr & ~PAGE_MASK;
+        const uint64_t limit = std::min(uint64_t{addr} + size, uint64_t{1} << 32);
+        const uint64_t end = (limit + PAGE_MASK) & ~uint64_t{PAGE_MASK};
 
-        for (uint32_t curr = start; curr < end_addr; curr += PAGE_SIZE) {
-            uint32_t l1_idx = curr >> 22;
-            uint32_t l2_idx = (curr >> 12) & 0x3FF;
+        for (uint64_t curr = start; curr < end; curr += PAGE_SIZE) {
+            const auto guest_page = static_cast<GuestAddr>(curr);
+            auto& chunk = dir->l1_directory[guest_page >> 22];
+            const uint32_t slot = (guest_page >> 12) & 0x3FF;
+            if (!chunk || !chunk->pages[slot]) continue;
 
-            auto& chunk = dir->l1_directory[l1_idx];
-            if (chunk) {
-                auto* old_page = chunk->pages[l2_idx];
-                const Property old_perms = chunk->permissions[l2_idx];
-                // Delete the page data only if not external
-                if (chunk->pages[l2_idx] && !has_property(chunk->permissions[l2_idx], Property::External)) {
-                    delete[] chunk->pages[l2_idx];
-                }
-                chunk->pages[l2_idx] = nullptr;
-                // Clear permissions
-                chunk->permissions[l2_idx] = Property::None;
-                remove_external_alias(curr, old_page, old_perms);
-                refresh_smc_armed_for_host_page(old_page);
-            }
+            auto* old_page = chunk->pages[slot];
+            const auto old_perms = chunk->permissions[slot];
+            chunk->pages[slot] = nullptr;
+            chunk->permissions[slot] = Property::None;
+            remove_host_page_alias(guest_page, old_page, old_perms);
+            refresh_smc_armed_for_host_page(old_page);
         }
         tlb.flush();
-        publish_runtime_tlb_flush_range_or_all(start, end_addr);
+        publish_runtime_tlb_flush_range_or_all(start, end);
     }
 
     // API: reset_memory - Replace page directory contents with a fresh empty one.
-    // Used during execve to clear all native pages before loading the new binary.
+    // Discards the guest mappings while callers retain their backing pages.
     // Keep core identity stable so C# MMU handles remain valid.
     [[nodiscard]] bool reset_memory() {
         if (core_ && core_->execution_active) return false;
@@ -1967,7 +1711,7 @@ public:
         page_dir = core_->page_directory.get();
         core_->code_cache.HardResetReleaseAll(1, 0);
         on_code_cache_hard_reset();
-        core_->external_aliases.clear();
+        core_->host_page_aliases.clear();
         tlb.flush();
         publish_runtime_tlb_flush_all();
         return true;

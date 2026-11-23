@@ -61,7 +61,7 @@ public sealed class CowProtectionAuditTests
 
         var childMm = parentMm.Clone();
         using var child = parent.Clone(false);
-        childMm.RebuildExternalMappingsFromNative(child, childMm.VMAs);
+        childMm.RebuildPageBindingsFromNative(child, childMm.VMAs);
         child.PageFaultResolver = (addr, write) => childMm.HandleFault(addr, write, child);
         try
         {

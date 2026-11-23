@@ -1,5 +1,5 @@
-#include "bindings.h"
 #include "decoder.h"
+#include "test_page_backing.h"
 #if FIBERCPU_LLVM_JIT
 #include "jit/executable_arena.h"
 #include "jit/llvm_block_jit.h"
@@ -23,20 +23,43 @@
 
 #include <unistd.h>
 
-#if FIBERCPU_LLVM_JIT
-extern "C" int X86_InternalMapManagedPage(EmuState*, uint32_t, void*, uint8_t);
-#endif
-
 namespace {
 
 constexpr uint32_t code_address = 0x10000;
 constexpr uint32_t data_address = 0x20000;
 constexpr int ss_segment = 2;
-using State = std::unique_ptr<EmuState, decltype(&X86_Destroy)>;
+class State {
+public:
+    explicit State(EmuState* cpu)
+        : State(cpu, std::make_shared<TestPageBacking>()) {}
+
+    EmuState* get() const {
+        return cpu_.get();
+    }
+    void reset() {
+        cpu_.reset();
+    }
+
+    State Clone(bool share_mmu) const {
+        return State(X86_Clone(get(), share_mmu), pages_);
+    }
+
+    std::byte* MapPage(uint32_t address, uint8_t permissions) {
+        return pages_->MapPage(get(), address, permissions);
+    }
+
+private:
+    State(EmuState* cpu, std::shared_ptr<TestPageBacking> pages)
+        : pages_(std::move(pages))
+        , cpu_(cpu, X86_Destroy) {}
+
+    std::shared_ptr<TestPageBacking> pages_;
+    std::unique_ptr<EmuState, decltype(&X86_Destroy)> cpu_;
+};
 
 State LoadCode(const uint8_t* code, unsigned size, const X86_RunContext* run = nullptr) {
-    State state{run ? X86_CreateForRun(run) : X86_CreateWithOptions(X86_CREATE_NO_FATAL_SIGNAL_HANDLERS), X86_Destroy};
-    X86_MemMap(state.get(), code_address, 4096, 7);
+    State state{run ? X86_CreateForRun(run) : X86_CreateWithOptions(X86_CREATE_NO_FATAL_SIGNAL_HANDLERS)};
+    state.MapPage(code_address, 7);
     X86_MemWrite(state.get(), code_address, code, size);
     X86_SetEIP(state.get(), code_address);
     return state;
@@ -84,7 +107,7 @@ bool VerifyLongBlock(bool enabled, bool linked) {
     }
 
     // A different state can still chain into the shared MMU's code cache.
-    State peer{X86_Clone(state.get(), 1), X86_Destroy};
+    auto peer = state.Clone(true);
     state.reset();
     if (X86_GetLLVMJitLiveBlockCount() != unsigned(enabled && !linked))
         return false;
@@ -102,13 +125,15 @@ bool VerifyLongBlock(bool enabled, bool linked) {
 struct FaultData {
     bool write;
     unsigned count = 0;
+    std::array<std::byte, 4096> page{};
 };
 
 int MapOnFault(EmuState* state, uint32_t address, int is_write, void* userdata) {
     auto& fault = *static_cast<FaultData*>(userdata);
     if (address != data_address || bool(is_write) != fault.write || fault.count++ != 0)
         return 0;
-    X86_MemMap(state, address, 4096, 3);
+    if (!X86_MemMapHostPage(state, address, fault.page.data(), 3))
+        return 0;
     if (!is_write) {
         constexpr uint8_t value[] = {7, 0, 0, 0};
         X86_MemWrite(state, address, value, sizeof(value));
@@ -144,8 +169,8 @@ bool VerifyMovAddressOperands(bool enabled) {
     constexpr uint32_t ss_base = data_address + 4096;
     constexpr int fs_segment = 4;
     auto state = LoadCode(code, sizeof(code));
-    X86_MemMap(state.get(), data_address, 4096, 3);
-    X86_MemMap(state.get(), ss_base, 4096, 3);
+    state.MapPage(data_address, 3);
+    state.MapPage(ss_base, 3);
     X86_SegBaseWrite(state.get(), fs_segment, data_address);
     X86_SegBaseWrite(state.get(), ss_segment, ss_base);
     X86_RegWrite(state.get(), 1, 3);
@@ -183,7 +208,7 @@ bool VerifyStringAndLoopPrefixes(bool enabled) {
         0x0f, 0x0b,
     };
     auto state = LoadCode(code, sizeof(code));
-    X86_MemMap(state.get(), data_address, 4096, 3);
+    state.MapPage(data_address, 3);
     X86_SegBaseWrite(state.get(), 0, data_address);
     X86_RegWrite(state.get(), 0, 0xabcd1234);
     X86_RegWrite(state.get(), 1, 0xcafe0003);
@@ -216,7 +241,7 @@ bool VerifyRelocatedWordBranch(bool enabled) {
     constexpr uint8_t code[] = {0x66, 0xe9, 0xfb, 0xff};
     auto state = LoadCode(code, sizeof(code));
     constexpr uint32_t relocated = 0x13200;
-    X86_MemMap(state.get(), relocated & ~0xfffu, 4096, 7);
+    state.MapPage(relocated & ~0xfffu, 7);
     X86_MemWrite(state.get(), relocated, code, sizeof(code));
     fiberish::HandlerFunc entry = nullptr;
     for (auto start : {code_address, relocated}) {
@@ -304,7 +329,7 @@ bool VerifyGenericConcat(bool enabled) {
     constexpr uint8_t code[] = {0x0f, 0xbf, 0xd1, 0x90, 0xeb, 2,    0x0f, 0x0b, 0x83,
                                 0xc2, 0xff, 0x8d, 0x42, 8,    0x0f, 0xb6, 0xf0};
     auto state = LoadCode(code, sizeof(code));
-    X86_ReprotectMappedRange(state.get(), code_address, 4096, 4);
+    X86_MemProtect(state.get(), code_address, 4096, 4);
     X86_RegWrite(state.get(), 1, 0x80ff);
     const auto end = code_address + sizeof(code);
     if (!X86_Run(state.get(), end, 16) || X86_GetEIP(state.get()) != end ||
@@ -385,8 +410,8 @@ bool VerifyGroup5ArithmeticAndPush(bool enabled) {
     constexpr uint32_t input[] = {0x7fffffff, 0x12340000};
     constexpr uint32_t stack_operand = 0x1234cdef;
     auto state = LoadCode(code, sizeof(code));
-    X86_MemMap(state.get(), data_address, 4096, 3);
-    X86_MemMap(state.get(), ss_base, 4096, 3);
+    state.MapPage(data_address, 3);
+    state.MapPage(ss_base, 3);
     X86_SegBaseWrite(state.get(), ss_segment, ss_base);
     X86_MemWrite(state.get(), data_address, reinterpret_cast<const uint8_t*>(input), sizeof(input));
     X86_MemWrite(state.get(), stack_top, reinterpret_cast<const uint8_t*>(&stack_operand), sizeof(stack_operand));
@@ -431,8 +456,8 @@ bool VerifyGroup5IndirectBranches(bool enabled) {
                 constexpr uint32_t ss_base = data_address + 4096;
                 constexpr uint32_t initial_esp = 32;
                 constexpr uint32_t stack_top = ss_base + initial_esp;
-                X86_MemMap(state.get(), data_address, 4096, 3);
-                X86_MemMap(state.get(), ss_base, 4096, 3);
+                state.MapPage(data_address, 3);
+                state.MapPage(ss_base, 3);
                 X86_SegBaseWrite(state.get(), ss_segment, ss_base);
                 constexpr uint32_t untouched = 0x89abcdef;
                 const unsigned stack_size = word ? 2 : 4;
@@ -494,10 +519,10 @@ bool VerifyGroup5Faults(bool enabled) {
         const uint32_t stack_page = data_address + (source_unmapped ? 4096 : 0);
         const uint32_t untouched = source_unmapped ? stack_page + 12 : data_address;
         auto state = LoadCode(code[i], size);
-        X86_MemMap(state.get(), stack_page, 4096, 3);
+        state.MapPage(stack_page, 3);
         X86_MemWrite(state.get(), untouched, reinterpret_cast<const uint8_t*>(&input), sizeof(input));
         if (!source_unmapped)
-            X86_ReprotectMappedRange(state.get(), stack_page, 4096, 1);
+            X86_MemProtect(state.get(), stack_page, 4096, 1);
         X86_RegWrite(state.get(), 0, 0xffffffff);
         X86_RegWrite(state.get(), 1, data_address);
         X86_RegWrite(state.get(), 4, stack_page + 16);
@@ -570,7 +595,7 @@ bool VerifyShiftBitMemory(bool enabled) {
     };
     FaultData fault{false};
     auto state = LoadCode(code, sizeof(code));
-    X86_MemMap(state.get(), data_address - 4096, 4096, 3);
+    state.MapPage(data_address - 4096, 3);
     X86_RegWrite(state.get(), 1, data_address);
     X86_RegWrite(state.get(), 2, 0xffffffff);
     X86_SetFaultCallback(state.get(), MapOnFault, &fault);
@@ -645,8 +670,8 @@ bool VerifyX87Helpers(bool enabled) {
         0xde, 0xc1, // FADDP ST(1), ST(0)
         0xd9, 0x19, // FSTP dword [ECX]
     };
-    auto state = LoadCode(code, sizeof(code));
     FaultData fault{true};
+    auto state = LoadCode(code, sizeof(code));
     X86_SetFaultCallback(state.get(), MapOnFault, &fault);
     X86_RegWrite(state.get(), 1, data_address);
     const auto end = code_address + sizeof(code);
@@ -663,7 +688,7 @@ bool VerifyTwoSlotX87Prefixes(bool enabled) {
         0x66, 0xd9, 0x72, 0x50,                   // FNSTENV m14byte [EDX+0x50]
     };
     auto state = LoadCode(code, sizeof(code));
-    X86_MemMap(state.get(), data_address, 4096, 3);
+    state.MapPage(data_address, 3);
     X86_RegWrite(state.get(), 2, data_address);
     std::array<uint8_t, 28> environment;
     environment.fill(0xa5);
@@ -682,7 +707,7 @@ bool VerifyTwoSlotX87Prefixes(bool enabled) {
 bool VerifyStackWidths(bool enabled) {
     constexpr uint8_t code[] = {0x66, 0x50, 0x66, 0x5a}; // PUSH AX; POP DX
     auto state = LoadCode(code, sizeof(code));
-    X86_MemMap(state.get(), data_address, 4096, 3);
+    state.MapPage(data_address, 3);
     X86_RegWrite(state.get(), 0, 0x89abcdef);
     X86_RegWrite(state.get(), 2, 0x12340000);
     X86_RegWrite(state.get(), 4, data_address + 32);
@@ -694,11 +719,11 @@ bool VerifyStackWidths(bool enabled) {
 
 bool VerifyStackReplay(bool enabled) {
     constexpr uint8_t code[] = {0x66, 0x9c, 0x66, 0x58}; // PUSHF word; POP AX
+    FaultData fault{true};
     auto state = LoadCode(code, sizeof(code));
     X86_RegWrite(state.get(), 0, 0x12340000);
     X86_RegWrite(state.get(), 4, data_address + 2);
     X86_SetEFLAGS(state.get(), 0x203);
-    FaultData fault{true};
     X86_SetFaultCallback(state.get(), MapOnFault, &fault);
     const auto end = code_address + sizeof(code);
     return X86_Run(state.get(), end, 16) && X86_GetEIP(state.get()) == end && fault.count == 1 &&
@@ -714,7 +739,7 @@ bool VerifyCallReturn(bool enabled) {
         0xc3,              // RET
     };
     auto state = LoadCode(code, sizeof(code));
-    X86_MemMap(state.get(), data_address, 4096, 3);
+    state.MapPage(data_address, 3);
     X86_RegWrite(state.get(), 4, data_address + 32);
     const auto end = code_address + sizeof(code);
     return X86_Run(state.get(), end, 16) && X86_GetEIP(state.get()) == end && X86_RegRead(state.get(), 0) == 42 &&
@@ -759,7 +784,7 @@ bool VerifyUncompiledSuffix() {
     const auto end = code_address + sizeof(code);
     constexpr uint32_t destination = data_address + 0x100;
     const uint32_t stack[] = {1, 2, 3, 4, end, destination};
-    X86_MemMap(state.get(), data_address, 4096, 3);
+    state.MapPage(data_address, 3);
     X86_MemWrite(state.get(), data_address, reinterpret_cast<const uint8_t*>(stack), sizeof(stack));
     const auto run = [&] {
         X86_SetEIP(state.get(), code_address);
@@ -884,7 +909,7 @@ bool VerifyPackedArena() {
 
     // Installing the same entry at another guest address adds no JIT allocation.
     constexpr uint32_t alias = code_address + 4096;
-    X86_MemMap(a.get(), alias, 4096, 7);
+    a.MapPage(alias, 7);
     X86_MemWrite(a.get(), alias, add, sizeof(add));
     X86_SetEIP(a.get(), alias);
     if (!X86_Run(a.get(), alias + sizeof(add), 16) || X86_RegRead(a.get(), 0) != 3)
@@ -972,9 +997,9 @@ bool VerifyPackedBudget() {
     data_slot.reset();
     if (!HasPageProtection(constant_page, VM_PROT_NONE))
         return false;
-    X86_MemMap(state.get(), data_address, 4096, 3);
+    state.MapPage(data_address, 3);
     X86_RegWrite(state.get(), 1, data_address);
-    State forked(X86_Clone(state.get(), 0), X86_Destroy);
+    auto forked = state.Clone(false);
     char stats[512];
     X86_DumpStats(forked.get(), stats, sizeof(stats));
     if (!std::strstr(stats, "\"code_cache_limit_bytes\":1048576") || !std::strstr(stats, arena_field.c_str()))
@@ -1000,6 +1025,10 @@ bool VerifyPackedBudget() {
         return false;
     uint8_t immediate = 2;
     const auto trigger_flush = [&] {
+        // The caller replaces the parent's backing before writing, as COW
+        // would. The forked MMU keeps its original code page.
+        if (!state.MapPage(code_address, 7))
+            return false;
         for (; immediate <= 64; ++immediate) {
             code[1] = immediate;
             X86_MemWrite(state.get(), code_address, code, sizeof(code));
@@ -1083,7 +1112,7 @@ bool VerifyCpuRunOptions(const char* path) {
 
     // A fork inherits the collector and admission threshold, while a separate
     // CPU run can record the same recipe without adding to this run's weight.
-    State forked{X86_Clone(first.get(), 0), X86_Destroy};
+    auto forked = first.Clone(false);
     if (!run(forked.get(), 2, 2))
         return false;
     forked.reset();
@@ -1128,7 +1157,7 @@ bool VerifyCpuRunOptions(const char* path) {
     constexpr uint32_t neighbor = code_address + 32;
     constexpr uint32_t late_neighbor = code_address + 64;
     constexpr uint32_t other_page = code_address + 4096;
-    X86_MemMap(page_state.get(), other_page, 4096, 7);
+    page_state.MapPage(other_page, 7);
     const auto visit = [&](uint32_t address, uint8_t value) {
         code[1] = value;
         X86_MemWrite(page_state.get(), address, code, sizeof(code));
@@ -1172,15 +1201,15 @@ bool VerifyPageRegion(bool cross_page = false) {
     alignas(4096) std::array<uint8_t, 4096> bytes{};
     std::copy(std::begin(a_code), std::end(a_code), bytes.begin());
     std::copy(std::begin(b_code), std::end(b_code), bytes.begin() + (second - first));
-    State state{X86_CreateWithOptions(X86_CREATE_NO_FATAL_SIGNAL_HANDLERS), X86_Destroy};
-    if (!X86_InternalMapManagedPage(state.get(), first, bytes.data(), 5) ||
-        !X86_InternalMapManagedPage(state.get(), relocated, bytes.data(), 5))
+    State state{X86_CreateWithOptions(X86_CREATE_NO_FATAL_SIGNAL_HANDLERS)};
+    if (!X86_MemMapHostPage(state.get(), first, bytes.data(), 5) ||
+        !X86_MemMapHostPage(state.get(), relocated, bytes.data(), 5))
         return false;
     if (cross_page) {
-        X86_MemMap(state.get(), external, 4096, 7);
+        state.MapPage(external, 7);
         X86_MemWrite(state.get(), external, external_code, sizeof(external_code));
     }
-    X86_MemMap(state.get(), data_address, 4096, 3);
+    auto* data_page = state.MapPage(data_address, 3);
     X86_RegWrite(state.get(), 2, data_address);
     X86_RegWrite(state.get(), 7, 11);
 
@@ -1235,9 +1264,10 @@ bool VerifyPageRegion(bool cross_page = false) {
     X86_MemUnmap(state.get(), data_address, 4096);
     struct Observer {
         uint8_t* bytes;
+        std::byte* data_page;
         bool called = false;
         uint32_t flags = 0;
-    } observer{bytes.data()};
+    } observer{bytes.data(), data_page};
     X86_SetFaultCallback(
         state.get(),
         +[](EmuState* s, uint32_t address, int write, void* userdata) -> int {
@@ -1248,8 +1278,7 @@ bool VerifyPageRegion(bool cross_page = false) {
             observer.flags = X86_GetEFLAGS(s);
             observer.bytes[(local_second - first) + 5] = 9;
             X86_ResetCodeCacheByRange(s, first, 4096);
-            X86_MemMap(s, data_address, 4096, 3);
-            return 1;
+            return X86_MemMapHostPage(s, data_address, observer.data_page, 3);
         },
         &observer);
     return run(first, 8, 10, first, 11, cmp_flags) && observer.called &&

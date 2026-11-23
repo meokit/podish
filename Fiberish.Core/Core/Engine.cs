@@ -302,8 +302,7 @@ public class Engine : IDisposable
 
     /// <summary>
     ///     Clone engine execution state.
-    ///     If <paramref name="shareMem" /> is false, MMU cloning copies owned pages and preserves External mappings.
-    ///     External pages are never converted into owned pages.
+    ///     A separate MMU copies the mappings and shares the backing pages.
     /// </summary>
     public Engine Clone(bool shareMem, EngineCloneMemoryMode memoryMode = EngineCloneMemoryMode.InlineClone)
     {
@@ -429,28 +428,15 @@ public class Engine : IDisposable
         return DetachOwnedMmuHandle();
     }
 
-    public void MemMap(uint addr, uint size, byte perms)
-    {
-        X86Native.MemMap(State, addr, size, perms);
-    }
-
     public void MemUnmap(uint addr, uint size)
     {
         X86Native.MemUnmap(State, addr, size);
     }
 
-    /// <summary>
-    ///     Allocate a single page with given permissions and return host pointer.
-    ///     Unlike MemMap, this also allocates the actual page memory.
-    /// </summary>
-    public unsafe IntPtr AllocatePage(uint addr, byte perms)
+    /// <summary>Map caller-owned backing. Keep it alive for the lifetime of all mappings and clones.</summary>
+    public unsafe bool MemMapHostPage(uint addr, IntPtr hostPage, byte perms)
     {
-        return (IntPtr)X86Native.AllocatePage(State, addr, perms);
-    }
-
-    internal unsafe bool MapManagedPage(uint addr, IntPtr hostPage, byte perms)
-    {
-        return X86Native.MapManagedPage(State, addr, (void*)hostPage, perms) != 0;
+        return X86Native.MemMapHostPage(State, addr, (void*)hostPage, perms) != 0;
     }
 
     public unsafe IntPtr GetPhysicalAddressSafe(uint vaddr, bool isWrite)
@@ -842,10 +828,10 @@ public class Engine : IDisposable
         }
     }
 
-    public void ReprotectMappedRange(uint addr, uint size, byte perms)
+    public void MemProtect(uint addr, uint size, byte perms)
     {
         AssertNotDisposed();
-        X86Native.ReprotectMappedRange(State, addr, size, perms);
+        X86Native.MemProtect(State, addr, size, perms);
     }
 
     public void ResetAllCodeCache()

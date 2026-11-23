@@ -45,10 +45,10 @@ public sealed class CarryRmwSmcTests
         string kind, int width, string form, int count, bool carry, string location)
     {
         using var cpu = new CpuSandbox(mapDefaults: false);
-        cpu.MapExternalMemory(CpuSandbox.CodeAddress, 7);
-        cpu.MapExternalMemory(CpuSandbox.DataAddress, 3);
-        if (location == "cross-code") cpu.MapExternalMemory(CpuSandbox.CodeAddress + CpuSandbox.PageSize, 7);
-        if (location == "alias") cpu.MapExternalAlias(AliasAddress, CpuSandbox.CodeAddress);
+        cpu.MapMemory(CpuSandbox.CodeAddress, CpuSandbox.PageSize, 7);
+        cpu.MapMemory(CpuSandbox.DataAddress, CpuSandbox.PageSize, 3);
+        if (location == "cross-code") cpu.MapMemory(CpuSandbox.CodeAddress + CpuSandbox.PageSize, CpuSandbox.PageSize, 7);
+        if (location == "alias") cpu.MapAlias(AliasAddress, CpuSandbox.CodeAddress);
         uint target = location switch
         {
             "data" => CpuSandbox.DataAddress + 0x100,
@@ -144,7 +144,7 @@ public sealed class CarryRmwSmcTests
     public void SignExtendedImmediate_SmcRerunUsesOriginalCarry(string kind, int width)
     {
         using var cpu = new CpuSandbox(mapDefaults: false);
-        cpu.MapExternalMemory(CpuSandbox.CodeAddress, 7);
+        cpu.MapMemory(CpuSandbox.CodeAddress, CpuSandbox.PageSize, 7);
         uint target = CpuSandbox.CodeAddress + 0x100;
         uint oldValue = kind == "adc" ? 0u : Mask(width);
         uint inputFlags = InitialFlags | (kind == "adc" ? 1u : 0u);
@@ -168,7 +168,7 @@ public sealed class CarryRmwSmcTests
     public void DeadOutputFlags_StillUsesInputCarryForSmcStore(string kind)
     {
         using var cpu = new CpuSandbox(mapDefaults: false);
-        cpu.MapExternalMemory(CpuSandbox.CodeAddress, 7);
+        cpu.MapMemory(CpuSandbox.CodeAddress, CpuSandbox.PageSize, 7);
         uint target = CpuSandbox.CodeAddress + 0x100;
         uint oldValue = kind == "adc" ? 0u : 2u;
         WriteValue(cpu, target, oldValue, 32);

@@ -32,7 +32,7 @@ public sealed class ReadVRetryMappingTests
         {
             Marshal.Copy(new byte[4096], 0, oldPage, 4096);
             Marshal.Copy(new byte[4096], 0, newPage, 4096);
-            Assert.True(engine.MapManagedPage(address, oldPage, 3));
+            Assert.True(engine.MemMapHostPage(address, oldPage, 3));
             var inode = new RetryInode { SuperBlock = syscalls.MemfdSuperBlock };
             var dentry = new Dentry(FsName.FromString("retry"), inode, null, inode.SuperBlock);
             var file = new LinuxFile(dentry, FileFlags.O_RDONLY, syscalls.AnonMount);
@@ -42,9 +42,9 @@ public sealed class ReadVRetryMappingTests
                     new ArraySegment<Iovec>([new Iovec { BaseAddr = address, Len = 1 }]), 0, 0);
                 Assert.False(read.IsCompleted);
                 Assert.Equal(1, inode.ReadAttempts);
-                if (change == "remap") Assert.True(engine.MapManagedPage(address, newPage, 3));
+                if (change == "remap") Assert.True(engine.MemMapHostPage(address, newPage, 3));
                 else if (change == "unmap") engine.MemUnmap(address, 4096);
-                else engine.ReprotectMappedRange(address, 4096, 1);
+                else engine.MemProtect(address, 4096, 1);
                 inode.Ready.SetResult(AwaitResult.Completed);
 
                 Assert.Equal(change == "remap" ? 1 : -(int)Errno.EFAULT, await read);

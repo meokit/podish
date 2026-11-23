@@ -33,15 +33,6 @@ public sealed class MmuHandle : SafeHandleZeroOrMinusOneIsInvalid
         return new MmuHandle(handle);
     }
 
-    public MmuHandle CloneSkipExternal()
-    {
-        ThrowIfInvalid();
-        var cloned = X86Native.MmuCloneSkipExternal(handle);
-        if (cloned == IntPtr.Zero)
-            throw new InvalidOperationException("Failed to clone MMU handle.");
-        return new MmuHandle(cloned);
-    }
-
     public MmuHandle AddRefHandle()
     {
         ThrowIfInvalid();

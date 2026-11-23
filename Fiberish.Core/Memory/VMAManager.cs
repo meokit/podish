@@ -298,7 +298,7 @@ public class VMAManager
 
         var sequence = BumpCodeCacheSequence();
         RecordCodeCacheResetRange(sequence, vma.Start, vma.Length);
-        TearDownNativeMappings(engine, vma.Start, vma.Length, false, true, true, preserveOwnerBinding: true);
+        TearDownNativeMappings(engine, vma.Start, vma.Length, false, true, preserveOwnerBinding: true);
         engine.AddressSpaceCodeCacheSequenceSeen = sequence;
         return true;
     }
@@ -787,14 +787,14 @@ public class VMAManager
     }
 
     [Conditional("DEBUG")]
-    private void AssertExternalPagesReleasedForRange(uint addr, uint len, string source)
+    private void AssertPageBindingsReleasedForRange(uint addr, uint len, string source)
     {
         if (len == 0) return;
         var (start, endExclusive) = ComputePageAlignedRange(addr, len);
         for (var page = start; page < endExclusive; page += LinuxConstants.PageSize)
             if (PageMapping.TryGet((uint)page, out var ptr))
                 throw new InvalidOperationException(
-                    $"{source}: stale external page mapping remains at 0x{page:x8}, ptr=0x{ptr.ToInt64():x}");
+                    $"{source}: stale page binding remains at 0x{page:x8}, ptr=0x{ptr.ToInt64():x}");
     }
 
     private static void MergeRangesInPlace(List<NativeRange> ranges)
@@ -873,7 +873,7 @@ public class VMAManager
             return;
 
         BindOrAssertAddressSpaceHandle(engine);
-        TearDownNativeMappings(engine, range.Start, range.Length, false, true, true, preserveOwnerBinding: true);
+        TearDownNativeMappings(engine, range.Start, range.Length, false, true, preserveOwnerBinding: true);
     }
 
     internal void ApplyPendingMetadataOnlyNativeRemaps(Engine engine, bool invalidateCodeRanges)
@@ -889,18 +889,15 @@ public class VMAManager
                 range.Length,
                 false,
                 invalidateCodeRanges,
-                true,
                 preserveOwnerBinding: true);
 
         _pendingMetadataOnlyNativeRemaps.Clear();
     }
 
     public void TearDownNativeMappings(Engine engine, uint addr, uint len, bool captureDirtySharedPages,
-        bool invalidateCodeRange, bool releaseExternalPages, bool preserveOwnerBinding = false)
+        bool invalidateCodeRange, bool preserveOwnerBinding = false)
     {
         if (len == 0) return;
-        DebugAssert(releaseExternalPages,
-            $"TearDownNativeMappings must release external pages whenever MemUnmap is performed. addr=0x{addr:x8} len={len}");
         if (captureDirtySharedPages)
         {
             var end = ComputeRangeEnd(addr, len);
@@ -911,7 +908,7 @@ public class VMAManager
             engine.ResetCodeCacheByRange(addr, len);
         engine.MemUnmap(addr, len);
         PageMapping.ReleaseRange(addr, len, preserveOwnerBinding);
-        AssertExternalPagesReleasedForRange(addr, len, "TearDownNativeMappings");
+        AssertPageBindingsReleasedForRange(addr, len, "TearDownNativeMappings");
     }
 
     public void ReprotectNativeMappings(Engine engine, uint addr, uint len, Protection perms,
@@ -921,7 +918,7 @@ public class VMAManager
 
         if ((perms & Protection.Write) == 0)
         {
-            engine.ReprotectMappedRange(addr, len, (byte)perms);
+            engine.MemProtect(addr, len, (byte)perms);
         }
         else
         {
@@ -936,7 +933,7 @@ public class VMAManager
                 var pagePerms = perms;
                 if (IsCowSharedBackingPage(page))
                     pagePerms &= ~Protection.Write;
-                engine.ReprotectMappedRange(page, pageSize, (byte)pagePerms);
+                engine.MemProtect(page, pageSize, (byte)pagePerms);
             }
         }
 
@@ -962,7 +959,7 @@ public class VMAManager
         return privatePage == null || privatePage.Value.HostPage.OwnerResidentCount > 1;
     }
 
-    public void RebuildExternalMappingsFromNative(Engine engine, IEnumerable<VmArea> vmas)
+    public void RebuildPageBindingsFromNative(Engine engine, IEnumerable<VmArea> vmas)
     {
         const int MaxPagesPerChunk = 256;
         var buffer = new X86Native.PageMapping[MaxPagesPerChunk];
@@ -978,7 +975,6 @@ public class VMAManager
                 for (var i = 0; i < count; i++)
                 {
                     var mapping = buffer[i];
-                    if ((mapping.Flags & X86Native.PageMappingFlags.External) == 0) continue;
                     var pageIndex = GetVmaPageIndex(vma, mapping.GuestPage);
                     var binding = CreateResolvedPageBinding(vma, pageIndex, mapping.HostPage);
                     PageMapping.AddBinding(mapping.GuestPage, binding, out _);
@@ -1138,14 +1134,13 @@ public class VMAManager
                     range.Start,
                     range.Length,
                     false,
-                    true,
                     true);
             }
 
             primary.AddressSpaceCodeCacheSequenceSeen = sequence;
 
             foreach (var range in ranges)
-                AssertExternalPagesReleasedForRange(range.Start, range.Length, "OnFileTruncate");
+                AssertPageBindingsReleasedForRange(range.Start, range.Length, "OnFileTruncate");
         }
 
         foreach (var privateObject in metadata.PrivateObjects)
@@ -1237,7 +1232,7 @@ public class VMAManager
             {
                 var primary = GetPrimarySharedMmuEngine(engines, nameof(SuspendHostMappedFileViewsForResize))!;
                 foreach (var range in invalidateRanges)
-                    TearDownNativeMappings(primary, range.Start, range.Length, false, true, true);
+                    TearDownNativeMappings(primary, range.Start, range.Length, false, true);
                 primary.AddressSpaceCodeCacheSequenceSeen = sequence;
             }
         }
@@ -1364,7 +1359,7 @@ public class VMAManager
         foreach (var range in ranges)
         {
             ReleaseGuestPageLocksInRange(range.Start, range.Start + range.Length);
-            TearDownNativeMappings(primary, range.Start, range.Length, false, true, true);
+            TearDownNativeMappings(primary, range.Start, range.Length, false, true);
         }
         primary.AddressSpaceCodeCacheSequenceSeen = sequence;
     }
@@ -1602,7 +1597,7 @@ public class VMAManager
                     continue;
 
                 throw new InvalidOperationException(
-                    $"Clone external binding lost VMA context: page=0x{pageAddr:X8}, owner={binding.OwnerKind}");
+                    $"Cloned page binding lost VMA context: page=0x{pageAddr:X8}, owner={binding.OwnerKind}");
             }
 
             if (clonedVma.WipeOnFork)
@@ -1908,7 +1903,6 @@ public class VMAManager
                 len,
                 false,
                 resetCodeCacheRange,
-                true,
                 preserveOwnerBinding: pendingObjectPageReleases != null);
             nativeMappingsTornDown = true;
         }
@@ -2121,7 +2115,6 @@ public class VMAManager
                 addr,
                 length,
                 false,
-                true,
                 true,
                 preserveOwnerBinding: pendingObjectPageReleases != null);
             nativeMappingsTornDown = true;
@@ -2345,7 +2338,6 @@ public class VMAManager
                 len,
                 true,
                 resetCodeCacheRange,
-                true,
                 true);
         else
             ReprotectNativeMappings(engine, addr, len, prot, resetCodeCacheRange);
@@ -2365,7 +2357,6 @@ public class VMAManager
                 vma.Start,
                 vma.End - vma.Start,
                 false,
-                true,
                 true);
             UnregisterVmAreaAttachments(vma);
             vma.VmMapping?.Release();
@@ -2503,7 +2494,6 @@ public class VMAManager
                 pageAddr,
                 LinuxConstants.PageSize,
                 false,
-                true,
                 true);
             dropped++;
         }
@@ -2705,8 +2695,8 @@ public class VMAManager
             if (hasSourceBinding)
             {
                 var originalBinding = binding!.Value;
-                PageMapping.Release(sourcePageAddr, preserveOwnerBinding: true);
                 engine.MemUnmap(sourcePageAddr, LinuxConstants.PageSize);
+                PageMapping.Release(sourcePageAddr, preserveOwnerBinding: true);
 
                 if (targetVma.Perms == Protection.None)
                     continue;
@@ -2747,7 +2737,7 @@ public class VMAManager
                         mappedPerms &= ~Protection.Write;
                 }
 
-                EnsureExternalMapping(targetPageAddr, newBinding, (byte)mappedPerms, engine);
+                EnsureNativeMapping(targetPageAddr, newBinding, (byte)mappedPerms, engine);
                 if ((targetVma.Perms & Protection.Exec) != 0)
                     TbCoh.ApplyWx(MemoryContext, newBinding.Ptr);
             }
@@ -2772,7 +2762,7 @@ public class VMAManager
             if (additionalVmas > 0 && !CanAllocateVmas(additionalVmas))
                 return -(int)Errno.ENOMEM;
 
-            TearDownNativeMappings(engine, addr, size, false, true, true);
+            TearDownNativeMappings(engine, addr, size, false, true);
             ReleaseGuestPageLocksInRange(addr, end);
 
             var replacements = new List<VmArea>();
@@ -3025,7 +3015,7 @@ public class VMAManager
         Engine engine)
     {
         var binding = CreateResolvedPageBinding(vma, pageIndex, pagePtr);
-        var result = EnsureExternalMapping(pageStart, binding, perms, engine);
+        var result = EnsureNativeMapping(pageStart, binding, perms, engine);
         if (result == FaultResult.Handled && (vma.Perms & Protection.Exec) != 0)
             TbCoh.ApplyWx(MemoryContext, binding.Ptr);
         return result;
@@ -3063,33 +3053,28 @@ public class VMAManager
             anonVma.MarkDirty(pageIndex);
         UnmarkTbWp(pageStart);
         var pageRecord = anonVma.PeekVmPage(pageIndex) ?? throw new InvalidOperationException("Page must exist after SetPage.");
-        return EnsureExternalMapping(pageStart,
+        return EnsureNativeMapping(pageStart,
             MappedPageBinding.FromAnonVmaPage(anonVma, pageIndex, pageRecord),
             perms, engine);
     }
 
-    private FaultResult EnsureExternalMapping(uint pageStart, MappedPageBinding binding, byte perms, Engine engine)
+    private FaultResult EnsureNativeMapping(uint pageStart, MappedPageBinding binding, byte perms, Engine engine)
     {
         var pagePtr = binding.Ptr;
         var hasCurrent = PageMapping.TryGet(pageStart, out var mappedPtr);
         if (hasCurrent && mappedPtr == pagePtr)
         {
-            engine.MemMap(pageStart, LinuxConstants.PageSize, perms);
+            engine.MemProtect(pageStart, LinuxConstants.PageSize, perms);
             return FaultResult.Handled;
         }
 
-        if (hasCurrent)
-            PageMapping.Release(pageStart);
+        // Replace the native translation while the old managed binding still retains its backing.
+        if (!engine.MemMapHostPage(pageStart, pagePtr, perms)) return FaultResult.Segv;
+        if (hasCurrent) PageMapping.Release(pageStart);
+        if (PageMapping.AddBinding(pageStart, binding, out _)) return FaultResult.Handled;
 
-        if (!PageMapping.AddBinding(pageStart, binding, out var addedRef))
-            return FaultResult.Segv;
-        if (!engine.MapManagedPage(pageStart, pagePtr, perms))
-        {
-            if (addedRef) PageMapping.Release(pageStart);
-            return FaultResult.Segv;
-        }
-
-        return FaultResult.Handled;
+        engine.MemUnmap(pageStart, LinuxConstants.PageSize);
+        return FaultResult.Segv;
     }
 
     private FaultResult EnsureWritableExistingPrivatePage(
@@ -3105,7 +3090,7 @@ public class VMAManager
         {
             privateObject.MarkDirty(pageIndex);
             TbCoh.OnWriteFault(this, pageStart, pageRecord.Ptr);
-            return EnsureExternalMapping(pageStart,
+            return EnsureNativeMapping(pageStart,
                 MappedPageBinding.FromAnonVmaPage(privateObject, pageIndex, pageRecord),
                 perms, engine);
         }
@@ -3151,7 +3136,7 @@ public class VMAManager
                 return writeMapResult;
 
             if (tempPerms != vma.Perms)
-                engine.MemMap(pageStart, LinuxConstants.PageSize, (byte)vma.Perms);
+                engine.MemProtect(pageStart, LinuxConstants.PageSize, (byte)vma.Perms);
 
             return FaultResult.Handled;
         }
@@ -3162,7 +3147,7 @@ public class VMAManager
             return mappingResult;
 
         if (tempPerms != vma.Perms)
-            engine.MemMap(pageStart, LinuxConstants.PageSize, (byte)vma.Perms);
+            engine.MemProtect(pageStart, LinuxConstants.PageSize, (byte)vma.Perms);
 
         return FaultResult.Handled;
     }
@@ -3189,7 +3174,7 @@ public class VMAManager
             if (existingPrivate != IntPtr.Zero && privateObject?.PeekVmPage(pageIndex) is { } privatePage)
             {
                 var binding = MappedPageBinding.FromAnonVmaPage(privateObject, pageIndex, privatePage);
-                var result = EnsureExternalMapping(pageStart, binding, readPerms, engine);
+                var result = EnsureNativeMapping(pageStart, binding, readPerms, engine);
                 if (result == FaultResult.Handled && (vma.Perms & Protection.Exec) != 0)
                     TbCoh.ApplyWx(MemoryContext, binding.Ptr);
                 return result;
@@ -3277,7 +3262,7 @@ public class VMAManager
         if (autoLock && result == FaultResult.Handled && (vma.Flags & MapFlags.Locked) != 0 &&
             !EnsureGuestPageLocked(vma, pageStart))
         {
-            TearDownNativeMappings(engine, pageStart, LinuxConstants.PageSize, false, false, true);
+            TearDownNativeMappings(engine, pageStart, LinuxConstants.PageSize, false, false);
             return FaultResult.Oom;
         }
 
@@ -3373,7 +3358,7 @@ public class VMAManager
 
         var primary = GetPrimarySharedMmuEngine(engines, nameof(MigrateOverlayMappings))!;
         foreach (var range in invalidatedRanges)
-            TearDownNativeMappings(primary, range.Start, range.Length, false, true, true, preserveOwnerBinding: true);
+            TearDownNativeMappings(primary, range.Start, range.Length, false, true, preserveOwnerBinding: true);
         primary.AddressSpaceCodeCacheSequenceSeen = sequence;
     }
 

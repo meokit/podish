@@ -555,7 +555,7 @@ public sealed partial class LtpRegressionTests
         var childMem = env.Vma.Clone();
         try
         {
-            childMem.RebuildExternalMappingsFromNative(childCpu, childMem.VMAs);
+            childMem.RebuildPageBindingsFromNative(childCpu, childMem.VMAs);
             env.Vma.ReprotectNativeMappings(env.Engine, MemoryBase, 2 * Page, Protection.Read, false);
             childMem.ReprotectNativeMappings(childCpu, MemoryBase, 2 * Page, Protection.Read, false);
 

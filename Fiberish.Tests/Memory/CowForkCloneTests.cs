@@ -26,7 +26,7 @@ public class CowForkCloneTests
         // Fork-style clone: child gets independent VmAnonVma metadata with shared page pointers.
         var childMm = env.ParentMm.Clone();
         using var childEngine = env.ParentEngine.Clone(false);
-        childMm.RebuildExternalMappingsFromNative(childEngine, childMm.VMAs);
+        childMm.RebuildPageBindingsFromNative(childEngine, childMm.VMAs);
         ReprotectPrivateMappings(childMm, childEngine);
         childEngine.PageFaultResolver =
             (addr, isWrite) => childMm.HandleFaultDetailed(addr, isWrite, childEngine) == FaultResult.Handled;
@@ -80,7 +80,7 @@ public class CowForkCloneTests
 
         var childMm = parentMm.Clone();
         using var childEngine = parentEngine.Clone(false);
-        childMm.RebuildExternalMappingsFromNative(childEngine, childMm.VMAs);
+        childMm.RebuildPageBindingsFromNative(childEngine, childMm.VMAs);
         childEngine.PageFaultResolver =
             (addr, isWrite) => childMm.HandleFaultDetailed(addr, isWrite, childEngine) == FaultResult.Handled;
 
@@ -203,7 +203,7 @@ public class CowForkCloneTests
 
         var childMm = parentMm.Clone();
         using var childEngine = parentEngine.Clone(false);
-        childMm.RebuildExternalMappingsFromNative(childEngine, childMm.VMAs);
+        childMm.RebuildPageBindingsFromNative(childEngine, childMm.VMAs);
         ReprotectPrivateMappings(childMm, childEngine);
         childEngine.PageFaultResolver =
             (addr, isWrite) => childMm.HandleFaultDetailed(addr, isWrite, childEngine) == FaultResult.Handled;
@@ -262,7 +262,7 @@ public class CowForkCloneTests
         childEngine.PageFaultResolver =
             (addr, isWrite) => childMm.HandleFaultDetailed(addr, isWrite, childEngine) == FaultResult.Handled;
 
-        childMm.RebuildExternalMappingsFromNative(childEngine, childMm.VMAs);
+        childMm.RebuildPageBindingsFromNative(childEngine, childMm.VMAs);
         Assert.False(childMm.PageMapping.TryGet(mapAddr, out _));
 
         Assert.Equal(0, childMm.Mprotect(mapAddr, LinuxConstants.PageSize, Protection.Read | Protection.Write,

@@ -1,7 +1,7 @@
-#include "bindings.h"
 #include "exec_utils.h"
 #include "instruction_variants.h"
 #include "state.h"
+#include "test_page_backing.h"
 #include <cstdio>
 #include <cstring>
 #include <memory>
@@ -148,13 +148,14 @@ static bool CheckReturnSlots(bool narrow, bool immediate) {
     constexpr uint32_t target = 0x1200;
     constexpr uint32_t stack_address = 0x2000;
     constexpr uint16_t adjustment = 0x1234;
+    TestPageBacking pages;
     std::unique_ptr<EmuState, decltype(&X86_Destroy)> state(X86_Create(), X86_Destroy);
     const auto cpu = state.get();
     cpu->status = EmuStatus::Running;
-    auto* page = X86_AllocatePage(cpu, code_address, static_cast<uint8_t>(mem::Property::RX));
+    auto* page = pages.MapPage(cpu, code_address, static_cast<uint8_t>(mem::Property::RX));
     if (!page)
         return false;
-    X86_MemMap(cpu, stack_address, 4096, 3);
+    pages.MapPage(cpu, stack_address, 3);
     const std::array<uint8_t, 4> code{0x66, uint8_t(immediate ? 0xc2 : 0xc3), 0x34, 0x12};
     const uint8_t* bytes = code.data() + !narrow;
     const auto size = uint32_t(1 + narrow + (immediate ? 2 : 0));
@@ -196,6 +197,7 @@ static bool CheckReturnSlots(bool narrow, bool immediate) {
 
 static bool CheckTestBranches() {
     constexpr uint32_t mask = CF_MASK | PF_MASK | AF_MASK | ZF_MASK | SF_MASK | OF_MASK;
+    TestPageBacking pages;
     std::unique_ptr<EmuState, decltype(&X86_Destroy)> state(X86_Create(), X86_Destroy);
     auto* cpu = state.get();
     for (bool branch_on_zero : {true, false}) {
@@ -209,7 +211,7 @@ static bool CheckTestBranches() {
             0,    0,
             0, // mov edx, 1
         };
-        X86_MemMap(cpu, address, 4096, 7);
+        pages.MapPage(cpu, address, 7);
         X86_MemWrite(cpu, address, code, sizeof(code));
         for (const uint32_t eax : {0u, 1u, 0x80000000u}) {
             cpu->status = EmuStatus::Running;
@@ -288,9 +290,10 @@ static bool CheckPendingMemoryReplay(EmuState* state) {
 
 static bool CheckDeadFlagsAcrossReplay() {
     constexpr uint32_t address = 0x1000;
+    TestPageBacking pages;
     auto* state = X86_Create();
     state->status = EmuStatus::Running;
-    auto* page = X86_AllocatePage(state, address, static_cast<uint8_t>(mem::Property::RX));
+    auto* page = pages.MapPage(state, address, static_cast<uint8_t>(mem::Property::RX));
     if (!page) {
         X86_Destroy(state);
         return false;
@@ -359,9 +362,10 @@ static bool CheckBoundScalarWidths() {
         {mov_reg16, 0xa5a55678, initial}, {mov_mem32, initial, 0x12345678},   {mov_mem16, initial, 0xa5a55678},
         {mov_small32, initial, 4},        {mov_small16, initial, 0xa5a50004},
     };
+    TestPageBacking pages;
     std::unique_ptr<EmuState, decltype(&X86_Destroy)> state(X86_Create(), X86_Destroy);
-    X86_MemMap(state.get(), code_address, 4096, 7);
-    X86_MemMap(state.get(), data_address, 4096, 3);
+    pages.MapPage(state.get(), code_address, 7);
+    pages.MapPage(state.get(), data_address, 3);
     HandlerFunc handler32 = nullptr;
     for (unsigned i = 0; i < std::size(cases); ++i) {
         const auto& test = cases[i];
@@ -415,11 +419,12 @@ static bool CheckMemoryFaultEip(bool write, bool single_step, bool concat = fals
     const auto code = write ? std::span<const uint8_t>(store) : std::span<const uint8_t>(load);
     const uint32_t prefix_size = concat ? sizeof(prefix) : 1;
     const auto fault_eip = code_address + prefix_size;
+    TestPageBacking pages;
     std::unique_ptr<EmuState, decltype(&X86_Destroy)> state(X86_Create(), X86_Destroy);
-    X86_MemMap(state.get(), code_address, 4096, 7);
+    pages.MapPage(state.get(), code_address, 7);
     X86_MemWrite(state.get(), code_address, prefix, prefix_size);
     X86_MemWrite(state.get(), fault_eip, code.data(), static_cast<uint32_t>(code.size()));
-    X86_ReprotectMappedRange(state.get(), code_address, 4096, 5);
+    X86_MemProtect(state.get(), code_address, 4096, 5);
     X86_RegWrite(state.get(), ECX, data_address);
     struct Fault {
         uint32_t eip;
@@ -503,9 +508,10 @@ static bool CheckPageLocalBlockCache() {
 
 int main() {
     constexpr uint32_t address = 0x1000;
+    TestPageBacking pages;
     auto* state = X86_Create();
     state->status = EmuStatus::Running;
-    auto* page = state->mmu.allocate_page(address, static_cast<uint8_t>(mem::Property::RX));
+    auto* page = pages.MapPage(state, address, static_cast<uint8_t>(mem::Property::RX));
     if (!page)
         return 1;
     std::memset(page, 0x40, 4096); // inc eax; no control flow or absorbed NOPs
@@ -540,7 +546,7 @@ int main() {
     ok = ok && result == InstructionDecodeResult::Success && raw == 0x40 && decoded.head.GetLength() == 1;
 
     // An instruction split across pages preserves the canonical opcode.
-    auto* next = state->mmu.allocate_page(address + 4096, static_cast<uint8_t>(mem::Property::RX));
+    auto* next = pages.MapPage(state, address + 4096, static_cast<uint8_t>(mem::Property::RX));
     if (!next) {
         X86_Destroy(state);
         return 1;

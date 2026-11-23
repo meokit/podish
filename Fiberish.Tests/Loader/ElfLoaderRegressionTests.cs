@@ -67,8 +67,7 @@ public class ElfLoaderRegressionTests
             SegmentVirtualAddress,
             LinuxConstants.PageSize,
             false,
-            false,
-            true);
+            false);
 
         Assert.True(mm.HandleFault(bssStart, false, runtime.Engine));
 

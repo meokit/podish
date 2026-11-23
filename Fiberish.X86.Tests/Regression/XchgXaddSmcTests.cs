@@ -10,8 +10,7 @@ namespace Fiberish.X86.Tests.Regression;
 ///   * XADD must compute the store address before overwriting its source register.
 ///   * Byte XCHG must update its register after the store completes.
 ///   * Flags from earlier instructions must survive a memory-operation exit.
-/// The SMC cases need External pages: ForceWriteSlow is only armed for pages
-/// tracked in the MMU's external-alias table.
+/// The SMC cases exercise ForceWriteSlow on writable aliases of translated pages.
 /// </summary>
 public sealed class XchgXaddSmcTests
 {
@@ -158,7 +157,7 @@ public sealed class XchgXaddSmcTests
 
         // Replace the executable backing without touching the code cache: the
         // block decoded from v1 must be invalidated by the page replacement.
-        cpu.ReplaceExternalMemory(CpuSandbox.CodeAddress, [0xC6, 0x05, 0x00, 0x00, 0x20, 0x00, 0x02], 7);
+        cpu.ReplaceBackingPage(CpuSandbox.CodeAddress, [0xC6, 0x05, 0x00, 0x00, 0x20, 0x00, 0x02], 7);
         cpu.Eip = CpuSandbox.CodeAddress;
         cpu.Run(CpuSandbox.CodeAddress + 7);
 
@@ -168,9 +167,9 @@ public sealed class XchgXaddSmcTests
     private static CpuSandbox CreateExternalSandbox()
     {
         var cpu = new CpuSandbox(mapDefaults: false);
-        cpu.MapExternalMemory(CpuSandbox.CodeAddress, 7);
-        cpu.MapExternalMemory(CpuSandbox.DataAddress, 3);
-        cpu.MapExternalMemory(CpuSandbox.StackAddress, 3);
+        cpu.MapMemory(CpuSandbox.CodeAddress, CpuSandbox.PageSize, 7);
+        cpu.MapMemory(CpuSandbox.DataAddress, CpuSandbox.PageSize, 3);
+        cpu.MapMemory(CpuSandbox.StackAddress, CpuSandbox.PageSize, 3);
         cpu[Reg.ESP] = CpuSandbox.StackAddress + CpuSandbox.PageSize - 16;
         return cpu;
     }

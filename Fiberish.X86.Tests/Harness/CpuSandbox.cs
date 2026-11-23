@@ -17,7 +17,7 @@ public sealed unsafe class CpuSandbox : IDisposable
 
     private readonly CpuHandle _handle;
     private readonly Dictionary<uint, byte> _pages = [];
-    private readonly List<IntPtr> _externalPages = [];
+    private readonly List<IntPtr> _backingPages = [];
 
     public CpuSandbox(bool mapDefaults = true)
     {
@@ -40,7 +40,7 @@ public sealed unsafe class CpuSandbox : IDisposable
         }
         catch
         {
-            _handle.Dispose();
+            Dispose();
             throw;
         }
     }
@@ -80,84 +80,54 @@ public sealed unsafe class CpuSandbox : IDisposable
             if (_pages.TryGetValue(guestPage, out var oldPermissions))
             {
                 var combined = (byte)(oldPermissions | permissions);
-                X86Native.ReprotectMappedRange(State, guestPage, PageSize, combined);
+                X86Native.MemProtect(State, guestPage, PageSize, combined);
                 _pages[guestPage] = combined;
                 continue;
             }
-            var pointer = X86Native.AllocatePage(State, guestPage, permissions);
-            if (pointer == null)
-                throw new InvalidOperationException($"Could not map guest page {guestPage:X8}.");
-            // Zero the backing allocation explicitly even if the current allocator
-            // happens to clear it; no case may read a previous allocator occupant.
-            new Span<byte>(pointer, (int)PageSize).Clear();
-            _pages.Add(guestPage, permissions);
+            MapPage(guestPage, permissions);
         }
     }
 
-    /// <summary>
-    /// Maps a page whose backing memory is owned by the caller (the emulator
-    /// marks it External). External executable pages are the only ones that arm
-    /// SMC write interception, so instruction tests that exercise
-    /// ForceWriteSlow use this instead of AllocatePage.
-    /// </summary>
-    public void MapExternalMemory(uint address, byte permissions = 3)
+    /// <summary>Installs new backing and lets the native mapping API invalidate cached code.</summary>
+    public void ReplaceBackingPage(uint address, ReadOnlySpan<byte> bytes, byte permissions = 7)
     {
         CheckedEnd(address, PageSize);
         if ((address & (PageSize - 1)) != 0)
-            throw new ArgumentException("External pages must be page aligned.", nameof(address));
-        if (_pages.ContainsKey(address))
-            throw new InvalidOperationException($"Guest page {address:X8} is already mapped.");
-
-        IntPtr memory = Marshal.AllocHGlobal((int)PageSize);
-        new Span<byte>((void*)memory, (int)PageSize).Clear();
-        if (X86Native.MapManagedPage(State, address, (void*)memory, permissions) == 0)
-        {
-            Marshal.FreeHGlobal(memory);
-            throw new InvalidOperationException($"Could not map external guest page {address:X8}.");
-        }
-        _externalPages.Add(memory);
-        _pages.Add(address, permissions);
-    }
-
-    /// <summary>
-    /// Installs a new backing page at an address that is already mapped. Does
-    /// not invalidate the code cache on purpose: callers use this to verify
-    /// that native page replacement invalidates translated blocks itself.
-    /// </summary>
-    public void ReplaceExternalMemory(uint address, ReadOnlySpan<byte> bytes, byte permissions = 7)
-    {
-        CheckedEnd(address, PageSize);
-        if ((address & (PageSize - 1)) != 0)
-            throw new ArgumentException("External pages must be page aligned.", nameof(address));
+            throw new ArgumentException("The guest page address must be aligned.", nameof(address));
         if (bytes.Length > PageSize) throw new ArgumentOutOfRangeException(nameof(bytes));
+        if (!_pages.ContainsKey(address))
+            throw new InvalidOperationException($"Guest page {address:X8} is unmapped.");
+        MapPage(address, permissions, bytes);
+    }
 
+    private void MapPage(uint address, byte permissions, ReadOnlySpan<byte> bytes = default)
+    {
         IntPtr memory = Marshal.AllocHGlobal((int)PageSize);
         var span = new Span<byte>((void*)memory, (int)PageSize);
         span.Clear();
         bytes.CopyTo(span);
-        if (X86Native.MapManagedPage(State, address, (void*)memory, permissions) == 0)
+        if (X86Native.MemMapHostPage(State, address, (void*)memory, permissions) == 0)
         {
             Marshal.FreeHGlobal(memory);
-            throw new InvalidOperationException($"Could not replace external guest page {address:X8}.");
+            throw new InvalidOperationException($"Could not map guest page {address:X8}.");
         }
-        _externalPages.Add(memory);
+        _backingPages.Add(memory);
         _pages[address] = permissions;
     }
 
-    /// <summary>Maps another guest address to an existing external backing page.</summary>
-    public void MapExternalAlias(uint address, uint sourceAddress, byte permissions = 3)
+    /// <summary>Maps another guest address to a backing page owned by this sandbox.</summary>
+    public void MapAlias(uint address, uint sourceAddress, byte permissions = 3)
     {
         CheckedEnd(address, PageSize);
         if (((address | sourceAddress) & (PageSize - 1)) != 0)
-            throw new ArgumentException("External aliases must be page aligned.");
+            throw new ArgumentException("Guest alias addresses must be page-aligned.");
         if (_pages.ContainsKey(address))
             throw new InvalidOperationException($"Guest page {address:X8} is already mapped.");
-        var source = X86Native.ResolvePtrForRead(State, sourceAddress);
-        if (source == null || !_externalPages.Contains((IntPtr)source))
-            throw new InvalidOperationException("The source must be an external page owned by this sandbox.");
-        if (X86Native.MapManagedPage(State, address, source, permissions) == 0)
-            throw new InvalidOperationException($"Could not map external alias {address:X8}.");
-        // The original allocation remains the sole owner; do not add it twice.
+        X86Native.PageMapping source = default;
+        if (X86Native.CollectMappedPages(State, sourceAddress, PageSize, &source, 1) != 1)
+            throw new InvalidOperationException($"Guest page {sourceAddress:X8} is unmapped.");
+        if (X86Native.MemMapHostPage(State, address, (void*)source.HostPage, permissions) == 0)
+            throw new InvalidOperationException($"Could not map guest alias {address:X8}.");
         _pages.Add(address, permissions);
     }
 
@@ -171,7 +141,7 @@ public sealed unsafe class CpuSandbox : IDisposable
                 throw new InvalidOperationException($"Protecting unmapped guest page {page:X8}.");
             _pages[(uint)page] = permissions;
         }
-        X86Native.ReprotectMappedRange(State, address, size, permissions);
+        X86Native.MemProtect(State, address, size, permissions);
     }
 
     public void UnmapMemory(uint address, uint size)
@@ -279,8 +249,8 @@ public sealed unsafe class CpuSandbox : IDisposable
     public void Dispose()
     {
         _handle.Dispose();
-        foreach (IntPtr page in _externalPages) Marshal.FreeHGlobal(page);
-        _externalPages.Clear();
+        foreach (IntPtr page in _backingPages) Marshal.FreeHGlobal(page);
+        _backingPages.Clear();
     }
 
     private static ulong CheckedEnd(uint address, uint size)

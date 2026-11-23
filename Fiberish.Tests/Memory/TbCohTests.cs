@@ -321,7 +321,7 @@ public class TbCohTests
             using var childEngine = parentEngine.Clone(false);
             var childMm = parentMm.Clone();
             childMm.BindOrAssertAddressSpaceHandle(childEngine);
-            childMm.RebuildExternalMappingsFromNative(childEngine, childMm.VMAs);
+            childMm.RebuildPageBindingsFromNative(childEngine, childMm.VMAs);
             childEngine.PageFaultResolver =
                 (addr, isWrite) => childMm.HandleFaultDetailed(addr, isWrite, childEngine) == FaultResult.Handled;
 

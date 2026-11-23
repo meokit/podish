@@ -96,8 +96,7 @@ public class PageCacheConsistencyTests
 
             mm.TearDownNativeMappings(engine, mapAddr, LinuxConstants.PageSize,
                 false,
-                false,
-                true);
+                false);
 
             Assert.True(mm.HandleFault(mapAddr, false, engine));
 

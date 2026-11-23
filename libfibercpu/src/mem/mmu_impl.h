@@ -103,58 +103,27 @@ FORCE_INLINE void Mmu::sync_dirty(GuestAddr vaddr) {
 
     const uint32_t l1_idx = addr >> 22;
     const uint32_t l2_idx = (addr >> 12) & 0x3FF;
-    const uint32_t offset = addr & 0xFFF;
-
-    // 1. Check L1 Directory
-    if (!dir->l1_directory[l1_idx]) {
-        auto status = signal_fault(addr, (int)has_property(req_perm, Property::Write));
-        if (status != EmuStatus::Running) return std::unexpected(FaultCode::PageFault);
-
-        // Retry after fault handler
-        dir = current_page_directory();
-        if (!dir || !dir->l1_directory[l1_idx]) {
-            return std::unexpected(FaultCode::PageFault);
-        }
-    }
-
+    const uint32_t offset = addr & PAGE_MASK;
     auto* chunk = dir->l1_directory[l1_idx].get();
-
-    // 2. Check Permissions
-    Property current_perm = chunk->permissions[l2_idx];
-    if (!has_property(current_perm, req_perm)) {
-        auto status = signal_fault(addr, (int)has_property(req_perm, Property::Write));
-        if (status != EmuStatus::Running) return std::unexpected(FaultCode::PageFault);
-
-        // Retry: Refetch chunk/perm because handler might have changed them
-        dir = current_page_directory();
-        if (!dir || !dir->l1_directory[l1_idx]) return std::unexpected(FaultCode::PageFault);
-
-        chunk = dir->l1_directory[l1_idx].get();
-        current_perm = chunk->permissions[l2_idx];
-
-        if (!has_property(current_perm, req_perm)) {
+    if (!chunk || !chunk->pages[l2_idx] || !has_property(chunk->permissions[l2_idx], req_perm)) {
+        if (signal_fault(addr, has_property(req_perm, Property::Write)) != EmuStatus::Running)
             return std::unexpected(FaultCode::PageFault);
-        }
+
+        // A fault callback may replace the mapping or its entire MMU.
+        dir = current_page_directory();
+        chunk = dir ? dir->l1_directory[l1_idx].get() : nullptr;
+        if (!chunk || !chunk->pages[l2_idx] || !has_property(chunk->permissions[l2_idx], req_perm))
+            return std::unexpected(FaultCode::PageFault);
     }
 
-    // Mark Dirty Bit if writing
+    auto current_perm = chunk->permissions[l2_idx];
     if (has_property(req_perm, Property::Write) && !has_property(current_perm, Property::Dirty)) {
         current_perm = current_perm | Property::Dirty;
         chunk->permissions[l2_idx] = current_perm;
     }
 
-    // 3. Lazy Allocation
-    if (!chunk->pages[l2_idx]) {
-        chunk->pages[l2_idx] = new std::byte[PAGE_SIZE];
-        std::memset(chunk->pages[l2_idx], 0, PAGE_SIZE);
-    }
-
-    HostAddr page_base = chunk->pages[l2_idx];
-
-    // 4. Fill TLB
-    if (!mem_hook) {
-        tlb.fill(addr, page_base, current_perm);
-    }
+    auto* page_base = chunk->pages[l2_idx];
+    if (!mem_hook) tlb.fill(addr, page_base, current_perm);
 
     return page_base + offset;
 }
@@ -343,7 +312,7 @@ template <typename T>
 FORCE_INLINE void StoreGuestValue(const EmuState* state, HostAddr host, const T& value) {
 #if defined(__has_builtin)
 #if __has_builtin(__builtin_assume_separate_storage)
-    // Guest backing, including caller-owned external pages, is allocated separately from the engine.
+    // Callers allocate guest backing separately from the engine.
     __builtin_assume_separate_storage(state, host);
 #endif
 #endif
