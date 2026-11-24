@@ -1,0 +1,5 @@
+# The SuperOpcode generator hashes its input bytes and emits LF source.
+/benchmark/optimization/manifests/baked-fusions-v3.json text eol=lf
+/libfibercpu/presets/*/recipes.json text eol=lf
+/libfibercpu/presets/*/superopcodes.generated.cpp text eol=lf
+/libfibercpu/src/generated/superopcodes.generated.cpp text eol=lf
