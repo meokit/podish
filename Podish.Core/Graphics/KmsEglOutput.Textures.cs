@@ -270,6 +270,12 @@ internal sealed unsafe partial class KmsEglOutput
             return true;
         }
 
+        internal bool WaitForProducer()
+        {
+            lock (_producerGate)
+                return Ready && owner.WaitForFence(ProducerFence);
+        }
+
         // The caller has its own EGL share group and retains the BO during import.
         internal nint ImportForCompositor()
         {

@@ -409,8 +409,16 @@ internal sealed unsafe class DesktopAngleRenderer : IDisposable
         var createWindow = (delegate* unmanaged[Cdecl]<nint, nint, nint, int*, nint>)_angle.Egl("eglCreateWindowSurface");
         _surface = createWindow(_angle.Display, config, _window.Handle, null);
         RequireEgl(_surface != 0, "create the Metal EGL surface");
+        nint shareContext = 0;
+        if (enableGles)
+        {
+            // Share textures directly with KmsEglOutput because ANGLE Metal does not
+            // implement EGL_KHR_gl_texture_2D_image for eglCreateImage(EGL_GL_TEXTURE_2D).
+            GuestTextures = new KmsEglOutput(_angle, window: null, logger);
+            shareContext = GuestTextures.TextureContext();
+        }
         int* contextArgs = stackalloc int[] { 0x3098, 3, 0x3038 };
-        _context = _angle.CreateContext(_angle.Display, config, 0, contextArgs);
+        _context = _angle.CreateContext(_angle.Display, config, shareContext, contextArgs);
         RequireEgl(_context != 0, "create a GLES3 context");
         RequireEgl(_angle.MakeCurrent(_angle.Display, _surface, _surface, _context) != 0, "bind the GLES3 context");
 
@@ -449,9 +457,8 @@ internal sealed unsafe class DesktopAngleRenderer : IDisposable
                 throw new InvalidOperationException("ANGLE could not allocate a virtual KMS framebuffer.");
         }
 
-        if (enableGles && _glImageTargetTexture != null)
+        if (GuestTextures != null)
         {
-            GuestTextures = new KmsEglOutput(_angle, window: null, logger);
             _glGenFramebuffers(1, &framebuffer);
             _importFramebuffer = framebuffer;
         }
@@ -493,38 +500,45 @@ internal sealed unsafe class DesktopAngleRenderer : IDisposable
     {
         var destination = (Texture)target;
         var source = (KmsEglOutput.TextureBo)buffer;
-        nint image = source.ImportForCompositor();
-        if (image == 0)
+        if (!source.WaitForProducer())
+        {
+            _logger?.LogWarning("UploadGpuBuffer failed: producer fence wait failed (eglError=0x{Err:X})", _angle.GetError());
             return false;
+        }
 
-        uint texture = 0;
         try
         {
-            _glGenTextures(1, &texture);
-            _glBindTexture(Texture2D, texture);
-            _glImageTargetTexture(Texture2D, image);
             _glBindFramebuffer(ReadFramebuffer, _importFramebuffer);
-            _glFramebufferTexture2D(ReadFramebuffer, ColorAttachment0, Texture2D, texture, 0);
+            _glFramebufferTexture2D(ReadFramebuffer, ColorAttachment0, Texture2D, source.Texture, 0);
             _glBindFramebuffer(DrawFramebuffer, _framebuffer);
             _glFramebufferTexture2D(DrawFramebuffer, ColorAttachment0, Texture2D, destination.Name, 0);
 
             uint readStatus = _glCheckFramebufferStatus(ReadFramebuffer);
             uint drawStatus = _glCheckFramebufferStatus(DrawFramebuffer);
-            if (_glGetError() != 0 || readStatus != FramebufferComplete || drawStatus != FramebufferComplete)
+            uint preErr = _glGetError();
+            if (preErr != 0 || readStatus != FramebufferComplete || drawStatus != FramebufferComplete)
+            {
+                _logger?.LogWarning("UploadGpuBuffer failed: glErr=0x{Err:X} readStatus=0x{R:X} drawStatus=0x{D:X}",
+                    preErr, readStatus, drawStatus);
                 return false;
+            }
 
             int width = destination.Width, height = destination.Height;
             _glBlitFramebuffer(0, yInverted ? height : 0, width, yInverted ? 0 : height,
                 0, 0, width, height, ColorBufferBit, 0x2600);
-            if (_glGetError() != 0)
+            uint blitErr = _glGetError();
+            if (blitErr != 0)
+            {
+                _logger?.LogWarning("UploadGpuBuffer blit failed: glErr=0x{Err:X}", blitErr);
                 return false;
+            }
             destination.NativeRgba = true;
         }
         finally
         {
             _glFramebufferTexture2D(ReadFramebuffer, ColorAttachment0, Texture2D, 0, 0);
             _glFramebufferTexture2D(DrawFramebuffer, ColorAttachment0, Texture2D, 0, 0);
-            DeleteTexture(texture);
+            _glBindFramebuffer(ReadFramebuffer, 0);
         }
 
         var create = (delegate* unmanaged[Cdecl]<nint, uint, nint*, nint>)_angle.Egl("eglCreateSync");

@@ -70,6 +70,10 @@ public sealed class ContainerRunRequest
     internal KmsEglOutput? CompositorTextures { get; init; }
     public string? AngleLibraryDirectory { get; init; }
     public string? GlesGuestLibraryDirectory { get; init; }
+    public bool MountRunTmpfs { get; init; }
+    public int RunTmpfsUid { get; init; }
+    public int RunTmpfsGid { get; init; }
+    public int RunTmpfsMode { get; init; } = 0x41FF;
     public ushort? TerminalRows { get; init; }
     public ushort? TerminalCols { get; init; }
     public Action<KernelRuntime, KernelScheduler, UTSNamespace?, int>? ConfigureVirtualDaemons { get; init; }
@@ -403,6 +407,9 @@ public sealed class ContainerRuntimeService
                     readOnly);
                 runtime.Syscalls.MountHostfs(hostPath, guestPath, readOnly);
             }
+
+            if (request.MountRunTmpfs)
+                runtime.Syscalls.MountStandardRun(request.RunTmpfsUid, request.RunTmpfsGid, request.RunTmpfsMode);
 
             if (request.EnableGles || request.EnableKmsDrm || request.CompositorScanout != null)
             {

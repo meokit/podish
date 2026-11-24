@@ -162,6 +162,7 @@ internal sealed class NativeDesktopSession : IDisposable
             {
                 "LANG=C.UTF-8",
                 "LC_ALL=C.UTF-8",
+                "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/games:/usr/games",
                 "TERM=xterm-256color",
                 "QT_QPA_PLATFORM=wayland",
                 "QT_QPA_PLATFORMTHEME=lxqt",
@@ -227,13 +228,15 @@ internal sealed class NativeDesktopSession : IDisposable
                 CompositorTextures = _compositor.GuestTextures,
                 AngleLibraryDirectory = _angleDir,
                 GlesGuestLibraryDirectory = _glesGuestDir,
+                // Mount a clean tmpfs at /run owned by desktop uid=1000 (0700) BEFORE ContainerGraphics.Mount
+                // so /run/podish-gles is mounted inside /run instead of being shadowed by a later /run mount.
+                MountRunTmpfs = true,
+                RunTmpfsUid = 1000,
+                RunTmpfsGid = 1000,
+                RunTmpfsMode = 0x41C0,
                 ProcessController = _processController,
                 ConfigureVirtualDaemons = (runtime, scheduler, uts, parentPid) =>
                 {
-                    // Mount a clean tmpfs at /run owned by desktop uid=1000 (0700) so XDG_RUNTIME_DIR=/run
-                    // has standard permissions and stale sockets never persist across SilkFS restarts.
-                    runtime.Syscalls.MountStandardRun(uid: 1000, gid: 1000, mode: 0x41C0);
-
                     var registry = new VirtualDaemonRegistry(runtime.Syscalls, scheduler);
                     var waylandDaemon = new DesktopWaylandDaemon(
                         ContainerRunRequest.WaylandDisplaySocketPath,
