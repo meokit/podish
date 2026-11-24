@@ -2779,8 +2779,10 @@ internal sealed class DesktopCompositorHost : IDisposable
     {
         if (frame.Width <= 0 || frame.Height <= 0 || frame.Stride <= 0) return;
         var format = frame.Format == WlShmFormat.Argb8888 ? DisplayPixelFormat.Argb8888 : DisplayPixelFormat.Xrgb8888;
+        bool hadExisting = _surfaces.TryGetValue(id, out var prev) && prev.Texture != null &&
+                           prev.Width == frame.Width && prev.Height == frame.Height && prev.Format == format;
         var state = EnsureSurfaceTexture(id, frame.Width, frame.Height, format);
-        UploadShmFrame(state.Texture!, frame);
+        UploadShmFrame(state.Texture!, frame, allowPartialDamage: hadExisting);
         state.Mapping = frame.Mapping;
         state.Bounds = bounds;
         if (!_zOrder.Contains(id))
@@ -2796,6 +2798,7 @@ internal sealed class DesktopCompositorHost : IDisposable
         var tex = reuse ? state.Texture! : _renderer!.CreateTexture(new DisplayTextureDescriptor(w, h, format));
         if (!_renderer!.UploadGpuBuffer(tex, frame.Buffer, frame.YInverted, frame.LeaseToken))
         {
+            _logger.LogWarning("UpsertGpuSurface rejected buffer id={Id} {W}x{H} bounds={Bounds}", id, w, h, bounds);
             if (!reuse) tex.Dispose();
             return false;
         }
@@ -2814,20 +2817,41 @@ internal sealed class DesktopCompositorHost : IDisposable
         return true;
     }
 
-    private static void UploadShmFrame(IDisplayTexture texture, WaylandShmFrame frame)
+    private static void UploadShmFrame(IDisplayTexture texture, WaylandShmFrame frame, bool allowPartialDamage)
     {
         var inode = frame.File.OpenedInode;
         if (inode == null) return;
-        int byteCount = checked(frame.Stride * frame.Height);
+
+        int uploadY = 0;
+        int uploadH = frame.Height;
+        int uploadX = 0;
+        int uploadW = frame.Width;
+        if (allowPartialDamage && frame.DamageBounds is { Width: > 0, Height: > 0 } dmg)
+        {
+            int x0 = Math.Clamp(dmg.X, 0, frame.Width - 1);
+            int y0 = Math.Clamp(dmg.Y, 0, frame.Height - 1);
+            int x1 = Math.Clamp(dmg.X + dmg.Width, x0 + 1, frame.Width);
+            int y1 = Math.Clamp(dmg.Y + dmg.Height, y0 + 1, frame.Height);
+            if ((long)(x1 - x0) * (y1 - y0) < (long)frame.Width * frame.Height * 3 / 4)
+            {
+                uploadX = x0;
+                uploadY = y0;
+                uploadW = x1 - x0;
+                uploadH = y1 - y0;
+            }
+        }
+
+        long readOffset = (long)frame.Offset + (long)uploadY * frame.Stride + (long)uploadX * 4;
+        int byteCount = checked((uploadH - 1) * frame.Stride + uploadW * 4);
         var buffer = ArrayPool<byte>.Shared.Rent(byteCount);
         try
         {
             var span = buffer.AsSpan(0, byteCount);
-            var segs = inode.GetReadableSegments(frame.File, frame.Offset, byteCount);
+            var segs = inode.GetReadableSegments(frame.File, readOffset, byteCount);
             if (!segs.Succeeded)
             {
                 span.Clear();
-                int read = inode.ReadToHost(null, frame.File, span, frame.Offset);
+                int read = inode.ReadToHost(null, frame.File, span, readOffset);
                 if (read <= 0) return;
             }
             else
@@ -2839,7 +2863,7 @@ internal sealed class DesktopCompositorHost : IDisposable
                     pos += seg.Length;
                 }
             }
-            texture.Update(span, frame.Stride);
+            texture.Update(new DisplayRect(uploadX, uploadY, uploadW, uploadH), span, frame.Stride);
         }
         finally
         {

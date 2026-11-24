@@ -162,6 +162,7 @@ internal sealed class WlSurfaceState
     }
 
     public List<WaylandRect> Damages { get; } = [];
+    public List<WaylandRect> BufferDamages { get; } = [];
     public List<WlCallbackResource> FrameCallbacks { get; } = [];
     public int BufferScale { get; set; } = 1;
     public WlOutputTransform Transform { get; set; }
@@ -364,7 +365,7 @@ internal sealed class WlSurfaceResource : WaylandResource
             case 9:
             {
                 var request = WlSurfaceProtocol.DecodeDamageBuffer(message.Body, message.Fds);
-                _pending.Damages.Add(new WaylandRect(request.X, request.Y, request.Width, request.Height));
+                _pending.BufferDamages.Add(new WaylandRect(request.X, request.Y, request.Width, request.Height));
                 break;
             }
             default:
@@ -398,6 +399,9 @@ internal sealed class WlSurfaceResource : WaylandResource
         _current.Damages.Clear();
         _current.Damages.AddRange(_pending.Damages);
         _pending.Damages.Clear();
+        _current.BufferDamages.Clear();
+        _current.BufferDamages.AddRange(_pending.BufferDamages);
+        _pending.BufferDamages.Clear();
 
         if (_role == WlSurfaceRole.Cursor)
         {
@@ -437,8 +441,9 @@ internal sealed class WlSurfaceResource : WaylandResource
                         Height = Math.Max(1, Client.ToCanvasHeight(m.Height))
                     }
                     : (WaylandSurfaceMapping?)null;
+                WaylandRect? damageBounds = ComputeBufferDamageBounds();
                 WaylandShmFrame? frame = _current.Buffer == null ? null :
-                    _current.Buffer.ToFrame(SceneSurfaceId) with { Mapping = canvasMapping };
+                    _current.Buffer.ToFrame(SceneSurfaceId) with { Mapping = canvasMapping, DamageBounds = damageBounds };
                 await Client.Server.FramePresenter.PresentSurfaceAsync(SceneSurfaceId, frame);
             }
         }
@@ -473,6 +478,52 @@ internal sealed class WlSurfaceResource : WaylandResource
         List<WlCallbackResource> callbacks = [.. _pending.FrameCallbacks];
         _pending.FrameCallbacks.Clear();
         Client.Server.EnqueueFrameCallbacks(callbacks);
+    }
+
+    private WaylandRect? ComputeBufferDamageBounds()
+    {
+        if (_current.Buffer is not { } buf || buf.Width <= 0 || buf.Height <= 0)
+            return null;
+        if (_current.Transform != WlOutputTransform.Normal || _current.ViewportSource != null)
+            return null;
+        if (_current.Damages.Count == 0 && _current.BufferDamages.Count == 0)
+            return null;
+
+        int minX = buf.Width, minY = buf.Height, maxX = 0, maxY = 0;
+        int scale = Math.Max(1, _current.BufferScale);
+        foreach (WaylandRect r in _current.Damages)
+        {
+            if (r.Width <= 0 || r.Height <= 0) continue;
+            long x0 = Math.Clamp((long)r.X * scale, 0, buf.Width);
+            long y0 = Math.Clamp((long)r.Y * scale, 0, buf.Height);
+            long x1 = Math.Clamp(((long)r.X + r.Width) * scale, 0, buf.Width);
+            long y1 = Math.Clamp(((long)r.Y + r.Height) * scale, 0, buf.Height);
+            if (x1 > x0 && y1 > y0)
+            {
+                if (x0 < minX) minX = (int)x0;
+                if (y0 < minY) minY = (int)y0;
+                if (x1 > maxX) maxX = (int)x1;
+                if (y1 > maxY) maxY = (int)y1;
+            }
+        }
+        foreach (WaylandRect r in _current.BufferDamages)
+        {
+            if (r.Width <= 0 || r.Height <= 0) continue;
+            long x0 = Math.Clamp((long)r.X, 0, buf.Width);
+            long y0 = Math.Clamp((long)r.Y, 0, buf.Height);
+            long x1 = Math.Clamp((long)r.X + r.Width, 0, buf.Width);
+            long y1 = Math.Clamp((long)r.Y + r.Height, 0, buf.Height);
+            if (x1 > x0 && y1 > y0)
+            {
+                if (x0 < minX) minX = (int)x0;
+                if (y0 < minY) minY = (int)y0;
+                if (x1 > maxX) maxX = (int)x1;
+                if (y1 > maxY) maxY = (int)y1;
+            }
+        }
+        if (maxX <= minX || maxY <= minY)
+            return null;
+        return new WaylandRect(minX, minY, maxX - minX, maxY - minY);
     }
 
     private async ValueTask SyncOutputPresenceAsync(bool entered)
@@ -2407,8 +2458,15 @@ internal sealed class XdgToplevelResource : WaylandResource
                 SyncSceneDecoration();
                 if (changed)
                     await Client.RefreshEffectiveOutputAsync();
-                if (changed && Client.Server.MobileMode && IsMaximized && !IsFullscreen)
+                bool isHomeLauncher = WaylandServer.IsHomeLauncherWindow(this);
+                if (isHomeLauncher && !IsMaximized && !IsFullscreen)
+                {
+                    await SetMaximizedAsync(true);
+                }
+                else if (changed && (Client.Server.MobileMode || isHomeLauncher) && IsMaximized && !IsFullscreen)
+                {
                     await UpdateMaximizedBoundsAsync();
+                }
                 await Client.Server.UpdateForeignToplevelAsync(this);
                 break;
             }
@@ -2726,9 +2784,7 @@ internal sealed class XdgToplevelResource : WaylandResource
 
     private WaylandDecorationSceneState BuildDecorationSceneState()
     {
-        bool isLauncherMain = Client.Server.MobileMode &&
-            WaylandClient.IsLauncherIdentifier(AppId) &&
-            !Title.Contains("Settings", StringComparison.OrdinalIgnoreCase);
+        bool isLauncherMain = WaylandServer.IsHomeLauncherWindow(this);
         return new WaylandDecorationSceneState(
             IsServerSideDecorated && !IsFullscreen && !isLauncherMain,
             Activated,

@@ -11,6 +11,7 @@ public readonly record struct WaylandShmFrame(
     WlShmFormat Format)
 {
     public WaylandSurfaceMapping? Mapping { get; init; }
+    public WaylandRect? DamageBounds { get; init; }
     public int LogicalWidth => Mapping?.Width ?? Width;
     public int LogicalHeight => Mapping?.Height ?? Height;
 }
