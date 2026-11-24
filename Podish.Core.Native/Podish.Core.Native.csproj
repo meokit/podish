@@ -1,7 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
     <ItemGroup>
+        <ProjectReference Include="..\Podish.Display\Podish.Display.csproj"/>
         <ProjectReference Include="..\Podish.Core\Podish.Core.csproj"/>
+        <ProjectReference Include="..\Podish.Wayland\Podish.Wayland.csproj"/>
     </ItemGroup>
 
     <PropertyGroup>
