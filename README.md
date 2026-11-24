@@ -174,49 +174,54 @@ i386 root filesystem.
 
 ### CoreMark 1.0
 
-All configurations use the same Debian i386 root filesystem and the same
-CoreMark ELF. Alpine GCC 15.2.0 builds the ELF with
-`-O3 -static -fno-pie -no-pie` and statically linked musl. Both Podish modes
-use baked instruction specialization and extended superopcodes. The LLVM
-JIT mode compiles hot blocks in exact mode with two workers.
+We used one Debian i386 root filesystem and one CoreMark ELF across all
+backends. We built the ELF with Alpine GCC 15.2.0, musl, and
+`-O3 -static -fno-pie -no-pie`. Each score is the median of three validated
+190,000-iteration runs, in iterations per second. We pinned each Linux Docker
+run to one logical CPU and ran the iSH CLI on native arm64 macOS.
 
-Each score is the median of three validated 190,000-iteration runs at Podish
-revision `37cea465`, in iterations per second. Each Linux Docker run used one
-logical CPU. iSH ran as a native arm64 CLI on the M5 Max.
+We retested Podish at `b30f252e` with the default `3.5m` preset. On macOS, we
+used one build for both Podish modes and ran LLVM JIT in `exact` mode with two
+workers. The QEMU and iSH scores come from the previous pass with the same
+guest fixture and run protocol.
 
 | Environment | Podish interpreter | Podish LLVM JIT | QEMU Usermode TCG | QEMU system TCG | iSH |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| M5 Max / native macOS | 4705.2 | 8932.3 | — | — | 2036.4 |
-| M5 Max / ARM64 Linux Docker | 4952.7 | — | 12939.3 | 4262.3 | — |
-| Ryzen AI Max+ 395 / x86-64 Linux Docker | 3898.1 | — | 16712.1 | 9655.5 | — |
+| M5 Max / native macOS | 4,508.9 | 8,815.9 | — | — | 2,036.4 |
+| M5 Max / ARM64 Linux Docker | 4,542.4 | — | 12,939.3 | 4,262.3 | — |
+| Ryzen AI Max+ 395 / x86-64 Linux Docker | 3,542.5 | — | 16,712.1 | 9,655.5 | — |
 
 The [early public results](benchmark/emulator-comparison/README.md#early-public-results)
 document earlier builds and test setups.
 
 ### CoreMark interpreter specialization
 
-Different builds of CoreMark can produce different registers, addressing
-forms, and instruction sequences. The interpreter's static specialization
-and fusion apply where those forms match the baked tables. Changing the
-table can change the score for the same ELF.
+We profile GNU utilities and a Node.js minification task. We use block
+execution counts to rank operand forms and short instruction sequences, then
+time candidate tables within code-size budgets. We ship `3.5m` for general
+terminal workloads and check performance on a separate set of applications.
+[Baking strategy](docs/baked-instruction-variants.md)
 
-These runs used an M5 Max, two statically linked i386 ELFs from the same
-CoreMark source revision, and the same Debian rootfs. Both ELFs use `-O3`.
-All four interpreter builds used the same register pinning and had Host
-JIT compiled out. Each score is the median of three 100,000-iteration runs,
-in iterations per second.
+Two compilers can choose different registers, addressing forms, and
+instruction sequences for the same C source. We measured both CoreMark ELFs
+against the general-purpose preset and against tables tuned for each ELF.
+
+We used an M5 Max, one Debian rootfs, and two i386 ELFs from the same
+CoreMark source revision. Both ELFs use `-O3` and static linkage. We kept
+the same register pinning and compiled out Host JIT. Each score is the
+median of three validated 100,000-iteration runs, in iterations per second.
+We retested `3.5m` at `b30f252e` and kept the no-bake and ELF-specific scores
+from `37cea465`.
 
 | Interpreter configuration | GCC 12.2 / glibc | GCC 15.2 / musl |
 | --- | ---: | ---: |
 | No specialization or fusion | 1,855.4 | 1,969.7 |
-| Previous default tables | 4,102.6 | 5,127.7 |
+| Default `3.5m` | 4,208.6 | 4,767.1 |
 | Trained on the GCC 12.2 ELF | **7,542.0** | 3,557.2 |
 | Trained on the GCC 15.2 ELF | 3,496.3 | **8,397.7** |
 
-The score gap between the ELFs was 6% with specialization and fusion
-disabled and 25% with the previous default tables. Bold entries use a plan
-trained on the measured ELF. Each targeted plan scored below the previous
-defaults when used on the other ELF.
+Each ELF-specific table scored highest on the ELF we used to train it. On the
+other ELF, the same table scored below `3.5m`.
 [Build settings, ELF hashes, and profile coverage](benchmark/emulator-comparison/README.md#coremark-interpreter-specialization)
 
 ## Repository Layout

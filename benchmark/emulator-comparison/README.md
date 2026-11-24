@@ -69,6 +69,11 @@ statically linked musl. The shared guest rootfs uses Debian. The runner
 records the ELF SHA-256, checks the compiler and flags reported by the
 guest, and checks the benchmark CRCs.
 
+For the README CoreMark table, we ran Podish at `b30f252e` with `3.5m` and
+reused the QEMU 8.2.2 and iSH scores from the previous pass. Both passes used
+the same fixture and 190,000 iterations per run. We took the median of three
+measured runs per cell.
+
 ## Run the Linux matrix
 
 Run on each Linux Docker engine, with the copied bundle. Start with
@@ -159,37 +164,34 @@ which logs its default `-O2` before the overriding `-O3`.
 | Debian GCC 12.2.0 | `21e5fa2303eff7481917bd44ee234022405e5f889c7181260254aefd053d5793` |
 | Alpine GCC 15.2.0 | `fcb65151196caa0678c992677442aa7ce7f41e9e46cbaa690d43746f0907fff6` |
 
-Run both ELFs at the same guest path in a shared Debian rootfs. On the M5 Max
-comparison, all builds use Release Clang 21.1.8, a 400 MiB block cache, and
-`FIBERCPU_GPR_PIN=WRITE_BACK` with EAX and ESP pinned. CMake's `AUTO` pin mode
-turns pinning off for custom fusion sources. Run with Host JIT, dynamic
-machine-code specialization, and the linked block cache off for every build.
+We ran both ELFs at the same guest path in the Debian rootfs. We built with
+Clang 21.1.8 in Release mode and used a 400 MiB block cache. We set
+`FIBERCPU_GPR_PIN=WRITE_BACK` to pin EAX and ESP, and disabled Host JIT,
+dynamic specialization, and linked block caching.
 
 | Measured configuration | Build settings |
 | --- | --- |
-| No specialization or fusion | Set `FIBERCPU_STATIC_SPECIALIZATION=OFF` and `FIBERCPU_ENABLE_SUPEROPCODES=OFF`. The interpreter uses its ordinary slot-bound handlers. |
-| Previous default tables | Enable static specialization and `EXTENDED` fusion with the plans checked in at `08acbc14`. |
-| Baked for either ELF | Enable static specialization and `EXTENDED` fusion. Supply that ELF's ModRM plan, exact scalar plan, fusion operand plan, and generated fusion source. |
+| Default `3.5m` at `b30f252e` | Use the checked-in `3.5m` tables with Host JIT off. |
+| No specialization or fusion at `37cea465` | Set `FIBERCPU_STATIC_SPECIALIZATION=OFF` and `FIBERCPU_ENABLE_SUPEROPCODES=OFF`. |
+| Baked for either ELF at `37cea465` | Supply that ELF's ModRM plan, exact scalar plan, fusion operand plan, and generated fusion source. |
 
-Capture an unfused Block Profile for each ELF in a separate instrumented build.
-Use 20,000 CoreMark iterations for these captures. The original procedure
-is in `docs/baked-instruction-variants.md` at revision `08acbc14`.
-Use a 99.9% weighted ModRM coverage target, up to 384 exact scalar variants,
-and the standard fusion limits of 384 sequences and 768 exact operand variants.
-Turn profiling off for the measurements and test each generated library on
-both guest ELFs.
+For the ELF-specific tables, we captured an unfused Block Profile for each
+ELF over 20,000 CoreMark iterations. We targeted 99.9% weighted ModRM coverage
+and capped the plans at 384 exact scalar variants, 384 fusion sequences, and
+768 fusion operand variants. We turned profiling off for the measurements
+and ran both ELFs against each table.
 
 Run CoreMark with `0x0 0x0 0x66 100000 7 1 2000`. Alternate the build and ELF
 order across three measured rounds and check the benchmark CRCs. The entries
 where the training and measured ELF match quantify an in-profile result. The
 crossed entries show how each plan transfers to the other ELF.
 
-Block-entry weighting estimates that the stock exact scalar plan covers
-75.9% of catalogued scalar visits on the GCC 12 ELF and 85.1% on the GCC 15
-ELF. Their respective targeted plans cover 98.4% and 97.5%. Replaying the
-exact fusion tables estimates 112 and 242 fewer dispatches per thousand
-guest instruction visits for the stock plans, compared with 642 and 651 for
-the matching plans. These estimates describe the captured execution.
+In the earlier experiment, we estimated exact scalar coverage at 75.9% on
+the GCC 12 ELF and 85.1% on the GCC 15 ELF with the old default tables. With
+the matching tables, those estimates rose to 98.4% and 97.5%. We replayed the
+profiles and estimated that the old fusion tables saved 112 and 242
+dispatches per thousand guest instruction visits. The matching tables
+saved an estimated 642 and 651.
 
 ## Early public results
 
