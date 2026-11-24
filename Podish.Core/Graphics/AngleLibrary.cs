@@ -13,11 +13,23 @@ internal sealed unsafe class AngleLibrary
     private readonly nint _gles;
     private readonly nint _nativeDisplay;
     private readonly int _nativePlatform;
+    private readonly Lock _displayGate = new();
 
     internal readonly nint Display;
     internal readonly nint Config;
     internal readonly bool SupportsEs3;
     internal readonly bool UsesVulkan;
+    internal readonly bool UsesMetal;
+
+    internal DisplayLockScope EnterDisplayLock() =>
+        UsesMetal ? new DisplayLockScope(_displayGate) : default;
+
+    internal readonly struct DisplayLockScope : IDisposable
+    {
+        private readonly Lock? _gate;
+        internal DisplayLockScope(Lock gate) { _gate = gate; _gate.Enter(); }
+        public void Dispose() => _gate?.Exit();
+    }
     internal const int Es2Bit = 0x0004, Es3Bit = 0x0040;
     internal readonly nint[] Gl;
     internal readonly nint MapBufferRange;
@@ -137,6 +149,7 @@ internal sealed unsafe class AngleLibrary
                 {
                     attribs[i++] = 0x3203; // EGL_PLATFORM_ANGLE_TYPE_ANGLE
                     attribs[i++] = 0x3489; // Metal
+                    UsesMetal = true;
                 }
                 else if (OperatingSystem.IsWindows() || OperatingSystem.IsLinux())
                 {

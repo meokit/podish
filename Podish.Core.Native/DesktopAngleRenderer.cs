@@ -318,6 +318,8 @@ internal sealed unsafe class DesktopAngleRenderer : IDisposable
 
     internal KmsEglOutput? GuestTextures { get; private set; }
     internal bool HasPendingUploads => _uploads.Count != 0;
+    internal AngleLibrary.DisplayLockScope EnterDisplayLock() => _angle.EnterDisplayLock();
+    internal void Flush() => _glFlush();
 
     private DesktopAngleRenderer(AngleLibrary angle, KmsEglWindow window)
     {

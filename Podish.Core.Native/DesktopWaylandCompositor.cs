@@ -2197,7 +2197,14 @@ internal sealed class DesktopCompositorHost : IDisposable
             bool scanoutDirty = true;
             while (!_stopRequested)
             {
-                bool dirty = DrainCommands(out var consumed);
+                bool dirty;
+                List<ulong> consumed;
+                using (_renderer.EnterDisplayLock())
+                {
+                    dirty = DrainCommands(out consumed);
+                    if (dirty)
+                        _renderer.Flush();
+                }
                 foreach (var lease in consumed)
                     IngressBridge.Post(new DesktopIngressEvent(DesktopIngressKind.BufferConsumed, LeaseToken: lease));
 
@@ -2205,7 +2212,13 @@ internal sealed class DesktopCompositorHost : IDisposable
 
                 if (Scanout.TryTakeGpuFrame(out var buffer, out uint timestamp))
                 {
-                    if (buffer != null && buffer.Present())
+                    bool presented = false;
+                    if (buffer != null)
+                    {
+                        using (_renderer.EnterDisplayLock())
+                            presented = buffer.Present();
+                    }
+                    if (presented)
                     {
                         IngressBridge.Post(new DesktopIngressEvent(DesktopIngressKind.VSyncTick,
                             Timestamp: timestamp, FrameSequence: _scanoutFrameSequence));
@@ -2213,10 +2226,16 @@ internal sealed class DesktopCompositorHost : IDisposable
                 }
 
                 scanoutDirty |= dirty || animDirty;
-                if (scanoutDirty && Scanout.TryQueueGpuFrame(CaptureScanoutFrame))
+                if (scanoutDirty)
                 {
-                    _scanoutFrameSequence = _sceneFrameSequence;
-                    scanoutDirty = false;
+                    bool queued;
+                    using (_renderer.EnterDisplayLock())
+                        queued = Scanout.TryQueueGpuFrame(CaptureScanoutFrame);
+                    if (queued)
+                    {
+                        _scanoutFrameSequence = _sceneFrameSequence;
+                        scanoutDirty = false;
+                    }
                 }
 
                 int waitMs = _renderer.HasPendingUploads ? 1 : (animating ? 8 : 12);
@@ -2237,22 +2256,25 @@ internal sealed class DesktopCompositorHost : IDisposable
 
     private void CleanupRendererResources()
     {
-        foreach (var s in _surfaces.Values)
+        using (_renderer?.EnterDisplayLock() ?? default)
         {
-            s.Texture?.Dispose();
-            s.TitleTexture?.Dispose();
-            s.AppIconTexture?.Dispose();
+            foreach (var s in _surfaces.Values)
+            {
+                s.Texture?.Dispose();
+                s.TitleTexture?.Dispose();
+                s.AppIconTexture?.Dispose();
+            }
+            _surfaces.Clear();
+            _zOrder.Clear();
+            foreach (var tex in _buttonIcons.Values)
+                tex.Dispose();
+            _buttonIcons.Clear();
+            foreach (var tex in _uiTextCache.Values)
+                tex.Dispose();
+            _uiTextCache.Clear();
+            _renderer?.Dispose();
+            _renderer = null;
         }
-        _surfaces.Clear();
-        _zOrder.Clear();
-        foreach (var tex in _buttonIcons.Values)
-            tex.Dispose();
-        _buttonIcons.Clear();
-        foreach (var tex in _uiTextCache.Values)
-            tex.Dispose();
-        _uiTextCache.Clear();
-        _renderer?.Dispose();
-        _renderer = null;
     }
 
     private bool DrainCommands(out List<ulong> consumed)
