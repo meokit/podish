@@ -1,0 +1,39 @@
+{
+  "version": 2,
+  "configurePresets": [
+    {
+      "name": "baking-release",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/../build/native/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "FIBERCPU_ENABLE_LLVM_JIT": false,
+        "FIBERCPU_ENABLE_DYNAMIC_SPECIALIZATION": false
+      }
+    },
+    {
+      "name": "1.75m",
+      "displayName": "1.75 MiB native text hint",
+      "inherits": "baking-release",
+      "cacheVariables": { "FIBERCPU_BAKING_PRESET": "1.75m" }
+    },
+    {
+      "name": "3.5m",
+      "displayName": "3.5 MiB native text hint",
+      "inherits": "baking-release",
+      "cacheVariables": { "FIBERCPU_BAKING_PRESET": "3.5m" }
+    },
+    {
+      "name": "10m",
+      "displayName": "10 MiB native text hint",
+      "inherits": "baking-release",
+      "cacheVariables": { "FIBERCPU_BAKING_PRESET": "10m" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "1.75m", "configurePreset": "1.75m", "targets": ["fibercpu"] },
+    { "name": "3.5m", "configurePreset": "3.5m", "targets": ["fibercpu"] },
+    { "name": "10m", "configurePreset": "10m", "targets": ["fibercpu"] }
+  ]
+}

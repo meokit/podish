@@ -18,7 +18,6 @@ ENV PODISH_BENCH_COMMIT=$PODISH_BENCH_COMMIT
 WORKDIR /src
 COPY . .
 RUN dotnet publish Podish.Cli/Podish.Cli.csproj -c Release -o /opt/podish \
-    -p:LlvmBlockJit=OFF -p:StaticInstructionSpecialization=ON \
-    -p:EnableSuperOpcodes=true -p:FusionStrategy=EXTENDED \
+    -p:LlvmBlockJit=OFF \
     -p:DynamicInstructionSpecialization=OFF
 ENTRYPOINT ["python3", "/src/benchmark/emulator-comparison/measure.py"]

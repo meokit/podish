@@ -22,6 +22,7 @@
 #include "ops/ops_groups_impl.h"
 #include "ops/ops_mmx_impl.h"
 #include "ops/ops_muldiv_impl.h"
+#include "ops/ops_sha_impl.h"
 #include "ops/ops_shift_bit_impl.h"
 #include "ops/ops_sse_cvt_impl.h"
 #include "ops/ops_sse_fp_impl.h"

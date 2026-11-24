@@ -1,6 +1,7 @@
 #pragma once
 
 #include "dispatch.h"
+#include "scalar_partial_config.h"
 
 namespace fiberish {
 
@@ -14,6 +15,20 @@ struct ExactScalarBinding {
     HandlerFunc handler;
 };
 
+#if FIBERCPU_HAVE_SCALAR_PARTIALS
+struct PartialScalarBinding {
+    struct Key {
+        DecodedOperandShape shape;
+        uint8_t slots;
+        auto operator<=>(const Key&) const = default;
+    };
+    Key key;
+    HandlerFunc handler;
+};
+
+using PartialScalarBindings = std::array<std::span<const PartialScalarBinding>, 3>;
+#endif
+
 struct ScalarBindingTable {
     const ScalarBindingEntry* entries;
     size_t count;
@@ -21,6 +36,9 @@ struct ScalarBindingTable {
     uint8_t policies;
     std::array<HandlerFunc, 2> fallback;
     std::span<const ExactScalarBinding> exact;
+#if FIBERCPU_HAVE_SCALAR_PARTIALS
+    const PartialScalarBindings* partial;
+#endif
 };
 
 enum ScalarBindingPolicy : uint8_t {

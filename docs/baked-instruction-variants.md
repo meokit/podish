@@ -1,17 +1,25 @@
 # Baked instruction variants
 
 CMake generates native scalar handlers for the interpreter's 16-byte slots from the
-[ModRM table](../libfibercpu/src/generated/modrm-specializations.json) and the
-[exact operand plan](../benchmark/optimization/manifests/baked-scalar-operands-v3.json).
-The exact plan binds prefixes, flag liveness, effective addresses and immediates
+[ModRM table](../libfibercpu/presets/3.5m/modrm.json) and
+[scalar plan](../libfibercpu/presets/3.5m/scalar.json) in the default `3.5m`
+preset. The [native build presets](build-presets.md) describe the other table sets.
+The scalar plan binds prefixes, flag liveness, effective addresses and immediates
 for selected shapes. The C++ and exact LLVM paths use the catalog kernel
 bindings. You can build and run the C++ handlers without LLVM.
 
-The decoder first matches the exact scalar shape. It then tries the ModRM and
-width/flags bindings. For some memory operands, the decoder masks the ModRM
-bits that the kernel gets from the decoded effective address. If neither table
-matches, the decoder selects a scalar binding for the slot count. The
+The decoder tries exact scalar, partial scalar, and ModRM bindings in that
+order. A ModRM entry can also bind width and flags. For some memory operands,
+the decoder masks the ModRM bits that the kernel gets from the decoded
+effective address. If no baked entry matches, the decoder selects a scalar
+binding for the slot count. The
 architectural catalog selects mandatory-prefix variants such as MMX or SSE.
+
+In a version 4 scalar entry, `slots` fixes the decoded slot count to 1 or 2.
+Set `disp` or `imm` to `null` in its operand record to read that value from the
+runtime op. The lookup still matches the other fields and the slot count. It
+tries single-field variants before variants with both fields dynamic. Exact
+entries retain the version 3 format. Fusion plans still use exact shapes.
 
 Fusions also come from recorded profiles. The checked-in sequence manifest
 contains canonical instruction IDs. The decoder selects a fusion when all of
@@ -19,110 +27,68 @@ its operand shapes match an entry in the baked plan. Other sequences use their
 scalar handlers. The LLVM JIT re-decodes guest bytes with architectural handlers
 to build exact block recipes. See [the JIT options](instruction-specialization.txt).
 
-## Training and updating the default table
+## Train the baking presets
 
-Use a framework-dependent Podish CLI built from the same checkout, with a
-matching managed block-dump ABI. Prepare two IA-32 Linux root filesystems.
+Run the [preset trainer](../scripts/train_nested_presets.py) with Python 3.11
+or later on a macOS ARM64 calibration host. It captures the configured workloads with static
+specialization, SuperOpcodes, online JIT and linked block caching disabled.
+It ranks observed ModRM, width/flags, exact and partial scalar, and fusion
+shapes. Partial candidates group observed operands after removing the
+displacement, the immediate, or both from the match key.
 
-| Input | Contents |
-| --- | --- |
-| Node rootfs | Node.js 14.21.3 at `/opt/node14`. Install fast-deep-equal 3.1.3, enhanced-resolve 5.27.0 and terser 5.51.2 under `/work/webpack/node_modules`. |
-| Suite rootfs | GNU gzip, gunzip, sed, grep, sort, sha256sum and tar at the paths in the [workload runner](../benchmark/optimization/run_matrix.py). Provide a `/work/manual` mount point and IA-32 CoreMark binaries at `/work/coremark_zig` and `/work/coremark_gcc`. |
+Each round adjusts how much of each ranked list to include. The trainer
+learns the code size cost from measured builds and verifies each candidate's
+guest output. It ranks candidates by the geometric mean of training-case
+speedups against a build without baking. It remeasures the finalists and
+freezes three strict supersets against the 1.75, 3.5, and 10 MiB native text
+budgets. The size check during training includes the generic interpreter.
 
-The [training runner](../scripts/run_modrm_training.py) resolves and minifies
-fast-deep-equal, checks eight GNU commands against a deterministic 2 MiB fixture,
-and verifies the CoreMark CRC results after 60,000 iterations of each build.
-It turns off online LLVM JIT, dynamic machine-code specialization and the linked
-cache for capture.
-
-From the repository root, configure a shared host build with Block Profile
-enabled and static specialization disabled.
+From the repository root, configure the training target with a workload JSON.
 
 ```sh
 cmake -S libfibercpu -B out/train -DCMAKE_BUILD_TYPE=Release \
-  -DFIBERCPU_ENABLE_BLOCK_PROFILE=ON \
-  -DFIBERCPU_STATIC_SPECIALIZATION=OFF \
-  -DFIBERCPU_MODRM_TRAIN_PODISH=/absolute/path/to/Podish.Cli.dll \
-  -DFIBERCPU_MODRM_TRAIN_ROOTFS=/absolute/path/to/node-rootfs \
-  -DFIBERCPU_MODRM_TRAIN_SUITE_ROOTFS=/absolute/path/to/suite-rootfs
-
-cmake --build out/train --config Release --target fibercpu_train_modrm_suite
+  -DFIBERCPU_PRESET_TRAINING_CONFIG=/absolute/path/to/training.json
+cmake --build out/train --config Release --target fibercpu_train_presets
 ```
 
-The suite writes one BLK2 v3 capture per case and `modrm-hotness.json` under
-`out/train/modrm-training-suite/Release/`. The collector estimates instruction
-visits from block-entry counts and selects enough keys to cover 99.9% of each
-case's weighted ModRM visits. It takes the union of those keys so Node.js and
-the GNU tools keep their coverage even when CoreMark enters more blocks. Check
-the per-case coverage in the JSON before replacing the default.
-
-Copy the candidate into the repository once you finish the review. Regular
-CMake builds read the checked-in table.
+For a different round count or a comparison without partial scalar forms,
+invoke the same script directly with `--rounds` or `--no-partial-operands`.
 
 ```sh
-cp out/train/modrm-training-suite/Release/modrm-hotness.json \
-  libfibercpu/src/generated/modrm-specializations.json
+python3 scripts/train_nested_presets.py --config /path/to/training.json \
+  --output out/preset-training --rounds 10
 ```
 
-Use `FIBERCPU_MODRM_PLAN_FILE` to test a candidate without changing the default.
-The `fibercpu_train_modrm` target runs only the short JavaScript workload.
-To rebuild a candidate from existing profiles, use
-[collect_modrm_hotness.py](../scripts/collect_modrm_hotness.py) with
-`--per-profile --scalar-policies` and the unfused `*/blocks.bin` files from the suite.
+The config names a writable IA-32 guest `rootfs`, the matching
+framework-dependent Podish build directory in `managed_cli`, the path to
+`Podish.PerfTools.dll` in `perf_tools`, the `cmake` executable, its
+`cmake_args`, and a `benchmark_lock` shared with other local benchmarks.
+Each entry in `workloads` supplies `id`, `group`, guest `cwd`, `shell`,
+`repetitions` and the expected output `sha256`. Optional `verify` selects
+the output representation to hash. Use a fresh output directory for each
+new suite.
 
-The CMake training targets retain the observed operand width and flag liveness
-for catalogued scalar kernels. `scalar_policies` attaches that data to the
-selected ModRM keys. The decoder uses the decoded prefix and flag-liveness
-result to select a policy. It falls back to the ModRM-only binding or the scalar
-slot binding when the plan omits a policy.
+The CMake target writes captures, plans, and timings under
+`out/train/preset-training/Release/`. The `frozen/` directory contains
+the selected plans, native libraries, baseline, and provenance. Compare the
+frozen libraries and baseline on a separate holdout suite with the same
+guest inputs and runtime settings. After review, copy the four JSON files
+and, for tiers with fusion, the generated C++ source into the matching
+`libfibercpu/presets/<tier>/` directories. A normal CMake build reads those
+files directly.
 
-An unfused suite build also writes candidate `baked-fusions-v3.json`,
-`baked-fusion-operands-v3.json`, and `baked-scalar-operands-v3.json` files
-alongside the ModRM plan. The scalar collector takes up to 1,024 shapes from
-fast-deep-equal, 384 from each CoreMark build, and 256 from each GNU workload,
-then deduplicates the union. The collector
-ranks exact operands and their canonical sequence together. A candidate's
-score is its estimated dispatch savings divided by guest instruction visits,
-summed across workloads. The collector replays each capture with the same
-longest-first matching as the decoder and keeps an operand shape only when
-it increases the estimated savings. The operand plan records estimated
-dispatch savings per workload for review. The default training budget is
-384 sequences and 768 exact shapes. `BASE` uses the first 32 sequences.
+Use `FIBERCPU_BAKING_PRESET=custom` and the individual plan options to try
+candidate tables. Set `FIBERCPU_MODRM_PLAN_FILE` for the ModRM plan,
+`FIBERCPU_STATIC_OPERAND_PLAN_FILE` for the scalar plan, and
+`FIBERCPU_GENERATED_SUPEROPCODES_FILE` and `FIBERCPU_OPERAND_PLAN_FILE` for
+the paired fusion source and operand shapes. An empty scalar plan path
+leaves the ModRM bindings enabled.
 
 Relative control transfers share an operand shape across encoded offsets.
 The decoder resolves the target into the runtime slot and retains the
-encoding for profile export. The collectors group these offsets before
-ranking variants, and the code generators accept older v3 plans by merging
-the equivalent entries. Data immediates and the stack adjustment of
-`RET imm16` still distinguish shapes.
-
-To refresh the fusion manifests from existing unfused profiles, run the
-collector and regenerate both C++ tables.
-
-```sh
-python3 scripts/collect_baked_fusions.py \
-  out/train/modrm-training-suite/Release/*/blocks.bin \
-  --candidates benchmark/optimization/manifests/baked-fusions-v3.json \
-  --operands benchmark/optimization/manifests/baked-fusion-operands-v3.json
-
-dotnet build Podish.PerfTools/Podish.PerfTools.csproj -c Release
-dotnet Podish.PerfTools/bin/Release/net10.0/Podish.PerfTools.dll gen-superopcodes \
-  --input benchmark/optimization/manifests/baked-fusions-v3.json --top 32 \
-  --output libfibercpu/src/generated/superopcodes.generated.cpp
-dotnet Podish.PerfTools/bin/Release/net10.0/Podish.PerfTools.dll gen-superopcodes \
-  --input benchmark/optimization/manifests/baked-fusions-v3.json --top 384 \
-  --output libfibercpu/src/generated/superopcodes.extended.generated.cpp
-```
-
-Recapture profiles after changing the canonical instruction identities or the
-decoded operand representation. Build the candidate, run the native and
-PerfTools tests, and validate the workloads before replacing the default.
-Use `FIBERCPU_GENERATED_SUPEROPCODES_FILE` and `FIBERCPU_OPERAND_PLAN_FILE`
-to build with the candidate source and its matching operand plan without
-changing the checked-in tables. Copy the suite's scalar plan to the checked-in
-manifest when updating the defaults. Use `FIBERCPU_STATIC_OPERAND_PLAN_FILE`
-to select a candidate scalar plan or pass an empty value to use ModRM-only
-scalar binding.
+encoding for profile export. Data immediates and the stack adjustment of
+`RET imm16` still distinguish shapes. Recapture profiles after changing
+canonical instruction identities or the decoded operand representation.
 
 ## Code generation review
 

@@ -83,8 +83,13 @@ const TrainingOperation* FindScalarBinding(HandlerFunc handler) {
                 if (fallback) result.emplace(fallback, &operation);
             for (const auto& entry : std::span(operation.scalar->entries, operation.scalar->count))
                 result.emplace(entry.handler, &operation);
-            for (const auto& entry : operation.scalar->exact)
-                result.emplace(entry.handler, &operation);
+            for (const auto& entry : operation.scalar->exact) result.emplace(entry.handler, &operation);
+#if FIBERCPU_HAVE_SCALAR_PARTIALS
+            if (operation.scalar->partial) {
+                for (const auto entries : *operation.scalar->partial)
+                    for (const auto& entry : entries) result.emplace(entry.handler, &operation);
+            }
+#endif
         }
         return result;
     }();
@@ -158,8 +163,7 @@ constinit const std::array<OpcodeBinding, 1024> kOpcodeBindings = [] {
 bool ValidateScalarBindingIndices() {
     const auto matches = [](HandlerFunc handler, ScalarBindingIndex index) {
         const auto offset = static_cast<uint16_t>(index) - 1u;
-        return offset < std::size(training_operations) &&
-               FindScalarBinding(handler) == &training_operations[offset];
+        return offset < std::size(training_operations) && FindScalarBinding(handler) == &training_operations[offset];
     };
     for (const auto& fallback : fallbacks)
         if (!matches(fallback.handler, kOpcodeBindings[fallback.opcode].fallback)) return false;
@@ -195,6 +199,24 @@ HandlerFunc FindGenericInstructionHandler(uint16_t opcode, const DecodedInstruct
     return best ? best->handler : nullptr;
 }
 
+#if FIBERCPU_HAVE_SCALAR_PARTIALS
+static HandlerFunc FindPartialScalar(const PartialScalarBindings& bindings, DecodedOperandShape decoded,
+                                     uint8_t slots) {
+    // Favor keeping an immediate constant when two one-field masks match.
+    // Extracting a compact immediate can cost more than loading a displacement.
+    for (unsigned fields = 1; fields <= bindings.size(); ++fields) {
+        const auto entries = bindings[fields - 1];
+        if (entries.empty()) continue;
+        auto key = PartialScalarBinding::Key{decoded, slots};
+        if (fields & OperandSpec::DynamicDisplacement) key.shape.displacement = 0;
+        if (fields & OperandSpec::DynamicImmediate) key.shape.immediate = 0;
+        const auto selected = std::ranges::lower_bound(entries, key, {}, &PartialScalarBinding::key);
+        if (selected != entries.end() && selected->key == key) return selected->handler;
+    }
+    return nullptr;
+}
+#endif
+
 BoundScalarHandler BindScalarHandler(const DecodedInstruction& op, ScalarBindingIndex index) {
     const auto shape = BoundOperandShape::Read(op);
     const bool indexed = index != ScalarBindingIndex::Unknown;
@@ -205,11 +227,19 @@ BoundScalarHandler BindScalarHandler(const DecodedInstruction& op, ScalarBinding
     const auto* binding = indexed ? &training_operations[offset] : FindScalarBinding(op.handler);
     if (!binding) return {nullptr, 0, shape};
     const auto& table = *binding->scalar;
+#if FIBERCPU_HAVE_SCALAR_PARTIALS
+    if (!table.exact.empty() || table.partial) {
+#else
     if (!table.exact.empty()) {
+#endif
         const auto decoded = DecodedOperandShape::Read(&op);
         const auto selected = std::ranges::lower_bound(table.exact, decoded, {}, &ExactScalarBinding::shape);
-        if (selected != table.exact.end() && selected->shape == decoded)
-            return {selected->handler, binding->id, shape};
+        if (selected != table.exact.end() && selected->shape == decoded) return {selected->handler, binding->id, shape};
+#if FIBERCPU_HAVE_SCALAR_PARTIALS
+        if (table.partial)
+            if (const auto handler = FindPartialScalar(*table.partial, decoded, shape.slots))
+                return {handler, binding->id, shape};
+#endif
     }
     const uint8_t modrm = shape.modrm < 0xc0 || !table.memory_mask ? shape.modrm & table.memory_mask : shape.modrm;
     const uint16_t key = (uint16_t(shape.slots) << 8) | modrm;

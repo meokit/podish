@@ -1,9 +1,22 @@
 <Project>
+  <PropertyGroup>
+    <FibercpuBakingPreset Condition="'$(FibercpuBakingPreset)' == ''">3.5m</FibercpuBakingPreset>
+    <FibercpuIsolatedPreset Condition="'$(FibercpuBakingPreset)' == '1.75m' Or '$(FibercpuBakingPreset)' == '10m'">true</FibercpuIsolatedPreset>
+  </PropertyGroup>
+
   <!-- Opt-in isolation for the training orchestrator, not a global output-policy change. -->
   <PropertyGroup Condition="'$(SuperOpcodeFlavor)' != ''">
     <SuperOpcodeArtifactsRoot Condition="'$(SuperOpcodeArtifactsRoot)' == ''">$(MSBuildThisFileDirectory)artifacts/superopcode/builds</SuperOpcodeArtifactsRoot>
     <BaseOutputPath>$(SuperOpcodeArtifactsRoot)/$(SuperOpcodeFlavor)/managed/$(MSBuildProjectName)/bin/</BaseOutputPath>
     <BaseIntermediateOutputPath>$(SuperOpcodeArtifactsRoot)/$(SuperOpcodeFlavor)/managed/$(MSBuildProjectName)/obj/</BaseIntermediateOutputPath>
+    <DefaultItemExcludes>$(DefaultItemExcludes);**/bin/**;**/obj/**</DefaultItemExcludes>
+  </PropertyGroup>
+
+  <PropertyGroup Condition="'$(FibercpuIsolatedPreset)' == 'true'">
+    <BaseOutputPath Condition="'$(BaseOutputPath)' == ''">bin/</BaseOutputPath>
+    <BaseIntermediateOutputPath Condition="'$(BaseIntermediateOutputPath)' == ''">obj/</BaseIntermediateOutputPath>
+    <BaseOutputPath>$(BaseOutputPath)$(FibercpuBakingPreset)/</BaseOutputPath>
+    <BaseIntermediateOutputPath>$(BaseIntermediateOutputPath)$(FibercpuBakingPreset)/</BaseIntermediateOutputPath>
     <DefaultItemExcludes>$(DefaultItemExcludes);**/bin/**;**/obj/**</DefaultItemExcludes>
   </PropertyGroup>
 </Project>

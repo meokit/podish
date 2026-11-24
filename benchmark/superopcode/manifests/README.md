@@ -22,7 +22,7 @@ this selection to the default, replacing the old 256-pair table. See the
 
 ```powershell
 $manifest = (Resolve-Path benchmark/superopcode/manifests/gnu-long4x32-v1.json).Path
-dotnet build Podish.Cli/Podish.Cli.csproj -c Release -p:SuperOpcodeFlavor=gnu-long4x32-v1 -p:NativeBuildDir=build_native/gnu-long4x32-v1 -p:EnableSuperOpcodes=true -p:EnableSequenceProfile=false -p:EnableHandlerProfile=false -p:EnableBlockProfile=false "-p:SuperOpcodeManifest=$manifest" -p:SuperOpcodeTop=64
+dotnet build Podish.Cli/Podish.Cli.csproj -c Release -p:FibercpuBakingPreset=custom -p:SuperOpcodeFlavor=gnu-long4x32-v1 -p:NativeBuildDir=build_native/gnu-long4x32-v1 -p:EnableSuperOpcodes=true -p:EnableSequenceProfile=false -p:EnableHandlerProfile=false -p:EnableBlockProfile=false "-p:SuperOpcodeManifest=$manifest" -p:SuperOpcodeTop=64
 ```
 
 Native and managed build products are isolated from ordinary/pinned builds. The

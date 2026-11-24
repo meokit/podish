@@ -41,13 +41,8 @@ option(FIBERCPU_BUILD_STATIC "Build fibercpu as a static library instead of shar
 option(FIBERCPU_ENABLE_LTO "Enable interprocedural optimization (LTO/IPO)" ON)
 option(FIBERCPU_ENABLE_BLOCK_PROFILE "Enable lightweight per-block execution counting" OFF)
 option(FIBERCPU_ENABLE_HANDLER_PROFILE "Enable approximate per-handler execution profiling" OFF)
-option(FIBERCPU_STATIC_SPECIALIZATION "Build profile-baked native instruction variants" ON)
-set(FIBERCPU_MODRM_PLAN_FILE "${CMAKE_CURRENT_SOURCE_DIR}/src/generated/modrm-specializations.json"
-    CACHE FILEPATH "Profile-baked ModRM specialization table")
-set(FIBERCPU_STATIC_OPERAND_PLAN_FILE "${CMAKE_CURRENT_SOURCE_DIR}/../benchmark/optimization/manifests/baked-scalar-operands-v3.json"
-    CACHE FILEPATH "Profile-baked exact scalar operand plan")
-option(FIBERCPU_ENABLE_SUPEROPCODES "Enable generated SuperOpcode matching and handlers" ON)
 option(FIBERCPU_ENABLE_SEQUENCE_PROFILE "Count actual unfused within-block Continue edges (training only)" OFF)
+include(cmake/BakingPresets.cmake)
 if(NOT FIBERCPU_STATIC_SPECIALIZATION)
     set(FIBERCPU_ENABLE_SUPEROPCODES OFF)
 endif()
@@ -60,10 +55,6 @@ if(MSVC AND FIBERCPU_BUILD_STATIC)
 endif()
 
 # Independent compile-time choices; AUTO selects the production defaults for the target.
-set(FIBERCPU_FUSION_STRATEGY "AUTO" CACHE STRING "Baked fusion set (AUTO, BASE, EXTENDED)")
-set_property(CACHE FIBERCPU_FUSION_STRATEGY PROPERTY STRINGS AUTO BASE EXTENDED)
-set(FIBERCPU_OPERAND_BUDGET "768" CACHE STRING "Maximum baked fusion operand shapes (0..1024)")
-set(FIBERCPU_OPERAND_PLAN_FILE "" CACHE FILEPATH "Override the baked fusion operand plan")
 set(FIBERCPU_DYNAMIC_OPERAND_PLAN_FILE "" CACHE FILEPATH "Decoded operand plan for runtime templates (macOS arm64)")
 option(FIBERCPU_ENABLE_DYNAMIC_SPECIALIZATION "Enable native runtime instruction specialization" ON)
 set(FIBERCPU_GPR_PIN "AUTO" CACHE STRING "Guest GPR pin (AUTO: supported ARM64 only; ON, OFF, ABI_ONLY, CONSERVATIVE, EAX_ESP, WRITE_BACK)")
@@ -73,9 +64,10 @@ set(FIBERCPU_GPR_PIN_REGISTERS "EAX,ESP" CACHE STRING "Pinned guest GPRs (comma-
 set(FIBERCPU_PIN_SPECIALIZATION "AUTO" CACHE STRING "Pin access coverage (AUTO, BASE, SCALAR, MEMORY)")
 set_property(CACHE FIBERCPU_PIN_SPECIALIZATION PROPERTY STRINGS AUTO BASE SCALAR MEMORY)
 
-# Sequence training and external fusion tables use their own configuration.
+# Sequence training and custom fusion tables use their own configuration.
 set(_production_optimizations ON)
-if(FIBERCPU_ENABLE_SEQUENCE_PROFILE OR FIBERCPU_GENERATED_SUPEROPCODES_FILE)
+if(FIBERCPU_ENABLE_SEQUENCE_PROFILE OR
+   (FIBERCPU_BAKING_PRESET STREQUAL "custom" AND FIBERCPU_GENERATED_SUPEROPCODES_FILE))
     set(_production_optimizations OFF)
 endif()
 
@@ -221,13 +213,14 @@ set(FIBERCPU_OPERAND_MODE 0)
 if(FIBERCPU_LOWER_OPERANDS)
     set(FIBERCPU_OPERAND_MODE 1)
 endif()
-set(_default_fusion "${CMAKE_CURRENT_SOURCE_DIR}/src/generated/superopcodes.generated.cpp")
-if(NOT FIBERCPU_FUSION_STRATEGY STREQUAL "BASE")
-    set(_default_fusion "${CMAKE_CURRENT_SOURCE_DIR}/src/generated/superopcodes.extended.generated.cpp")
+if(FIBERCPU_FUSION_STRATEGY STREQUAL "BASE")
+    set(_default_fusion "${CMAKE_CURRENT_SOURCE_DIR}/src/generated/superopcodes.generated.cpp")
+    set(_stock_fusion_plan "${CMAKE_CURRENT_SOURCE_DIR}/../benchmark/optimization/manifests/baked-fusion-operands-v3.json")
+else()
+    set(_default_fusion "${_default_baking_directory}/superopcodes.generated.cpp")
+    set(_stock_fusion_plan "${_default_baking_directory}/fusion-operands.json")
 endif()
 # An explicit external table wins; an empty cache value follows the strategy.
-set(FIBERCPU_GENERATED_SUPEROPCODES_FILE
-    "" CACHE FILEPATH "Explicit generated superopcode source (empty follows strategy)")
 if(NOT FIBERCPU_GENERATED_SUPEROPCODES_FILE)
     set(FIBERCPU_GENERATED_SUPEROPCODES_FILE "${_default_fusion}")
 endif()
@@ -291,6 +284,7 @@ set(_catalog_products "${CMAKE_CURRENT_BINARY_DIR}/generated/instruction_familie
                       "${CMAKE_CURRENT_BINARY_DIR}/generated/llvm_block_operations.inc"
                       "${CMAKE_CURRENT_BINARY_DIR}/generated/llvm_block_entries.inc"
                       "${CMAKE_CURRENT_BINARY_DIR}/generated/llvm_op_ids.h"
+                      "${CMAKE_CURRENT_BINARY_DIR}/generated/scalar_partial_config.h"
                       "${CMAKE_CURRENT_BINARY_DIR}/generated/training_scalar_handlers.inc"
                       "${CMAKE_CURRENT_BINARY_DIR}/generated/training_fusion_handlers.inc")
 # Keep the scalar trampolines and baked bindings in separate translation units.
@@ -302,24 +296,32 @@ list(APPEND _catalog_products ${_scalar_bindings})
 set(_modrm_plan_args)
 set(_modrm_plan_input)
 set(_static_operand_args)
-set(_static_operand_input)
+set(_static_operand_inputs)
+set(_static_operand_hashes)
 if(FIBERCPU_STATIC_SPECIALIZATION)
     set(_modrm_plan_input "${FIBERCPU_MODRM_PLAN_FILE}")
     set(_modrm_plan_args --modrm-plan "${_modrm_plan_input}")
     if(FIBERCPU_STATIC_OPERAND_PLAN_FILE)
-        set(_static_operand_input "${FIBERCPU_STATIC_OPERAND_PLAN_FILE}")
-        set(_static_operand_args --static-operand-plan "${_static_operand_input}")
-        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${_static_operand_input}")
-        file(SHA256 "${_static_operand_input}" _static_operand_hash)
+        list(APPEND _static_operand_inputs "${FIBERCPU_STATIC_OPERAND_PLAN_FILE}")
     endif()
+    foreach(plan IN LISTS _static_operand_inputs)
+        list(APPEND _static_operand_args --static-operand-plan "${plan}")
+        set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${plan}")
+        file(SHA256 "${plan}" plan_hash)
+        list(APPEND _static_operand_hashes "${plan_hash}")
+    endforeach()
 endif()
+set(_catalog_options "${CMAKE_CURRENT_BINARY_DIR}/generated/catalog-options.txt")
+file(CONFIGURE OUTPUT "${_catalog_options}" CONTENT
+    "@_catalog_fusion_input@\n@_modrm_plan_input@\n@_static_operand_inputs@\n@FIBERCPU_PIN_SPECIALIZATION_MODE@\n@_pin_mask@\n" @ONLY)
 add_custom_command(OUTPUT ${_catalog_products}
     COMMAND "${Python3_EXECUTABLE}" "${_catalog_generator}" --catalog "${_instruction_catalog}"
         --output "${CMAKE_CURRENT_BINARY_DIR}/generated" --pin-mode "${FIBERCPU_PIN_SPECIALIZATION_MODE}"
         --pin-mask "${_pin_mask}" ${_catalog_fusion_args} ${_modrm_plan_args} ${_static_operand_args}
     DEPENDS "${_catalog_generator}" "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/operand_specialization_data.py"
         "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/scalar_modrm.py" "${CMAKE_CURRENT_SOURCE_DIR}/src/decoder_lut.h"
-        ${_catalog_inputs} ${_catalog_fusion_input} ${_modrm_plan_input} ${_static_operand_input}
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/decoder.h"
+        "${_catalog_options}" ${_catalog_inputs} ${_catalog_fusion_input} ${_modrm_plan_input} ${_static_operand_inputs}
     VERBATIM)
 add_custom_target(fibercpu_instruction_catalog DEPENDS ${_catalog_products})
 
@@ -339,7 +341,7 @@ if(FIBERCPU_HAVE_GENERATED_SUPEROPCODES)
     file(WRITE "${_combined}" "#include \"${_operand_source}\"\n#include \"${_operand_output}\"\n")
     set(_plan "${FIBERCPU_OPERAND_PLAN_FILE}")
     if(NOT _plan)
-        set(_plan "${CMAKE_CURRENT_SOURCE_DIR}/../benchmark/optimization/manifests/baked-fusion-operands-v3.json")
+        set(_plan "${_stock_fusion_plan}")
     endif()
     set(_operand_options "${CMAKE_CURRENT_BINARY_DIR}/generated/operand-options.txt")
     file(GENERATE OUTPUT "${_operand_options}" CONTENT
@@ -405,7 +407,9 @@ if(_modrm_plan_input)
     file(SHA256 "${_modrm_plan_input}" _modrm_hash)
 endif()
 set(FIBERCPU_OPTIMIZATION_CONFIG "static=${FIBERCPU_STATIC_SPECIALIZATION};fusion=${FIBERCPU_FUSION_STRATEGY};enabled=${FIBERCPU_ENABLE_SUPEROPCODES};operand=${FIBERCPU_OPERAND_MODE};budget=${FIBERCPU_OPERAND_BUDGET};pin=${FIBERCPU_GPR_PIN};pins=${_pin_registers};coverage=${FIBERCPU_PIN_SPECIALIZATION};plan_source=${_operand_plan_source};plan=${_operand_plan_hash};modrm=${_modrm_hash}")
-if(_static_operand_input)
+string(APPEND FIBERCPU_OPTIMIZATION_CONFIG ";baking_preset=${FIBERCPU_BAKING_PRESET}")
+if(_static_operand_hashes)
+    list(JOIN _static_operand_hashes "+" _static_operand_hash)
     string(APPEND FIBERCPU_OPTIMIZATION_CONFIG ";scalar_operands=${_static_operand_hash}")
 endif()
 set(FIBERCPU_DYNAMIC_OPERANDS OFF)
@@ -545,6 +549,7 @@ set(FIBERCPU_FINAL_SOURCES
 )
 
 add_library(fibercpu ${FIBERCPU_LIBRARY_TYPE} ${FIBERCPU_FINAL_SOURCES})
+fibercpu_report_baking_size(fibercpu)
 
 # Instruction variant lookup uses handler addresses as identities.
 if(MSVC)
@@ -555,58 +560,19 @@ if(MSVC)
     endif()
 endif()
 
-set(FIBERCPU_MODRM_TRAIN_PODISH "" CACHE FILEPATH "Published Podish.Cli.dll for short ModRM training")
-set(FIBERCPU_MODRM_TRAIN_ROOTFS "" CACHE PATH "Prepared IA-32 Node/Webpack rootfs for short ModRM training")
-set(FIBERCPU_MODRM_TRAIN_SUITE_ROOTFS "" CACHE PATH "Prepared IA-32 GNU and CoreMark rootfs for full ModRM training")
-if(FIBERCPU_MODRM_TRAIN_PODISH OR FIBERCPU_MODRM_TRAIN_ROOTFS OR FIBERCPU_MODRM_TRAIN_SUITE_ROOTFS)
-    if(NOT EXISTS "${FIBERCPU_MODRM_TRAIN_PODISH}" OR NOT IS_DIRECTORY "${FIBERCPU_MODRM_TRAIN_ROOTFS}")
-        message(FATAL_ERROR "ModRM training requires FIBERCPU_MODRM_TRAIN_PODISH and FIBERCPU_MODRM_TRAIN_ROOTFS")
+set(FIBERCPU_PRESET_TRAINING_CONFIG "" CACHE FILEPATH "Workload configuration for training the baking presets")
+if(FIBERCPU_PRESET_TRAINING_CONFIG)
+    if(NOT EXISTS "${FIBERCPU_PRESET_TRAINING_CONFIG}")
+        message(FATAL_ERROR "Preset training config does not exist: ${FIBERCPU_PRESET_TRAINING_CONFIG}")
     endif()
-    if(NOT FIBERCPU_ENABLE_BLOCK_PROFILE OR FIBERCPU_BUILD_STATIC OR CMAKE_CROSSCOMPILING)
-        message(FATAL_ERROR "ModRM training requires a host shared build with FIBERCPU_ENABLE_BLOCK_PROFILE=ON")
-    endif()
-    find_program(FIBERCPU_MODRM_TRAIN_DOTNET dotnet REQUIRED)
-    set(_modrm_training_output "${CMAKE_CURRENT_BINARY_DIR}/modrm-training/$<CONFIG>")
-    set(_modrm_training_fusions)
-    if(FIBERCPU_HAVE_GENERATED_SUPEROPCODES)
-        list(APPEND _modrm_training_fusions --fusions "${FIBERCPU_GENERATED_SUPEROPCODES_FILE}")
-    endif()
-    set(_modrm_training_command
-        "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/run_modrm_training.py"
-        --dotnet "${FIBERCPU_MODRM_TRAIN_DOTNET}" --podish "${FIBERCPU_MODRM_TRAIN_PODISH}"
-        --library "$<TARGET_FILE:fibercpu>" --rootfs "${FIBERCPU_MODRM_TRAIN_ROOTFS}"
-        ${_modrm_training_fusions})
-    add_custom_target(fibercpu_train_modrm
-        COMMAND ${_modrm_training_command} --output "${_modrm_training_output}"
-        DEPENDS fibercpu
-        BYPRODUCTS "${_modrm_training_output}/blocks.bin" "${_modrm_training_output}/modrm-hotness.json"
-        COMMENT "Capturing a short Node.js ModRM training profile"
+    add_custom_target(fibercpu_train_presets
+        COMMAND "${Python3_EXECUTABLE}" "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/train_nested_presets.py"
+            --config "${FIBERCPU_PRESET_TRAINING_CONFIG}"
+            --output "${CMAKE_CURRENT_BINARY_DIR}/preset-training/$<CONFIG>"
+        COMMENT "Training nested instruction baking presets"
         USES_TERMINAL
         VERBATIM
     )
-    if(FIBERCPU_MODRM_TRAIN_SUITE_ROOTFS)
-        if(NOT IS_DIRECTORY "${FIBERCPU_MODRM_TRAIN_SUITE_ROOTFS}")
-            message(FATAL_ERROR "FIBERCPU_MODRM_TRAIN_SUITE_ROOTFS must be a prepared rootfs directory")
-        endif()
-        set(_modrm_suite_output "${CMAKE_CURRENT_BINARY_DIR}/modrm-training-suite/$<CONFIG>")
-        set(_modrm_suite_args)
-        set(_modrm_suite_products "${_modrm_suite_output}/modrm-hotness.json")
-        if(NOT FIBERCPU_STATIC_SPECIALIZATION)
-            list(APPEND _modrm_suite_args --bake-fusions)
-            list(APPEND _modrm_suite_products "${_modrm_suite_output}/baked-fusions-v3.json"
-                                             "${_modrm_suite_output}/baked-fusion-operands-v3.json"
-                                             "${_modrm_suite_output}/baked-scalar-operands-v3.json")
-        endif()
-        add_custom_target(fibercpu_train_modrm_suite
-            COMMAND ${_modrm_training_command} --suite-rootfs "${FIBERCPU_MODRM_TRAIN_SUITE_ROOTFS}"
-                    --output "${_modrm_suite_output}" ${_modrm_suite_args}
-            DEPENDS fibercpu
-            BYPRODUCTS ${_modrm_suite_products}
-            COMMENT "Capturing the ModRM training suite"
-            USES_TERMINAL
-            VERBATIM
-        )
-    endif()
 endif()
 
 target_compile_definitions(fibercpu PRIVATE FIBERCPU_SUPEROPCODE_SET_SHA256="${FIBERCPU_SUPEROPCODE_SET_SHA256}")
@@ -800,7 +766,7 @@ ${setting}=${${setting}}")
     endforeach()
     file(GLOB_RECURSE _linked_abi_sources RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}"
         CONFIGURE_DEPENDS "src/*.h")
-    list(APPEND _linked_abi_sources CMakeLists.txt src/decoder.cpp src/jit/block_recipe.cpp src/jit/llvm_block_ir.cpp
+    list(APPEND _linked_abi_sources CMakeLists.txt cmake/BakingPresets.cmake src/decoder.cpp src/jit/block_recipe.cpp src/jit/llvm_block_ir.cpp
         src/jit/llvm_block_jit.cpp src/jit/llvm_operand_ir.cpp ../scripts/gen_instruction_catalog.py)
     foreach(source IN LISTS _linked_abi_sources)
         set(path "${CMAKE_CURRENT_SOURCE_DIR}/${source}")

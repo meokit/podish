@@ -12,7 +12,7 @@ python tests/media/run.py --cli Podish.Cli/bin/Release/net10.0/Podish.Cli.dll --
 On Windows, point the same command at the Windows CLI and fixture directory.
 Use `--dotnet <path>` if .NET 10 is installed outside `PATH`. If a Windows
 clang-cl build fails to link generated SuperOpcodes, build the smoke CLI with
-`-p:EnableSuperOpcodes=OFF` as in CI.
+`-p:FibercpuBakingPreset=custom -p:EnableSuperOpcodes=OFF` as in CI.
 
 The probes cover framebuffer ioctl and shared memory, Wayland `xdg_shell`
 configure and a shared-memory frame with callback/release, KMS modeset and

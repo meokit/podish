@@ -511,6 +511,7 @@ internal static class BenchmarkRunner
             "-c",
             configuration,
             "--no-restore",
+            "-p:FibercpuBakingPreset=custom",
             $"-p:EnableSuperOpcodes={(enableSuperOpcodes ? "true" : "false")}",
             $"-p:EnableBlockProfile={(enableBlockProfile ? "true" : "false")}"
         };

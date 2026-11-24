@@ -36,6 +36,7 @@
         <PodishStaticNative Condition="'$(PublishAot)' == 'true'">true</PodishStaticNative>
         <PodishNativeBuildDir Condition="'$(RuntimeIdentifier)' != ''">..\Fiberish.X86\build_native\$(RuntimeIdentifier)</PodishNativeBuildDir>
         <PodishNativeBuildDir Condition="'$(RuntimeIdentifier)' == ''">..\Fiberish.X86\build_native\host</PodishNativeBuildDir>
+        <PodishNativeBuildDir Condition="'$(FibercpuIsolatedPreset)' == 'true'">$(PodishNativeBuildDir)\$(FibercpuBakingPreset)</PodishNativeBuildDir>
         <PodishNetstackTarget Condition="'$(RuntimeIdentifier)' == 'osx-arm64'">aarch64-apple-darwin</PodishNetstackTarget>
         <PodishNetstackTarget Condition="'$(RuntimeIdentifier)' == 'ios-arm64'">aarch64-apple-ios</PodishNetstackTarget>
         <PodishNetstackTarget Condition="'$(RuntimeIdentifier)' == 'iossimulator-arm64'">aarch64-apple-ios-sim</PodishNetstackTarget>

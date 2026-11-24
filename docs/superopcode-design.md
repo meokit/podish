@@ -7,28 +7,26 @@ slots so execution can resume at the instruction that faulted.
 
 ## Build inputs
 
-CMake enables SuperOpcodes by default with static specialization enabled.
-`FIBERCPU_FUSION_STRATEGY=AUTO` selects `EXTENDED`. Use `BASE` for the first
-32 sequences or set `FIBERCPU_ENABLE_SUPEROPCODES=OFF` to run scalar handlers.
-`FIBERCPU_STATIC_SPECIALIZATION=OFF` disables fusion and keeps the mandatory scalar
-slot bindings that make the interpreter runnable.
+CMake uses the trained `3.5m` preset by default. Each preset supplies a set of
+fusion recipes and their exact operand shapes. Select
+`FIBERCPU_BAKING_PRESET=custom` to change the individual baking options.
+In a custom build, `FIBERCPU_FUSION_STRATEGY=BASE` selects the legacy
+32-sequence table, `FIBERCPU_ENABLE_SUPEROPCODES=OFF` runs scalar handlers, and
+`FIBERCPU_STATIC_SPECIALIZATION=OFF` keeps only the mandatory scalar slot
+bindings.
 
-| Input | Role |
+| Default input | Role |
 | --- | --- |
-| [Sequence manifest](../benchmark/optimization/manifests/baked-fusions-v3.json) | Orders candidates by their numeric, catalog-assigned operation IDs. |
-| [Fusion operand plan](../benchmark/optimization/manifests/baked-fusion-operands-v3.json) | Lists the exact operand shapes to compile for those sequences. |
+| [Sequence manifest](../libfibercpu/presets/3.5m/recipes.json) | Orders candidates by their numeric, catalog-assigned operation IDs. |
+| [Fusion operand plan](../libfibercpu/presets/3.5m/fusion-operands.json) | Lists the exact operand shapes to compile for those sequences. |
 | [Instruction catalog](../libfibercpu/src/instruction_catalog.json) | Defines instruction identities, kernel bindings, and eligible family aliases. |
 
 `Podish.PerfTools gen-superopcodes` reads the version 3 manifest and emits
 C++ handlers and lookup code. CMake includes the selected generated source and
 runs [gen_operand_specializations.py](../scripts/gen_operand_specializations.py)
-to generate the exact operand clones. See the
-[baking guide](baked-instruction-variants.md) for the workload suite, refresh
-commands and machine-code checks.
-
-For a candidate build, set `FIBERCPU_GENERATED_SUPEROPCODES_FILE` to the new
-generated source and `FIBERCPU_OPERAND_PLAN_FILE` to the corresponding plan.
-Normal builds use the checked-in source and plan.
+to generate the exact operand clones. To test a candidate in a custom build,
+set `FIBERCPU_GENERATED_SUPEROPCODES_FILE` to its generated source and
+`FIBERCPU_OPERAND_PLAN_FILE` to the corresponding plan.
 
 ## Decode and lookup
 
@@ -75,11 +73,11 @@ before a later fault keep their effects.
 
 ## Profiles and validation
 
-Collect unfused block profiles with `fibercpu_train_modrm_suite`. The default
-suite combines Node.js, GNU tools and two CoreMark builds. The collector ranks
-sequence and operand shapes by estimated dispatch savings across workloads,
-then replays longest-first matching to score overlap. See
-[collect_baked_fusions.py](../scripts/collect_baked_fusions.py).
+Run `fibercpu_train_presets` to capture unfused block profiles and measure
+candidate tables. The candidate collector ranks sequence and operand shapes
+by estimated dispatch savings across workloads and replays longest-first
+matching to score overlap. The trainer measures subsets of those candidates
+together with scalar variants. See the [baking guide](baked-instruction-variants.md).
 
 For block-dump diagnostics, use `Podish.PerfTools analyze-blocks` and aggregate
 the analysis files with `analyze-superopcode-candidates`. That output helps

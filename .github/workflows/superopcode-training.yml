@@ -47,14 +47,14 @@ jobs:
       - name: Explicit pinned GNU asset preparation
         run: dotnet msbuild build/SuperOpcodes.proj -t:PrepareAssets
       - name: Verify instrumented pair and exact ngram accounting
-        run: dotnet test Fiberish.X86.Tests/Fiberish.X86.Tests.csproj -c Release -p:SuperOpcodeFlavor=training -p:NativeBuildDir=build_native/training -p:EnableSuperOpcodes=false -p:EnableSequenceProfile=true --filter FullyQualifiedName~SequenceProfileTests --logger "trx;LogFileName=sequence-profile.trx" --results-directory artifacts/superopcode/standard-training/counter-tests
+        run: dotnet test Fiberish.X86.Tests/Fiberish.X86.Tests.csproj -c Release -p:FibercpuBakingPreset=custom -p:SuperOpcodeFlavor=training -p:NativeBuildDir=build_native/training -p:EnableSuperOpcodes=false -p:EnableSequenceProfile=true --filter FullyQualifiedName~SequenceProfileTests --logger "trx;LogFileName=sequence-profile.trx" --results-directory artifacts/superopcode/standard-training/counter-tests
       - name: Verify actual long-sequence matches and fault recovery
         shell: pwsh
         run: |
           dotnet run --project Podish.PerfTools -c Release -- gen-superopcodes --input benchmark/superopcode/sequence-probes.json --output artifacts/superopcode/standard-training/sequence-probes.generated.cpp --top 32
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           $source = (Resolve-Path artifacts/superopcode/standard-training/sequence-probes.generated.cpp).Path
-          dotnet test Fiberish.X86.Tests/Fiberish.X86.Tests.csproj -c Release -p:SuperOpcodeFlavor=sequence-probes -p:NativeBuildDir=build_native/sequence-probes -p:EnableSuperOpcodes=true -p:EnableSequenceProfile=false -p:EnableExtendedSuperOpcodeProbes=true "-p:SuperOpcodeSource=$source" --filter FullyQualifiedName~LongSequenceFusionTests --logger "trx;LogFileName=long-sequence.trx" --results-directory artifacts/superopcode/standard-training/sequence-probes
+          dotnet test Fiberish.X86.Tests/Fiberish.X86.Tests.csproj -c Release -p:FibercpuBakingPreset=custom -p:SuperOpcodeFlavor=sequence-probes -p:NativeBuildDir=build_native/sequence-probes -p:EnableSuperOpcodes=true -p:EnableSequenceProfile=false -p:EnableExtendedSuperOpcodeProbes=true "-p:SuperOpcodeSource=$source" --filter FullyQualifiedName~LongSequenceFusionTests --logger "trx;LogFileName=long-sequence.trx" --results-directory artifacts/superopcode/standard-training/sequence-probes
       - name: Train unfused, distill, build and verify candidate
         run: dotnet msbuild build/SuperOpcodes.proj -t:TrainAndVerify
       - name: Measure three uninstrumented variants on independent holdout

@@ -12,6 +12,7 @@
         <NativeBuildDir Condition="'$(IsBrowserWasm)' == 'true'">build_native/browser-wasm</NativeBuildDir>
         <NativeBuildDir Condition="'$(IsBrowserWasm)' != 'true' And '$(RuntimeIdentifier)' != ''">build_native/$(RuntimeIdentifier)</NativeBuildDir>
         <NativeBuildDir Condition="'$(IsBrowserWasm)' != 'true' And '$(RuntimeIdentifier)' == ''">build_native/host</NativeBuildDir>
+        <NativeBuildDir Condition="'$(FibercpuIsolatedPreset)' == 'true'">$(NativeBuildDir)/$(FibercpuBakingPreset)</NativeBuildDir>
         <FusionStrategy Condition="'$(FusionStrategy)' == ''">AUTO</FusionStrategy>
         <OperandBudget Condition="'$(OperandBudget)' == ''">AUTO</OperandBudget>
         <PinSpecialization Condition="'$(PinSpecialization)' == ''">AUTO</PinSpecialization>
@@ -45,9 +46,13 @@
     <!-- Define inputs for incremental build tracking -->
     <ItemGroup Condition="'$(LibFibercpuSourceExists)' == 'true'">
         <NativeBuildInput Include="$(LibFibercpuSourceDir)/CMakeLists.txt" />
+        <NativeBuildInput Include="$(LibFibercpuSourceDir)/cmake/**/*.cmake" />
+        <NativeBuildInput Include="$(LibFibercpuSourceDir)/presets/**/*.json;$(LibFibercpuSourceDir)/presets/**/*.cpp" />
         <NativeBuildInput Include="$(MSBuildProjectFullPath)" />
         <NativeBuildInput Include="$(MSBuildThisFileDirectory)../scripts/gen_operand_specializations.py" />
         <NativeBuildInput Include="$(MSBuildThisFileDirectory)../scripts/gen_instruction_catalog.py" />
+        <NativeBuildInput Include="$(MSBuildThisFileDirectory)../scripts/scalar_modrm.py" />
+        <NativeBuildInput Include="$(MSBuildThisFileDirectory)../scripts/check_native_text_budget.py" />
         <NativeBuildInput Include="$(MSBuildThisFileDirectory)../scripts/embed_llvm_bitcode.py" />
         <NativeBuildInput Include="$(MSBuildThisFileDirectory)../scripts/operand_specialization_data.py" />
         <NativeBuildInput Include="$(MSBuildThisFileDirectory)../scripts/gen_dynamic_operand_specializations.py" Condition="'$(DynamicOperandPlanFile)' != ''" />
@@ -65,6 +70,7 @@
          network asset preparation occurs inside an ordinary native build. -->
     <Target Name="PrepareSuperOpcodeGenerator" BeforeTargets="GenerateSelectedSuperOpcodes"
             Condition="'$(SuperOpcodeManifest)' != '' And '$(DesignTimeBuild)' != 'true' And '$(FiberishSkipNativeBuild)' != 'true'">
+        <Error Condition="'$(FibercpuBakingPreset)' != 'custom'" Text="SuperOpcodeManifest requires FibercpuBakingPreset=custom." />
         <Error Condition="'$(EnableSuperOpcodes)' == 'false'" Text="SuperOpcodeManifest cannot be used with EnableSuperOpcodes=false." />
         <Error Condition="!$([System.IO.Path]::IsPathRooted('$(SuperOpcodeManifest)'))" Text="SuperOpcodeManifest must be an absolute path." />
         <Error Condition="!Exists('$(SuperOpcodeManifest)')" Text="Missing locked SuperOpcodeManifest: $(SuperOpcodeManifest)" />
@@ -83,9 +89,11 @@
 
     <Target Name="PrepareNativeOptions" BeforeTargets="BuildNativeLib"
             Condition="'$(DesignTimeBuild)' != 'true' And '$(FiberishSkipNativeBuild)' != 'true'">
+        <Error Condition="'$(FibercpuBakingPreset)' != 'custom' And '$(FibercpuBakingPreset)' != '1.75m' And '$(FibercpuBakingPreset)' != '3.5m' And '$(FibercpuBakingPreset)' != '10m'"
+               Text="Unknown FibercpuBakingPreset '$(FibercpuBakingPreset)'. Choose custom, 1.75m, 3.5m or 10m." />
         <MakeDir Directories="$(SuperOpcodeGenerationDir)" />
         <WriteLinesToFile File="$(SuperOpcodeGenerationDir)/native-options.txt"
-            Lines="fusion=$(FusionStrategy);budget=$(OperandBudget);pin=$(GprPin);pins=$(GprPinRegisters);writeback=$(GprWriteBack);coverage=$(PinSpecialization);plan=$(OperandPlanFile);static=$(StaticInstructionSpecialization);dynamic=$(DynamicInstructionSpecialization);dynamic_plan=$(DynamicOperandPlanFile);llvm=$(LlvmBlockJit);llvm_dir=$(LlvmConfigDir);native_clang=$(NativeClangDir);super=$(EnableSuperOpcodes);source=$(SuperOpcodeSource);handler=$(EnableHandlerProfile);block=$(EnableBlockProfile);sequence=$(EnableSequenceProfile)"
+            Lines="baking_preset=$(FibercpuBakingPreset);fusion=$(FusionStrategy);budget=$(OperandBudget);pin=$(GprPin);pins=$(GprPinRegisters);writeback=$(GprWriteBack);coverage=$(PinSpecialization);plan=$(OperandPlanFile);static=$(StaticInstructionSpecialization);dynamic=$(DynamicInstructionSpecialization);dynamic_plan=$(DynamicOperandPlanFile);llvm=$(LlvmBlockJit);llvm_dir=$(LlvmConfigDir);native_clang=$(NativeClangDir);super=$(EnableSuperOpcodes);source=$(SuperOpcodeSource);handler=$(EnableHandlerProfile);block=$(EnableBlockProfile);sequence=$(EnableSequenceProfile)"
             Overwrite="true" WriteOnlyWhenDifferent="true" />
     </Target>
 
@@ -124,6 +132,7 @@
             <CMakeSequenceProfile Condition="'$(EnableSequenceProfile)' == 'true'">ON</CMakeSequenceProfile>
             <CMakeSequenceProfile Condition="'$(CMakeSequenceProfile)' == ''">OFF</CMakeSequenceProfile>
             <CMakeArgs>$(CMakeArgs) -DFIBERCPU_ENABLE_SEQUENCE_PROFILE=$(CMakeSequenceProfile)</CMakeArgs>
+            <CMakeArgs>$(CMakeArgs) -DFIBERCPU_BAKING_PRESET=$(FibercpuBakingPreset)</CMakeArgs>
             <CMakeArgs>$(CMakeArgs) -DFIBERCPU_FUSION_STRATEGY=$(FusionStrategy) -DFIBERCPU_OPERAND_BUDGET=$(OperandBudget) -DFIBERCPU_GPR_PIN=$(GprPin) -DFIBERCPU_GPR_PIN_REGISTERS=&quot;$(GprPinRegisters)&quot; -DFIBERCPU_GPR_WRITE_BACK=$(GprWriteBack) -DFIBERCPU_PIN_SPECIALIZATION=$(PinSpecialization) -DFIBERCPU_OPERAND_PLAN_FILE=&quot;$(OperandPlanFile)&quot;</CMakeArgs>
             <CMakeArgs>$(CMakeArgs) -DFIBERCPU_GENERATED_SUPEROPCODES_FILE=&quot;$(SuperOpcodeSource)&quot;</CMakeArgs>
             <CMakeArgs>$(CMakeArgs) -DFIBERCPU_DYNAMIC_OPERAND_PLAN_FILE=&quot;$(DynamicOperandPlanFile)&quot;</CMakeArgs>

@@ -37,7 +37,12 @@ dotnet build Podish.Cli/Podish.Cli.csproj -c Debug -r win-x64 -m:1
 ```
 
 The CLI build calls CMake through `Fiberish.X86` and Cargo through
-`Fiberish.Core`. For the full solution, follow the CI workflow's macOS job.
+`Fiberish.Core`. The default baking preset is `3.5m`. Set
+`-p:FibercpuBakingPreset=1.75m` or `-p:FibercpuBakingPreset=10m` to select
+a different set of instruction tables. The names are size hints calibrated
+on macOS ARM64. See [native build presets](docs/build-presets.md).
+
+For the full solution, follow the CI workflow's macOS job.
 It builds the browser project alongside the native projects and installs the
 `wasm-tools` workload. The [browser build notes](Podish.Browser/README.md)
 cover Emscripten setup. The [Swift app roadmap](docs/podish-swift-app-roadmap.md)
@@ -204,13 +209,13 @@ in iterations per second.
 | Interpreter configuration | GCC 12.2 / glibc | GCC 15.2 / musl |
 | --- | ---: | ---: |
 | No specialization or fusion | 1,855.4 | 1,969.7 |
-| Repository defaults | 4,102.6 | 5,127.7 |
+| Previous default tables | 4,102.6 | 5,127.7 |
 | Trained on the GCC 12.2 ELF | **7,542.0** | 3,557.2 |
 | Trained on the GCC 15.2 ELF | 3,496.3 | **8,397.7** |
 
 The score gap between the ELFs was 6% with specialization and fusion
-disabled and 25% with the repository defaults. Bold entries use a plan
-trained on the measured ELF. Each targeted plan scored below the repository
+disabled and 25% with the previous default tables. Bold entries use a plan
+trained on the measured ELF. Each targeted plan scored below the previous
 defaults when used on the other ELF.
 [Build settings, ELF hashes, and profile coverage](benchmark/emulator-comparison/README.md#coremark-interpreter-specialization)
 

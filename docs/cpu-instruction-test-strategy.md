@@ -21,7 +21,7 @@ dotnet test Fiberish.X86.Tests/Fiberish.X86.Tests.csproj -c Release --no-build \
 
 ```sh
 dotnet test Fiberish.X86.Tests/Fiberish.X86.Tests.csproj -c Release \
-  -p:NativeBuildDir=build_native/cpu-nosuper -p:EnableSuperOpcodes=false \
+  -p:FibercpuBakingPreset=custom -p:NativeBuildDir=build_native/cpu-nosuper -p:EnableSuperOpcodes=false \
   --filter "Category!=Exhaustive"
 ```
 

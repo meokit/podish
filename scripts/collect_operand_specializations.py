@@ -103,29 +103,10 @@ def collect(profiles, fusion_source, limit):
     return entries, len(ranked), skipped
 
 
-def bake_scalar_workload_union(profiles, output):
-    selected = {}
-    for name, profile in sorted(profiles.items()):
-        limit = 1024 if name == "fast-deep-equal" else 384 if name.startswith("coremark") else 256
-        entries, _, _ = collect([profile], None, limit)
-        for row in entries:
-            operand, = row["operands"]
-            key = row["originalId"], Operand(**operand)
-            if key not in selected:
-                selected[key] = row
-            else:
-                selected[key]["count"] += row["count"]
-                selected[key]["dispatch_count"] += row["dispatch_count"]
-    if not selected:
-        raise ValueError("no eligible scalar operands in the unfused captures")
-    rows = ",\n".join("    " + json.dumps(row, separators=(",", ":")) for row in selected.values())
-    output.write_text('{\n  "version": 3,\n  "entries": [\n' + rows + '\n  ]\n}\n', encoding="utf-8")
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("profiles", type=Path, nargs="+", help="blocks.bin files or guest stats directories")
-    parser.add_argument("--fusions", type=Path, default=SRC / "generated/superopcodes.extended.generated.cpp",
+    parser.add_argument("--fusions", type=Path, default=SRC.parent / "presets/3.5m/superopcodes.generated.cpp",
                         help="C++ fusion source selected when capturing the profiles")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--limit", type=int, help="Export only this many rows (default: all observed rows)")

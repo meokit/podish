@@ -3,6 +3,8 @@
 import hashlib
 import re
 from dataclasses import asdict, dataclass, replace
+from functools import cache
+from pathlib import Path
 
 
 def instruction_targets(catalog):
@@ -131,6 +133,28 @@ HAS_MEMORY = 2
 HAS_IMMEDIATE = 4
 NO_FLAGS = 1 << 4
 OPSIZE_PREFIX = 1 << 6
+
+
+@cache
+def compact_immediates():
+    source = (Path(__file__).resolve().parents[1] / "libfibercpu/src/decoder.h").read_text()
+    mask = re.search(r"constexpr uint8_t kCodeMask = (\w+);", source)
+    last = re.search(r"constexpr uint8_t kLastLiteral = (\w+);", source)
+    constants = re.search(r"kConstants\{([^}]+)\};", source)
+    if not (mask and last and constants):
+        raise ValueError("could not read compact immediate encoding from decoder.h")
+    mask, last = int(mask[1], 0), int(last[1], 0)
+    table = [int(value, 0) for value in constants[1].split(",") if value.strip()]
+    if len(table) != mask - last:
+        raise ValueError("invalid compact immediate table in decoder.h")
+    return mask, frozenset(range(last + 1)) | frozenset(table)
+
+
+def data_operand_slots(operand):
+    prefix_mask, immediates = compact_immediates()
+    extra = bool(operand.meta & HAS_MEMORY and operand.imm
+                 and (operand.prefixes & prefix_mask or operand.imm not in immediates))
+    return 1 + extra
 
 
 @dataclass(frozen=True, order=True)

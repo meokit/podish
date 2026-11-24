@@ -6,33 +6,18 @@ from collections import Counter
 from decimal import Decimal, InvalidOperation
 import json
 from pathlib import Path
-import re
 import struct
 
 from collect_operand_specializations import SRC, blocks
 from gen_instruction_catalog import read_catalog
 from operand_specialization_data import (
-    HAS_MEMORY, HAS_MODRM, NO_FLAGS, OPSIZE_PREFIX, generated_fusions, training_handlers,
+    HAS_MODRM, NO_FLAGS, OPSIZE_PREFIX, data_operand_slots, generated_fusions, training_handlers,
 )
 from scalar_modrm import scalar_modrm_plans
 
 
 DEFAULT_COVERAGE = Decimal("0.999")
-DEFAULT_FUSIONS = SRC / "generated/superopcodes.extended.generated.cpp"
-
-
-def compact_immediates():
-    source = (SRC / "decoder.h").read_text()
-    mask = re.search(r"constexpr uint8_t kCodeMask = (\w+);", source)
-    last = re.search(r"constexpr uint8_t kLastLiteral = (\w+);", source)
-    constants = re.search(r"kConstants\{([^}]+)\};", source)
-    if not (mask and last and constants):
-        raise ValueError("could not read compact immediate encoding from decoder.h")
-    mask, last = int(mask[1], 0), int(last[1], 0)
-    table = [int(value, 0) for value in constants[1].split(",") if value.strip()]
-    if len(table) != mask - last:
-        raise ValueError("invalid compact immediate table in decoder.h")
-    return mask, set(range(last + 1)) | set(table)
+DEFAULT_FUSIONS = SRC.parent / "presets/3.5m/superopcodes.generated.cpp"
 
 
 def read_modrm_counts(profiles, fusion_source, collect_policies):
@@ -41,7 +26,6 @@ def read_modrm_counts(profiles, fusion_source, collect_policies):
     handlers = training_handlers(catalog, fusions)
     plans = scalar_modrm_plans(catalog)
     scalar_ids = {handler.name: op_id for op_id, handler in handlers.items() if handler.kind == "wrapper"}
-    prefix_mask, immediates = compact_immediates()
     hits = Counter()
     policy_hits = Counter()
     policies = catalog.get("scalar_policies", {}) if collect_policies else {}
@@ -68,9 +52,7 @@ def read_modrm_counts(profiles, fusion_source, collect_policies):
                         continue  # Invalid-opcode trap handlers have no trainable ModRM shape.
                     mem_mask = binding.memory_mask
                     modrm = op.modrm & mem_mask if op.modrm < 0xc0 or not mem_mask else op.modrm
-                    slots = 1
-                    if op.meta & HAS_MEMORY and op.imm and (op.prefixes & prefix_mask or op.imm not in immediates):
-                        slots = 2
+                    slots = data_operand_slots(op)
                     if (slots << 8 | modrm) not in binding.modrm_keys:
                         raise ValueError(f"{profile}: missing scalar binding {name}, ModRM 0x{modrm:02x}, {slots} slots")
                     key = scalar_ids[name], slots, modrm

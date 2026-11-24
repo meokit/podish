@@ -97,8 +97,7 @@ llvm="$(brew --prefix llvm@21)"
 
 dotnet publish Podish.Cli/Podish.Cli.csproj -c Release -o "$out/podish" \
   -p:LlvmBlockJit=ON -p:NativeClangDir="$llvm/bin" \
-  -p:LlvmConfigDir="$llvm/lib/cmake/llvm" -p:FusionStrategy=EXTENDED \
-  -p:StaticInstructionSpecialization=ON -p:EnableSuperOpcodes=true \
+  -p:LlvmConfigDir="$llvm/lib/cmake/llvm" \
   -p:DynamicInstructionSpecialization=OFF
 
 python3 "$bench/measure.py" --bundle "$HOME/podish-bundle" \
@@ -169,12 +168,12 @@ machine-code specialization, and the linked block cache off for every build.
 | Measured configuration | Build settings |
 | --- | --- |
 | No specialization or fusion | Set `FIBERCPU_STATIC_SPECIALIZATION=OFF` and `FIBERCPU_ENABLE_SUPEROPCODES=OFF`. The interpreter uses its ordinary slot-bound handlers. |
-| Repository defaults | Enable static specialization and `EXTENDED` fusion with the checked-in plans. |
+| Previous default tables | Enable static specialization and `EXTENDED` fusion with the plans checked in at `08acbc14`. |
 | Baked for either ELF | Enable static specialization and `EXTENDED` fusion. Supply that ELF's ModRM plan, exact scalar plan, fusion operand plan, and generated fusion source. |
 
 Capture an unfused Block Profile for each ELF in a separate instrumented build.
-Use 20,000 CoreMark iterations for these captures. Follow the
-[baking guide](../../docs/baked-instruction-variants.md) to generate each plan.
+Use 20,000 CoreMark iterations for these captures. The original procedure
+is in `docs/baked-instruction-variants.md` at revision `08acbc14`.
 Use a 99.9% weighted ModRM coverage target, up to 384 exact scalar variants,
 and the standard fusion limits of 384 sequences and 768 exact operand variants.
 Turn profiling off for the measurements and test each generated library on

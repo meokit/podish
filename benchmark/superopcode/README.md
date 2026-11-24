@@ -71,7 +71,7 @@ Commands: `build --flavor training|off|pinned|candidate`, `collect`, `distill`,
 Use an **absolute** manifest path to opt into generation before `BuildNativeLib`:
 
 ```sh
-dotnet build Fiberish.X86/Fiberish.X86.csproj -c Release -p:SuperOpcodeManifest=/absolute/path/selected.json -p:SuperOpcodeTop=128
+dotnet build Fiberish.X86/Fiberish.X86.csproj -c Release -p:FibercpuBakingPreset=custom -p:SuperOpcodeManifest=/absolute/path/selected.json -p:SuperOpcodeTop=128
 ```
 
 MSBuild builds the host generator, tracks the manifest/tool/options/project
@@ -79,7 +79,8 @@ inputs, emits C++ into the isolated intermediate directory and passes its path t
 generator performs no guest execution and accesses no network assets. CMake
 excludes the default table from its source glob and compiles exactly the selected
 file. A missing requested table is an error, not a silent fallback. Standalone
-CMake can use `-DFIBERCPU_GENERATED_SUPEROPCODES_FILE=/absolute/table.cpp`.
+CMake accepts `-DFIBERCPU_BAKING_PRESET=custom` with
+`-DFIBERCPU_GENERATED_SUPEROPCODES_FILE=/absolute/table.cpp`.
 
 For separate generation without compilation:
 

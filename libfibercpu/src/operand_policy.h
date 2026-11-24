@@ -90,8 +90,7 @@ struct DecodedOperandShape {
     static constexpr bool HasMemoryAddress(uint8_t metadata) { return (metadata & 0xc2) == 2; }
 
     constexpr BoundOperandShape Binding() const {
-        return BoundOperandShape::From(uint8_t(encoding), uint8_t(encoding >> 8), uint8_t(encoding >> 16),
-                                       immediate);
+        return BoundOperandShape::From(uint8_t(encoding), uint8_t(encoding >> 8), uint8_t(encoding >> 16), immediate);
     }
 
     constexpr unsigned SlotCount() const { return Binding().slots; }
@@ -104,7 +103,7 @@ struct DecodedOperandShape {
         // Relative branches consume the resolved target in the runtime Op.
         // RET imm16 uses the same storage kind and still needs its immediate.
         const bool omit_immediate = !include_relative_offset && kind == ExtKind::ControlFlow &&
-                                   op->ext.control.relative_width != RelativeBranchWidth::None;
+                                    op->ext.control.relative_width != RelativeBranchWidth::None;
         return {
             uint32_t(op->modrm) | (uint32_t(op->prefixes.all) << 8) | (uint32_t(op->meta.all & metadata_mask) << 16) |
                 (uint32_t(op->len) << 24),
@@ -122,8 +121,9 @@ struct Baked {
     Prefixes prefixes;
     BakedAddress address;
 
-    constexpr Baked(uint8_t prefix_byte, uint32_t ea_desc, uint32_t displacement)
-        : prefixes{prefix_byte}, address{ea_desc, displacement, (prefix_byte & prefix::ADDRSIZE) != 0} {}
+    constexpr Baked(uint8_t prefix_byte, uint32_t ea_desc, uint32_t displacement, bool displacement_known = true)
+        : prefixes{prefix_byte},
+          address{ea_desc, displacement, (prefix_byte & prefix::ADDRSIZE) != 0, displacement_known} {}
 
     constexpr Prefixes ReadPrefixes(const DecodedOp*) const { return prefixes; }
 };
@@ -146,6 +146,34 @@ struct Profile {
         }
     }
     static constexpr uint32_t Immediate(const DecodedOp*) { return Shape.immediate; }
+};
+
+enum DynamicField : uint8_t {
+    DynamicDisplacement = 1,
+    DynamicImmediate = 2,
+};
+
+template <DecodedOperandShape Shape, unsigned Keep, unsigned Slots, unsigned DynamicFields>
+struct PartialProfile : Profile<Shape, Keep> {
+    static_assert(Slots == 1 || Slots == 2);
+    static_assert(DynamicFields > 0 && DynamicFields < 4);
+    static constexpr unsigned slots = Slots;
+    static constexpr auto metadata = Profile<Shape, Keep>::metadata;
+    static_assert(ExtKind(metadata >> 6) == ExtKind::Data);
+    static constexpr bool memory = DecodedOperandShape::HasMemoryAddress(metadata);
+    static_assert(!(DynamicFields & DynamicDisplacement) || memory);
+    static_assert(!(DynamicFields & DynamicImmediate) || (metadata & Meta::has_imm_mask));
+    static_assert((DynamicFields & DynamicImmediate) ? Slots == 1 || memory : Slots == Shape.SlotCount());
+    static constexpr Baked operands{Profile<Shape, Keep>::prefixes, Shape.ea_desc, Shape.displacement,
+                                    !(DynamicFields & DynamicDisplacement)};
+    static constexpr const BakedAddress* baked_address = memory ? &operands.address : nullptr;
+
+    static FORCE_INLINE uint32_t Immediate(const DecodedOp* op) {
+        if constexpr (!(DynamicFields & DynamicImmediate)) return Shape.immediate;
+        if constexpr (Slots == 2) return (op + 1)->Primary();
+        if constexpr (memory) return GetSingleSlotMemoryImmediate(op);
+        return op->Primary();
+    }
 };
 }  // namespace OperandSpec
 

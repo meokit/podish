@@ -106,7 +106,7 @@ internal static partial class Program
         var arguments = new List<string>
         {
             "build", "Podish.Cli/Podish.Cli.csproj", "-c", "Release", "--nologo", "-clp:ErrorsOnly;Summary",
-            "-p:FusionStrategy=BASE", "-p:OperandSpecialization=OFF", "-p:OperandScope=ALL", "-p:GprPin=OFF",
+            "-p:FibercpuBakingPreset=custom", "-p:FusionStrategy=BASE", "-p:OperandSpecialization=OFF", "-p:OperandScope=ALL", "-p:GprPin=OFF",
             "-p:RollForward=Major", $"-p:SuperOpcodeFlavor={flavor}", $"-p:NativeBuildDir=build_native/{flavor}",
             $"-p:EnableSuperOpcodes={enabled.ToString().ToLowerInvariant()}",
             $"-p:EnableSequenceProfile={(flavor == "training").ToString().ToLowerInvariant()}",
@@ -483,7 +483,7 @@ internal static partial class Program
             // Never let a failed test/build command reuse an older successful TRX.
             var freshFile = Path.Combine(output, $"correctness-{flavor}-{Guid.NewGuid():N}.trx");
             var arguments = new List<string> { "test", "Fiberish.X86.Tests/Fiberish.X86.Tests.csproj", "-c", "Release", "--nologo",
-                "-clp:ErrorsOnly;Summary", "-p:FusionStrategy=BASE", "-p:OperandSpecialization=OFF", "-p:OperandScope=ALL", "-p:GprPin=OFF",
+                "-clp:ErrorsOnly;Summary", "-p:FibercpuBakingPreset=custom", "-p:FusionStrategy=BASE", "-p:OperandSpecialization=OFF", "-p:OperandScope=ALL", "-p:GprPin=OFF",
                 "-p:RollForward=Major", $"-p:SuperOpcodeFlavor={flavor}",
                 $"-p:NativeBuildDir=build_native/{flavor}", $"-p:EnableSuperOpcodes={(flavor != "off").ToString().ToLowerInvariant()}",
                 "-p:EnableSequenceProfile=false", "-p:EnableBlockProfile=false", "-p:EnableHandlerProfile=false",

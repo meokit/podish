@@ -69,7 +69,7 @@ For superopcode OFF use a separate build/output, or rebuild and launch a fresh
 testhost before running:
 
 ```sh
-dotnet test Fiberish.X86.Tests/Fiberish.X86.Tests.csproj -c Release -p:NativeBuildDir=build_native/cpu-nosuper -p:EnableSuperOpcodes=false --filter "Category!=Exhaustive"
+dotnet test Fiberish.X86.Tests/Fiberish.X86.Tests.csproj -c Release -p:FibercpuBakingPreset=custom -p:NativeBuildDir=build_native/cpu-nosuper -p:EnableSuperOpcodes=false --filter "Category!=Exhaustive"
 ```
 
 Never switch a loaded native DLL underneath a running testhost. The dedicated

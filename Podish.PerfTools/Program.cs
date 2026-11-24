@@ -240,8 +240,10 @@ internal static partial class Program
                 "build",
                 Path.Combine(projectRoot, "Podish.Cli", "Podish.Cli.csproj"),
                 "-c", "Release",
+                "-p:FibercpuBakingPreset=custom",
                 "-p:EnableHandlerProfile=true",
-                "-p:EnableSuperOpcodes=true"
+                "-p:EnableSuperOpcodes=true",
+                $"-p:SuperOpcodeSource={generatedOutputPath}"
             }, projectRoot);
 
         Console.WriteLine($"[superopcode] results_dir={resultsDir}");

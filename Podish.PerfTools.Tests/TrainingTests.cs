@@ -15,8 +15,20 @@ public sealed class TrainingTests
         var generated = Path.Combine(root.FullName, "libfibercpu", "src", "generated");
         Assert.Equal(Tool.GenerateSuperopcodes(manifest, 32),
             File.ReadAllText(Path.Combine(generated, "superopcodes.generated.cpp")));
-        Assert.Equal(Tool.GenerateSuperopcodes(manifest, int.MaxValue),
-            File.ReadAllText(Path.Combine(generated, "superopcodes.extended.generated.cpp")));
+    }
+
+    [Theory]
+    [InlineData("1.75m")]
+    [InlineData("3.5m")]
+    [InlineData("10m")]
+    public void PresetFusionSourceReproducesItsRecipes(string preset)
+    {
+        var root = new DirectoryInfo(AppContext.BaseDirectory);
+        while (root is not null && !File.Exists(Path.Combine(root.FullName, "Podish.slnx"))) root = root.Parent;
+        Assert.NotNull(root);
+        var directory = Path.Combine(root.FullName, "libfibercpu", "presets", preset);
+        Assert.Equal(Tool.GenerateSuperopcodes(Path.Combine(directory, "recipes.json"), int.MaxValue),
+            File.ReadAllText(Path.Combine(directory, "superopcodes.generated.cpp")));
     }
 
     [Fact]
