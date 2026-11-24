@@ -12,16 +12,21 @@ internal static class ContainerGraphics
 
     internal static AngleDevice? Mount(SyscallManager syscalls, KernelScheduler scheduler,
         FramebufferDevice? framebuffer, VirtualConsoleInput? kmsInput, bool gles, bool kmsDrm,
-        KmsEglWindow? kmsWindow, VirtualDrmScanout? compositorScanout, KmsEglOutput? compositorTextures, ILogger logger)
+        KmsEglWindow? kmsWindow, VirtualDrmScanout? compositorScanout, KmsEglOutput? compositorTextures, ILogger logger,
+        string? angleDirectory = null, string? guestDirectory = null)
     {
-        if (gles && (OperatingSystem.IsBrowser() || OperatingSystem.IsIOS()))
-            throw new ContainerConfigurationException("ANGLE GLES is only available in a desktop host process.");
+        if (gles && OperatingSystem.IsBrowser())
+            throw new ContainerConfigurationException("ANGLE GLES is not available in browser WebAssembly.");
 
-        var angle = Environment.GetEnvironmentVariable("PODISH_ANGLE_DIR");
+        var angle = !string.IsNullOrWhiteSpace(angleDirectory)
+            ? angleDirectory
+            : Environment.GetEnvironmentVariable("PODISH_ANGLE_DIR");
         if (gles && string.IsNullOrEmpty(angle))
             throw new ContainerConfigurationException("Set PODISH_ANGLE_DIR to the host ANGLE EGL/GLES library directory.");
-        var guest = Environment.GetEnvironmentVariable("PODISH_GLES_GUEST_DIR") ??
-                    Path.GetFullPath("artifacts/podish-gles/guest");
+        var guest = !string.IsNullOrWhiteSpace(guestDirectory)
+            ? guestDirectory
+            : Environment.GetEnvironmentVariable("PODISH_GLES_GUEST_DIR") ??
+              Path.GetFullPath("artifacts/podish-gles/guest");
 
         try
         {

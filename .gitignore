@@ -53,3 +53,7 @@ xcuserdata/
 Fiberish.Tests/TestResults/
 Fiberish.X86.Tests/TestResults/
 Podish.PerfTools.Tests/TestResults/
+dist/
+PodishApp/Resources/PodishRootfs/
+PodishApp/Resources/PodishGlesGuest/
+PodishApp/artifacts/

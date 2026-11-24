@@ -68,6 +68,8 @@ public sealed class ContainerRunRequest
     public VirtualConsoleInput? KmsInput { get; init; }
     public VirtualDrmScanout? CompositorScanout { get; init; }
     internal KmsEglOutput? CompositorTextures { get; init; }
+    public string? AngleLibraryDirectory { get; init; }
+    public string? GlesGuestLibraryDirectory { get; init; }
     public ushort? TerminalRows { get; init; }
     public ushort? TerminalCols { get; init; }
     public Action<KernelRuntime, KernelScheduler, UTSNamespace?, int>? ConfigureVirtualDaemons { get; init; }
@@ -407,7 +409,7 @@ public sealed class ContainerRuntimeService
                 startupPhase = "mount-graphics";
                 gles = ContainerGraphics.Mount(runtime.Syscalls, scheduler, request.Framebuffer, request.KmsInput,
                     request.EnableGles, request.EnableKmsDrm, request.KmsWindow, request.CompositorScanout,
-                    request.CompositorTextures, _logger);
+                    request.CompositorTextures, _logger, request.AngleLibraryDirectory, request.GlesGuestLibraryDirectory);
             }
 
             try
