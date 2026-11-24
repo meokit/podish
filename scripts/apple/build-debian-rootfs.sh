@@ -61,7 +61,7 @@ apt-get install -y --no-install-recommends \
     wget \
     git \
     nano \
-    vim-tiny \
+    vim \
     less \
     file \
     tar \
@@ -96,6 +96,7 @@ apt-get install -y --no-install-recommends \
     qt6-wayland \
     qt6-svg-plugins \
     qt6-qpa-plugins \
+    libqt6opengl6 \
     lxqt-qtplugin \
     lxqt-themes \
     lxqt-config \
@@ -120,8 +121,10 @@ apt-get install -y --no-install-recommends \
 cmake -S /src/podish-launcher -B /tmp/build-launcher -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build /tmp/build-launcher
 install -Dm755 /tmp/build-launcher/podish-launcher /usr/local/bin/podish-launcher
-strip --strip-unneeded /usr/local/bin/podish-launcher || true
+install -Dm755 /tmp/build-launcher/podish-gl4es-sdl-shim.so /usr/local/lib/podish-gl4es-sdl-shim.so
+strip --strip-unneeded /usr/local/bin/podish-launcher /usr/local/lib/podish-gl4es-sdl-shim.so || true
 install -Dm755 /src/podish-launcher/podish-desktop-session /usr/local/bin/podish-desktop-session
+install -Dm755 /src/podish-launcher/podish-supertuxkart /usr/local/bin/supertuxkart
 install -Dm644 /src/podish-launcher/podish-launcher.desktop /usr/local/share/applications/podish-launcher.desktop
 install -Dm644 /src/podish-launcher/podish-launcher.svg /usr/local/share/icons/hicolor/scalable/apps/podish-launcher.svg
 rm -rf /tmp/build-launcher
@@ -134,7 +137,8 @@ apt-get purge -y --auto-remove \
     pkg-config \
     qt6-base-dev
 
-# Configure default user account (uid 1000) and desktop directories
+# Configure default root password, desktop user account (uid 1000), and desktop directories
+echo "root:podish" | chpasswd
 if ! id -u user >/dev/null 2>&1; then
     useradd -m -U -u 1000 -s /bin/bash user
 fi

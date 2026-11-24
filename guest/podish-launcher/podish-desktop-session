@@ -3,6 +3,7 @@ set -eu
 
 export HOME="${HOME:-/home/user}"
 export USER="${USER:-user}"
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/local/games:/usr/games"
 export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run}"
 export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-0}"
 export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
