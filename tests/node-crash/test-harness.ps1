@@ -15,7 +15,7 @@ $project = Join-Path $WorkDirectory "Probe.csproj"
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>Exe</OutputType>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>net11.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>
   </PropertyGroup>
 </Project>
@@ -29,7 +29,7 @@ return mode == "marker-fail" ? 139 : 0;
 
 & dotnet build $project --nologo -p:NuGetAudit=false
 if ($LASTEXITCODE -ne 0) { throw "Fake CLI build failed: $LASTEXITCODE" }
-$cli = Join-Path $WorkDirectory "bin\Debug\net10.0\Probe.dll"
+$cli = Join-Path $WorkDirectory "bin\Debug\net11.0\Probe.dll"
 $harness = Join-Path $PSScriptRoot "run-repro.ps1"
 $cases = @(
     @{ Mode = "success"; Expected = 0; Crash = $false },

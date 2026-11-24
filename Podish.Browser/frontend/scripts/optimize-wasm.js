@@ -7,7 +7,7 @@ import {fileURLToPath} from 'url';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(__dirname, '../../');
-const DEFAULT_FRAMEWORK_DIR = path.join(PROJECT_ROOT, 'bin/Release/net10.0/publish/wwwroot/_framework');
+const DEFAULT_FRAMEWORK_DIR = path.join(PROJECT_ROOT, 'bin/Release/net11.0/publish/wwwroot/_framework');
 
 function parseArgs(argv) {
     const options = {

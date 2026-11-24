@@ -30,7 +30,7 @@ tests/cpu/
     catalog.json                 # all 260 sources; ready/blocked + concrete reason
     bin/<upstream-relative>.bin   # all 260 offline NASM conversions
     manifests/<relative>.json    # CONFIG, provenance, binary SHA256, HLT addresses
-  tools/FexImport/                # standalone net10.0 console import/verification tool
+  tools/FexImport/                # standalone net11.0 console import/verification tool
 Fiberish.X86.Tests/Fex/           # strict CONFIG parser, asset verifier, execution, shards
 ```
 
@@ -161,7 +161,7 @@ dotnet run --project tests/cpu/tools/FexImport -- regenerate --nasm C:\path\to\n
 dotnet test Fiberish.X86.Tests --filter FullyQualifiedName~Fex
 ```
 
-The importer targets `net10.0` and allows major runtime roll-forward. It shares only
+The importer targets `net11.0` and allows major runtime roll-forward. It shares only
 the managed schema/parser source with the test project and has no package or native
 project dependency. `--root <repository-path>` is supported from another directory.
 `fetch` uses GitHub's pinned codeload archive in memory and extracts only the locked

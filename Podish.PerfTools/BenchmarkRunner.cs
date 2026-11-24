@@ -472,8 +472,8 @@ internal static class BenchmarkRunner
 
     private static string DefaultJitConfiguration(string projectRoot)
     {
-        var releaseBinary = Path.Combine(projectRoot, "Podish.Cli", "bin", "Release", "net10.0", "Podish.Cli");
-        var debugBinary = Path.Combine(projectRoot, "Podish.Cli", "bin", "Debug", "net10.0", "Podish.Cli");
+        var releaseBinary = Path.Combine(projectRoot, "Podish.Cli", "bin", "Release", "net11.0", "Podish.Cli");
+        var debugBinary = Path.Combine(projectRoot, "Podish.Cli", "bin", "Debug", "net11.0", "Podish.Cli");
         if (File.Exists(releaseBinary))
             return "Release";
         if (File.Exists(debugBinary))

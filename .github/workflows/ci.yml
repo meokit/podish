@@ -36,7 +36,7 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 10.0.x
+          dotnet-version: 11.0.x
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -68,7 +68,7 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 10.0.x
+          dotnet-version: 11.0.x
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -92,7 +92,7 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 10.0.x
+          dotnet-version: 11.0.x
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -105,7 +105,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: podishcli-win-x64-nativeaot-publish
-          path: Podish.Cli/bin/Release/net10.0/win-x64/publish/**
+          path: Podish.Cli/bin/Release/net11.0/win-x64/publish/**
 
   publish-linux:
     name: Publish Linux PodishCli NativeAOT
@@ -118,7 +118,7 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 10.0.x
+          dotnet-version: 11.0.x
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -136,7 +136,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: podishcli-linux-x64-nativeaot-publish
-          path: Podish.Cli/bin/Release/net10.0/linux-x64/publish/**
+          path: Podish.Cli/bin/Release/net11.0/linux-x64/publish/**
 
   build-macos:
     name: Build macOS full solution
@@ -149,7 +149,7 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 10.0.x
+          dotnet-version: 11.0.x
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -161,57 +161,8 @@ jobs:
       - name: Install WebAssembly workload
         run: dotnet workload install wasm-tools
 
-      - name: Resolve browser-wasm toolchain
-        shell: bash
-        run: |
-          set -euo pipefail
-          dotnet_root="${DOTNET_ROOT:-}"
-          if [[ -z "${dotnet_root}" ]]; then
-            dotnet_root="$(dirname "$(command -v dotnet)")"
-          fi
-          if [[ ! -d "$dotnet_root/packs" ]]; then
-            echo "Failed to locate dotnet packs under $dotnet_root/packs" >&2
-            echo "command -v dotnet => $(command -v dotnet)" >&2
-            echo "DOTNET_ROOT => ${DOTNET_ROOT:-<unset>}" >&2
-            exit 1
-          fi
-          emscripten_toolchain="$(find "$dotnet_root/packs" -path '*/tools/emscripten/cmake/Modules/Platform/Emscripten.cmake' -print -quit)"
-          browser_node="$(find "$dotnet_root/packs" -path '*/tools/bin/node' -print | grep 'Microsoft.NET.Runtime.Emscripten.*Node' | head -n 1)"
-          if [[ -z "${emscripten_toolchain:-}" ]]; then
-            echo "Failed to locate Emscripten.cmake under $dotnet_root/packs" >&2
-            exit 1
-          fi
-          if [[ -z "${browser_node:-}" ]]; then
-            echo "Failed to locate the Emscripten Node runtime under $dotnet_root/packs" >&2
-            exit 1
-          fi
-          emsdk_tools_root="$(cd "$(dirname "$emscripten_toolchain")/../../../../" && pwd)"
-          ninja_bin="$(command -v ninja || true)"
-          if [[ -z "${ninja_bin:-}" ]]; then
-            echo "Failed to locate ninja in PATH after brew install" >&2
-            exit 1
-          fi
-          echo "EMSDK_PATH=$emsdk_tools_root" >> "$GITHUB_ENV"
-          echo "DOTNET_EMSCRIPTEN_LLVM_ROOT=$emsdk_tools_root/bin" >> "$GITHUB_ENV"
-          echo "DOTNET_EMSCRIPTEN_BINARYEN_ROOT=$emsdk_tools_root" >> "$GITHUB_ENV"
-          echo "DOTNET_EMSCRIPTEN_NODE_JS=$browser_node" >> "$GITHUB_ENV"
-          echo "EM_CACHE=$RUNNER_TEMP/emscripten-cache" >> "$GITHUB_ENV"
-          echo "FROZEN_CACHE=" >> "$GITHUB_ENV"
-          echo "EMSCRIPTEN_TOOLCHAIN_FILE=$emscripten_toolchain" >> "$GITHUB_ENV"
-          echo "BROWSER_WASM_NODE_EXECUTABLE=$browser_node" >> "$GITHUB_ENV"
-          echo "$emsdk_tools_root/emscripten" >> "$GITHUB_PATH"
-          echo "$emsdk_tools_root/bin" >> "$GITHUB_PATH"
-          echo "$(dirname "$browser_node")" >> "$GITHUB_PATH"
-          echo "$(dirname "$ninja_bin")" >> "$GITHUB_PATH"
-
-      - name: Prepare Emscripten cache
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p "$EM_CACHE"
-
       - name: Build full solution
-        run: dotnet build Podish.slnx -c Debug -p:EmscriptenToolchainFile="$EMSCRIPTEN_TOOLCHAIN_FILE" -p:BrowserWasmNodeExecutable="$BROWSER_WASM_NODE_EXECUTABLE"
+        run: dotnet build Podish.slnx -c Debug -m:1
 
   publish-macos:
     name: Publish macOS PodishCli NativeAOT
@@ -224,7 +175,7 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 10.0.x
+          dotnet-version: 11.0.x
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -240,4 +191,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: podishcli-osx-arm64-nativeaot-publish
-          path: Podish.Cli/bin/Release/net10.0/osx-arm64/publish/**
+          path: Podish.Cli/bin/Release/net11.0/osx-arm64/publish/**

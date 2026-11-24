@@ -1,7 +1,7 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
-        <TargetFramework>net10.0</TargetFramework>
+        <TargetFramework>net11.0</TargetFramework>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
@@ -9,7 +9,7 @@
         <IsBrowserWasm Condition="'$(RuntimeIdentifier)' == 'browser-wasm' Or '$(FiberishForceBrowserWasm)' == 'true'">true</IsBrowserWasm>
 
         <DefineConstants Condition="'$(IsBrowserWasm)' == 'true'">$(DefineConstants);FIBERISH_BROWSER_WASM</DefineConstants>
-        <NativeBuildDir Condition="'$(IsBrowserWasm)' == 'true'">build_native/browser-wasm</NativeBuildDir>
+        <NativeBuildDir Condition="'$(IsBrowserWasm)' == 'true'">$(FibercpuWasmNativeBuildDir)</NativeBuildDir>
         <NativeBuildDir Condition="'$(IsBrowserWasm)' != 'true' And '$(RuntimeIdentifier)' != ''">build_native/$(RuntimeIdentifier)</NativeBuildDir>
         <NativeBuildDir Condition="'$(IsBrowserWasm)' != 'true' And '$(RuntimeIdentifier)' == ''">build_native/host</NativeBuildDir>
         <NativeBuildDir Condition="'$(FibercpuIsolatedPreset)' == 'true'">$(NativeBuildDir)/$(FibercpuBakingPreset)</NativeBuildDir>
@@ -27,13 +27,7 @@
         <!-- Keep generated inputs outside the CMake tree: changing toolchains may recreate that tree. -->
         <SuperOpcodeGenerationDir>$([System.IO.Path]::Combine('$(MSBuildThisFileDirectory)', '$(BaseIntermediateOutputPath)', 'superopcode'))</SuperOpcodeGenerationDir>
         <SuperOpcodeSource Condition="'$(SuperOpcodeManifest)' != '' And '$(SuperOpcodeSource)' == ''">$(SuperOpcodeGenerationDir)/superopcodes.generated.cpp</SuperOpcodeSource>
-        <SuperOpcodeGeneratorDll>$(MSBuildThisFileDirectory)../Podish.PerfTools/bin/Release/net10.0/Podish.PerfTools.dll</SuperOpcodeGeneratorDll>
-        <EmscriptenToolchainFile Condition="'$(EmscriptenToolchainFile)' == '' and Exists('/opt/homebrew/opt/emscripten/libexec/cmake/Modules/Platform/Emscripten.cmake')">/opt/homebrew/opt/emscripten/libexec/cmake/Modules/Platform/Emscripten.cmake</EmscriptenToolchainFile>
-        <EmscriptenToolchainFile Condition="'$(EmscriptenToolchainFile)' == '' and Exists('/usr/local/opt/emscripten/libexec/cmake/Modules/Platform/Emscripten.cmake')">/usr/local/opt/emscripten/libexec/cmake/Modules/Platform/Emscripten.cmake</EmscriptenToolchainFile>
-        <BrowserWasmNodeExecutable Condition="'$(BrowserWasmNodeExecutable)' == '' and Exists('/opt/homebrew/opt/node/bin/node')">/opt/homebrew/opt/node/bin/node</BrowserWasmNodeExecutable>
-         <BrowserWasmNodeExecutable Condition="'$(BrowserWasmNodeExecutable)' == '' and Exists('/opt/homebrew/bin/node')">/opt/homebrew/bin/node</BrowserWasmNodeExecutable>
-        <BrowserWasmNodeExecutable Condition="'$(BrowserWasmNodeExecutable)' == '' and Exists('/usr/local/bin/node')">/usr/local/bin/node</BrowserWasmNodeExecutable>
-         <BrowserWasmNodeExecutable Condition="'$(BrowserWasmNodeExecutable)' == ''">node</BrowserWasmNodeExecutable>
+        <SuperOpcodeGeneratorDll>$(MSBuildThisFileDirectory)../Podish.PerfTools/bin/Release/net11.0/Podish.PerfTools.dll</SuperOpcodeGeneratorDll>
          <FibercpuWasmDownloadUrl Condition="'$(FibercpuWasmDownloadUrl)' == ''"></FibercpuWasmDownloadUrl>
          <LibFibercpuSourceDir>$(MSBuildThisFileDirectory)../libfibercpu</LibFibercpuSourceDir>
          <LibFibercpuSourceExists Condition="Exists('$(LibFibercpuSourceDir)/CMakeLists.txt')">true</LibFibercpuSourceExists>
@@ -43,12 +37,33 @@
          <WindowsToolchainSignatureFile Condition="$([MSBuild]::IsOsPlatform('Windows')) And '$(IsBrowserWasm)' != 'true'">$(NativeBuildDir)\.podish-toolchain</WindowsToolchainSignatureFile>
      </PropertyGroup>
 
+    <ImportGroup Condition="'$(IsBrowserWasm)' == 'true' And '$(EmscriptenToolchainFile)' == ''">
+        <Import Project="Sdk.props" Sdk="Microsoft.NET.Runtime.Emscripten.Node.net11"/>
+        <Import Project="Sdk.props" Sdk="Microsoft.NET.Runtime.Emscripten.Sdk.net11"/>
+        <Import Project="Sdk.props" Sdk="Microsoft.NET.Runtime.Emscripten.Cache.net11"/>
+    </ImportGroup>
+
+    <PropertyGroup Condition="'$(IsBrowserWasm)' == 'true'">
+        <EmscriptenToolchainFile Condition="'$(EmscriptenToolchainFile)' == ''">$([MSBuild]::NormalizePath('$(EmscriptenSdkToolsPath)', 'emscripten', 'cmake', 'Modules', 'Platform', 'Emscripten.cmake'))</EmscriptenToolchainFile>
+        <BrowserWasmNodeSuffix Condition="$([MSBuild]::IsOsPlatform('Windows'))">.exe</BrowserWasmNodeSuffix>
+        <BrowserWasmNodeExecutable Condition="'$(BrowserWasmNodeExecutable)' == '' And '$(EmscriptenNodeToolsPath)' != ''">$([MSBuild]::NormalizePath('$(EmscriptenNodeToolsPath)', 'bin', 'node$(BrowserWasmNodeSuffix)'))</BrowserWasmNodeExecutable>
+        <BrowserWasmNodeExecutable Condition="'$(BrowserWasmNodeExecutable)' == ''">node</BrowserWasmNodeExecutable>
+    </PropertyGroup>
+
+    <ItemGroup Condition="'$(IsBrowserWasm)' == 'true' And '$(EmscriptenSdkToolsPath)' != ''">
+        <FibercpuEmscriptenEnvironment Include="DOTNET_EMSCRIPTEN_LLVM_ROOT=$([MSBuild]::NormalizePath('$(EmscriptenSdkToolsPath)', 'bin'))"/>
+        <FibercpuEmscriptenEnvironment Include="DOTNET_EMSCRIPTEN_BINARYEN_ROOT=$([MSBuild]::NormalizePath('$(EmscriptenSdkToolsPath)'))"/>
+        <FibercpuEmscriptenEnvironment Include="DOTNET_EMSCRIPTEN_NODE_JS=$(BrowserWasmNodeExecutable)"/>
+        <FibercpuEmscriptenEnvironment Include="EM_CACHE=$(WasmCachePath)"/>
+    </ItemGroup>
+
     <!-- Define inputs for incremental build tracking -->
     <ItemGroup Condition="'$(LibFibercpuSourceExists)' == 'true'">
         <NativeBuildInput Include="$(LibFibercpuSourceDir)/CMakeLists.txt" />
         <NativeBuildInput Include="$(LibFibercpuSourceDir)/cmake/**/*.cmake" />
         <NativeBuildInput Include="$(LibFibercpuSourceDir)/presets/**/*.json;$(LibFibercpuSourceDir)/presets/**/*.cpp" />
         <NativeBuildInput Include="$(MSBuildProjectFullPath)" />
+        <NativeBuildInput Include="$(EmscriptenToolchainFile)" Condition="'$(IsBrowserWasm)' == 'true'" />
         <NativeBuildInput Include="$(MSBuildThisFileDirectory)../scripts/gen_operand_specializations.py" />
         <NativeBuildInput Include="$(MSBuildThisFileDirectory)../scripts/gen_instruction_catalog.py" />
         <NativeBuildInput Include="$(MSBuildThisFileDirectory)../scripts/scalar_modrm.py" />
@@ -139,7 +154,7 @@
             <CMakeArgs>$(CMakeArgs) -DFIBERCPU_STATIC_SPECIALIZATION=$(StaticInstructionSpecialization) -DFIBERCPU_ENABLE_DYNAMIC_SPECIALIZATION=$(DynamicInstructionSpecialization) -DFIBERCPU_ENABLE_LLVM_JIT=$(LlvmBlockJit)</CMakeArgs>
             <CMakeArgs Condition="'$(LlvmConfigDir)' != ''">$(CMakeArgs) -DLLVM_DIR=&quot;$(LlvmConfigDir)&quot;</CMakeArgs>
             <CMakeGeneratorArgs Condition="'$(IsBrowserWasm)' == 'true'">-G Ninja</CMakeGeneratorArgs>
-            <CMakeArgs Condition="'$(IsBrowserWasm)' == 'true'">$(CMakeArgs) -DCMAKE_TOOLCHAIN_FILE=&quot;$(EmscriptenToolchainFile)&quot; -DCMAKE_CROSSCOMPILING_EMULATOR=&quot;$(BrowserWasmNodeExecutable)&quot;</CMakeArgs>
+            <CMakeArgs Condition="'$(IsBrowserWasm)' == 'true'">$(CMakeArgs) -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY -DCMAKE_TOOLCHAIN_FILE=&quot;$(EmscriptenToolchainFile)&quot; -DCMAKE_CROSSCOMPILING_EMULATOR=&quot;$(BrowserWasmNodeExecutable)&quot;</CMakeArgs>
         </PropertyGroup>
 
         <Message Text="Building libfibercpu with CMake (Incremental check passed)..." Importance="High"/>
@@ -189,12 +204,14 @@
               Condition="$([MSBuild]::IsOsPlatform('Windows')) And '$(IsBrowserWasm)' != 'true'" />
         <Exec Command="cmake -S ../libfibercpu -B $(NativeBuildDir) $(CMakeGeneratorArgs) $(CMakeArgs)"
               WorkingDirectory="$(MSBuildThisFileDirectory)"
+              EnvironmentVariables="@(FibercpuEmscriptenEnvironment)"
               Condition="$([MSBuild]::IsOsPlatform('Windows')) != 'true' Or '$(IsBrowserWasm)' == 'true'" />
         <Exec Command="$(WindowsCMakeBuildCommand)"
               WorkingDirectory="$(MSBuildThisFileDirectory)"
               Condition="$([MSBuild]::IsOsPlatform('Windows')) And '$(IsBrowserWasm)' != 'true'" />
         <Exec Command="cmake --build $(NativeBuildDir) --config Release"
               WorkingDirectory="$(MSBuildThisFileDirectory)"
+              EnvironmentVariables="@(FibercpuEmscriptenEnvironment)"
               Condition="$([MSBuild]::IsOsPlatform('Windows')) != 'true' Or '$(IsBrowserWasm)' == 'true'" />
     </Target>
 

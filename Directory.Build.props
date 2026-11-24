@@ -1,5 +1,6 @@
 <Project>
   <PropertyGroup>
+    <FibercpuWasmNativeBuildDir>build_native/browser-wasm/net11.0</FibercpuWasmNativeBuildDir>
     <FibercpuBakingPreset Condition="'$(FibercpuBakingPreset)' == ''">3.5m</FibercpuBakingPreset>
     <FibercpuIsolatedPreset Condition="'$(FibercpuBakingPreset)' == '1.75m' Or '$(FibercpuBakingPreset)' == '10m'">true</FibercpuIsolatedPreset>
   </PropertyGroup>
@@ -19,4 +20,15 @@
     <BaseIntermediateOutputPath>$(BaseIntermediateOutputPath)$(FibercpuBakingPreset)/</BaseIntermediateOutputPath>
     <DefaultItemExcludes>$(DefaultItemExcludes);**/bin/**;**/obj/**</DefaultItemExcludes>
   </PropertyGroup>
+
+  <PropertyGroup Condition="'$(FiberishForceBrowserWasm)' == 'true'">
+    <BaseOutputPath Condition="'$(BaseOutputPath)' == ''">bin/</BaseOutputPath>
+    <BaseIntermediateOutputPath Condition="'$(BaseIntermediateOutputPath)' == ''">obj/</BaseIntermediateOutputPath>
+    <!-- NuGet restores project references without AdditionalProperties. Share the assets file. -->
+    <MSBuildProjectExtensionsPath Condition="'$(MSBuildProjectExtensionsPath)' == ''">$(BaseIntermediateOutputPath)</MSBuildProjectExtensionsPath>
+    <BaseOutputPath>$(BaseOutputPath)browser-wasm/</BaseOutputPath>
+    <BaseIntermediateOutputPath>$(BaseIntermediateOutputPath)browser-wasm/</BaseIntermediateOutputPath>
+    <DefaultItemExcludes>$(DefaultItemExcludes);**/bin/**;**/obj/**</DefaultItemExcludes>
+  </PropertyGroup>
+
 </Project>

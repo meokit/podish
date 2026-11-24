@@ -25,12 +25,12 @@ both measured variants use the **same** run-time arguments
 
 Build both `Podish.Cli` versions in Release, using the unmodified
 `320880455fde9b81c7b9d83d436051e7a69057c0` as baseline. On Windows,
-with .NET 11 installed (roll forward the net10.0 target), run:
+with the SDKs required by both checkouts installed, run:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File ./benchmark/compare_static_coremark.ps1 `
   -BaselineCli 'C:\path\to\baseline\Podish.Cli\bin\Release\net10.0\Podish.Cli.dll' `
-  -ChangedCli './Podish.Cli/bin/Release/net10.0/Podish.Cli.dll' `
+  -ChangedCli './Podish.Cli/bin/Release/net11.0/Podish.Cli.dll' `
   -Rootfs './artifacts/coremark-static'
 ```
 

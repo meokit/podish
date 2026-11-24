@@ -34,9 +34,9 @@ function shouldUseRawWasm() {
 
 function resolveBootResource(type, name, defaultUri) {
     if (typeof defaultUri !== 'string' || defaultUri.length === 0)
-        return null;
+        return defaultUri;
     if (type !== 'dotnetwasm' && !(typeof name === 'string' && name.endsWith('.wasm')))
-        return null;
+        return defaultUri;
     if (shouldUseRawWasm())
         return defaultUri;
     return `${defaultUri}.br`;

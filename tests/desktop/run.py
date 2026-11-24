@@ -80,7 +80,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--rootfs", required=True, type=Path, help="Debian i386 root filesystem tar")
     parser.add_argument("--user", default="user", help="guest account name (default: user)")
-    parser.add_argument("--cli", type=Path, default=REPO / "Podish.Cli/bin/Release/net10.0/Podish.Cli.dll")
+    parser.add_argument("--cli", type=Path, default=REPO / "Podish.Cli/bin/Release/net11.0/Podish.Cli.dll")
     parser.add_argument("--out", type=Path, default=REPO / "artifacts/lxqt-desktop")
     parser.add_argument("--verify-input", action="store_true", help="type seat-ok in the desktop terminal and press Enter")
     args = parser.parse_args()

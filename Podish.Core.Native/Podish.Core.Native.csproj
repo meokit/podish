@@ -5,18 +5,18 @@
     </ItemGroup>
 
     <PropertyGroup>
-        <TargetFramework>net10.0</TargetFramework>
+        <TargetFramework>net11.0</TargetFramework>
         <OutputType>Library</OutputType>
         <AssemblyName>podishcore</AssemblyName>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
         <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
-        <PublishAot Condition="'$(TargetFramework)' == 'net10.0'">true</PublishAot>
-        <PublishAotUsingRuntimePack Condition="'$(TargetFramework)' == 'net10.0'">true</PublishAotUsingRuntimePack>
-        <NativeLib Condition="'$(TargetFramework)' == 'net10.0'">Static</NativeLib>
-        <SelfContained Condition="'$(TargetFramework)' == 'net10.0'">true</SelfContained>
-        <StripSymbols Condition="'$(TargetFramework)' == 'net10.0'">false</StripSymbols>
-        <InvariantGlobalization Condition="'$(TargetFramework)' == 'net10.0'">true</InvariantGlobalization>
+        <PublishAot Condition="'$(TargetFramework)' == 'net11.0'">true</PublishAot>
+        <PublishAotUsingRuntimePack Condition="'$(TargetFramework)' == 'net11.0'">true</PublishAotUsingRuntimePack>
+        <NativeLib Condition="'$(TargetFramework)' == 'net11.0'">Static</NativeLib>
+        <SelfContained Condition="'$(TargetFramework)' == 'net11.0'">true</SelfContained>
+        <StripSymbols Condition="'$(TargetFramework)' == 'net11.0'">false</StripSymbols>
+        <InvariantGlobalization Condition="'$(TargetFramework)' == 'net11.0'">true</InvariantGlobalization>
         <PodishStaticNative>true</PodishStaticNative>
         <IsAotCompatible>true</IsAotCompatible>
     </PropertyGroup>

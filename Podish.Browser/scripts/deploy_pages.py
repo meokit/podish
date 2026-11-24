@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 
-DEFAULT_PUBLISH_DIR = Path("Podish.Browser/bin/Release/net10.0/publish/wwwroot")
+DEFAULT_PUBLISH_DIR = Path("Podish.Browser/bin/Release/net11.0/publish/wwwroot")
 DEFAULT_CLOUDFLARE_DIR = Path("Podish.Browser/cloudflare-pages")
 DEFAULT_ROOTFS_DIR = Path("Podish.Browser/frontend/public/rootfs")
 STATIC_IMMUTABLE_CACHE = "public, max-age=31536000, immutable"

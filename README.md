@@ -13,7 +13,7 @@ root filesystem to run a shell, compiler, or application.
 
 ### Requirements
 
-- .NET 10 SDK. [global.json](global.json) sets the SDK floor and roll-forward policy.
+- .NET 11 SDK. [global.json](global.json) sets the SDK floor and roll-forward policy.
 - CMake 3.20 or newer, Python 3.10 or newer, and a Clang toolchain with C++23 support.
 - Rust and Cargo for the native network stack.
 

@@ -27,7 +27,7 @@ dotnet build Podish.Cli/Podish.Cli.csproj -c Release -p:FibercpuBakingPreset=cus
 
 Native and managed build products are isolated from ordinary/pinned builds. The
 CLI output is under
-`artifacts/superopcode/builds/gnu-long4x32-v1/managed/Podish.Cli/bin/Release/net10.0/`.
+`artifacts/superopcode/builds/gnu-long4x32-v1/managed/Podish.Cli/bin/Release/net11.0/`.
 An ordinary build without these options now uses the same long4x32 selection from
 the checked-in generated table. The explicit options above are only needed for
 an isolated rebuild from the frozen manifest.

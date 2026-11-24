@@ -15,7 +15,7 @@ dotnet build Podish.Cli -c Release
 Use a host ANGLE build that includes **Vulkan on Windows and Linux** or **Metal on macOS**. Supply `libEGL.dll` and `libGLESv2.dll` on Windows, `libEGL.so` and `libGLESv2.so` on Linux, or the matching `.dylib` files on macOS. Some Electron distributions include compatible libraries. The guest build targets glibc 2.11 or later. Set `PODISH_GLES_GUEST_DIR` if you build the guest libraries outside `artifacts/podish-gles/guest` or launch Podish from another working directory. [ANGLE build instructions](https://chromium.googlesource.com/angle/angle/+/main/doc/DevSetup.md)
 
 ```sh
-cli=Podish.Cli/bin/Release/net10.0/Podish.Cli.dll
+cli=Podish.Cli/bin/Release/net11.0/Podish.Cli.dll
 dotnet "$cli" run --rm --gles --fbdev --fbdev-size 640x480 --rootfs "$rootfs" -- /path/to/fbdev-egl-app
 dotnet "$cli" run --rm --gles --wayland-server --rootfs "$rootfs" -- /path/to/wayland-egl-app
 ```
