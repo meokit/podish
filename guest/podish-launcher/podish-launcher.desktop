@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Podish Launcher
+Comment=Touch-friendly LXQt Desktop Launcher
+Exec=/usr/local/bin/podish-launcher
+Icon=podish-launcher
+Terminal=false
+NoDisplay=true
+Categories=System;

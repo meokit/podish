@@ -1,0 +1,78 @@
+#!/bin/sh
+set -eu
+
+export HOME="${HOME:-/home/user}"
+export USER="${USER:-user}"
+export XDG_RUNTIME_DIR="${XDG_RUNTIME_DIR:-/run}"
+export WAYLAND_DISPLAY="${WAYLAND_DISPLAY:-wayland-0}"
+export XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+export XDG_DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
+export XDG_CONFIG_DIRS=/etc:/etc/xdg:/usr/share
+export XDG_DATA_DIRS=/usr/local/share:/usr/share
+export XDG_SESSION_TYPE=wayland
+export XDG_CURRENT_DESKTOP=LXQt
+export XDG_SESSION_DESKTOP=lxqt
+export XDG_MENU_PREFIX=lxqt-
+export QT_QPA_PLATFORM=wayland
+export QT_QPA_PLATFORMTHEME=lxqt
+export GDK_BACKEND=wayland
+export SDL_VIDEODRIVER=wayland
+export SDL_VIDEO_DRIVER=wayland
+export LIBGL_ES=2
+export LIBGL_GL=21
+export LIBGL_EGL=/run/podish-gles/libEGL.so.1
+export LIBGL_GLES=/run/podish-gles/libGLESv2.so.2
+
+mkdir -p "$HOME/Desktop" "$HOME/Documents" "$HOME/Downloads" "$HOME/Pictures" \
+         "$XDG_CONFIG_HOME/lxqt" "$XDG_DATA_HOME/applications" "$XDG_CACHE_HOME"
+
+if [ ! -f "$XDG_CONFIG_HOME/lxqt/lxqt.conf" ]; then
+    cat > "$XDG_CONFIG_HOME/lxqt/lxqt.conf" <<'EOF'
+[General]
+__userfile__=true
+icon_theme=breeze
+theme=ambiance
+EOF
+fi
+
+# Wait briefly for the embedded Wayland compositor socket if needed.
+waited=0
+while [ ! -S "$XDG_RUNTIME_DIR/$WAYLAND_DISPLAY" ] && [ "$waited" -lt 50 ]; do
+    sleep 0.1
+    waited=$((waited + 1))
+done
+
+run_loop() {
+    STOP=0
+    trap 'STOP=1; kill "$CHILD_PID" 2>/dev/null || true' TERM INT
+    while [ "$STOP" -eq 0 ]; do
+        /usr/local/bin/podish-launcher &
+        CHILD_PID=$!
+        wait "$CHILD_PID" || true
+        [ "$STOP" -eq 0 ] || break
+        sleep 0.4
+    done
+}
+
+if command -v dbus-run-session >/dev/null 2>&1; then
+    exec dbus-run-session -- sh -c '
+        STOP=0
+        trap "STOP=1; [ -n \"\${CHILD_PID:-}\" ] && kill \"\$CHILD_PID\" 2>/dev/null || true" TERM INT
+        if [ -n "${PODISH_AUTOSTART_APP:-}" ]; then
+            (sleep 1.2 && sh -c "$PODISH_AUTOSTART_APP") &
+        fi
+        while [ "$STOP" -eq 0 ]; do
+            /usr/local/bin/podish-launcher &
+            CHILD_PID=$!
+            wait "$CHILD_PID" || true
+            [ "$STOP" -eq 0 ] || break
+            sleep 0.4
+        done
+    '
+else
+    if [ -n "${PODISH_AUTOSTART_APP:-}" ]; then
+        (sleep 1.2 && sh -c "$PODISH_AUTOSTART_APP") &
+    fi
+    run_loop
+fi
