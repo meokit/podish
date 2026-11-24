@@ -29,20 +29,22 @@ internal sealed unsafe partial class AngleDevice : IDisposable
     private readonly FramebufferDevice? _fb;
     private readonly KmsEglOutput? _kms;
     private nint Config => _kms?.Config ?? _angle.Config;
-    internal bool HasKmsOutput => _kms != null;
+    internal bool HasKmsOutput { get; }
     private readonly HashSet<Session> _sessions = [];
     private Session? _hostSession;
     private Binding _hostBinding;
     private uint _nextSync = 1;
     private bool _disposed;
 
-    internal AngleDevice(string directory, FramebufferDevice? framebuffer, KmsEglWindow? kmsWindow, ILogger logger)
+    internal AngleDevice(string directory, FramebufferDevice? framebuffer, KmsEglWindow? kmsWindow, ILogger logger,
+        KmsEglOutput? compositorTextures = null)
     {
         _angle = AngleLibrary.Acquire(directory, kmsWindow);
         _fb = framebuffer;
         try
         {
-            if (kmsWindow is { } window) _kms = new KmsEglOutput(_angle, window, logger);
+            HasKmsOutput = kmsWindow != null;
+            _kms = HasKmsOutput ? new KmsEglOutput(_angle, kmsWindow, logger) : compositorTextures;
         }
         catch
         {
@@ -584,7 +586,7 @@ internal sealed unsafe partial class AngleDevice : IDisposable
         _disposed = true;
         foreach (var session in _sessions.ToArray())
             Close(session);
-        _kms?.Dispose();
+        if (HasKmsOutput) _kms?.Dispose();
         _angle.Release();
     }
 }

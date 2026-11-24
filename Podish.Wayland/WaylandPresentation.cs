@@ -8,7 +8,29 @@ public readonly record struct WaylandShmFrame(
     int Width,
     int Height,
     int Stride,
-    WlShmFormat Format);
+    WlShmFormat Format)
+{
+    public WaylandSurfaceMapping? Mapping { get; init; }
+    public int LogicalWidth => Mapping?.Width ?? Width;
+    public int LogicalHeight => Mapping?.Height ?? Height;
+}
+
+public readonly record struct WaylandGpuFrame(ulong LeaseToken, DrmScanoutBuffer Buffer, bool YInverted)
+{
+    public WaylandSurfaceMapping? Mapping { get; init; }
+    public int LogicalWidth => Mapping?.Width ?? (int)Buffer.Width;
+    public int LogicalHeight => Mapping?.Height ?? (int)Buffer.Height;
+}
+
+public readonly record struct WaylandSurfaceMapping(int Width, int Height, float U, float V,
+    float Ux, float Vx, float Uy, float Vy);
+
+public interface IWaylandGpuFramePresenter
+{
+    bool CanImportGpuBuffer(DrmScanoutBuffer buffer);
+    ValueTask PresentGpuSurfaceAsync(ulong sceneSurfaceId, WaylandGpuFrame frame);
+    void UpdateGpuSurfaceMapping(ulong sceneSurfaceId, WaylandSurfaceMapping mapping) { }
+}
 
 public readonly record struct WaylandCursorFrame(
     ulong SceneSurfaceId,
@@ -47,6 +69,8 @@ public enum WaylandSceneHitKind
 
 public readonly record struct WaylandDecorationMetrics(int BorderThickness, int TitlebarHeight, int ButtonSize, int ButtonGap, int ButtonInset, int ResizeGripThickness)
 {
+    public int ButtonHeight { get; init; } = ButtonSize;
+
     public static WaylandDecorationMetrics FromTheme(WaylandUiTheme theme) =>
         new(
             theme.Spacing.WindowBorderThickness,
@@ -54,7 +78,10 @@ public readonly record struct WaylandDecorationMetrics(int BorderThickness, int 
             theme.Spacing.ButtonSize,
             theme.Spacing.ButtonGap,
             theme.Spacing.ButtonInset,
-            theme.Spacing.ResizeGripThickness);
+            theme.Spacing.ResizeGripThickness)
+        {
+            ButtonHeight = theme.Spacing.ButtonHeight ?? theme.Spacing.ButtonSize
+        };
 }
 
 public readonly record struct WaylandDecorationSceneState(
@@ -62,7 +89,12 @@ public readonly record struct WaylandDecorationSceneState(
     bool Active,
     bool Maximized,
     bool Minimized,
-    string Title);
+    string Title)
+{
+    public WaylandApplicationIcon? ApplicationIcon { get; init; }
+}
+
+public sealed record WaylandApplicationIcon(ReadOnlyMemory<byte> Data, bool IsSvg);
 
 public readonly record struct WaylandSceneHit(
     ulong SceneSurfaceId,
@@ -112,43 +144,72 @@ public static class WaylandDecorationLayout
             metrics.TitlebarHeight);
     }
 
+    public static int GetWindowCornerRadius(WaylandSurfaceBounds bounds, WaylandDecorationSceneState decoration,
+        WaylandUiTheme theme) =>
+        decoration.Visible && !decoration.Maximized
+            ? Math.Clamp(theme.Corners.WindowCornerRadius, 0, Math.Min(bounds.Width / 2, theme.Spacing.TitlebarHeight))
+            : 0;
+
     public static WaylandSurfaceBounds GetButtonRowBounds(WaylandSurfaceBounds windowBounds, WaylandUiTheme theme)
     {
         WaylandDecorationMetrics metrics = WaylandDecorationMetrics.FromTheme(theme);
         int width = metrics.ButtonSize * 3 + metrics.ButtonGap * 2;
-        int x = windowBounds.X + windowBounds.Width - metrics.BorderThickness - metrics.ButtonInset - width;
-        int y = windowBounds.Y + (metrics.TitlebarHeight - metrics.ButtonSize) / 2;
-        return new WaylandSurfaceBounds(x, y, width, metrics.ButtonSize);
+        int left = windowBounds.X + metrics.BorderThickness;
+        int right = Math.Max(left, windowBounds.X + windowBounds.Width - metrics.BorderThickness - metrics.ButtonInset);
+        int x = Math.Max(left, right - width);
+        int y = windowBounds.Y + (metrics.TitlebarHeight - metrics.ButtonHeight) / 2;
+        return new WaylandSurfaceBounds(x, y, right - x, metrics.ButtonHeight);
     }
 
-    public static WaylandSurfaceBounds GetMinimizeButtonBounds(WaylandSurfaceBounds windowBounds, WaylandUiTheme theme)
+    public static WaylandSurfaceBounds GetMinimizeButtonBounds(WaylandSurfaceBounds windowBounds, WaylandUiTheme theme) =>
+        GetButtonBounds(windowBounds, theme, 2);
+
+    public static WaylandSurfaceBounds GetMaximizeButtonBounds(WaylandSurfaceBounds windowBounds, WaylandUiTheme theme) =>
+        GetButtonBounds(windowBounds, theme, 1);
+
+    public static WaylandSurfaceBounds GetCloseButtonBounds(WaylandSurfaceBounds windowBounds, WaylandUiTheme theme) =>
+        GetButtonBounds(windowBounds, theme, 0);
+
+    private static WaylandSurfaceBounds GetButtonBounds(WaylandSurfaceBounds windowBounds, WaylandUiTheme theme, int buttonsToRight)
     {
         WaylandDecorationMetrics metrics = WaylandDecorationMetrics.FromTheme(theme);
         WaylandSurfaceBounds row = GetButtonRowBounds(windowBounds, theme);
-        return new WaylandSurfaceBounds(row.X, row.Y, metrics.ButtonSize, metrics.ButtonSize);
+        int right = row.X + row.Width - (metrics.ButtonSize + metrics.ButtonGap) * buttonsToRight;
+        int left = Math.Max(row.X, right - metrics.ButtonSize);
+        return new WaylandSurfaceBounds(left, row.Y, Math.Max(0, right - left), row.Height);
     }
 
-    public static WaylandSurfaceBounds GetMaximizeButtonBounds(WaylandSurfaceBounds windowBounds, WaylandUiTheme theme)
+    public static WaylandSurfaceBounds GetApplicationIconBounds(WaylandSurfaceBounds windowBounds, WaylandUiTheme theme)
     {
-        WaylandDecorationMetrics metrics = WaylandDecorationMetrics.FromTheme(theme);
-        WaylandSurfaceBounds row = GetButtonRowBounds(windowBounds, theme);
-        return new WaylandSurfaceBounds(row.X + metrics.ButtonSize + metrics.ButtonGap, row.Y, metrics.ButtonSize, metrics.ButtonSize);
+        WaylandSurfaceBounds titlebar = GetTitlebarBounds(windowBounds, theme);
+        WaylandSurfaceBounds buttons = GetButtonRowBounds(windowBounds, theme);
+        int size = Math.Clamp(titlebar.Height - 8, 0, 18);
+        int x = titlebar.X + theme.Spacing.TitlebarHorizontalPadding;
+        if (x + size + theme.Spacing.TitlebarHorizontalPadding > buttons.X)
+            size = 0;
+        return new WaylandSurfaceBounds(x, titlebar.Y + (titlebar.Height - size) / 2, size, size);
     }
 
-    public static WaylandSurfaceBounds GetCloseButtonBounds(WaylandSurfaceBounds windowBounds, WaylandUiTheme theme)
-    {
-        WaylandDecorationMetrics metrics = WaylandDecorationMetrics.FromTheme(theme);
-        WaylandSurfaceBounds row = GetButtonRowBounds(windowBounds, theme);
-        return new WaylandSurfaceBounds(row.X + (metrics.ButtonSize + metrics.ButtonGap) * 2, row.Y, metrics.ButtonSize, metrics.ButtonSize);
-    }
-
-    public static WaylandSurfaceBounds GetTitleTextBounds(WaylandSurfaceBounds windowBounds, WaylandUiTheme theme)
+    public static WaylandSurfaceBounds GetTitleTextBounds(WaylandSurfaceBounds windowBounds, WaylandUiTheme theme,
+        bool reserveIcon = false)
     {
         WaylandDecorationMetrics metrics = WaylandDecorationMetrics.FromTheme(theme);
         WaylandSurfaceBounds titlebar = GetTitlebarBounds(windowBounds, theme);
         WaylandSurfaceBounds buttonRow = GetButtonRowBounds(windowBounds, theme);
         int left = titlebar.X + theme.Spacing.TitlebarHorizontalPadding;
+        var icon = reserveIcon ? GetApplicationIconBounds(windowBounds, theme) : default;
+        if (icon.Width > 0)
+            left = icon.X + icon.Width + theme.Spacing.TitlebarHorizontalPadding;
         int right = buttonRow.X - metrics.ButtonGap - theme.Spacing.TitlebarHorizontalPadding;
+        if (theme.Typography.Alignment == WaylandTitleAlignment.Center)
+        {
+            int margin = Math.Max(left - windowBounds.X, windowBounds.X + windowBounds.Width - right);
+            if (margin < windowBounds.Width / 2)
+            {
+                left = windowBounds.X + margin;
+                right = windowBounds.X + windowBounds.Width - margin;
+            }
+        }
         return new WaylandSurfaceBounds(
             left,
             titlebar.Y,
@@ -157,10 +218,21 @@ public static class WaylandDecorationLayout
     }
 }
 
+public interface IWaylandDecorationInputPresenter
+{
+    void UpdateDecorationPointer(WaylandSceneHit hovered, WaylandSceneHit pressed);
+}
+
 public interface IWaylandFramePresenter
 {
     ValueTask PresentSurfaceAsync(ulong sceneSurfaceId, WaylandShmFrame? frame,
         CancellationToken cancellationToken = default);
+}
+
+public interface IWaylandFrameScheduler
+{
+    /// <summary>Schedules presentation and returns the sequence covering the current surface commits.</summary>
+    ulong ScheduleFrame();
 }
 
 public interface IWaylandCursorPresenter
@@ -173,7 +245,7 @@ public interface IWaylandCursorPresenter
 
 public interface IWaylandTextInputPresenter
 {
-    ValueTask UpdateTextInputAsync(bool enabled, WaylandRect? cursorRectangle,
+    ValueTask UpdateTextInputAsync(ulong sceneSurfaceId, WaylandRect? cursorRectangle,
         CancellationToken cancellationToken = default);
 }
 
@@ -198,4 +270,15 @@ public interface IWaylandDesktopSceneController
     void SetWindowBounds(ulong sceneSurfaceId, WaylandSurfaceBounds bounds);
     void SetSurfaceDecoration(ulong sceneSurfaceId, WaylandDecorationSceneState decoration);
     void SetSurfaceHidden(ulong sceneSurfaceId, bool hidden);
+    void SetSurfaceLayer(ulong sceneSurfaceId, WaylandSceneLayer layer) { }
+}
+
+public enum WaylandSceneLayer
+{
+    Background = -2,
+    Bottom = -1,
+    Window = 0,
+    Top = 1,
+    Fullscreen = 2,
+    Overlay = 3
 }

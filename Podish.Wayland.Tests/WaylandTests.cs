@@ -1159,7 +1159,20 @@ public sealed class WaylandVirtualDaemonTests
 
             step = "get registry";
             await clientSocket.SendAsync(MakeRequest(1, 1, writer => writer.WriteNewId(2)).Buffer);
-            var globals = await clientSocket.ReceiveMessagesAsync(11);
+            const uint registrySyncId = 99;
+            await clientSocket.SendAsync(MakeRequest(1, 0, writer => writer.WriteNewId(registrySyncId)).Buffer);
+            var globals = new List<DecodedMessage>();
+            while (true)
+            {
+                var message = await clientSocket.ReceiveMessageAsync();
+                if (message.Header.ObjectId == registrySyncId && message.Header.Opcode == 0)
+                    break;
+                Assert.Equal<uint>(2, message.Header.ObjectId);
+                globals.Add(message);
+            }
+            var deleteSync = await clientSocket.ReceiveMessageAsync();
+            Assert.Equal<uint>(1, deleteSync.Header.ObjectId);
+            Assert.Equal<ushort>(1, deleteSync.Header.Opcode);
             var compositorName = globals.Select(ParseGlobal)
                 .Single(x => x.Interface == WlCompositorProtocol.InterfaceName).Name;
             var shmName = globals.Select(ParseGlobal).Single(x => x.Interface == WlShmProtocol.InterfaceName).Name;
@@ -1379,6 +1392,8 @@ internal sealed class TestScenePresenter : IWaylandFramePresenter, IWaylandScene
         _decorations[sceneSurfaceId] = decoration;
     }
 
+    public WaylandDecorationSceneState GetDecoration(ulong sceneSurfaceId) => _decorations[sceneSurfaceId];
+
     public void SetSurfaceHidden(ulong sceneSurfaceId, bool hidden)
     {
         if (hidden)
@@ -1491,25 +1506,29 @@ internal sealed class WaylandSocketClient : IDisposable
     {
         var messages = new List<DecodedMessage>();
         while (messages.Count < count)
+            messages.Add(await ReceiveMessageAsync());
+        return messages;
+    }
+
+    public async Task<DecodedMessage> ReceiveMessageAsync()
+    {
+        while (true)
         {
+            if (_pending.Count >= WaylandMessageHeader.SizeInBytes)
+            {
+                var header = WaylandMessageHeader.Decode(CollectionsMarshal.AsSpan(_pending));
+                if (_pending.Count >= header.Size)
+                {
+                    var packet = _pending[..header.Size].ToArray();
+                    _pending.RemoveRange(0, header.Size);
+                    return new DecodedMessage(header, packet[WaylandMessageHeader.SizeInBytes..]);
+                }
+            }
+
             var read = await _socket.RecvAsync(_file, _task, _scratch, 0, _scratch.Length);
             Assert.True(read > 0);
             _pending.AddRange(_scratch[..read]);
-
-            while (_pending.Count >= WaylandMessageHeader.SizeInBytes)
-            {
-                var header = WaylandMessageHeader.Decode(CollectionsMarshal.AsSpan(_pending));
-                if (_pending.Count < header.Size)
-                    break;
-                var packet = _pending[..header.Size].ToArray();
-                _pending.RemoveRange(0, header.Size);
-                messages.Add(new DecodedMessage(header, packet[WaylandMessageHeader.SizeInBytes..]));
-                if (messages.Count == count)
-                    break;
-            }
         }
-
-        return messages;
     }
 }
 

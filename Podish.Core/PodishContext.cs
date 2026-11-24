@@ -40,6 +40,7 @@ public sealed class PodishRunSpec
     public bool WaylandServer { get; init; }
     public int WaylandDesktopWidth { get; init; } = 1024;
     public int WaylandDesktopHeight { get; init; } = 768;
+    public string? WaylandTheme { get; init; }
     public bool Fbdev { get; init; }
     public bool Gles { get; init; }
     public bool KmsDrm { get; init; }
@@ -531,6 +532,7 @@ public sealed class PodishContext : IDisposable
             WaylandServer = spec.WaylandServer,
             WaylandDesktopWidth = spec.WaylandDesktopWidth,
             WaylandDesktopHeight = spec.WaylandDesktopHeight,
+            WaylandTheme = spec.WaylandTheme,
             Fbdev = spec.Fbdev,
             Gles = spec.Gles,
             KmsDrm = spec.KmsDrm,

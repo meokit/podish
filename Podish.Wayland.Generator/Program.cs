@@ -55,9 +55,11 @@ internal static class Program
         ["wl_pointer"] = 7,
         ["wl_keyboard"] = 7,
         ["wl_output"] = 4,
-        ["xdg_wm_base"] = 1,
-        ["xdg_surface"] = 1,
-        ["xdg_toplevel"] = 1,
+        ["xdg_wm_base"] = 3,
+        ["xdg_surface"] = 3,
+        ["xdg_toplevel"] = 3,
+        ["xdg_positioner"] = 3,
+        ["xdg_popup"] = 3,
         ["zxdg_decoration_manager_v1"] = 1,
         ["zxdg_toplevel_decoration_v1"] = 1,
         ["wp_cursor_shape_manager_v1"] = 1,
@@ -68,6 +70,18 @@ internal static class Program
         ["zwp_primary_selection_source_v1"] = 1,
         ["zwp_text_input_manager_v3"] = 1,
         ["zwp_text_input_v3"] = 1,
+        ["zwlr_layer_shell_v1"] = 4,
+        ["zwlr_layer_surface_v1"] = 4,
+        ["zwlr_foreign_toplevel_manager_v1"] = 3,
+        ["zwlr_foreign_toplevel_handle_v1"] = 3,
+        ["zwp_linux_dmabuf_v1"] = 3,
+        ["zwp_linux_buffer_params_v1"] = 3,
+        ["wp_fractional_scale_manager_v1"] = 1,
+        ["wp_fractional_scale_v1"] = 1,
+        ["wp_viewporter"] = 1,
+        ["wp_viewport"] = 1,
+        ["zxdg_output_manager_v1"] = 3,
+        ["zxdg_output_v1"] = 3,
     };
 
     private static int Main(string[] args)
@@ -243,7 +257,7 @@ internal static class Program
         foreach (InterfaceModel iface in protocols.SelectMany(protocol => protocol.Interfaces))
             RenderInterface(sb, iface);
 
-        return sb.ToString();
+        return sb.ToString().TrimEnd('\r', '\n') + Environment.NewLine;
     }
 
     private static string SanitizePathForComment(string repoRoot, string path)

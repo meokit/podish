@@ -12,6 +12,7 @@ using Podish.Cli.Pulse;
 using Podish.Cli.Wayland;
 using Podish.Core;
 using Podish.Display;
+using Podish.Wayland;
 using LinuxSignal = Fiberish.Native.Signal;
 
 namespace Podish.Cli;
@@ -158,16 +159,19 @@ internal class Program
             "Enable a virtual PulseAudio server inside the guest at /run/pulse/native");
         var waylandServerOption = new Option<bool>(
             new[] { "--wayland-server" },
-            "Enable a virtual Wayland compositor inside the guest at /run/wayland-0");
+            "Enable the built-in Wayland compositor on Podish virtual DRM at /run/wayland-0");
         var waylandDesktopSizeOption = new Option<string>(
             new[] { "--wayland-desktop-size" },
             () => "1024x768",
             "Virtual Wayland desktop size as WIDTHxHEIGHT");
+        var waylandThemeOption = new Option<string?>(
+            "--wayland-theme",
+            "Wayland window decoration theme name, theme directory, or Openbox/Labwc themerc file");
         var fbdevOption = new Option<bool>(
             "--fbdev",
             "Expose /dev/fb0 and display the guest framebuffer in an SDL window");
         var glesOption = new Option<bool>("--gles", "Expose ANGLE-backed EGL and OpenGL ES up to 3.0 to the IA-32 guest");
-        var kmsDrmOption = new Option<bool>("--kmsdrm", "Expose virtual DRM and libgbm. Combine with --gles for GPU output");
+        var kmsDrmOption = new Option<bool>("--kmsdrm", "Expose virtual DRM and the guest libgbm. Combine with --gles for guest GPU output");
         var fbdevSizeOption = new Option<string>(
             "--fbdev-size",
             () => "640x480",
@@ -202,6 +206,7 @@ internal class Program
         runCommand.AddOption(pulseServerOption);
         runCommand.AddOption(waylandServerOption);
         runCommand.AddOption(waylandDesktopSizeOption);
+        runCommand.AddOption(waylandThemeOption);
         runCommand.AddOption(fbdevOption);
         runCommand.AddOption(glesOption);
         runCommand.AddOption(kmsDrmOption);
@@ -231,6 +236,7 @@ internal class Program
             var enablePulseServer = context.ParseResult.GetValueForOption(pulseServerOption);
             var enableWaylandServer = context.ParseResult.GetValueForOption(waylandServerOption);
             var waylandDesktopSizeRaw = context.ParseResult.GetValueForOption(waylandDesktopSizeOption) ?? "1024x768";
+            var waylandTheme = context.ParseResult.GetValueForOption(waylandThemeOption)?.Trim();
             var enableFbdev = context.ParseResult.GetValueForOption(fbdevOption);
             var fbdevSizeRaw = context.ParseResult.GetValueForOption(fbdevSizeOption) ?? "640x480";
             if (enableFbdev && enableWaylandServer)
@@ -299,10 +305,20 @@ internal class Program
             var logLevelRaw = context.ParseResult.GetValueForOption(logLevelOption) ?? "warn";
             var logFile = context.ParseResult.GetValueForOption(logFileOption);
 
-            if (!TryParseDisplaySize(waylandDesktopSizeRaw, out var waylandDesktopSize))
+            if (!TryParseDisplaySize(waylandDesktopSizeRaw, out var waylandDesktopSize) ||
+                waylandDesktopSize.Width > FramebufferDevice.DimensionLimit ||
+                waylandDesktopSize.Height > FramebufferDevice.DimensionLimit)
             {
                 Console.Error.WriteLine(
-                    $"[Podish.Cli] invalid --wayland-desktop-size value: {waylandDesktopSizeRaw}. Use WIDTHxHEIGHT");
+                    $"[Podish.Cli] invalid --wayland-desktop-size value: {waylandDesktopSizeRaw}. Use WIDTHxHEIGHT with dimensions up to {FramebufferDevice.DimensionLimit}");
+                context.ExitCode = 125;
+                return;
+            }
+
+            if (waylandTheme != null && (File.Exists(waylandTheme) || Directory.Exists(waylandTheme)))
+                waylandTheme = Path.GetFullPath(waylandTheme);
+            if (!TryLoadWaylandDesktopOptions(waylandDesktopSize, waylandTheme, out var waylandDesktopOptions))
+            {
                 context.ExitCode = 125;
                 return;
             }
@@ -458,6 +474,7 @@ internal class Program
                 WaylandServer = enableWaylandServer,
                 WaylandDesktopWidth = waylandDesktopSize.Width,
                 WaylandDesktopHeight = waylandDesktopSize.Height,
+                WaylandTheme = waylandTheme,
                 Fbdev = enableFbdev,
                 Gles = context.ParseResult.GetValueForOption(glesOption),
                 KmsDrm = context.ParseResult.GetValueForOption(kmsDrmOption),
@@ -534,7 +551,7 @@ internal class Program
                 spec.CpuOptions,
                 spec.PulseServer,
                 spec.WaylandServer,
-                new WaylandDesktopOptions(spec.WaylandDesktopWidth, spec.WaylandDesktopHeight),
+                waylandDesktopOptions,
                 spec.Fbdev ? new DisplaySize(spec.FbdevWidth, spec.FbdevHeight) : null, spec.Gles, spec.KmsDrm));
             metadata.State = "exited";
             metadata.Running = false;
@@ -705,6 +722,13 @@ internal class Program
                 }
             }
 
+            if (!TryLoadWaylandDesktopOptions(new DisplaySize(spec.WaylandDesktopWidth, spec.WaylandDesktopHeight),
+                    spec.WaylandTheme, out var waylandDesktopOptions))
+            {
+                context.ExitCode = 125;
+                return;
+            }
+
             Logger.LogInformation("Starting existing container {ContainerId}", containerId);
             if (hasEntrypointOverride)
             {
@@ -744,7 +768,7 @@ internal class Program
                 [.. spec.CpuOptions, .. (context.ParseResult.GetValueForOption(cpuOptions) ?? [])],
                 spec.PulseServer,
                 spec.WaylandServer,
-                new WaylandDesktopOptions(spec.WaylandDesktopWidth, spec.WaylandDesktopHeight),
+                waylandDesktopOptions,
                 spec.Fbdev ? new DisplaySize(spec.FbdevWidth, spec.FbdevHeight) : null, spec.Gles, spec.KmsDrm));
             metadata.State = "exited";
             metadata.Running = false;
@@ -1368,6 +1392,7 @@ internal class Program
             "--publish",
             "--guest-stats-dir",
             "--wayland-desktop-size",
+            "--wayland-theme",
             "--fbdev-size"
         };
         var optionsNoValue = new HashSet<string>(StringComparer.Ordinal)
@@ -1606,6 +1631,21 @@ internal class Program
         return true;
     }
 
+    private static bool TryLoadWaylandDesktopOptions(DisplaySize size, string? theme, out WaylandDesktopOptions options)
+    {
+        try
+        {
+            options = new WaylandDesktopOptions(size.Width, size.Height, WaylandUiTheme.Load(theme));
+            return true;
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or ArgumentException)
+        {
+            Console.Error.WriteLine($"[Podish.Cli] Could not load Wayland theme '{theme}': {ex.Message}");
+            options = default;
+            return false;
+        }
+    }
+
     private static bool TryParseDisplaySize(string raw, out DisplaySize size)
     {
         size = default;
@@ -1664,14 +1704,23 @@ internal class Program
         using var _logScope = Logging.BeginScope(ProgramLoggerFactory);
         using var runtimeThread = new ContainerRuntimeThread(Logger, ProgramLoggerFactory);
         using var pulseServerState = enablePulseServer ? new PulseServerState(ProgramLoggerFactory) : null;
+        if (enableWaylandServer && (waylandDesktopOptions.Width is < 1 or > FramebufferDevice.DimensionLimit ||
+                                    waylandDesktopOptions.Height is < 1 or > FramebufferDevice.DimensionLimit))
+        {
+            Logger.LogError("Virtual KMS desktop dimensions must be between 1 and {Limit}", FramebufferDevice.DimensionLimit);
+            return 125;
+        }
+
         var waylandDisplayState = enableWaylandServer
-            ? new WaylandDisplayServerState(ProgramLoggerFactory, waylandDesktopOptions)
+            ? new WaylandDisplayServerState(ProgramLoggerFactory, waylandDesktopOptions, enableGles)
             : null;
         var waylandIngressBridge = enableWaylandServer ? new WaylandDisplayIngressBridge() : null;
         var framebuffer = fbdevSize is DisplaySize size ? new FramebufferDevice(size.Width, size.Height) : null;
         var enableKmsOutput = enableKmsDrm && enableGles && framebuffer == null && !enableWaylandServer;
         var kmsInput = enableKmsOutput ? new VirtualConsoleInput() : null;
-        var processController = framebuffer != null || enableKmsOutput ? new ContainerProcessController() : null;
+        var processController = framebuffer != null || enableKmsOutput || enableWaylandServer
+            ? new ContainerProcessController()
+            : null;
         using var framebufferHost = framebuffer != null ? new FramebufferDisplayHost(ProgramLoggerFactory, framebuffer) : null;
         try
         {
@@ -1696,9 +1745,13 @@ internal class Program
                 framebufferHost?.Start();
                 waylandDisplayState?.Start();
             }
-            catch (Exception ex) when (ex is InvalidOperationException or DllNotFoundException or EntryPointNotFoundException)
+            catch (Exception ex) when (ex is InvalidOperationException or DllNotFoundException or EntryPointNotFoundException
+                                       or BadImageFormatException)
             {
-                Logger.LogError("SDL display initialization failed. {Message}", ex.Message);
+                if (enableWaylandServer && framebufferHost == null)
+                    Logger.LogError("Built-in Wayland compositor initialization failed. {Message}", ex.Message);
+                else
+                    Logger.LogError("Host display initialization failed. {Message}", ex.Message);
                 return 125;
             }
             var runtimeTask = runtimeThread.Start(new ContainerRunRequest
@@ -1732,6 +1785,8 @@ internal class Program
                 EnableKmsDrm = enableKmsDrm,
                 KmsWindow = kmsOutput?.KmsWindow,
                 KmsInput = kmsInput,
+                CompositorScanout = waylandDisplayState?.Scanout,
+                CompositorTextures = waylandDisplayState?.GuestTextures,
                 ProcessController = processController,
                 MemoryQuotaBytes = memoryQuotaBytes,
                 CpuOptions = cpuOptions,
@@ -1790,7 +1845,20 @@ internal class Program
             }
             else if (waylandDisplayState != null && waylandIngressBridge != null)
             {
-                waylandDisplayState.RunMainLoop(runtimeTask, waylandIngressBridge);
+                try
+                {
+                    waylandDisplayState.RunMainLoop(runtimeTask, waylandIngressBridge);
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogError(ex, "Wayland display failed");
+                    if (!runtimeTask.IsCompleted)
+                    {
+                        processController!.TrySignalInitProcess((int)LinuxSignal.SIGKILL);
+                        runtimeTask.GetAwaiter().GetResult();
+                    }
+                    return 125;
+                }
             }
 
             return runtimeTask.GetAwaiter().GetResult();
@@ -1828,7 +1896,9 @@ internal class Program
                 waylandDisplayState?.Presenter,
                 waylandIngressBridge,
                 waylandDisplayState != null,
-                waylandDesktopOptions);
+                waylandDesktopOptions,
+                enableGpuBuffers: waylandDisplayState?.GuestTextures != null,
+                scale120: waylandDisplayState?.Scale120 ?? 120);
             var waylandRuntime = registry.Spawn(waylandDaemon, parentPid: ownerPid, uts: uts);
             Logger.LogInformation("Registered Podish virtual Wayland daemon pid={Pid} ownerPid={OwnerPid} path={Path}",
                 waylandRuntime.Process.TGID, ownerPid, waylandDaemon.UnixPath);

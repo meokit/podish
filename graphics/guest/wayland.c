@@ -199,14 +199,11 @@ struct pg_wayland* pg_wayland_create(void* display, struct wl_egl_window* native
     if (!window)
         return NULL;
     window->display = display;
-    window->render_fd = -1;
-    if (getenv("PODISH_KMSDRM")) {
-        window->render_fd = open("/dev/dri/renderD128", O_RDWR | O_CLOEXEC);
-        uint32_t caps = 0;
-        if (window->render_fd >= 0 && (ioctl(window->render_fd, DRM_QUERY_GPU, &caps) < 0 || !(caps & 2))) {
-            close(window->render_fd);
-            window->render_fd = -1;
-        }
+    window->render_fd = open("/dev/dri/renderD128", O_RDWR | O_CLOEXEC);
+    uint32_t caps = 0;
+    if (window->render_fd >= 0 && (ioctl(window->render_fd, DRM_QUERY_GPU, &caps) < 0 || !(caps & 2))) {
+        close(window->render_fd);
+        window->render_fd = -1;
     }
     window->queue = wl.create_queue(display);
     if (!window->queue)

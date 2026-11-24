@@ -117,6 +117,12 @@ commands, and compatibility reports.
 | X.Org, Openbox, xeyes, xclock, xterm | Guest X11 with a framebuffer displayed in a host SDL2 window. [X11 setup](tests/fbdev-games/README.md) |
 
 The Wayland bridge handles shared-memory and ANGLE-backed EGL clients.
+The built-in compositor uses Catppuccin Latte for window decorations. Pass
+`--wayland-theme breeze-light` to select the previous style, or use
+`--wayland-theme PATH` to load an Openbox or Labwc theme directory or `themerc`
+file on the host. Installed theme names are resolved through the host's XDG
+data directories and `~/.themes`. The loader reads solid titlebar and border
+colors, title alignment, padding, button sizes and states, and XBM button icons.
 The PulseAudio bridge forwards guest audio to host backends.
 [Graphics setup](graphics/README.md) · [Media smoke tests](tests/media/README.md)
 

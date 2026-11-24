@@ -27,10 +27,10 @@ internal sealed unsafe partial class KmsEglOutput : IDisposable
     private readonly delegate* unmanaged[Cdecl]<nint> _getContext;
     private readonly delegate* unmanaged[Cdecl]<nint, nint, int, int*, uint> _querySurface;
 
-    internal KmsEglOutput(AngleLibrary angle, KmsEglWindow window, ILogger logger)
+    internal KmsEglOutput(AngleLibrary angle, KmsEglWindow? window, ILogger logger)
     {
         _angle = angle;
-        _window = window;
+        _window = window.GetValueOrDefault();
         _logger = logger;
         _bindTexture = (delegate* unmanaged[Cdecl]<nint, nint, int, uint>)angle.Egl("eglBindTexImage");
         _releaseTexture = (delegate* unmanaged[Cdecl]<nint, nint, int, uint>)angle.Egl("eglReleaseTexImage");
@@ -41,6 +41,13 @@ internal sealed unsafe partial class KmsEglOutput : IDisposable
         _getSurface = (delegate* unmanaged[Cdecl]<int, nint>)angle.Egl("eglGetCurrentSurface");
         _getContext = (delegate* unmanaged[Cdecl]<nint>)angle.Egl("eglGetCurrentContext");
         _querySurface = (delegate* unmanaged[Cdecl]<nint, nint, int, int*, uint>)angle.Egl("eglQuerySurface");
+
+        if (window == null)
+        {
+            Config = angle.Config;
+            Require(TextureContext() != 0, "create a GLES3 context for virtual GBM buffers");
+            return;
+        }
 
         var choose = (delegate* unmanaged[Cdecl]<nint, int*, nint*, int, int*, uint>)angle.Egl("eglChooseConfig");
         int* attributes = stackalloc int[]
@@ -59,7 +66,7 @@ internal sealed unsafe partial class KmsEglOutput : IDisposable
         try
         {
             var createWindow = (delegate* unmanaged[Cdecl]<nint, nint, nint, int*, nint>)angle.Egl("eglCreateWindowSurface");
-            _surface = createWindow(angle.Display, Config, window.Handle, null);
+            _surface = createWindow(angle.Display, Config, _window.Handle, null);
             int* contextArgs = stackalloc int[] { 0x3098, 2, 0x3483, 0, 0x3038 };
             _context = angle.CreateContext(angle.Display, Config, 0, contextArgs);
             Require(_surface != 0 && _context != 0 &&

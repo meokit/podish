@@ -10,7 +10,6 @@ public sealed partial class DrmCardInode : Inode, ITaskWaitSource, IPollNotifica
 {
     private const uint CrtcId = 1, ConnectorId = 2, EncoderId = 3;
     public const int ModeWidth = 640, ModeHeight = 480;
-    private const uint Width = ModeWidth, Height = ModeHeight;
     private const int EventSize = 32, MaxEvents = 256;
     private const short PollIn = 0x0001;
     private const int MaxObjects = 64;
@@ -36,7 +35,12 @@ public sealed partial class DrmCardInode : Inode, ITaskWaitSource, IPollNotifica
     private readonly bool _gpuBuffers;
     private readonly FramebufferDevice? _cpuOutput;
     private readonly Func<uint, uint, uint, DrmScanoutBuffer?>? _allocateGpu;
-    private readonly byte[] _mode = CreateMode();
+    private readonly uint _width;
+    private readonly uint _height;
+    private readonly byte[] _mode;
+    private readonly VirtualDrmScanout? _compositorOutput;
+    private Session? _compositorSession;
+    private readonly uint _compositorFirstFramebuffer;
     private Session? _master;
     private Session? _scanoutOwner;
     private uint _scanout;
@@ -45,18 +49,65 @@ public sealed partial class DrmCardInode : Inode, ITaskWaitSource, IPollNotifica
     private uint _nextId = DpmsProperty + 1;
 
     public DrmCardInode(SuperBlock superBlock, KernelScheduler scheduler, bool gpuBuffers,
-        FramebufferDevice? cpuOutput = null, Func<uint, uint, uint, DrmScanoutBuffer?>? allocateGpu = null)
+        FramebufferDevice? cpuOutput = null, Func<uint, uint, uint, DrmScanoutBuffer?>? allocateGpu = null,
+        VirtualDrmScanout? compositorOutput = null)
     {
         _scheduler = scheduler;
         _gpuBuffers = gpuBuffers;
         _cpuOutput = cpuOutput;
         _allocateGpu = allocateGpu;
+        _width = (uint)(compositorOutput?.Width ?? ModeWidth);
+        _height = (uint)(compositorOutput?.Height ?? ModeHeight);
+        _mode = CreateMode((int)_width, (int)_height);
         SuperBlock = superBlock;
         Type = InodeType.CharDev;
         Ino = 0x22600;
         Mode = 0x1b6;
         Rdev = 0xe200; // DRM major 226, card0 minor 0.
         SetInitialLinkCount(1, "Virtual DRM registration");
+
+        if (compositorOutput != null)
+        {
+            _compositorOutput = compositorOutput;
+            _master = _compositorSession = new Session(scheduler);
+            _compositorFirstFramebuffer = _nextId;
+            var pitch = (uint)compositorOutput.Pitch;
+            for (int i = 0; i < 2; i++)
+            {
+                var backing = new Buffer(null, _width, _height, pitch, pitch * _height,
+                    compositorOutput.GpuBuffers?[i]);
+                backing.Retain();
+                _compositorSession.Framebuffers.Add(_nextId++, new Framebuffer(backing, _width, _height));
+            }
+            compositorOutput.Attach(this);
+        }
+    }
+
+    internal void SubmitCompositorFlip(int bufferIndex)
+    {
+        _scheduler.ScheduleFromAnyThread(() =>
+        {
+            if (_compositorSession is { } session)
+            {
+                uint framebuffer = _compositorFirstFramebuffer + (uint)bufferIndex;
+                var gpu = session.Framebuffers[framebuffer].Backing.Gpu;
+                gpu?.Pin();
+                ScheduleFlip(new PendingFlip(session, framebuffer, false, 0, gpu));
+            }
+        });
+    }
+
+    internal void ReleaseCompositorScanout()
+    {
+        if (_compositorSession is not { } session)
+            return;
+
+        Deactivate(session);
+        foreach (var framebuffer in session.Framebuffers.Values)
+            framebuffer.Backing.Release();
+        session.Framebuffers.Clear();
+        _compositorSession = null;
+        _master = null;
     }
 
     private sealed record Framebuffer(Buffer Backing, uint Width, uint Height);
@@ -441,7 +492,7 @@ public sealed partial class DrmCardInode : Inode, ITaskWaitSource, IPollNotifica
         if (_pending != null) return -(int)Errno.EBUSY;
         if (!session.Framebuffers.TryGetValue(fb, out var buffer)) return -(int)Errno.ENOENT;
         if (U32(data, 8) != 1 || U32(data, 20) != 0 || U32(data, 24) != 0 ||
-            buffer.Width != Width || buffer.Height != Height ||
+            buffer.Width != _width || buffer.Height != _height ||
             !data.Slice(36, 32).SequenceEqual(_mode.AsSpan(0, 32)))
             return -(int)Errno.EINVAL;
         Span<byte> connector = stackalloc byte[sizeof(uint)];
@@ -481,17 +532,22 @@ public sealed partial class DrmCardInode : Inode, ITaskWaitSource, IPollNotifica
         if (_pending != null) return -(int)Errno.EBUSY;
         var fb = U32(data, 4);
         if (!session.Framebuffers.TryGetValue(fb, out var buffer)) return -(int)Errno.ENOENT;
-        if (buffer.Width != Width || buffer.Height != Height) return -(int)Errno.EINVAL;
+        if (buffer.Width != _width || buffer.Height != _height) return -(int)Errno.EINVAL;
         if ((flags & 1) != 0 && session.Events.Count >= MaxEvents) return -(int)Errno.EBUSY;
 
         var gpu = buffer.Backing.Gpu;
         if (gpu is { Ready: false }) return -(int)Errno.EINVAL;
         gpu?.Pin();
-        _pending = new PendingFlip(session, fb, (flags & 1) != 0, U64(data, 16), gpu);
+        ScheduleFlip(new PendingFlip(session, fb, (flags & 1) != 0, U64(data, 16), gpu));
+        return 0;
+    }
+
+    private void ScheduleFlip(PendingFlip flip)
+    {
+        _pending = flip;
         var now = MonotonicClock.Milliseconds;
         var next = ((now * 60 / 1000 + 1) * 1000 + 59) / 60;
-        session.Timer = _scheduler.ScheduleTimer(next - now, CompleteFlip);
-        return 0;
+        flip.Owner.Timer = _scheduler.ScheduleTimer(next - now, CompleteFlip);
     }
 
     private void CompleteFlip()
@@ -502,16 +558,19 @@ public sealed partial class DrmCardInode : Inode, ITaskWaitSource, IPollNotifica
         _pending = null;
         try
         {
-            if (PresentBuffer(session.Framebuffers[flip.Fb]))
+            // The built-in compositor owns its EGL context on the display thread.
+            if (session == _compositorSession || PresentBuffer(session.Framebuffers[flip.Fb]))
                 Activate(session, flip.Fb, flip.Gpu);
         }
         finally
         {
             flip.Gpu?.Unpin();
         }
+        var now = MonotonicClock.Milliseconds;
+        if (session == _compositorSession)
+            _compositorOutput!.CompleteFlip((int)(flip.Fb - _compositorFirstFramebuffer), unchecked((uint)now));
         if (!flip.Event) return;
 
-        var now = MonotonicClock.Milliseconds;
         var data = new byte[EventSize];
         Put(data, 0, 2); // DRM_EVENT_FLIP_COMPLETE
         Put(data, 4, EventSize);
@@ -597,17 +656,24 @@ public sealed partial class DrmCardInode : Inode, ITaskWaitSource, IPollNotifica
         return total;
     }
 
-    private static byte[] CreateMode()
+    private static byte[] CreateMode(int width, int height)
     {
         var mode = new byte[68];
-        Put(mode, 0, 25175);
-        ushort[] timings = [640, 656, 752, 800, 0, 480, 490, 492, 525, 0];
+        bool standardVga = width == ModeWidth && height == ModeHeight;
+        int horizontalTotal = width + 160;
+        int verticalTotal = height + 45;
+        Put(mode, 0, standardVga ? 25175u : (uint)((horizontalTotal * verticalTotal * 60 + 500) / 1000));
+        ushort[] timings =
+        [
+            (ushort)width, (ushort)(width + 16), (ushort)(width + 112), (ushort)horizontalTotal, 0,
+            (ushort)height, (ushort)(height + 10), (ushort)(height + 12), (ushort)verticalTotal, 0
+        ];
         for (var i = 0; i < timings.Length; i++)
             BinaryPrimitives.WriteUInt16LittleEndian(mode.AsSpan(4 + i * 2), timings[i]);
         Put(mode, 24, 60);
         Put(mode, 28, (1u << 1) | (1u << 3)); // Negative HSync and VSync.
         Put(mode, 32, (1u << 3) | (1u << 6)); // Preferred, generated by the driver.
-        "640x480"u8.CopyTo(mode.AsSpan(36));
+        System.Text.Encoding.ASCII.GetBytes(FormattableString.Invariant($"{width}x{height}"), mode.AsSpan(36));
         return mode;
     }
 
