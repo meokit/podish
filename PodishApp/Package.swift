@@ -10,21 +10,25 @@ let package = Package(
     products: [
         .executable(name: "Podish", targets: ["Podish"])
     ],
-    dependencies: [
-        .package(path: "Vendor/SwiftTerm"),
-        .package(url: "https://github.com/Flight-School/MessagePack.git", from: "1.2.4")
-    ],
     targets: [
         .binaryTarget(
             name: "PodishCoreBinary",
             path: "artifacts/podish-native/PodishCore.xcframework"
         ),
+        .binaryTarget(
+            name: "AngleEGL",
+            path: "artifacts/angle/libEGL.xcframework"
+        ),
+        .binaryTarget(
+            name: "AngleGLESv2",
+            path: "artifacts/angle/libGLESv2.xcframework"
+        ),
         .executableTarget(
             name: "Podish",
             dependencies: [
                 "PodishCoreBinary",
-                .product(name: "SwiftTerm", package: "SwiftTerm"),
-                .product(name: "MessagePack", package: "MessagePack")
+                "AngleEGL",
+                "AngleGLESv2"
             ],
             linkerSettings: [
                 .unsafeFlags([
@@ -33,11 +37,17 @@ let package = Package(
                 ], .when(platforms: [.macOS, .iOS])),
                 .linkedFramework("Foundation", .when(platforms: [.macOS, .iOS])),
                 .linkedFramework("CoreFoundation", .when(platforms: [.macOS, .iOS])),
+                .linkedFramework("CoreGraphics", .when(platforms: [.macOS, .iOS])),
+                .linkedFramework("CoreText", .when(platforms: [.macOS, .iOS])),
+                .linkedFramework("ImageIO", .when(platforms: [.macOS, .iOS])),
+                .linkedFramework("Metal", .when(platforms: [.macOS, .iOS])),
+                .linkedFramework("QuartzCore", .when(platforms: [.macOS, .iOS])),
                 .linkedFramework("Security", .when(platforms: [.macOS, .iOS])),
                 .linkedFramework("Network", .when(platforms: [.macOS, .iOS])),
                 .linkedFramework("GSS", .when(platforms: [.macOS, .iOS])),
                 .linkedLibrary("c++", .when(platforms: [.macOS, .iOS])),
-                .linkedLibrary("z", .when(platforms: [.macOS, .iOS])),
+                .linkedLibrary("sqlite3", .when(platforms: [.macOS, .iOS])),
+                .linkedLibrary("z", .when(platforms: [.macOS, .iOS]))
             ]
         )
     ]

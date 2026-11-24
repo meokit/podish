@@ -4,6 +4,8 @@
 <dict>
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
+	<key>CFBundleDisplayName</key>
+	<string>Podish</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -15,20 +17,14 @@
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
-	<string>$(MARKETING_VERSION)</string>
+	<string>2.0.0</string>
 	<key>CFBundleVersion</key>
-	<string>$(CURRENT_PROJECT_VERSION)</string>
+	<string>1</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>$(MACOSX_DEPLOYMENT_TARGET)</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
-	<key>PodishCoreBootstrapperPath</key>
-	<string>$(PODISHCORE_BOOTSTRAPPER_OBJ)</string>
-	<key>PodishCoreSliceName</key>
-	<string>$(PODISHCORE_SLICE_NAME)</string>
-	<key>PodishCoreStaticLibPath</key>
-	<string>$(PODISHCORE_STATIC_LIB)</string>
-	<key>PodishSeedImageReference</key>
-	<string>$(PODISH_SEED_IMAGE_REF)</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
 </dict>
 </plist>
