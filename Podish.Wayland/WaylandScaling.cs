@@ -161,7 +161,7 @@ internal sealed class FractionalScaleManagerResource(WaylandClient client, uint 
                 "The surface already has a fractional scale object.");
         var resource = Client.Register(new FractionalScaleResource(Client, request.Id, Version, surface));
         surface.FractionalScale = resource;
-        return WpFractionalScaleV1EventWriter.PreferredScaleAsync(Client, resource.ObjectId, Client.Server.Output.Scale120);
+        return WpFractionalScaleV1EventWriter.PreferredScaleAsync(Client, resource.ObjectId, Client.EffectiveOutput.Scale120);
     }
 }
 
@@ -214,7 +214,7 @@ internal sealed class XdgOutputResource(WaylandClient client, uint id, uint vers
 
     internal async ValueTask AdvertiseAsync(bool initial)
     {
-        var info = Client.Server.Output;
+        var info = Client.EffectiveOutput;
         await ZxdgOutputV1EventWriter.LogicalPositionAsync(Client, ObjectId, 0, 0);
         await ZxdgOutputV1EventWriter.LogicalSizeAsync(Client, ObjectId, info.Width, info.Height);
         if (initial && Version >= 2)

@@ -271,15 +271,17 @@ internal sealed class XdgPopupResource : WaylandResource
             server.FramePresenter is not IWaylandDesktopSceneController scene)
             return;
 
-        WaylandSurfaceBounds parent = GetParentGeometry();
+        WaylandSurfaceBounds parentCanvas = GetParentCanvasGeometry();
         WaylandSurfaceBounds ownGeometry = XdgSurface.WindowGeometry ?? default;
-        var bounds = placement with
-        {
-            X = SaturatingAdd((long)parent.X + placement.X - ownGeometry.X),
-            Y = SaturatingAdd((long)parent.Y + placement.Y - ownGeometry.Y)
-        };
-        if (XdgSurface.Surface.CurrentBuffer != null)
-            bounds = bounds with { Width = XdgSurface.Surface.LogicalWidth, Height = XdgSurface.Surface.LogicalHeight };
+        var bounds = new WaylandSurfaceBounds(
+            SaturatingAdd((long)parentCanvas.X + Client.ToCanvasWidth(placement.X - ownGeometry.X)),
+            SaturatingAdd((long)parentCanvas.Y + Client.ToCanvasHeight(placement.Y - ownGeometry.Y)),
+            XdgSurface.Surface.CurrentBuffer != null
+                ? Math.Max(1, Client.ToCanvasWidth(XdgSurface.Surface.LogicalWidth))
+                : Math.Max(1, Client.ToCanvasWidth(placement.Width)),
+            XdgSurface.Surface.CurrentBuffer != null
+                ? Math.Max(1, Client.ToCanvasHeight(XdgSurface.Surface.LogicalHeight))
+                : Math.Max(1, Client.ToCanvasHeight(placement.Height)));
         scene.SetSurfaceBounds(XdgSurface.Surface.SceneSurfaceId, bounds);
         scene.SetSurfaceLayer(XdgSurface.Surface.SceneSurfaceId, Parent.SceneLayer);
         scene.RaiseSurface(XdgSurface.Surface.SceneSurfaceId);
@@ -320,25 +322,40 @@ internal sealed class XdgPopupResource : WaylandResource
         await server.Focus.HandleSurfaceDestroyedAsync(XdgSurface.Surface.SceneSurfaceId);
     }
 
-    private WaylandSurfaceBounds GetParentGeometry()
+    private WaylandSurfaceBounds GetParentCanvasGeometry()
     {
         WaylandSurfaceBounds surface = default;
         if (Parent != null && Client.Server.FramePresenter is IWaylandSceneView view)
             view.TryGetSurfaceBounds(Parent.SceneSurfaceId, out surface);
         if (Parent?.XdgSurface?.WindowGeometry is not { } geometry)
             return surface;
+        return new WaylandSurfaceBounds(
+            SaturatingAdd((long)surface.X + Client.ToCanvasWidth(geometry.X)),
+            SaturatingAdd((long)surface.Y + Client.ToCanvasHeight(geometry.Y)),
+            Math.Max(1, Client.ToCanvasWidth(geometry.Width)),
+            Math.Max(1, Client.ToCanvasHeight(geometry.Height)));
+    }
+
+    private WaylandSurfaceBounds GetParentGeometry()
+    {
+        WaylandSurfaceBounds surface = default;
+        if (Parent != null && Client.Server.FramePresenter is IWaylandSceneView view)
+            view.TryGetSurfaceBounds(Parent.SceneSurfaceId, out surface);
+        WaylandSurfaceBounds clientSurface = Client.ToClientBounds(surface);
+        if (Parent?.XdgSurface?.WindowGeometry is not { } geometry)
+            return clientSurface;
         return geometry with
         {
-            X = SaturatingAdd((long)surface.X + geometry.X),
-            Y = SaturatingAdd((long)surface.Y + geometry.Y)
+            X = SaturatingAdd((long)clientSurface.X + geometry.X),
+            Y = SaturatingAdd((long)clientSurface.Y + geometry.Y)
         };
     }
 
     private async ValueTask ConfigureAsync(uint? token = null)
     {
         WaylandSurfaceBounds available = Parent?.LayerSurface != null || Parent?.SceneLayer != WaylandSceneLayer.Window
-            ? Client.Server.OutputBounds
-            : Client.Server.WorkArea;
+            ? Client.GetClientOutputBounds()
+            : Client.GetClientWorkArea();
         WaylandSurfaceBounds placement = _rules.Place(GetParentGeometry(), available);
         if (token == null && _lastConfigured == placement)
             return;

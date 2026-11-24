@@ -225,6 +225,9 @@ internal sealed class PodishWaylandVirtualDaemon : IVirtualDaemon
                 await _server.HandlePointerMotionAsync(inputEvent.X, inputEvent.Y, inputEvent.Timestamp);
                 await _server.HandlePointerButtonAsync((uint)inputEvent.Button, inputEvent.Pressed, inputEvent.Timestamp);
                 break;
+            case DisplayInputEventKind.PointerWheel:
+                await _server.HandlePointerAxisAsync(inputEvent.DeltaX * 15, -inputEvent.DeltaY * 15, inputEvent.Timestamp);
+                break;
             case DisplayInputEventKind.PointerLeave:
                 await _server.ClearPointerFocusAsync();
                 break;

@@ -1816,7 +1816,7 @@ public readonly record struct WlSubsurfacePlaceBelowRequest(uint Sibling);
 public static class XdgWmBaseProtocol
 {
     public const string InterfaceName = "xdg_wm_base";
-    public const uint Version = 3;
+    public const uint Version = 4;
 
     public static readonly ReadOnlyCollection<WaylandMessageMetadata> Requests = new([
         new WaylandMessageMetadata(InterfaceName, "destroy", 0, 1, []),
@@ -2096,7 +2096,7 @@ public static class XdgSurfaceEventWriter
 public static class XdgToplevelProtocol
 {
     public const string InterfaceName = "xdg_toplevel";
-    public const uint Version = 3;
+    public const uint Version = 4;
 
     public static readonly ReadOnlyCollection<WaylandMessageMetadata> Requests = new([
         new WaylandMessageMetadata(InterfaceName, "destroy", 0, 1, []),
@@ -2257,6 +2257,15 @@ public static class XdgToplevelEventWriter
     public static ValueTask CloseAsync(WaylandClient client, uint objectId)
     {
         return client.SendEventAsync(objectId, 1, static _ => { });
+    }
+
+    public static ValueTask ConfigureBoundsAsync(WaylandClient client, uint objectId, int width, int height)
+    {
+        return client.SendEventAsync(objectId, 2, writer =>
+        {
+            writer.WriteInt(width);
+            writer.WriteInt(height);
+        });
     }
 
 }

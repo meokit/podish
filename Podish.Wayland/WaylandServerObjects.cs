@@ -415,16 +415,30 @@ internal sealed class WlSurfaceResource : WaylandResource
             {
                 if (Client.Server.FramePresenter is IWaylandGpuFramePresenter presenter)
                 {
+                    var canvasMapping = _mapping is { } m
+                        ? m with
+                        {
+                            Width = Math.Max(1, Client.ToCanvasWidth(m.Width)),
+                            Height = Math.Max(1, Client.ToCanvasHeight(m.Height))
+                        }
+                        : (WaylandSurfaceMapping?)null;
                     if (attached)
-                        await presenter.PresentGpuSurfaceAsync(SceneSurfaceId, gpuBuffer.ToGpuFrame() with { Mapping = _mapping });
-                    else if (mappingChanged && _mapping is { } newMapping)
+                        await presenter.PresentGpuSurfaceAsync(SceneSurfaceId, gpuBuffer.ToGpuFrame() with { Mapping = canvasMapping });
+                    else if (mappingChanged && canvasMapping is { } newMapping)
                         presenter.UpdateGpuSurfaceMapping(SceneSurfaceId, newMapping);
                 }
             }
             else
             {
+                var canvasMapping = _mapping is { } m
+                    ? m with
+                    {
+                        Width = Math.Max(1, Client.ToCanvasWidth(m.Width)),
+                        Height = Math.Max(1, Client.ToCanvasHeight(m.Height))
+                    }
+                    : (WaylandSurfaceMapping?)null;
                 WaylandShmFrame? frame = _current.Buffer == null ? null :
-                    _current.Buffer.ToFrame(SceneSurfaceId) with { Mapping = _mapping };
+                    _current.Buffer.ToFrame(SceneSurfaceId) with { Mapping = canvasMapping };
                 await Client.Server.FramePresenter.PresentSurfaceAsync(SceneSurfaceId, frame);
             }
         }
@@ -674,7 +688,11 @@ internal sealed class WlSubsurfaceResource : WaylandResource
 
         sceneController.SetSurfaceBounds(
             Surface.SceneSurfaceId,
-            new WaylandSurfaceBounds(parentBounds.X + _positionX, parentBounds.Y + _positionY, width, height));
+            new WaylandSurfaceBounds(
+                parentBounds.X + Client.ToCanvasWidth(_positionX),
+                parentBounds.Y + Client.ToCanvasHeight(_positionY),
+                width,
+                height));
         sceneController.SetSurfaceLayer(Surface.SceneSurfaceId, ParentSurface.SceneLayer);
 
         if (!_sync)
@@ -1682,14 +1700,14 @@ internal sealed class WlOutputResource : WaylandResource
 
     public async ValueTask AdvertiseAsync()
     {
-        WaylandServer.OutputInfo output = Client.Server.Output;
+        WaylandServer.OutputInfo output = Client.EffectiveOutput;
         await WlOutputEventWriter.GeometryAsync(
             Client,
             ObjectId,
             0,
             0,
-            0,
-            0,
+            output.PhysicalWidthMm,
+            output.PhysicalHeightMm,
             WlOutputSubpixel.Unknown,
             output.Make,
             output.Model,
@@ -1816,6 +1834,19 @@ internal sealed class WlPointerResource : WaylandResource
             time,
             button,
             pressed ? WlPointerButtonState.Pressed : WlPointerButtonState.Released);
+        if (Version >= 5)
+            await WlPointerEventWriter.FrameAsync(Client, ObjectId);
+    }
+
+    public async ValueTask HandleAxisAsync(int deltaX, int deltaY, uint time)
+    {
+        if (_focusedSurfaceId == null || (deltaX == 0 && deltaY == 0))
+            return;
+
+        if (deltaY != 0)
+            await WlPointerEventWriter.AxisAsync(Client, ObjectId, time, WlPointerAxis.VerticalScroll, deltaY);
+        if (deltaX != 0)
+            await WlPointerEventWriter.AxisAsync(Client, ObjectId, time, WlPointerAxis.HorizontalScroll, deltaX);
         if (Version >= 5)
             await WlPointerEventWriter.FrameAsync(Client, ObjectId);
     }
@@ -2365,12 +2396,19 @@ internal sealed class XdgToplevelResource : WaylandResource
             case 3:
             {
                 string appId = XdgToplevelProtocol.DecodeSetAppId(message.Body, message.Fds).AppId;
-                if (AppId != appId)
+                bool changed = AppId != appId;
+                if (changed)
                 {
                     AppId = appId;
+                    if (!string.IsNullOrWhiteSpace(appId))
+                        Client.AppIdHint = appId;
                     _applicationIcon = Client.Server.ResolveApplicationIcon?.Invoke(appId);
                 }
                 SyncSceneDecoration();
+                if (changed)
+                    await Client.RefreshEffectiveOutputAsync();
+                if (changed && Client.Server.MobileMode && IsMaximized && !IsFullscreen)
+                    await UpdateMaximizedBoundsAsync();
                 await Client.Server.UpdateForeignToplevelAsync(this);
                 break;
             }
@@ -2435,6 +2473,14 @@ internal sealed class XdgToplevelResource : WaylandResource
 
     public async ValueTask SendInitialConfigureAsync()
     {
+        if (Client.Server.MobileMode && Parent == null)
+        {
+            IsMaximized = true;
+            SyncSceneDecoration();
+            await UpdateMaximizedBoundsAsync();
+            return;
+        }
+
         await SendConfigureAsync(0, 0);
     }
 
@@ -2453,11 +2499,33 @@ internal sealed class XdgToplevelResource : WaylandResource
 
     public async ValueTask SendConfigureAsync(int width, int height, bool resizing = false)
     {
+        if ((width <= 0 || height <= 0) && (IsMaximized || IsFullscreen))
+        {
+            WaylandSurfaceBounds desired = IsFullscreen ? Client.GetClientOutputBounds() : Client.GetClientWorkArea();
+            if (Client.Server.FramePresenter is IWaylandSceneView view &&
+                view.TryGetSurfaceBounds(Surface.Surface.SceneSurfaceId, out WaylandSurfaceBounds bounds) &&
+                bounds.Width > 0 && bounds.Height > 0)
+            {
+                desired = Client.ToClientBounds(bounds);
+            }
+
+            if (width <= 0)
+                width = desired.Width;
+            if (height <= 0)
+                height = desired.Height;
+        }
+
         if (width > 0 || height > 0)
             _hasSentNonZeroConfigure = true;
 
         if (DecorationResource != null)
             await DecorationResource.SendConfigureAsync(DecorationMode);
+        if (Version >= 4)
+        {
+            WaylandSurfaceBounds maxBounds = IsFullscreen ? Client.GetClientOutputBounds() : Client.GetClientWorkArea();
+            await XdgToplevelEventWriter.ConfigureBoundsAsync(Client, ObjectId,
+                Math.Max(1, maxBounds.Width), Math.Max(1, maxBounds.Height));
+        }
         await XdgToplevelEventWriter.ConfigureAsync(Client, ObjectId, width, height, BuildStates(resizing));
         await Surface.SendConfigureAsync();
     }
@@ -2530,7 +2598,7 @@ internal sealed class XdgToplevelResource : WaylandResource
         else if (Client.Server.FramePresenter is IWaylandDesktopSceneController scene && _restoreBounds is { } restore)
         {
             scene.SetSurfaceBounds(id, restore);
-            await SendConfigureAsync(restore.Width, restore.Height);
+            await SendConfigureAsync(Client.ToClientWidth(restore.Width), Client.ToClientHeight(restore.Height));
         }
         else
         {
@@ -2560,7 +2628,7 @@ internal sealed class XdgToplevelResource : WaylandResource
         else if (Client.Server.FramePresenter is IWaylandDesktopSceneController scene && _beforeFullscreenBounds is { } previous)
         {
             scene.SetSurfaceBounds(Surface.Surface.SceneSurfaceId, previous);
-            await SendConfigureAsync(previous.Width, previous.Height);
+            await SendConfigureAsync(Client.ToClientWidth(previous.Width), Client.ToClientHeight(previous.Height));
         }
         else
         {
@@ -2585,7 +2653,7 @@ internal sealed class XdgToplevelResource : WaylandResource
                 desired = bounds;
             Surface.Surface.UpdateChildSubsurfacePlacements();
         }
-        await SendConfigureAsync(desired.Width, desired.Height);
+        await SendConfigureAsync(Math.Max(1, Client.ToClientWidth(desired.Width)), Math.Max(1, Client.ToClientHeight(desired.Height)));
     }
 
     public async ValueTask SetMinimizedAsync(bool minimized)
@@ -2654,11 +2722,15 @@ internal sealed class XdgToplevelResource : WaylandResource
     }
 
     private WaylandApplicationIcon? _applicationIcon;
+    internal WaylandApplicationIcon? ApplicationIcon => _applicationIcon;
 
     private WaylandDecorationSceneState BuildDecorationSceneState()
     {
+        bool isLauncherMain = Client.Server.MobileMode &&
+            WaylandClient.IsLauncherIdentifier(AppId) &&
+            !Title.Contains("Settings", StringComparison.OrdinalIgnoreCase);
         return new WaylandDecorationSceneState(
-            IsServerSideDecorated && !IsFullscreen,
+            IsServerSideDecorated && !IsFullscreen && !isLauncherMain,
             Activated,
             IsMaximized,
             IsMinimized,
