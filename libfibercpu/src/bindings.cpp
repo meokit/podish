@@ -182,7 +182,8 @@ static int InternalFaultBridge(void* opaque, uint32_t addr, int requested) {
         if (state->extended_fault_callback) {
             const bool exec = mem::has_property(property, mem::Property::Exec);
             if (exec) access |= 2;
-            if (exec || state->can_restart_memory_fault) access |= 4;
+            // A replay can repeat an earlier data hook from the same instruction.
+            if (exec || (state->can_restart_memory_fault && !state->mem_hook)) access |= 4;
         }
         int res = state->fault_handler(state, addr, access, state->fault_userdata);
         if (res && state->status != EmuStatus::Fault) {

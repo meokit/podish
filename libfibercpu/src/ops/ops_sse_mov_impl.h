@@ -39,7 +39,8 @@ FORCE_INLINE LogicFlow OpMovss_LoadMemory(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpMovss_StoreMemory(LogicFuncParams) {
     const uint32_t address = ComputeLinearAddress(state, gpr, op);
     const float value = simde_mm_cvtss_f32(state->ctx.xmm[(operand_modrm >> 3) & 7]);
-    if (!WriteMem<float, OpOnTLBMiss::Retry>(state, gpr, address, value, utlb, op)) return LogicFlow::RetryMemoryOp;
+    if (!WriteMem<float, OpOnTLBMiss::RetryRestartable>(state, gpr, address, value, utlb, op))
+        return LogicFlow::RetryMemoryOp;
     return LogicFlow::Continue;
 }
 
@@ -103,7 +104,8 @@ FORCE_INLINE LogicFlow OpMov_Sse_StoreWithOperands(LogicFuncParams, const Operan
             uint32_t addr = ComputeLinearAddress(state, gpr, op);
             double val;
             simde_mm_store_sd(&val, simde_mm_castps_pd(src_val));
-            if (!WriteMem<double, OpOnTLBMiss::Retry>(state, gpr, addr, val, utlb, op)) return LogicFlow::RetryMemoryOp;
+            if (!WriteMem<double, OpOnTLBMiss::RetryRestartable>(state, gpr, addr, val, utlb, op))
+                return LogicFlow::RetryMemoryOp;
         }
     } else if (operands.ReadPrefixes(op).flags.rep) {  // F3: MOVSS
         if ((operand_modrm >> 6) == 3) {
@@ -115,7 +117,7 @@ FORCE_INLINE LogicFlow OpMov_Sse_StoreWithOperands(LogicFuncParams, const Operan
         }
     } else {  // MOVUPS/MOVUPD
         // Store 128
-        if (!WriteModRM<simde__m128, OpOnTLBMiss::Retry>(state, gpr, op, operand_modrm, src_val, utlb))
+        if (!WriteModRM<simde__m128, OpOnTLBMiss::RetryRestartable>(state, gpr, op, operand_modrm, src_val, utlb))
             return LogicFlow::RetryMemoryOp;
     }
     return LogicFlow::Continue;
@@ -170,7 +172,7 @@ FORCE_INLINE LogicFlow OpMovd_StoreWithOperands(LogicFuncParams, const Operands&
     uint8_t reg = (operand_modrm >> 3) & 7;
     simde__m128 val = state->ctx.xmm[reg];
     int32_t i_val = simde_mm_cvtsi128_si32(simde_mm_castps_si128(val));
-    if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry>(state, gpr, op, operand_modrm, (uint32_t)i_val, utlb))
+    if (!WriteModRM<uint32_t, OpOnTLBMiss::RetryRestartable>(state, gpr, op, operand_modrm, (uint32_t)i_val, utlb))
         return LogicFlow::RetryMemoryOp;
     return LogicFlow::Continue;
 }
@@ -192,7 +194,8 @@ FORCE_INLINE LogicFlow OpMovq_Store(LogicFuncParams) {
         ptr[1] = 0;
     } else {
         uint32_t addr = ComputeLinearAddress(state, gpr, op);
-        if (!WriteMem<uint64_t, OpOnTLBMiss::Retry>(state, gpr, addr, val, utlb, op)) return LogicFlow::RetryMemoryOp;
+        if (!WriteMem<uint64_t, OpOnTLBMiss::RetryRestartable>(state, gpr, addr, val, utlb, op))
+            return LogicFlow::RetryMemoryOp;
     }
     return LogicFlow::Continue;
 }
@@ -245,7 +248,7 @@ FORCE_INLINE LogicFlow OpMovdqa_Store(LogicFuncParams) {
     }
     uint8_t reg = (operand_modrm >> 3) & 7;
     simde__m128 val = state->ctx.xmm[reg];
-    if (!WriteModRM<simde__m128, OpOnTLBMiss::Retry>(state, gpr, op, operand_modrm, val, utlb))
+    if (!WriteModRM<simde__m128, OpOnTLBMiss::RetryRestartable>(state, gpr, op, operand_modrm, val, utlb))
         return LogicFlow::RetryMemoryOp;
     return LogicFlow::Continue;
 }
@@ -263,7 +266,7 @@ FORCE_INLINE LogicFlow OpMovdqu_Store(LogicFuncParams) {
     // F3 0F 7F: MOVDQU xmm/m128, xmm
     uint8_t reg = (operand_modrm >> 3) & 7;
     simde__m128 val = state->ctx.xmm[reg];
-    if (!WriteModRM<simde__m128, OpOnTLBMiss::Retry>(state, gpr, op, operand_modrm, val, utlb))
+    if (!WriteModRM<simde__m128, OpOnTLBMiss::RetryRestartable>(state, gpr, op, operand_modrm, val, utlb))
         return LogicFlow::RetryMemoryOp;
     return LogicFlow::Continue;
 }
@@ -284,7 +287,8 @@ FORCE_INLINE LogicFlow OpMovhpd_Store(LogicFuncParams) {
     uint8_t reg = (operand_modrm >> 3) & 7;
     uint64_t val = ((uint64_t*)&state->ctx.xmm[reg])[1];
     uint32_t addr = ComputeLinearAddress(state, gpr, op);
-    if (!WriteMem<uint64_t, OpOnTLBMiss::Retry>(state, gpr, addr, val, utlb, op)) return LogicFlow::RetryMemoryOp;
+    if (!WriteMem<uint64_t, OpOnTLBMiss::RetryRestartable>(state, gpr, addr, val, utlb, op))
+        return LogicFlow::RetryMemoryOp;
     return LogicFlow::Continue;
 }
 
@@ -304,7 +308,8 @@ FORCE_INLINE LogicFlow OpMovhps_Store(LogicFuncParams) {
     uint8_t reg = (operand_modrm >> 3) & 7;
     uint64_t val = ((uint64_t*)&state->ctx.xmm[reg])[1];
     uint32_t addr = ComputeLinearAddress(state, gpr, op);
-    if (!WriteMem<uint64_t, OpOnTLBMiss::Retry>(state, gpr, addr, val, utlb, op)) return LogicFlow::RetryMemoryOp;
+    if (!WriteMem<uint64_t, OpOnTLBMiss::RetryRestartable>(state, gpr, addr, val, utlb, op))
+        return LogicFlow::RetryMemoryOp;
     return LogicFlow::Continue;
 }
 
@@ -345,7 +350,8 @@ FORCE_INLINE LogicFlow OpMovlpd_Store(LogicFuncParams) {
     uint8_t reg = (operand_modrm >> 3) & 7;
     uint64_t val = ((uint64_t*)&state->ctx.xmm[reg])[0];
     uint32_t addr = ComputeLinearAddress(state, gpr, op);
-    if (!WriteMem<uint64_t, OpOnTLBMiss::Retry>(state, gpr, addr, val, utlb, op)) return LogicFlow::RetryMemoryOp;
+    if (!WriteMem<uint64_t, OpOnTLBMiss::RetryRestartable>(state, gpr, addr, val, utlb, op))
+        return LogicFlow::RetryMemoryOp;
     return LogicFlow::Continue;
 }
 
@@ -366,7 +372,8 @@ FORCE_INLINE LogicFlow OpMovlps_Store(LogicFuncParams) {
     uint8_t reg = (operand_modrm >> 3) & 7;
     uint64_t val = ((uint64_t*)&state->ctx.xmm[reg])[0];
     uint32_t addr = ComputeLinearAddress(state, gpr, op);
-    if (!WriteMem<uint64_t, OpOnTLBMiss::Retry>(state, gpr, addr, val, utlb, op)) return LogicFlow::RetryMemoryOp;
+    if (!WriteMem<uint64_t, OpOnTLBMiss::RetryRestartable>(state, gpr, addr, val, utlb, op))
+        return LogicFlow::RetryMemoryOp;
     return LogicFlow::Continue;
 }
 
@@ -436,7 +443,7 @@ FORCE_INLINE LogicFlow OpMovnt_Sse(LogicFuncParams) {
     // 0F 2B: MOVNTPS / MOVNTPD (66)
     uint8_t reg = (operand_modrm >> 3) & 7;
     simde__m128 src = state->ctx.xmm[reg];
-    if (!WriteModRM<simde__m128, OpOnTLBMiss::Retry, 16>(state, gpr, op, operand_modrm, src, utlb))
+    if (!WriteModRM<simde__m128, OpOnTLBMiss::RetryRestartable, 16>(state, gpr, op, operand_modrm, src, utlb))
         return LogicFlow::RetryMemoryOp;
     return LogicFlow::Continue;
 }
@@ -445,7 +452,7 @@ FORCE_INLINE LogicFlow OpMovntdq(LogicFuncParams) {
     // 66 0F E7: MOVNTDQ
     uint8_t reg = (operand_modrm >> 3) & 7;
     simde__m128 val = state->ctx.xmm[reg];
-    if (!WriteModRM<simde__m128, OpOnTLBMiss::Retry, 16>(state, gpr, op, operand_modrm, val, utlb))
+    if (!WriteModRM<simde__m128, OpOnTLBMiss::RetryRestartable, 16>(state, gpr, op, operand_modrm, val, utlb))
         return LogicFlow::RetryMemoryOp;
     return LogicFlow::Continue;
 }
@@ -455,7 +462,8 @@ FORCE_INLINE LogicFlow OpMovnti(LogicFuncParams) {
     uint8_t reg = (operand_modrm >> 3) & 7;
     uint32_t r_val = gpr.GetReg(state, reg);
     uint32_t addr = ComputeLinearAddress(state, gpr, op);
-    if (!WriteMem<uint32_t, OpOnTLBMiss::Retry>(state, gpr, addr, r_val, utlb, op)) return LogicFlow::RetryMemoryOp;
+    if (!WriteMem<uint32_t, OpOnTLBMiss::RetryRestartable>(state, gpr, addr, r_val, utlb, op))
+        return LogicFlow::RetryMemoryOp;
     return LogicFlow::Continue;
 }
 
@@ -475,7 +483,7 @@ FORCE_INLINE LogicFlow OpMaskmovdqu(LogicFuncParams) {
         if (m[i] & 0x80) {
             // Blocking write
             // Returns std::unexpected on fatal fault
-            if (!WriteMem<uint8_t, OpOnTLBMiss::Blocking>(state, gpr, addr + i, v[i], utlb, op)) {
+            if (!WriteMem<uint8_t, OpOnTLBMiss::BlockingRestartable>(state, gpr, addr + i, v[i], utlb, op)) {
                 return LogicFlow::ExitOnCurrentEIP;
             }
         }

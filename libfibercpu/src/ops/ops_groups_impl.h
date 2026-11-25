@@ -112,7 +112,7 @@ FORCE_INLINE LogicFlow OpGroup4_Eb_Internal(LogicFuncParams) {
 template <typename T, bool UpdateFlags, GroupOpSpec FixedSubOp = GroupOpSpec::Dynamic>
 FORCE_INLINE LogicFlow OpGroup5_Ev_T_Internal(LogicFuncParams) {
     const ModRMRmwOperand<> operand(state, gpr, op, operand_modrm);
-    const auto value = operand.Read<T, OpOnTLBMiss::Blocking>(state, gpr, op, utlb);
+    const auto value = operand.Read<T, OpOnTLBMiss::BlockingRestartable>(state, gpr, op, utlb);
     if (!value) return LogicFlow::ExitOnCurrentEIP;
     return Helper_Group5<T, UpdateFlags, FixedSubOp>(state, gpr, op, operand_modrm, operand, flags_cache, *value, utlb,
                                                      branch);
@@ -137,7 +137,7 @@ FORCE_INLINE LogicFlow OpXadd_T_Internal(LogicFuncParams) {
     // in the destination address and must not be modified before that write.
     uint64_t updated_flags = flags_cache;
     const T result = AluAdd<T, Flags != FlagsSpec::Dead>(state, updated_flags, *destination, source);
-    if (!operand.template Write<T, OpOnTLBMiss::Blocking>(state, gpr, op, result, utlb))
+    if (!operand.template Write<T, OpOnTLBMiss::BlockingRestartable>(state, gpr, op, result, utlb))
         return LogicFlow::ExitOnCurrentEIP;
     flags_cache = updated_flags;
     WriteRegGeneric<T>(state, gpr, reg, *destination);
@@ -242,22 +242,16 @@ FORCE_INLINE LogicFlow OpGroup9_Internal(LogicFuncParams) {
         if (!mem_res) return LogicFlow::RestartMemoryOp;  // Restart on read fail
         uint64_t mem_val = *mem_res;
 
-        uint32_t eax = gpr.GetReg(state, EAX);
-        uint32_t edx = gpr.GetReg(state, EDX);
-        uint64_t edx_eax = ((uint64_t)edx << 32) | eax;
-        if (mem_val == edx_eax) {
-            SetFlagBits(flags_cache, ZF_MASK);
-            uint32_t ebx = gpr.GetReg(state, EBX);
-            uint32_t ecx = gpr.GetReg(state, ECX);
-            uint64_t ecx_ebx = ((uint64_t)ecx << 32) | ebx;
-
-            // Retry on write fail
-            if (!WriteMem<uint64_t, OpOnTLBMiss::Retry>(state, gpr, addr, ecx_ebx, utlb, op))
-                return LogicFlow::RetryMemoryOp;
-        } else {
-            ClearFlagBits(flags_cache, ZF_MASK);
-            gpr.SetReg(state, EAX, (uint32_t)mem_val);
-            gpr.SetReg(state, EDX, (uint32_t)(mem_val >> 32));
+        const uint64_t expected = (uint64_t{gpr.GetReg(state, EDX)} << 32) | gpr.GetReg(state, EAX);
+        const bool equal = mem_val == expected;
+        const uint64_t source = (uint64_t{gpr.GetReg(state, ECX)} << 32) | gpr.GetReg(state, EBX);
+        // CMPXCHG8B performs a write cycle even when the comparison fails.
+        if (!WriteMem<uint64_t, OpOnTLBMiss::BlockingRestartable>(state, gpr, addr, equal ? source : mem_val, utlb, op))
+            return LogicFlow::ExitOnCurrentEIP;
+        AssignZF(flags_cache, equal);
+        if (!equal) {
+            gpr.SetReg(state, EAX, static_cast<uint32_t>(mem_val));
+            gpr.SetReg(state, EDX, static_cast<uint32_t>(mem_val >> 32));
         }
     } else {
         return OpUd2_Groups(LogicPassParams);

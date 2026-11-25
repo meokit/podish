@@ -343,7 +343,7 @@ FORCE_INLINE LogicFlow OpMov_GvEv_Mem(LogicFuncParams) { return OpMov_GvEv_Mem_I
 template <typename T, AddrModeSpec Form = AddrModeSpec::Dynamic>
 FORCE_INLINE LogicFlow OpXchgModRM(LogicFuncParams) {
     // A blocking store ensures the register is updated only after the store succeeds.
-    constexpr auto read_policy = sizeof(T) == 1 ? OpOnTLBMiss::Restart : OpOnTLBMiss::Blocking;
+    constexpr auto read_policy = sizeof(T) == 1 ? OpOnTLBMiss::Restart : OpOnTLBMiss::BlockingRestartable;
     const ModRMRmwOperand<Form> operand(state, gpr, op, operand_modrm);
     const auto rm_value = operand.template Read<T, read_policy>(state, gpr, op, utlb);
     if (!rm_value) {
@@ -353,7 +353,7 @@ FORCE_INLINE LogicFlow OpXchgModRM(LogicFuncParams) {
 
     const unsigned reg = (operand_modrm >> 3) & 7;
     const T reg_value = ReadRegGeneric<T>(state, gpr, reg);
-    if (!operand.template Write<T, OpOnTLBMiss::Blocking>(state, gpr, op, reg_value, utlb))
+    if (!operand.template Write<T, OpOnTLBMiss::BlockingRestartable>(state, gpr, op, reg_value, utlb))
         return LogicFlow::ExitOnCurrentEIP;
     WriteRegGeneric<T>(state, gpr, reg, *rm_value);
     return LogicFlow::Continue;
@@ -658,14 +658,14 @@ FORCE_INLINE LogicFlow OpPopModRM(LogicFuncParams) {
         return LogicFlow::Continue;
     }
 
-    RestartableMemoryFaultScope restartable(state);
     const uint32_t sp = gpr.GetReg(state, ESP);
-    const auto value = ReadMem<T, OpOnTLBMiss::Blocking>(state, gpr, state->ctx.seg_base[3] + sp, utlb, op);
+    const auto value = ReadMem<T, OpOnTLBMiss::BlockingRestartable>(state, gpr, state->ctx.seg_base[3] + sp, utlb, op);
     if (!value) return LogicFlow::ExitOnCurrentEIP;
 
     // POP [ESP] addresses memory using the incremented stack pointer.
     const uint32_t address = ComputeLinearAddress(state, gpr, op) + (op->AddressBase() == ESP ? sizeof(T) : 0);
-    if (!WriteMem<T, OpOnTLBMiss::Blocking>(state, gpr, address, *value, utlb, op)) return LogicFlow::ExitOnCurrentEIP;
+    if (!WriteMem<T, OpOnTLBMiss::BlockingRestartable>(state, gpr, address, *value, utlb, op))
+        return LogicFlow::ExitOnCurrentEIP;
     gpr.SetReg(state, ESP, sp + sizeof(T));
     return LogicFlow::Continue;
 }
@@ -692,8 +692,8 @@ FORCE_INLINE LogicFlow PushaWithWidth(LogicFuncParams) {
         gpr.GetReg(state, EAX), gpr.GetReg(state, ECX), gpr.GetReg(state, EDX), gpr.GetReg(state, EBX), sp,
         gpr.GetReg(state, EBP), gpr.GetReg(state, ESI), gpr.GetReg(state, EDI)};
     for (uint32_t i = 0; i < 8; ++i) {
-        if (!WriteMem<T, OpOnTLBMiss::Blocking>(state, gpr, ss + sp - (i + 1) * sizeof(T), static_cast<T>(values[i]),
-                                                utlb, op))
+        if (!WriteMem<T, OpOnTLBMiss::BlockingRestartable>(state, gpr, ss + sp - (i + 1) * sizeof(T),
+                                                           static_cast<T>(values[i]), utlb, op))
             return LogicFlow::ExitOnCurrentEIP;
     }
     gpr.SetReg(state, ESP, sp - 8 * sizeof(T));
@@ -716,7 +716,7 @@ FORCE_INLINE LogicFlow PopaWithWidth(LogicFuncParams) {
     T values[8]{};
     for (uint32_t i = 0; i < 8; ++i) {
         if (i == 3) continue;  // The saved SP slot is not read or restored.
-        auto value = ReadMem<T, OpOnTLBMiss::Blocking>(state, gpr, ss + sp + i * sizeof(T), utlb, op);
+        auto value = ReadMem<T, OpOnTLBMiss::BlockingRestartable>(state, gpr, ss + sp + i * sizeof(T), utlb, op);
         if (!value) return LogicFlow::ExitOnCurrentEIP;
         values[i] = *value;
     }
@@ -735,6 +735,34 @@ FORCE_INLINE LogicFlow OpPopaWithOperands(LogicFuncParams, const Operands& opera
 
 FORCE_INLINE LogicFlow OpPopa(LogicFuncParams) { return OpPopaWithOperands(LogicPassParams, OperandSpec::Dynamic{}); }
 
+// An ENTER frame can overlap the chain it reads, including via aliased pages.
+// Resolve all pages first so a file wait cannot restart after changing that chain.
+template <typename T>
+__attribute__((noinline)) bool PrepareEnterFrame(EmuState* state, const DecodedOp* op, uint32_t ss, uint32_t sp,
+                                                 uint32_t bp, uint16_t size, uint8_t level) {
+    state->sync_eip_to_op_start(op);
+    RestartableMemoryFaultScope restartable(state);
+    const auto probe = [&](uint32_t addr, mem::Property access) {
+        const uint32_t last = addr + sizeof(T) - 1;
+        if (!state->mmu.resolve_ptr(addr, access)) return false;
+        return ((addr ^ last) & ~mem::PAGE_MASK) == 0 || state->mmu.resolve_ptr(last, access).has_value();
+    };
+    uint32_t cursor = sp - sizeof(T);
+    if (!probe(ss + cursor, mem::Property::Write)) return false;
+    if (level != 0) {
+        for (uint8_t i = 1; i < level; ++i) {
+            bp = static_cast<T>(bp - sizeof(T));
+            if (!probe(ss + bp, mem::Property::Read)) return false;
+            cursor -= sizeof(T);
+            if (!probe(ss + cursor, mem::Property::Write)) return false;
+        }
+        cursor -= sizeof(T);
+        if (!probe(ss + cursor, mem::Property::Write)) return false;
+    }
+    // ENTER also checks write access at the final stack pointer without storing there.
+    return probe(ss + cursor - size, mem::Property::Write);
+}
+
 template <typename T>
 FORCE_INLINE LogicFlow EnterWithWidth(LogicFuncParams) {
     const uint16_t size = static_cast<uint16_t>(imm);
@@ -742,6 +770,8 @@ FORCE_INLINE LogicFlow EnterWithWidth(LogicFuncParams) {
     const uint32_t ss = state->ctx.seg_base[3];
     const uint32_t sp = gpr.GetReg(state, ESP);
     const uint32_t bp = gpr.GetReg(state, EBP);
+    if (!gpr.WithCanonical(state, [&] { return PrepareEnterFrame<T>(state, op, ss, sp, bp, size, level); }))
+        return LogicFlow::ExitOnCurrentEIP;
     uint32_t cursor = sp - sizeof(T);
     if (!WriteMem<T, OpOnTLBMiss::Blocking>(state, gpr, ss + cursor, static_cast<T>(bp), utlb, op))
         return LogicFlow::ExitOnCurrentEIP;
@@ -777,7 +807,7 @@ template <typename T>
 FORCE_INLINE LogicFlow OpLeaveWidth(LogicFuncParams) {
     const uint32_t ebp = gpr.GetReg(state, EBP);
     const uint32_t address = state->ctx.seg_base[3] + ebp;
-    const auto value = ReadMem<T, OpOnTLBMiss::Blocking>(state, gpr, address, utlb, op);
+    const auto value = ReadMem<T, OpOnTLBMiss::BlockingRestartable>(state, gpr, address, utlb, op);
     if (!value) return LogicFlow::ExitOnCurrentEIP;
     gpr.SetReg(state, ESP, ebp + sizeof(T));
     WriteRegGeneric<T>(state, gpr, EBP, *value);
@@ -892,7 +922,6 @@ FORCE_INLINE uint32_t StringDestinationAddress(EmuState* state, uint32_t offset)
 template <typename Perform, typename ShouldContinue>
 FORCE_INLINE LogicFlow ExecuteStringOperation(EmuState* state, GprCache& gpr, bool addr16, bool repeat, Perform perform,
                                               ShouldContinue should_continue) {
-    RestartableMemoryFaultScope restartable(state);
     if (!repeat) return perform(1) != 0 ? LogicFlow::Continue : LogicFlow::ExitOnCurrentEIP;
 
     auto remaining = GetStringCount(state, gpr, addr16);
@@ -982,8 +1011,8 @@ FORCE_INLINE LogicFlow OpMovsWithShape(LogicFuncParams, const Operands& operands
         const auto dst = StringDestinationAddress(state, edi);
         uint32_t count = !addr16 && limit >= 8 ? TryBulkMovs<T>(state, src, dst, limit, df) : 0;
         if (count == 0) {
-            const auto value = ReadMem<T, OpOnTLBMiss::Blocking>(state, gpr, src, utlb, op);
-            if (!value || !WriteMem<T, OpOnTLBMiss::Blocking>(state, gpr, dst, *value, utlb, op)) return 0;
+            const auto value = ReadMem<T, OpOnTLBMiss::BlockingRestartable>(state, gpr, src, utlb, op);
+            if (!value || !WriteMem<T, OpOnTLBMiss::BlockingRestartable>(state, gpr, dst, *value, utlb, op)) return 0;
             count = 1;
         }
 
@@ -1018,7 +1047,7 @@ FORCE_INLINE LogicFlow OpStosWithShape(LogicFuncParams, const Operands& operands
         const auto dst = StringDestinationAddress(state, edi);
         uint32_t count = !addr16 && limit >= 8 ? TryBulkStos(state, dst, value, limit, df) : 0;
         if (count == 0) {
-            if (!WriteMem<T, OpOnTLBMiss::Blocking>(state, gpr, dst, value, utlb, op)) return 0;
+            if (!WriteMem<T, OpOnTLBMiss::BlockingRestartable>(state, gpr, dst, value, utlb, op)) return 0;
             count = 1;
         }
 
@@ -1050,7 +1079,7 @@ FORCE_INLINE LogicFlow OpLodsWithShape(LogicFuncParams, const Operands& operands
     const auto perform = [&](uint32_t) -> uint32_t {
         uint32_t esi = GetStringOffset(state, gpr, ESI, addr16);
         uint32_t src_addr = esi + GetSegmentBase(state, op, operands);
-        auto val_res = ReadMem<T, OpOnTLBMiss::Blocking>(state, gpr, src_addr, utlb, op);
+        auto val_res = ReadMem<T, OpOnTLBMiss::BlockingRestartable>(state, gpr, src_addr, utlb, op);
         if (!val_res) return 0;
         T val = *val_res;
 
@@ -1088,11 +1117,15 @@ FORCE_INLINE LogicFlow OpScasWithShape(LogicFuncParams, const Operands& operands
     bool df = TestFlagBits(flags_cache, 0x400);  // DF
     int32_t step = df ? -((int32_t)sizeof(T)) : (int32_t)sizeof(T);
 
+    // Publish the last comparison flags only when the string instruction
+    // completes. Keeping the input flags across a slice also preserves them
+    // if a later iteration faults, while the count and indices retain progress.
+    uint64_t compare_flags = flags_cache;
     const auto perform = [&](uint32_t) -> uint32_t {
         uint32_t edi = GetStringOffset(state, gpr, EDI, addr16);
         // ES:[EDI]
         auto mem_val_res =
-            ReadMem<T, OpOnTLBMiss::Blocking>(state, gpr, StringDestinationAddress(state, edi), utlb, op);
+            ReadMem<T, OpOnTLBMiss::BlockingRestartable>(state, gpr, StringDestinationAddress(state, edi), utlb, op);
         if (!mem_val_res) return 0;
         T mem_val = *mem_val_res;
 
@@ -1104,15 +1137,18 @@ FORCE_INLINE LogicFlow OpScasWithShape(LogicFuncParams, const Operands& operands
         else
             acc = (T)gpr.GetReg(state, EAX);
 
-        AluSub<T>(state, flags_cache, acc, mem_val);  // CMP uses Sub.
+        AluSub<T>(state, compare_flags, acc, mem_val);  // CMP uses Sub.
 
         SetStringOffset(state, gpr, EDI, edi + step, addr16);
         return 1;
     };
 
     const auto prefix = operands.ReadPrefixes(op).flags;
-    return ExecuteStringOperation(state, gpr, addr16, prefix.rep || prefix.repne, perform,
-                                  [&] { return TestFlagBits(flags_cache, ZF_MASK) == static_cast<bool>(prefix.rep); });
+    const auto flow = ExecuteStringOperation(state, gpr, addr16, prefix.rep || prefix.repne, perform, [&] {
+        return TestFlagBits(compare_flags, ZF_MASK) == static_cast<bool>(prefix.rep);
+    });
+    if (flow != LogicFlow::ExitOnCurrentEIP) flags_cache = compare_flags;
+    return flow;
 }
 
 FORCE_INLINE LogicFlow OpScas_Byte(LogicFuncParams) { return OpScasWithShape<uint8_t>(LogicPassParams); }
@@ -1133,21 +1169,26 @@ FORCE_INLINE LogicFlow OpCmpsWithShape(LogicFuncParams, const Operands& operands
     bool df = TestFlagBits(flags_cache, 0x400);  // DF
     int32_t step = df ? -((int32_t)sizeof(T)) : (int32_t)sizeof(T);
 
+    // Publish the last comparison flags only when the string instruction
+    // completes. Keeping the input flags across a slice also preserves them
+    // if a later iteration faults, while the count and indices retain progress.
+    uint64_t compare_flags = flags_cache;
     const auto perform = [&](uint32_t) -> uint32_t {
         uint32_t esi = GetStringOffset(state, gpr, ESI, addr16);
         uint32_t edi = GetStringOffset(state, gpr, EDI, addr16);
 
         uint32_t src_addr = esi + GetSegmentBase(state, op, operands);
-        auto src_val_res = ReadMem<T, OpOnTLBMiss::Blocking>(state, gpr, src_addr, utlb, op);
+        auto src_val_res = ReadMem<T, OpOnTLBMiss::BlockingRestartable>(state, gpr, src_addr, utlb, op);
         if (!src_val_res) return 0;
         T src_val = *src_val_res;
 
-        auto dst_val_res = ReadMem<T, OpOnTLBMiss::Blocking>(state, gpr, StringDestinationAddress(state, edi), utlb,
-                                                             op);  // ES:EDI
+        auto dst_val_res =
+            ReadMem<T, OpOnTLBMiss::BlockingRestartable>(state, gpr, StringDestinationAddress(state, edi), utlb,
+                                                         op);  // ES:EDI
         if (!dst_val_res) return 0;
         T dst_val = *dst_val_res;
 
-        AluSub<T>(state, flags_cache, src_val, dst_val);
+        AluSub<T>(state, compare_flags, src_val, dst_val);
 
         SetStringOffset(state, gpr, ESI, esi + step, addr16);
         SetStringOffset(state, gpr, EDI, edi + step, addr16);
@@ -1155,8 +1196,11 @@ FORCE_INLINE LogicFlow OpCmpsWithShape(LogicFuncParams, const Operands& operands
     };
 
     const auto prefix = operands.ReadPrefixes(op).flags;
-    return ExecuteStringOperation(state, gpr, addr16, prefix.rep || prefix.repne, perform,
-                                  [&] { return TestFlagBits(flags_cache, ZF_MASK) == static_cast<bool>(prefix.rep); });
+    const auto flow = ExecuteStringOperation(state, gpr, addr16, prefix.rep || prefix.repne, perform, [&] {
+        return TestFlagBits(compare_flags, ZF_MASK) == static_cast<bool>(prefix.rep);
+    });
+    if (flow != LogicFlow::ExitOnCurrentEIP) flags_cache = compare_flags;
+    return flow;
 }
 
 FORCE_INLINE LogicFlow OpCmps_Byte(LogicFuncParams) { return OpCmpsWithShape<uint8_t>(LogicPassParams); }

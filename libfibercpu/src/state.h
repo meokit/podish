@@ -217,7 +217,7 @@ struct EmuState {
         return std::unexpected(mem::FaultCode::PageFault);
     }
 
-    template <typename T>
+    template <typename T, bool can_restart = false>
     FORCE_INLINE mem::MemResult<void> request_write_and_check_pending(uint32_t addr, const T& value,
                                                                       const DecodedOp* instruction) {
         static_assert(sizeof(T) <= 16);
@@ -236,7 +236,7 @@ struct EmuState {
         op.addr = addr;
         op.size = sizeof(T);
         op.done = false;
-        op.can_restart = false;
+        op.can_restart = can_restart;
         op.instruction = instruction;
         std::memcpy(op.data.data(), &value, sizeof(T));
 

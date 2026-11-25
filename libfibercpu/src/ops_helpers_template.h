@@ -17,35 +17,36 @@ FORCE_INLINE LogicFlow Helper_Group1(EmuState* state, GprCache& gpr, DecodedOp* 
                                      uint8_t rm, uint32_t address) {
     const uint8_t subop = GroupOperation<FixedSubOp>(operand_modrm);
 
+    uint64_t updated_flags = flags_cache;
     T res = 0;
 
     switch (subop) {
         case 0:
-            res = AluAdd<T, UpdateFlags>(state, flags_cache, dest, src);
+            res = AluAdd<T, UpdateFlags>(state, updated_flags, dest, src);
             break;
         case 1:
-            res = AluOr<T, UpdateFlags>(state, flags_cache, dest, src);
+            res = AluOr<T, UpdateFlags>(state, updated_flags, dest, src);
             break;
         case 2:
             if (!register_operand)
                 return ExecuteCarryMemRmw<CarryRmwKind::Adc, T, UpdateFlags>(state, gpr, op, address, dest, src, utlb,
                                                                              flags_cache);
-            res = CalculateCarryRmw<CarryRmwKind::Adc, T, UpdateFlags>(state, flags_cache, dest, src);
+            res = CalculateCarryRmw<CarryRmwKind::Adc, T, UpdateFlags>(state, updated_flags, dest, src);
             break;
         case 3:
             if (!register_operand)
                 return ExecuteCarryMemRmw<CarryRmwKind::Sbb, T, UpdateFlags>(state, gpr, op, address, dest, src, utlb,
                                                                              flags_cache);
-            res = CalculateCarryRmw<CarryRmwKind::Sbb, T, UpdateFlags>(state, flags_cache, dest, src);
+            res = CalculateCarryRmw<CarryRmwKind::Sbb, T, UpdateFlags>(state, updated_flags, dest, src);
             break;
         case 4:
-            res = AluAnd<T, UpdateFlags>(state, flags_cache, dest, src);
+            res = AluAnd<T, UpdateFlags>(state, updated_flags, dest, src);
             break;
         case 5:
-            res = AluSub<T, UpdateFlags>(state, flags_cache, dest, src);
+            res = AluSub<T, UpdateFlags>(state, updated_flags, dest, src);
             break;
         case 6:
-            res = AluXor<T, UpdateFlags>(state, flags_cache, dest, src);
+            res = AluXor<T, UpdateFlags>(state, updated_flags, dest, src);
             break;
         case 7:
             AluSub<T, UpdateFlags>(state, flags_cache, dest, src);
@@ -60,9 +61,10 @@ FORCE_INLINE LogicFlow Helper_Group1(EmuState* state, GprCache& gpr, DecodedOp* 
 
     if (register_operand) {
         WriteRegGeneric<T>(state, gpr, rm, res);
-    } else if (!WriteMem<T, OpOnTLBMiss::Retry>(state, gpr, address, res, utlb, op)) {
-        return LogicFlow::RetryMemoryOp;
+    } else if (!WriteMem<T, OpOnTLBMiss::BlockingRestartable>(state, gpr, address, res, utlb, op)) {
+        return LogicFlow::ExitOnCurrentEIP;
     }
+    flags_cache = updated_flags;
     return LogicFlow::Continue;
 }
 
@@ -81,21 +83,24 @@ FORCE_INLINE LogicFlow Helper_Group3(EmuState* state, GprCache& gpr, DecodedOp* 
             break;
         }
         case 2:  // NOT
-            if (!operand.template Write<T, OpOnTLBMiss::Retry>(state, gpr, op, static_cast<T>(~val), utlb))
-                return LogicFlow::RetryMemoryOp;
+            if (!operand.template Write<T, OpOnTLBMiss::BlockingRestartable>(state, gpr, op, static_cast<T>(~val),
+                                                                             utlb))
+                return LogicFlow::ExitOnCurrentEIP;
             return LogicFlow::Continue;
         case 3:  // NEG
         {
-            T res = AluSub<T, UpdateFlags>(state, flags_cache, (T)0, val);
+            uint64_t updated_flags = flags_cache;
+            T res = AluSub<T, UpdateFlags>(state, updated_flags, (T)0, val);
             if constexpr (UpdateFlags) {
                 if (val != 0)
-                    SetFlagBits(flags_cache, CF_MASK);
+                    SetFlagBits(updated_flags, CF_MASK);
                 else
-                    ClearFlagBits(flags_cache, CF_MASK);
+                    ClearFlagBits(updated_flags, CF_MASK);
             }
 
-            if (!operand.template Write<T, OpOnTLBMiss::Retry>(state, gpr, op, res, utlb))
-                return LogicFlow::RetryMemoryOp;
+            if (!operand.template Write<T, OpOnTLBMiss::BlockingRestartable>(state, gpr, op, res, utlb))
+                return LogicFlow::ExitOnCurrentEIP;
+            flags_cache = updated_flags;
             return LogicFlow::Continue;
         }
         case 4:  // MUL (Unsigned)
@@ -354,15 +359,18 @@ FORCE_INLINE LogicFlow Helper_Group4(EmuState* state, GprCache& gpr, DecodedOp* 
                                      mem::MicroTLB* utlb) {
     const uint8_t subop = GroupOperation<FixedSubOp>(operand_modrm);
 
-    uint32_t old_cf = GetFlags32(flags_cache) & CF_MASK;
-
     switch (subop) {
         case 0:    // INC
         case 1: {  // DEC
-            const T result = subop == 0 ? AluAdd<T, UpdateFlags>(state, flags_cache, val, 1)
-                                        : AluSub<T, UpdateFlags>(state, flags_cache, val, 1);
-            if constexpr (UpdateFlags) SetFlags32(flags_cache, (GetFlags32(flags_cache) & ~CF_MASK) | old_cf);
-            if (!operand.Write<T, OpOnTLBMiss::Retry>(state, gpr, op, result, utlb)) return LogicFlow::RetryMemoryOp;
+            uint64_t updated_flags = flags_cache;
+            const T result = subop == 0 ? AluAdd<T, UpdateFlags>(state, updated_flags, val, 1)
+                                        : AluSub<T, UpdateFlags>(state, updated_flags, val, 1);
+            if (!operand.Write<T, OpOnTLBMiss::BlockingRestartable>(state, gpr, op, result, utlb))
+                return LogicFlow::ExitOnCurrentEIP;
+            if constexpr (UpdateFlags) {
+                AssignCF(updated_flags, ReadCF(flags_cache));
+                flags_cache = updated_flags;
+            }
             break;
         }
         default:
@@ -389,7 +397,7 @@ FORCE_INLINE LogicFlow Helper_Group5(EmuState* state, GprCache& gpr, DecodedOp* 
             const T result = subop == 0 ? AluAdd<T, UpdateFlags>(state, updated_flags, val, 1)
                                         : AluSub<T, UpdateFlags>(state, updated_flags, val, 1);
             // A faulting destination write must leave the old flags visible.
-            if (!operand.Write<T, OpOnTLBMiss::Blocking>(state, gpr, op, result, utlb))
+            if (!operand.Write<T, OpOnTLBMiss::BlockingRestartable>(state, gpr, op, result, utlb))
                 return LogicFlow::ExitOnCurrentEIP;
             if constexpr (UpdateFlags) {
                 const uint32_t carry = GetFlags32(flags_cache) & CF_MASK;

@@ -30,6 +30,7 @@ __attribute__((noinline, cold)) LogicFlow CarryRmwSlow(EmuState* state, DecodedO
     SetStateFlagsCache(state, input_flags);
     uint64_t candidate_flags = input_flags;
     const T result = CalculateCarryRmw<Kind, T, UpdateFlags>(state, candidate_flags, dest, src);
+    RestartableMemoryFaultScope restartable(state);
     if (!state->mmu.write_slow<T>(addr, result)) return LogicFlow::ExitOnCurrentEIP;
     SetStateFlagsCache(state, candidate_flags);
     return LogicFlow::Continue;

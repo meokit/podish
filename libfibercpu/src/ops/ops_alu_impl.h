@@ -19,8 +19,11 @@ FORCE_INLINE LogicFlow OpBinaryRmwValue(LogicFuncParams) {
     if (!destination) return LogicFlow::RestartMemoryOp;
 
     const T source = ReadRegGeneric<T>(state, gpr, (operand_modrm >> 3) & 7);
-    const T result = Calculate(state, flags_cache, *destination, source);
-    if (!operand.template Write<T, OpOnTLBMiss::Retry>(state, gpr, op, result, utlb)) return LogicFlow::RetryMemoryOp;
+    uint64_t updated_flags = flags_cache;
+    const T result = Calculate(state, updated_flags, *destination, source);
+    if (!operand.template Write<T, OpOnTLBMiss::BlockingRestartable>(state, gpr, op, result, utlb))
+        return LogicFlow::ExitOnCurrentEIP;
+    flags_cache = updated_flags;
     return LogicFlow::Continue;
 }
 
@@ -1009,13 +1012,13 @@ FORCE_INLINE LogicFlow OpArpl_Internal(LogicFuncParams) {
     // ARPL operates only on selector RPL bits; no descriptor lookup is needed.
     // Delay ZF and destination changes until the memory operation can complete.
     const ModRMRmwOperand<Form> operand(state, gpr, op, operand_modrm);
-    const auto destination = operand.template Read<uint16_t, OpOnTLBMiss::Blocking>(state, gpr, op, utlb);
+    const auto destination = operand.template Read<uint16_t, OpOnTLBMiss::BlockingRestartable>(state, gpr, op, utlb);
     if (!destination) return LogicFlow::ExitOnCurrentEIP;
     const uint16_t source = static_cast<uint16_t>(gpr.GetReg(state, (operand_modrm >> 3) & 7));
     const bool adjusted = (*destination & 3) < (source & 3);
     if (adjusted) {
         const uint16_t result = static_cast<uint16_t>((*destination & ~3u) | (source & 3));
-        if (!operand.template Write<uint16_t, OpOnTLBMiss::Blocking>(state, gpr, op, result, utlb))
+        if (!operand.template Write<uint16_t, OpOnTLBMiss::BlockingRestartable>(state, gpr, op, result, utlb))
             return LogicFlow::ExitOnCurrentEIP;
     }
     AssignZF(flags_cache, adjusted);

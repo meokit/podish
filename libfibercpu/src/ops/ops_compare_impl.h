@@ -175,7 +175,8 @@ FORCE_INLINE LogicFlow OpCmpxchg_T(LogicFuncParams) {
 
     // The unequal case must still perform a write cycle. A failed write may
     // fault or invalidate the block, so publish flags and the accumulator last.
-    if (!operand.template Write<T, OpOnTLBMiss::Blocking>(state, gpr, op, equal ? source : *destination, utlb))
+    if (!operand.template Write<T, OpOnTLBMiss::BlockingRestartable>(state, gpr, op, equal ? source : *destination,
+                                                                     utlb))
         return LogicFlow::ExitOnCurrentEIP;
     AluSub<T, Flags != FlagsSpec::Dead>(state, flags_cache, accumulator, *destination);
     if (!equal) WriteRegGeneric<T>(state, gpr, EAX, *destination);
@@ -196,7 +197,7 @@ FORCE_INLINE LogicFlow OpCmpxchg_Internal(LogicFuncParams, const Operands& opera
 template <uint8_t Cond, AddrModeSpec Form = AddrModeSpec::Dynamic>
 FORCE_INLINE LogicFlow OpSetcc_Internal(LogicFuncParams) {
     const uint8_t val = CheckCondition(flags_cache, Cond) ? 1 : 0;
-    if (!WriteModRM<uint8_t, OpOnTLBMiss::Retry, 1, Form>(state, gpr, op, operand_modrm, val, utlb))
+    if (!WriteModRM<uint8_t, OpOnTLBMiss::RetryRestartable, 1, Form>(state, gpr, op, operand_modrm, val, utlb))
         return LogicFlow::RetryMemoryOp;
     return LogicFlow::Continue;
 }

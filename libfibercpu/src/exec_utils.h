@@ -111,30 +111,37 @@ struct GprCache {
 
 // Keep the inline TLB hit path inside the threaded chain. On a blocking miss,
 // observers may read or change GPRs before the instruction continues.
-template <typename T, bool FailOnMiss>
-FORCE_INLINE MemResult<T> ReadGuestMem(EmuState* state, GprCache& gpr, uint32_t addr, mem::MicroTLB* utlb,
-                                       const DecodedOp* op) {
-#if FIBERCPU_GPR_PIN_MODE == 4
-    if constexpr (!FailOnMiss) {
-        if (auto result = state->mmu.read_tlb_only<T>(addr, utlb)) return result;
-        state->sync_eip_to_op_start(op);
-        return gpr.WithCanonical(state, [&] { return state->mmu.read_slow<T>(addr); });
+template <bool CanSuspend, typename Access>
+FORCE_INLINE auto AccessGuestMemSlow(EmuState* state, GprCache& gpr, const DecodedOp* op, Access&& access) {
+    state->sync_eip_to_op_start(op);
+    if constexpr (CanSuspend) {
+        RestartableMemoryFaultScope restartable(state);
+        return gpr.WithCanonical(state, access);
+    } else {
+        return gpr.WithCanonical(state, access);
     }
-#endif
-    return state->mmu.read<T, FailOnMiss>(addr, utlb, op);
 }
 
-template <typename T, bool FailOnMiss>
+template <typename T, bool FailOnMiss, bool CanSuspend = false>
+FORCE_INLINE MemResult<T> ReadGuestMem(EmuState* state, GprCache& gpr, uint32_t addr, mem::MicroTLB* utlb,
+                                       const DecodedOp* op) {
+    if constexpr (!FailOnMiss && (CanSuspend || FIBERCPU_GPR_PIN_MODE == 4)) {
+        if (auto result = state->mmu.read_tlb_only<T>(addr, utlb)) return result;
+        return AccessGuestMemSlow<CanSuspend>(state, gpr, op, [&] { return state->mmu.read_slow<T>(addr); });
+    } else {
+        return state->mmu.read<T, FailOnMiss>(addr, utlb, op);
+    }
+}
+
+template <typename T, bool FailOnMiss, bool CanSuspend = false>
 FORCE_INLINE MemResult<void> WriteGuestMem(EmuState* state, GprCache& gpr, uint32_t addr, T value, mem::MicroTLB* utlb,
                                            const DecodedOp* op) {
-#if FIBERCPU_GPR_PIN_MODE == 4
-    if constexpr (!FailOnMiss) {
+    if constexpr (!FailOnMiss && (CanSuspend || FIBERCPU_GPR_PIN_MODE == 4)) {
         if (auto result = state->mmu.write_tlb_only<T>(addr, value, utlb)) return result;
-        state->sync_eip_to_op_start(op);
-        return gpr.WithCanonical(state, [&] { return state->mmu.write_slow<T>(addr, value); });
+        return AccessGuestMemSlow<CanSuspend>(state, gpr, op, [&] { return state->mmu.write_slow<T>(addr, value); });
+    } else {
+        return state->mmu.write<T, FailOnMiss>(addr, value, utlb, op);
     }
-#endif
-    return state->mmu.write<T, FailOnMiss>(addr, value, utlb, op);
 }
 
 // ------------------------------------------------------------------------------------------------
@@ -471,6 +478,9 @@ enum class OpOnTLBMiss {
     // Corresponds to legacy fail_on_tlb_miss = false.
     Blocking,
 
+    // Inline access whose miss may suspend before restarting from the saved EIP.
+    BlockingRestartable,
+
     // Return failure logic flow to allow restarting the instruction.
     // Checks for pending operation completion on re-entry.
     // Corresponds to legacy fail_on_tlb_miss = true, request_retry = true (READ) / request_write_and_check (WRITE RMW).
@@ -510,8 +520,8 @@ FORCE_INLINE MemResult<T> ReadModRM(EmuState* state, GprCache& gpr, DecodedOp* o
             }
         }
 
-        if constexpr (Strategy == OpOnTLBMiss::Blocking) {
-            return ReadGuestMem<T, false>(state, gpr, addr, utlb, op);
+        if constexpr (Strategy == OpOnTLBMiss::Blocking || Strategy == OpOnTLBMiss::BlockingRestartable) {
+            return ReadGuestMem<T, false, Strategy == OpOnTLBMiss::BlockingRestartable>(state, gpr, addr, utlb, op);
         } else {
             // Restart or Retry (though Retry for Read is unusual, treating as Restart)
             auto value = state->mmu.read<T, true>(addr, utlb, op);
@@ -552,8 +562,9 @@ FORCE_INLINE MemResult<void> WriteModRM(EmuState* state, GprCache& gpr, DecodedO
             }
         }
 
-        if constexpr (Strategy == OpOnTLBMiss::Blocking) {
-            return WriteGuestMem<T, false>(state, gpr, addr, val, utlb, op);
+        if constexpr (Strategy == OpOnTLBMiss::Blocking || Strategy == OpOnTLBMiss::BlockingRestartable) {
+            return WriteGuestMem<T, false, Strategy == OpOnTLBMiss::BlockingRestartable>(state, gpr, addr, val, utlb,
+                                                                                         op);
         } else {
             auto result = state->mmu.write<T, true>(addr, val, utlb, op);
             if (!result) [[unlikely]] {
@@ -574,8 +585,8 @@ FORCE_INLINE MemResult<void> WriteModRM(EmuState* state, GprCache& gpr, DecodedO
 template <typename T, OpOnTLBMiss Strategy>
 FORCE_INLINE MemResult<T> ReadMem(EmuState* state, GprCache& gpr, uint32_t addr, mem::MicroTLB* utlb,
                                   const DecodedOp* op) {
-    if constexpr (Strategy == OpOnTLBMiss::Blocking) {
-        return ReadGuestMem<T, false>(state, gpr, addr, utlb, op);
+    if constexpr (Strategy == OpOnTLBMiss::Blocking || Strategy == OpOnTLBMiss::BlockingRestartable) {
+        return ReadGuestMem<T, false, Strategy == OpOnTLBMiss::BlockingRestartable>(state, gpr, addr, utlb, op);
     } else {
         auto value = state->mmu.read<T, true>(addr, utlb, op);
         if (!value) [[unlikely]] {
@@ -591,8 +602,8 @@ FORCE_INLINE MemResult<T> ReadMem(EmuState* state, GprCache& gpr, uint32_t addr,
 template <typename T, OpOnTLBMiss Strategy>
 FORCE_INLINE MemResult<void> WriteMem(EmuState* state, GprCache& gpr, uint32_t addr, T val, mem::MicroTLB* utlb,
                                       const DecodedOp* op) {
-    if constexpr (Strategy == OpOnTLBMiss::Blocking) {
-        return WriteGuestMem<T, false>(state, gpr, addr, val, utlb, op);
+    if constexpr (Strategy == OpOnTLBMiss::Blocking || Strategy == OpOnTLBMiss::BlockingRestartable) {
+        return WriteGuestMem<T, false, Strategy == OpOnTLBMiss::BlockingRestartable>(state, gpr, addr, val, utlb, op);
     } else {
         auto result = state->mmu.write<T, true>(addr, val, utlb, op);
         if (!result) [[unlikely]] {
@@ -650,12 +661,13 @@ FORCE_INLINE MemResult<void> Push(EmuState* state, GprCache& gpr, T val, mem::Mi
     const uint32_t ss_base = state->ctx.seg_base[3];  // SS
 
     // Write to memory (ESP - size)
-    auto res = WriteGuestMem<T, fail_on_tlb_miss>(state, gpr, ss_base + esp - size, val, utlb, op);
+    auto res = WriteGuestMem<T, fail_on_tlb_miss, true>(state, gpr, ss_base + esp - size, val, utlb, op);
 
     // Request a write and return
-    if (!res && fail_on_tlb_miss) [[unlikely]] {
-        // Push can satisfy "Retry" semantics (update ESP only on success)
-        res = state->request_write_and_check_pending<T>(ss_base + esp - size, val, op);
+    if constexpr (fail_on_tlb_miss) {
+        if (!res) [[unlikely]] {
+            res = state->request_write_and_check_pending<T, true>(ss_base + esp - size, val, op);
+        }
     }
 
     if (res) {

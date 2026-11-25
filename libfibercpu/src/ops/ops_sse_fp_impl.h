@@ -559,7 +559,7 @@ FORCE_INLINE LogicFlow OpMovAp_Store(LogicFuncParams) {
     // 0F 29: MOVAPS xmm2/m128, xmm1 (Store)
     uint8_t reg = (operand_modrm >> 3) & 7;
     simde__m128 val = state->ctx.xmm[reg];
-    if (!WriteModRM<simde__m128, OpOnTLBMiss::Retry, 16>(state, gpr, op, operand_modrm, val, utlb))
+    if (!WriteModRM<simde__m128, OpOnTLBMiss::RetryRestartable, 16>(state, gpr, op, operand_modrm, val, utlb))
         return LogicFlow::RetryMemoryOp;
     return LogicFlow::Continue;
 }

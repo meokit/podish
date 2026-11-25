@@ -40,13 +40,14 @@ FORCE_INLINE LogicFlow OpGroup2_T_Internal(LogicFuncParams) {
     if (count == 0) return LogicFlow::Continue;
 
     constexpr bool update_flags = Flags != FlagsSpec::Dead;
+    uint64_t updated_flags = flags_cache;
     T result;
     switch (GroupOperation<SubOp>(operand_modrm)) {
         case 0:
-            result = AluRol<T, update_flags>(state, flags_cache, *dest, count);
+            result = AluRol<T, update_flags>(state, updated_flags, *dest, count);
             break;
         case 1:
-            result = AluRor<T, update_flags>(state, flags_cache, *dest, count);
+            result = AluRor<T, update_flags>(state, updated_flags, *dest, count);
             break;
         case 2:
             return ExecuteCarryRmw<CarryRmwKind::Rcl, T, update_flags>(state, gpr, op, operand, *dest, count, utlb,
@@ -56,19 +57,21 @@ FORCE_INLINE LogicFlow OpGroup2_T_Internal(LogicFuncParams) {
                                                                        flags_cache);
         case 4:
         case 6:  // SAL alias
-            result = AluShl<T, update_flags>(state, flags_cache, *dest, count);
+            result = AluShl<T, update_flags>(state, updated_flags, *dest, count);
             break;
         case 5:
-            result = AluShr<T, update_flags>(state, flags_cache, *dest, count);
+            result = AluShr<T, update_flags>(state, updated_flags, *dest, count);
             break;
         case 7:
-            result = AluSar<T, update_flags>(state, flags_cache, *dest, count);
+            result = AluSar<T, update_flags>(state, updated_flags, *dest, count);
             break;
         default:
             __builtin_unreachable();  // The three-bit group extension is exhaustive.
     }
 
-    if (!operand.template Write<T, OpOnTLBMiss::Retry>(state, gpr, op, result, utlb)) return LogicFlow::RetryMemoryOp;
+    if (!operand.template Write<T, OpOnTLBMiss::BlockingRestartable>(state, gpr, op, result, utlb))
+        return LogicFlow::ExitOnCurrentEIP;
+    flags_cache = updated_flags;
     return LogicFlow::Continue;
 }
 
@@ -117,11 +120,12 @@ FORCE_INLINE LogicFlow OpBitRegister_Internal(LogicFuncParams, const Operands& o
         const unsigned offset = index & 7;
         const auto value = ReadMem<uint8_t, OpOnTLBMiss::Restart>(state, gpr, address, utlb, op);
         if (!value) return LogicFlow::RestartMemoryOp;
-        if constexpr (Flags != FlagsSpec::Dead) AssignCF(flags_cache, (*value >> offset) & 1);
         if constexpr (Operation != GroupOpSpec::Ext4) {
-            if (!WriteMem<uint8_t, OpOnTLBMiss::Retry>(state, gpr, address, ModifyBit(*value, offset, subop), utlb, op))
-                return LogicFlow::RetryMemoryOp;
+            if (!WriteMem<uint8_t, OpOnTLBMiss::BlockingRestartable>(state, gpr, address,
+                                                                     ModifyBit(*value, offset, subop), utlb, op))
+                return LogicFlow::ExitOnCurrentEIP;
         }
+        if constexpr (Flags != FlagsSpec::Dead) AssignCF(flags_cache, (*value >> offset) & 1);
     }
     return LogicFlow::Continue;
 }
@@ -144,16 +148,16 @@ FORCE_INLINE LogicFlow OpGroup8_T_Internal(LogicFuncParams) {
         value = ReadRegGeneric<T>(state, gpr, rm);
     }
 
-    if constexpr (Flags != FlagsSpec::Dead) AssignCF(flags_cache, (value >> offset) & 1);
     if (subop >= 5) {
         const T result = ModifyBit(value, offset, subop);
         if (memory) {
-            if (!WriteMem<T, OpOnTLBMiss::Retry>(state, gpr, address, result, utlb, op))
-                return LogicFlow::RetryMemoryOp;
+            if (!WriteMem<T, OpOnTLBMiss::BlockingRestartable>(state, gpr, address, result, utlb, op))
+                return LogicFlow::ExitOnCurrentEIP;
         } else {
             WriteRegGeneric<T>(state, gpr, rm, result);
         }
     }
+    if constexpr (Flags != FlagsSpec::Dead) AssignCF(flags_cache, (value >> offset) & 1);
     return LogicFlow::Continue;
 }
 

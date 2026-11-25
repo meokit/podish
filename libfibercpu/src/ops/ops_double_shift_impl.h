@@ -25,6 +25,8 @@ FORCE_INLINE LogicFlow OpDoubleShiftValue(LogicFuncParams, uint8_t count) {
     const T dst = *destination;
     const T src = ReadRegGeneric<T>(state, gpr, (operand_modrm >> 3) & 7);
     const T result = left ? (dst << count) | (src >> (width - count)) : (dst >> count) | (src << (width - count));
+    if (!operand.template Write<T, OpOnTLBMiss::BlockingRestartable>(state, gpr, op, result, utlb))
+        return LogicFlow::ExitOnCurrentEIP;
     if constexpr (Flags != FlagsSpec::Dead) {
         uint32_t flags = GetFlags32(flags_cache) & ~(CF_MASK | PF_MASK | ZF_MASK | SF_MASK | OF_MASK);
         if ((dst >> (left ? width - count : count - 1)) & 1) flags |= CF_MASK;
@@ -35,7 +37,6 @@ FORCE_INLINE LogicFlow OpDoubleShiftValue(LogicFuncParams, uint8_t count) {
         SetFlags32AndSyncParityState(flags_cache, flags);
     }
 
-    if (!operand.template Write<T, OpOnTLBMiss::Retry>(state, gpr, op, result, utlb)) return LogicFlow::RetryMemoryOp;
     return LogicFlow::Continue;
 }
 

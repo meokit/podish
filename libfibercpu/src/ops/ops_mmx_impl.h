@@ -97,7 +97,7 @@ FORCE_INLINE mem::MemResult<void> WriteMmxModRM(EmuState* state, GprCache& gpr, 
         } else {
             auto result = state->mmu.write<uint64_t, true>(addr, raw_val, utlb, op);
             if (!result) {
-                result = state->request_write_and_check_pending<uint64_t>(addr, raw_val, op);
+                result = state->request_write_and_check_pending<uint64_t, true>(addr, raw_val, op);
             }
             return result;
         }
@@ -167,7 +167,7 @@ FORCE_INLINE mem::MemResult<void> WriteDwordModRM(EmuState* state, GprCache& gpr
         } else {
             auto result = state->mmu.write<uint32_t, true>(addr, val, utlb, op);
             if (!result) {
-                result = state->request_write_and_check_pending<uint32_t>(addr, val, op);
+                result = state->request_write_and_check_pending<uint32_t, true>(addr, val, op);
             }
             return result;
         }
@@ -870,8 +870,8 @@ FORCE_INLINE LogicFlow OpPmovmskb_Mmx(LogicFuncParams) {
 FORCE_INLINE LogicFlow OpMovntq_Mmx(LogicFuncParams) {
     uint8_t reg = (operand_modrm >> 3) & 7;
     simde__m64 val = GetMmxReg(state, reg);
-    auto res = WriteMmxModRM<OpOnTLBMiss::Retry>(state, gpr, op, operand_modrm, val, utlb);
-    if (!res) return LogicFlow::RetryMemoryOp;
+    auto res = WriteMmxModRM<OpOnTLBMiss::Restart>(state, gpr, op, operand_modrm, val, utlb);
+    if (!res) return LogicFlow::RestartMemoryOp;
     EnterMmxState(state);
     return LogicFlow::Continue;
 }
@@ -887,7 +887,7 @@ FORCE_INLINE LogicFlow OpMaskmovq_Mmx(LogicFuncParams) {
 
     for (int i = 0; i < 8; ++i) {
         if (mp.u8[i] & 0x80) {
-            if (!WriteMem<uint8_t, OpOnTLBMiss::Blocking>(state, gpr, addr + i, vp.u8[i], utlb, op)) {
+            if (!WriteMem<uint8_t, OpOnTLBMiss::BlockingRestartable>(state, gpr, addr + i, vp.u8[i], utlb, op)) {
                 return LogicFlow::ExitOnCurrentEIP;
             }
         }

@@ -398,8 +398,8 @@ FORCE_INLINE LogicFlow OpFxState(LogicFuncParams, bool restore) {
         // Blocking, bounded reads avoid partial architectural updates and the
         // single pending-memory slot used by restartable scalar operations.
         for (uint32_t offset = 0; offset < image.bytes.size(); offset += 16) {
-            auto value =
-                ReadMem<std::array<uint8_t, 16>, OpOnTLBMiss::Blocking>(state, gpr, address + offset, utlb, op);
+            auto value = ReadMem<std::array<uint8_t, 16>, OpOnTLBMiss::BlockingRestartable>(state, gpr,
+                                                                                            address + offset, utlb, op);
             if (!value) return LogicFlow::ExitOnCurrentEIP;
             std::memcpy(image.bytes.data() + offset, value->data(), 16);
         }
@@ -458,8 +458,8 @@ FORCE_INLINE LogicFlow OpFxState(LogicFuncParams, bool restore) {
         for (uint32_t offset = 0; offset < 464; offset += 16) {
             std::array<uint8_t, 16> value;
             std::memcpy(value.data(), image.bytes.data() + offset, 16);
-            if (!WriteMem<std::array<uint8_t, 16>, OpOnTLBMiss::Blocking>(state, gpr, address + offset, value, utlb,
-                                                                          op)) {
+            if (!WriteMem<std::array<uint8_t, 16>, OpOnTLBMiss::BlockingRestartable>(state, gpr, address + offset,
+                                                                                     value, utlb, op)) {
                 return LogicFlow::ExitOnCurrentEIP;
             }
         }
@@ -496,7 +496,7 @@ FORCE_INLINE LogicFlow OpFxGroup(LogicFuncParams) {
         case 3:
             if (!reg) {
                 const uint32_t addr = ComputeLinearAddress(state, gpr, op);
-                if (!WriteMem<uint32_t, OpOnTLBMiss::Retry>(state, gpr, addr, state->ctx.mxcsr, utlb, op))
+                if (!WriteMem<uint32_t, OpOnTLBMiss::RetryRestartable>(state, gpr, addr, state->ctx.mxcsr, utlb, op))
                     return LogicFlow::RetryMemoryOp;
             }
             break;
