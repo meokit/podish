@@ -1,5 +1,8 @@
 import Foundation
 import QuartzCore
+#if PODISH_APPLE_VULKAN
+import Metal
+#endif
 
 private func podishOnTextInputChangedCallback(
     userData: UnsafeMutableRawPointer?,
@@ -240,34 +243,53 @@ final class PodishDesktopSession: ObservableObject {
         return (lw, lh, pw, ph, scale120, defaultGlobalDpi)
     }
 
+    #if PODISH_APPLE_VULKAN
+    private static let graphicsBackend = "vulkan"
+    #else
+    private static let graphicsBackend = "gles"
+    #endif
+
     static func stateDirectoryURL() -> URL {
         let fm = FileManager.default
-        let base = (try? fm.url(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true
-        )) ?? URL(fileURLWithPath: NSTemporaryDirectory())
-        let dir = base.appendingPathComponent("Podish", isDirectory: true)
+        let base: URL
+        if let path = ProcessInfo.processInfo.environment["PODISH_STATE_DIR"], !path.isEmpty {
+            base = URL(fileURLWithPath: path, isDirectory: true)
+        } else {
+            let support = (try? fm.url(
+                for: .applicationSupportDirectory,
+                in: .userDomainMask,
+                appropriateFor: nil,
+                create: true
+            )) ?? URL(fileURLWithPath: NSTemporaryDirectory())
+            base = support.appendingPathComponent("Podish", isDirectory: true)
+        }
+        let dir = base.appendingPathComponent(graphicsBackend, isDirectory: true)
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
 
     static func bundledRootfsURL() -> URL? {
+        func matchesBackend(_ url: URL) -> Bool {
+            guard let marker = try? String(contentsOf: url.appendingPathComponent("graphics-backend"), encoding: .utf8),
+                  marker.trimmingCharacters(in: .whitespacesAndNewlines) == graphicsBackend else { return false }
+            return FileManager.default.fileExists(atPath: url.appendingPathComponent("image.json").path)
+        }
+
         if let env = ProcessInfo.processInfo.environment["PODISH_ROOTFS_STORE_DIR"], !env.isEmpty {
             let url = URL(fileURLWithPath: env, isDirectory: true)
-            if FileManager.default.fileExists(atPath: url.appendingPathComponent("image.json").path) {
+            if matchesBackend(url) {
                 return url
             }
         }
         if let res = Bundle.main.resourceURL?.appendingPathComponent("PodishRootfs", isDirectory: true),
-           FileManager.default.fileExists(atPath: res.appendingPathComponent("image.json").path) {
+           matchesBackend(res) {
             return res
         }
         return nil
     }
 
-    static func bundledAngleDirectoryPath() -> String? {
+    #if !PODISH_APPLE_VULKAN
+    private static func bundledAngleDirectoryPath() -> String? {
         if let env = ProcessInfo.processInfo.environment["PODISH_ANGLE_DIR"], !env.isEmpty {
             return env
         }
@@ -277,7 +299,7 @@ final class PodishDesktopSession: ObservableObject {
         return Bundle.main.resourcePath
     }
 
-    static func bundledGlesGuestDirectoryPath() -> String? {
+    private static func bundledGlesGuestDirectoryPath() -> String? {
         if let env = ProcessInfo.processInfo.environment["PODISH_GLES_GUEST_DIR"], !env.isEmpty {
             return env
         }
@@ -287,6 +309,7 @@ final class PodishDesktopSession: ObservableObject {
         }
         return nil
     }
+    #endif
 
     func attachAndStart(metalLayer: CAMetalLayer, logicalSize: CGSize, pixelSize: CGSize, scale: CGFloat) {
         attachedLayer = metalLayer
@@ -307,16 +330,28 @@ final class PodishDesktopSession: ObservableObject {
         }
 
         guard let rootfsURL = Self.bundledRootfsURL() else {
-            state = .failed("Embedded Debian rootfs (PodishRootfs) is missing from the app bundle.")
+            state = .failed("Embedded Debian rootfs for \(Self.graphicsBackend) is missing from the app bundle.")
             return
         }
-        guard let angleDir = Self.bundledAngleDirectoryPath() else {
-            state = .failed("ANGLE Metal frameworks are missing from the app bundle.")
+        #if PODISH_APPLE_VULKAN
+        guard MTLCreateSystemDefaultDevice()?.supportsFamily(.metal4) == true else {
+            state = .failed("KosmicKrisp requires a GPU with Metal 4 support.")
             return
         }
+        guard let frameworksDir = Bundle.main.privateFrameworksPath else {
+            state = .failed("The app bundle is missing its Vulkan frameworks directory.")
+            return
+        }
+        let glesGuestDir = ""
+        #else
+        guard let frameworksDir = Self.bundledAngleDirectoryPath(),
+              let glesGuestDir = Self.bundledGlesGuestDirectoryPath() else {
+            state = .failed("ANGLE Metal frameworks or guest GLES libraries are missing from the app bundle.")
+            return
+        }
+        #endif
 
         let stateDir = Self.stateDirectoryURL().path
-        let glesGuestDir = Self.bundledGlesGuestDirectoryPath() ?? ""
         let logLevel = ProcessInfo.processInfo.environment["PODISH_LOG_LEVEL"] ?? "info"
         #if os(iOS)
         let isTouch: Int32 = 1
@@ -341,13 +376,13 @@ final class PodishDesktopSession: ObservableObject {
         var outHandle: UnsafeMutableRawPointer?
         let createRc: Int32 = rootfsURL.path.withCString { rootfsC in
             stateDir.withCString { stateC in
-                angleDir.withCString { angleC in
+                frameworksDir.withCString { frameworksC in
                     glesGuestDir.withCString { guestC in
                         logLevel.withCString { logC in
                             var opts = PodDesktopOptionsNative(
                                 rootfs_store_dir_utf8: rootfsC,
                                 state_dir_utf8: stateC,
-                                angle_dir_utf8: angleC,
+                                angle_dir_utf8: frameworksC,
                                 gles_guest_dir_utf8: glesGuestDir.isEmpty ? nil : guestC,
                                 log_level_utf8: logC,
                                 metal_layer: layerPtr,

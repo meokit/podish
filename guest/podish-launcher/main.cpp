@@ -1194,7 +1194,7 @@ private:
 };
 
 // ============================================================================
-// GPU Hardware-Accelerated Launcher Window (QOpenGLWindow -> wayland-egl -> ANGLE Metal)
+// QOpenGLWindow using the active Wayland EGL context.
 // ============================================================================
 
 struct GlTextureEntry {
@@ -1204,7 +1204,7 @@ struct GlTextureEntry {
     QString key;
 };
 
-struct GlesApi {
+struct LauncherGlApi {
     void* lib = nullptr;
     const GLubyte* (*getString)(GLenum) = nullptr;
     GLuint (*createShader)(GLenum) = nullptr;
@@ -1215,6 +1215,7 @@ struct GlesApi {
     void (*deleteShader)(GLuint) = nullptr;
     GLuint (*createProgram)() = nullptr;
     void (*attachShader)(GLuint, GLuint) = nullptr;
+    void (*bindAttribLocation)(GLuint, GLuint, const GLchar*) = nullptr;
     void (*linkProgram)(GLuint) = nullptr;
     void (*getProgramiv)(GLuint, GLenum, GLint*) = nullptr;
     void (*getProgramInfoLog)(GLuint, GLsizei, GLsizei*, GLchar*) = nullptr;
@@ -1258,15 +1259,18 @@ struct GlesApi {
     }
 
     bool load(QOpenGLContext* ctx) {
-        if (!lib) {
+#ifndef PODISH_LAUNCHER_VULKAN
+        // The Podish GLES shim exports these directly.
+        if (!lib && ctx->isOpenGLES()) {
             lib = ::dlopen("/run/podish-gles/libGLESv2.so.2", RTLD_NOW | RTLD_LOCAL);
             if (!lib)
                 lib = ::dlopen("libGLESv2.so.2", RTLD_NOW | RTLD_LOCAL);
         }
+#endif
 #define LOAD_GL(field, sym)                                                                                            \
     field = reinterpret_cast<decltype(field)>(resolve(ctx, sym));                                                      \
     if (!field) {                                                                                                      \
-        std::fprintf(stderr, "[podish-launcher] Missing GLES symbol: %s\n", sym);                                      \
+        std::fprintf(stderr, "[podish-launcher] Missing GL symbol: %s\n", sym);                                        \
         return false;                                                                                                  \
     }
         LOAD_GL(getString, "glGetString");
@@ -1278,6 +1282,7 @@ struct GlesApi {
         LOAD_GL(deleteShader, "glDeleteShader");
         LOAD_GL(createProgram, "glCreateProgram");
         LOAD_GL(attachShader, "glAttachShader");
+        LOAD_GL(bindAttribLocation, "glBindAttribLocation");
         LOAD_GL(linkProgram, "glLinkProgram");
         LOAD_GL(getProgramiv, "glGetProgramiv");
         LOAD_GL(getProgramInfoLog, "glGetProgramInfoLog");
@@ -1311,11 +1316,12 @@ struct GlesApi {
         return true;
     }
 
-    GLuint compileShaderSource(GLenum type, const char* src) {
+    GLuint compileShaderSource(GLenum type, const char* preamble, const char* source) {
         GLuint sh = createShader(type);
         if (!sh)
             return 0;
-        shaderSource(sh, 1, &src, nullptr);
+        const char* parts[] = {preamble, source};
+        shaderSource(sh, 2, parts, nullptr);
         compileShader(sh);
         GLint ok = 0;
         getShaderiv(sh, GL_COMPILE_STATUS, &ok);
@@ -1323,18 +1329,27 @@ struct GlesApi {
             char log[1024] = {};
             GLsizei len = 0;
             getShaderInfoLog(sh, sizeof(log) - 1, &len, log);
-            std::fprintf(stderr, "[podish-launcher] GLES shader compile error: %s\n", log);
+            std::fprintf(stderr, "[podish-launcher] GL shader compile error: %s\n", log);
             deleteShader(sh);
             return 0;
         }
         return sh;
     }
 
-    GLuint buildProgram(const char* vertSrc, const char* fragSrc) {
-        GLuint vs = compileShaderSource(GL_VERTEX_SHADER, vertSrc);
+    GLuint buildProgram(bool gles, const char* vertSrc, const char* fragSrc) {
+        const char* vertPreamble = gles ? "#version 300 es\nprecision highp float;\n"
+                                          "#define VERTEX_ATTRIBUTE in\n#define VARYING out\n"
+                                        : "#version 120\n#define VERTEX_ATTRIBUTE attribute\n"
+                                          "#define VARYING varying\n";
+        const char* fragPreamble = gles ? "#version 300 es\nprecision highp float;\n"
+                                          "#define VARYING in\n#define SAMPLE_TEXTURE texture\n"
+                                          "out vec4 fragColor;\n"
+                                        : "#version 120\n#define VARYING varying\n"
+                                          "#define SAMPLE_TEXTURE texture2D\n#define fragColor gl_FragColor\n";
+        GLuint vs = compileShaderSource(GL_VERTEX_SHADER, vertPreamble, vertSrc);
         if (!vs)
             return 0;
-        GLuint fs = compileShaderSource(GL_FRAGMENT_SHADER, fragSrc);
+        GLuint fs = compileShaderSource(GL_FRAGMENT_SHADER, fragPreamble, fragSrc);
         if (!fs) {
             deleteShader(vs);
             return 0;
@@ -1342,6 +1357,7 @@ struct GlesApi {
         GLuint prog = createProgram();
         attachShader(prog, vs);
         attachShader(prog, fs);
+        bindAttribLocation(prog, 0, "aUv");
         linkProgram(prog);
         deleteShader(vs);
         deleteShader(fs);
@@ -1351,7 +1367,7 @@ struct GlesApi {
             char log[1024] = {};
             GLsizei len = 0;
             getProgramInfoLog(prog, sizeof(log) - 1, &len, log);
-            std::fprintf(stderr, "[podish-launcher] GLES program link error: %s\n", log);
+            std::fprintf(stderr, "[podish-launcher] GL program link error: %s\n", log);
             deleteProgram(prog);
             return 0;
         }
@@ -1425,7 +1441,7 @@ public:
 protected:
     void initializeGL() override {
         if (!m_gl.load(context())) {
-            std::fprintf(stderr, "[podish-launcher] Failed to load direct GLESv2 functions\n");
+            std::fprintf(stderr, "[podish-launcher] Failed to resolve GL functions\n");
             std::fflush(stderr);
             return;
         }
@@ -1436,14 +1452,13 @@ protected:
                      vendor ? vendor : "?", renderer ? renderer : "?", version ? version : "?");
         std::fflush(stderr);
 
-        static const char* kVertSrc = R"(#version 300 es
-precision highp float;
-layout(location = 0) in vec2 aUv;
+        static const char* kVertSrc = R"(
+VERTEX_ATTRIBUTE vec2 aUv;
 uniform vec2 uViewport;
 uniform vec4 uRect;
-out vec2 vUv;
-out vec2 vLocal;
-flat out vec2 vSize;
+VARYING vec2 vUv;
+VARYING vec2 vLocal;
+VARYING vec2 vSize;
 void main() {
     vUv = aUv;
     vSize = uRect.zw;
@@ -1453,17 +1468,15 @@ void main() {
 }
 )";
 
-        static const char* kFragSrc = R"(#version 300 es
-precision highp float;
+        static const char* kFragSrc = R"(
 uniform int uMode;
 uniform vec4 uColor;
 uniform vec4 uBorderColor;
 uniform vec4 uParams; // x: radiusPx, y: borderPx, z: alpha, w: unused
 uniform sampler2D uTex;
-in vec2 vUv;
-in vec2 vLocal;
-flat in vec2 vSize;
-out vec4 fragColor;
+VARYING vec2 vUv;
+VARYING vec2 vLocal;
+VARYING vec2 vSize;
 
 vec3 plasmaWallpaper() {
     vec2 p = vUv - vec2(0.5);
@@ -1517,7 +1530,7 @@ void main() {
         return;
     }
     if (uMode == 2) {
-        vec4 s = texture(uTex, vUv);
+        vec4 s = SAMPLE_TEXTURE(uTex, vUv);
         fragColor = s * uParams.z;
         return;
     }
@@ -1545,7 +1558,7 @@ void main() {
 }
 )";
 
-        m_program = m_gl.buildProgram(kVertSrc, kFragSrc);
+        m_program = m_gl.buildProgram(context()->isOpenGLES(), kVertSrc, kFragSrc);
         if (m_program == 0) {
             std::fflush(stderr);
             return;
@@ -2616,7 +2629,7 @@ private:
     bool m_glReady = false;
     qreal m_lastDpr = 1.0;
 
-    GlesApi m_gl;
+    LauncherGlApi m_gl;
     GLuint m_program = 0;
     GLuint m_quadVbo = 0;
     int m_uViewport = -1;
@@ -2685,8 +2698,13 @@ private:
 
 int main(int argc, char* argv[]) {
     QSurfaceFormat fmt;
+#ifdef PODISH_LAUNCHER_VULKAN
+    fmt.setRenderableType(QSurfaceFormat::OpenGL);
+    fmt.setVersion(2, 1);
+#else
     fmt.setRenderableType(QSurfaceFormat::OpenGLES);
     fmt.setVersion(3, 0);
+#endif
     fmt.setRedBufferSize(8);
     fmt.setGreenBufferSize(8);
     fmt.setBlueBufferSize(8);

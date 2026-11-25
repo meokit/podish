@@ -56,4 +56,6 @@ Podish.PerfTools.Tests/TestResults/
 dist/
 PodishApp/Resources/PodishRootfs/
 PodishApp/Resources/PodishGlesGuest/
+PodishApp/Resources/vulkan/
+PodishApp/Resources/gles/
 PodishApp/artifacts/

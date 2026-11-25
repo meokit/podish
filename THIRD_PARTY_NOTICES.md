@@ -16,6 +16,16 @@ The bundled Wayland EGL backend header is from Wayland 1.22.0 and retains its MI
 
 Podish loads a host-provided ANGLE build for the optional GLES bridge. [ANGLE license](https://chromium.googlesource.com/angle/angle/+/main/LICENSE)
 
+## Apple guest Vulkan
+
+`PodishVenus.framework` links the Venus backend of virglrenderer and the packaged KosmicKrisp driver from Mesa 26.2.7. The frameworks include applicable Mesa, virglrenderer, and Khronos Vulkan-Headers license notices. [virglrenderer (MIT)](https://github.com/emkey1/virglrenderer/tree/a6a179c72ace8e8e1cdbb267a007997be0318ca6) · [Mesa licenses](https://docs.mesa3d.org/license.html) · [Vulkan-Headers](https://github.com/KhronosGroup/Vulkan-Headers/tree/6802bb4733b63ed5efd3adb308a6c885ef180ea1)
+
+The Vulkan compositor uses DiligentCore under Apache 2.0. The build embeds its shader binaries and includes the applicable license notices in the framework. [DiligentCore license](https://github.com/DiligentGraphics/DiligentCore/blob/c5cfdc4a4f08f2726c903b9c35782416c1eaccb7/License.txt)
+
+The experimental Host Zink build bundles Mesa Zink and uses libepoxy for native OpenGL dispatch in virglrenderer. The corresponding frameworks include their license notices. [Mesa licenses](https://docs.mesa3d.org/license.html) · [libepoxy license](https://github.com/anholt/libepoxy/blob/c84bc9459357a40e46e2fec0408d04fbdde2c973/COPYING)
+
+The Debian rootfs builds Mesa 25.0.7 for its i386 Venus and Zink drivers. The local Wayland EGL and Vulkan WSI changes retain the upstream files’ MIT license. [Mesa 25.0.7 source archive](https://archive.mesa3d.org/mesa-25.0.7.tar.xz)
+
 ## C++ Third-Party Libraries
 
 ### simde

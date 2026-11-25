@@ -5,14 +5,23 @@ ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 PROJ="$ROOT_DIR/Podish.Core.Native/Podish.Core.Native.csproj"
 NETSTACK_MANIFEST="$ROOT_DIR/Fiberish.Netstack/Cargo.toml"
 TFM="net10.0"
-NUGET_ROOT="${NUGET_PACKAGES:-$HOME/.nuget/packages}"
-OUT_ROOT="$ROOT_DIR/PodishApp/artifacts/podish-native"
+BACKEND="${PODISH_GRAPHICS_BACKEND:-vulkan}"
+case "$BACKEND" in
+  vulkan|gles) ;;
+  *) echo "error: PODISH_GRAPHICS_BACKEND must be vulkan or gles" >&2; exit 2 ;;
+esac
+OUT_ROOT="$ROOT_DIR/PodishApp/artifacts/podish-native/$BACKEND"
+BUILD_ARGS=(--artifacts-path "$OUT_ROOT/dotnet" -p:PodishGraphicsBackend="$BACKEND")
 WORK_ROOT="$OUT_ROOT/_staging"
 XCFRAMEWORK_OUT="$OUT_ROOT/PodishCore.xcframework"
-RIDS=("osx-arm64" "ios-arm64" "iossimulator-arm64")
+RIDS=("osx-arm64" "ios-arm64")
+if [[ "$BACKEND" == gles ]]; then
+  RIDS+=("iossimulator-arm64")
+fi
 
-echo "Publishing Podish.Core.Native multiplatform XCFramework (TFM=$TFM)"
+echo "Publishing Podish.Core.Native multiplatform XCFramework ($BACKEND, TFM=$TFM)"
 rm -rf "$WORK_ROOT" "$XCFRAMEWORK_OUT"
+rm -f "$OUT_ROOT/graphics-backend"
 mkdir -p "$WORK_ROOT" "$OUT_ROOT"
 
 export MSBUILDDISABLENODEREUSE=1
@@ -27,56 +36,30 @@ require_dotnet_10() {
   fi
 }
 
-find_bootstrapper_dll_obj() {
-  local rid="$1"
-  local pkg_base pkg_dir native_dir sdk_dir ilc_base ilc_dir
-
-  pkg_base="$NUGET_ROOT/microsoft.netcore.app.runtime.nativeaot.$rid"
-  if [ -d "$pkg_base" ]; then
-    pkg_dir="$(ls -d "$pkg_base"/* 2>/dev/null | sort -V | tail -n 1)"
-    native_dir="$pkg_dir/runtimes/$rid/native"
-    sdk_dir="$pkg_dir/sdk"
-    if [ -f "$native_dir/libbootstrapperdll.o" ]; then
-      echo "$native_dir/libbootstrapperdll.o"
-      return 0
-    fi
-    if [ -f "$sdk_dir/libbootstrapperdll.o" ]; then
-      echo "$sdk_dir/libbootstrapperdll.o"
-      return 0
-    fi
-  fi
-
-  ilc_base="$NUGET_ROOT/runtime.$rid.microsoft.dotnet.ilcompiler"
-  if [ -d "$ilc_base" ]; then
-    ilc_dir="$(ls -d "$ilc_base"/* 2>/dev/null | sort -V | tail -n 1)"
-    if [ -f "$ilc_dir/sdk/libbootstrapperdll.o" ]; then
-      echo "$ilc_dir/sdk/libbootstrapperdll.o"
-      return 0
-    fi
-  fi
-
-  return 1
-}
-
 find_native_static_dir() {
-  local rid="$1"
-  local pkg_base pkg_dir
+  local rid="$1" assets_file="$2"
+  # The linker inputs must come from the same pack as the restored NativeAOT compiler project.
+  /usr/bin/python3 - "$rid" "$assets_file" "$TFM" <<'PYTHON'
+import json
+from pathlib import Path
+import sys
 
-  pkg_base="$NUGET_ROOT/microsoft.netcore.app.runtime.nativeaot.$rid"
-  if [ -d "$pkg_base" ]; then
-    pkg_dir="$(ls -d "$pkg_base"/* 2>/dev/null | sort -V | tail -n 1)"
-    echo "$pkg_dir/runtimes/$rid/native"
-    return 0
-  fi
-
-  pkg_base="$NUGET_ROOT/runtime.$rid.microsoft.dotnet.ilcompiler"
-  if [ -d "$pkg_base" ]; then
-    pkg_dir="$(ls -d "$pkg_base"/* 2>/dev/null | sort -V | tail -n 1)"
-    echo "$pkg_dir/framework"
-    return 0
-  fi
-
-  return 1
+rid, assets_file, tfm = sys.argv[1:]
+with open(assets_file, encoding="utf-8") as handle:
+    project = json.load(handle)["project"]
+package_id = f"microsoft.netcore.app.runtime.nativeaot.{rid}"
+for dependency in project["frameworks"][tfm].get("downloadDependencies", []):
+    if dependency["name"].lower() == package_id:
+        lower, upper = (version.strip() for version in dependency["version"].strip("[]").split(",", 1))
+        if lower != upper:
+            raise SystemExit(f"Expected exact runtime pack version for {rid}")
+        native = Path(project["restore"]["packagesPath"], package_id, lower, "runtimes", rid, "native")
+        if native.is_dir():
+            print(native)
+            break
+else:
+    raise SystemExit(f"NativeAOT runtime pack not found for {rid}")
+PYTHON
 }
 
 cargo_target_for_rid() {
@@ -98,7 +81,9 @@ build_library_for_rid() {
   local headers_dir="$rid_out/include"
   local static_out="$rid_out/libPodishCore.a"
   local fibercpu_static="$ROOT_DIR/Fiberish.X86/build_native/$rid/libfibercpu.a"
-  local native_dir sdk_dir tmp_inputs dedup_inputs bootstrapper_dll_obj
+  local native_dir sdk_dir assets_file
+  local -a merge_inputs
+  local archive
   local netstack_target netstack_static
 
   echo "=== RID: $rid ==="
@@ -106,20 +91,22 @@ build_library_for_rid() {
   mkdir -p "$headers_dir"
 
   # Restore for the concrete RID first so build/publish always resolves RID-specific assets.
-  dotnet restore "$ROOT_DIR/Fiberish.X86/Fiberish.X86.csproj" -r "$rid" --nologo
-  dotnet build "$ROOT_DIR/Fiberish.X86/Fiberish.X86.csproj" -c Release --nologo /p:PodishStaticNative=true /p:RuntimeIdentifier="$rid"
+  dotnet restore "$ROOT_DIR/Fiberish.X86/Fiberish.X86.csproj" -r "$rid" --nologo "${BUILD_ARGS[@]}"
+  dotnet build "$ROOT_DIR/Fiberish.X86/Fiberish.X86.csproj" -c Release -r "$rid" --no-restore --nologo \
+    -p:PodishStaticNative=true "${BUILD_ARGS[@]}"
   netstack_target="$(cargo_target_for_rid "$rid")"
   cargo build --manifest-path "$NETSTACK_MANIFEST" --release --target "$netstack_target"
   netstack_static="$ROOT_DIR/Fiberish.Netstack/target/$netstack_target/release/libfiberish_netstack.a"
-  dotnet restore "$PROJ" -r "$rid" --nologo /p:TargetFramework="$TFM" /p:CheckEolTargetFramework=false /p:CheckEolWorkloads=false
-  dotnet publish "$PROJ" -f "$TFM" -c Release -r "$rid" -o "$rid_out" --nologo /p:PodishStaticNative=true /p:CheckEolTargetFramework=false /p:CheckEolWorkloads=false
+  dotnet restore "$PROJ" -r "$rid" --nologo -p:TargetFramework="$TFM" \
+    -p:_IsPublishing=true -p:PublishAotUsingRuntimePack=true \
+    -p:PodishStaticNative=true -p:CheckEolTargetFramework=false -p:CheckEolWorkloads=false "${BUILD_ARGS[@]}"
+  dotnet publish "$PROJ" -f "$TFM" -c Release -r "$rid" -o "$rid_out" --no-restore --nologo \
+    -p:PodishStaticNative=true -p:CheckEolTargetFramework=false -p:CheckEolWorkloads=false "${BUILD_ARGS[@]}"
+  assets_file="$(dotnet msbuild "$PROJ" -nologo -getProperty:ProjectAssetsFile -p:ArtifactsPath="$OUT_ROOT/dotnet")"
+  native_dir="$(find_native_static_dir "$rid" "$assets_file")"
 
   cp "$ROOT_DIR/Podish.Core.Native/podish.h" "$headers_dir/podish.h"
-  bootstrapper_dll_obj="$(find_bootstrapper_dll_obj "$rid")" || {
-    echo "error: libbootstrapperdll.o not found for RID '$rid'." >&2
-    exit 1
-  }
-  cp "$bootstrapper_dll_obj" "$rid_out/podish_bootstrapper.o"
+  cp "$native_dir/libbootstrapperdll.o" "$rid_out/podish_bootstrapper.o"
 
   if [ ! -f "$rid_out/podishcore.a" ]; then
     echo "error: missing podishcore.a for RID '$rid'." >&2
@@ -134,51 +121,27 @@ build_library_for_rid() {
     exit 1
   fi
 
-  native_dir="$(find_native_static_dir "$rid")" || {
-    echo "error: NativeAOT static dir not found for RID '$rid'." >&2
-    exit 1
-  }
   sdk_dir="$native_dir/../sdk"
-
-  tmp_inputs="$(mktemp)"
-  {
-    echo "$rid_out/podishcore.a"
-    echo "$fibercpu_static"
-    echo "$netstack_static"
-    for a in "$native_dir"/*.a; do
-      [ -f "$a" ] && echo "$a"
-    done
-    for a in "$sdk_dir"/*.a; do
-      [ -f "$a" ] && echo "$a"
-    done
-  } > "$tmp_inputs"
-
-  dedup_inputs="$(awk '!seen[$0]++' "$tmp_inputs")"
-  rm -f "$tmp_inputs"
-
-  if [ -z "$dedup_inputs" ]; then
-    echo "error: no static inputs found for RID '$rid'." >&2
-    exit 1
-  fi
-
-  rm -f "$static_out"
-  # Merge input static archives directly to avoid object name collisions during manual extraction.
-  # shellcheck disable=SC2086
-  xcrun libtool -static -o "$static_out" $dedup_inputs
+  merge_inputs=("$rid_out/podishcore.a" "$fibercpu_static" "$netstack_static")
+  for archive in "$native_dir"/*.a "$sdk_dir"/*.a; do
+    if [[ -f "$archive" ]]; then
+      merge_inputs+=("$archive")
+    fi
+  done
+  xcrun libtool -static -o "$static_out" "${merge_inputs[@]}"
 }
 
 require_dotnet_10
+XCFRAMEWORK_INPUTS=()
 for rid in "${RIDS[@]}"; do
   build_library_for_rid "$rid"
+  XCFRAMEWORK_INPUTS+=(-library "$WORK_ROOT/$rid/libPodishCore.a" -headers "$WORK_ROOT/$rid/include")
 done
 
-xcodebuild -create-xcframework \
-  -library "$WORK_ROOT/osx-arm64/libPodishCore.a" -headers "$WORK_ROOT/osx-arm64/include" \
-  -library "$WORK_ROOT/ios-arm64/libPodishCore.a" -headers "$WORK_ROOT/ios-arm64/include" \
-  -library "$WORK_ROOT/iossimulator-arm64/libPodishCore.a" -headers "$WORK_ROOT/iossimulator-arm64/include" \
-  -output "$XCFRAMEWORK_OUT"
+xcodebuild -create-xcframework "${XCFRAMEWORK_INPUTS[@]}" -output "$XCFRAMEWORK_OUT"
 
 echo "Published multi-platform XCFramework:"
 echo "  $XCFRAMEWORK_OUT"
 echo "$TFM" > "$OUT_ROOT/.tfm"
+printf '%s\n' "$BACKEND" > "$OUT_ROOT/graphics-backend"
 echo "TFM marker written to $OUT_ROOT/.tfm"

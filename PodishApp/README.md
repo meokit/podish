@@ -6,37 +6,25 @@ Podish embeds a complete i386 Debian Trixie graphical desktop directly inside a 
 
 - **Embedded Linux Desktop**: i386 Debian Trixie + Qt 6 Wayland + common LXQt apps (`qterminal`, `pcmanfm-qt`, `featherpad`, `lximage-qt`, `lxqt-archiver`, `qps`, `lxqt-config`, `screengrab`).
 - **Touch-First Qt6 Launcher**: Custom C++ Qt6 Wayland launcher (`guest/podish-launcher/`) that opens immediately when the app starts, featuring kinetic finger-swipe scrolling, live search, category filters, `.desktop` app discovery, and a quick-launch dock.
-- **Built-in Wayland Compositor + ANGLE Metal**: `Podish.Wayland` runs in-process over a virtual Unix socket (`/run/wayland-0`) and renders directly to a native `CAMetalLayer` through ANGLE (Metal backend) on both iOS and macOS, plus guest EGL/GLES passthrough.
+- **Built-in Wayland compositor.** `Podish.Wayland` runs in process over `/run/wayland-0`. The Apple view provides a `CAMetalLayer` and sends AppKit or UIKit input to the Wayland server.
+- **Apple graphics builds.** The Vulkan build uses DiligentCore and KosmicKrisp, supplies a Venus render node, and runs Zink desktop OpenGL in the guest. The GLES build uses ANGLE Metal and the original guest EGL and GLES devices.
 - **Storage (`tarfs` + `silkfs`)**: The read-only Debian rootfs is mounted directly from an indexed `.tar` inside the app bundle (`PodishRootfs/blobs/rootfs.tar`) using `layerfs`, overlaid with a persistent writable `silkfs` SQLite-backed upper layer in `Application Support/Podish`.
 
-## Build & Package Everything
+## Build and package
 
-From the repository root:
+Install Xcode, the .NET 10 SDK, Rust with the Apple targets, Python 3, and a container engine for the i386 Linux build. The Vulkan build also uses CMake, Meson, Ninja, `glslc`, and LLVM/Clang 21.1 for the native Mesa shader tools. Meson needs Python with Mako, Packaging, and PyYAML. Run from the repository root.
 
-```bash
-# 1. Fetch/wrap ANGLE Metal XCFrameworks (macOS arm64, iOS arm64, iOS Simulator arm64)
-bash scripts/apple/prepare-angle.sh
-
-# 2. Build IA-32 guest EGL/GLES/GBM libraries
-bash graphics/build-guest.sh PodishApp/Resources/PodishGlesGuest
-
-# 3. Build Debian i386 LXQt + Qt6 Launcher rootfs and tarfs index (Docker / OrbStack / Podman)
-bash scripts/apple/build-debian-rootfs.sh
-
-# 4. Build NativeAOT PodishCore.xcframework (osx-arm64, ios-arm64, iossimulator-arm64)
-bash Podish.Core.Native/scripts/publish-static.sh
-
-# 5. Build and package complete macOS (.app / .zip) and iOS (.ipa + simulator .app) bundles
-bash scripts/apple/package-apple.sh
+```sh
+PODISH_GRAPHICS_BACKEND=vulkan bash scripts/apple/package-apple.sh --full
+PODISH_GRAPHICS_BACKEND=gles bash scripts/apple/package-apple.sh --full
 ```
 
-Or run the one-shot packaging script with `--full` to execute all steps end-to-end:
+`vulkan` is the default. Each command builds its matching frameworks, Debian rootfs, NativeAOT library, and Apple packages. Run the same command without `--full` to repackage prepared artifacts. The native library and rootfs directories are specific to the selected graphics backend.
 
-```bash
-bash scripts/apple/package-apple.sh --full
-```
+The Vulkan build uses Metal 4 on Apple silicon with macOS 26 or on a physical device with iOS 26. It builds pinned Mesa KosmicKrisp, DiligentCore, and virglrenderer from source. Run `bash scripts/apple/prepare-venus.sh macosx` or pass `iphoneos` to build the corresponding frameworks. Vulkan packages contain the macOS and iOS device apps. Select the GLES build to package the iOS Simulator app.
 
-Packaged outputs are placed in `dist/apple/`:
-- `dist/apple/macos/Podish.app` and `dist/apple/Podish-macOS-arm64.zip`
-- `dist/apple/Podish-iOS-arm64.ipa`
-- `dist/apple/ios-simulator/Podish.app`
+The package script writes the following files under `dist/apple/vulkan` or `dist/apple/gles`.
+
+- `macos/Podish.app` and `Podish-macOS-arm64.zip`
+- `Podish-iOS-arm64.ipa`
+- `ios-simulator/Podish.app` for GLES builds

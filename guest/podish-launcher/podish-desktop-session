@@ -20,10 +20,15 @@ export QT_QPA_PLATFORMTHEME=lxqt
 export GDK_BACKEND=wayland
 export SDL_VIDEODRIVER=wayland
 export SDL_VIDEO_DRIVER=wayland
-export LIBGL_ES=2
-export LIBGL_GL=21
-export LIBGL_EGL=/run/podish-gles/libEGL.so.1
-export LIBGL_GLES=/run/podish-gles/libGLESv2.so.2
+
+if [ "$(cat /usr/local/libexec/podish-graphics-backend)" = vulkan ]; then
+    . /usr/local/libexec/podish-vulkan-env
+else
+    export LIBGL_ES=2
+    export LIBGL_GL=21
+    export LIBGL_EGL=/run/podish-gles/libEGL.so.1
+    export LIBGL_GLES=/run/podish-gles/libGLESv2.so.2
+fi
 
 mkdir -p "$HOME/Desktop" "$HOME/Documents" "$HOME/Downloads" "$HOME/Pictures" \
          "$XDG_CONFIG_HOME/lxqt" "$XDG_DATA_HOME/applications" "$XDG_CACHE_HOME"

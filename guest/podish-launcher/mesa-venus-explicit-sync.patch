@@ -1,0 +1,241 @@
+--- a/src/egl/wayland/wayland-drm/meson.build
++++ b/src/egl/wayland/wayland-drm/meson.build
+@@ -48,6 +48,7 @@
+   'presentation-time': 'stable/presentation-time/presentation-time.xml',
+   'tearing-control-v1': 'staging/tearing-control/tearing-control-v1.xml',
+   'linux-drm-syncobj-v1': 'staging/linux-drm-syncobj/linux-drm-syncobj-v1.xml',
++  'linux-explicit-synchronization-unstable-v1': 'unstable/linux-explicit-synchronization/linux-explicit-synchronization-unstable-v1.xml',
+ }
+ wp_files = {}
+ foreach name, xml : wp_protos
+--- a/src/vulkan/wsi/meson.build
++++ b/src/vulkan/wsi/meson.build
+@@ -22,6 +22,7 @@
+   files_vulkan_wsi += wp_files['tearing-control-v1']
+   links_vulkan_wsi += libloader_wayland_helper
+   files_vulkan_wsi += wp_files['linux-drm-syncobj-v1']
++  files_vulkan_wsi += wp_files['linux-explicit-synchronization-unstable-v1']
+ endif
+
+ if with_platform_windows
+--- a/src/vulkan/wsi/wsi_common.c
++++ b/src/vulkan/wsi/wsi_common.c
+@@ -1555,9 +1555,12 @@
+ #endif
+       }
+
+-      if (wsi->sw)
+-	      wsi->WaitForFences(device, 1, &swapchain->fences[image_index],
+-				 true, ~0ull);
++      if (wsi->sw) {
++         result = wsi->WaitForFences(device, 1, &swapchain->fences[image_index],
++                                    true, ~0ull);
++         if (result != VK_SUCCESS)
++            goto fail_present;
++      }
+
+       const VkPresentRegionKHR *region = NULL;
+       if (regions && regions->pRegions)
+--- a/src/vulkan/wsi/wsi_common_drm.c
++++ b/src/vulkan/wsi/wsi_common_drm.c
+@@ -42,7 +42,7 @@
+ #include <stdio.h>
+ #include <xf86drm.h>
+
+-static VkResult
++VkResult
+ wsi_dma_buf_export_sync_file(int dma_buf_fd, int *sync_file_fd)
+ {
+    /* Don't keep trying an IOCTL that doesn't exist. */
+--- a/src/vulkan/wsi/wsi_common_private.h
++++ b/src/vulkan/wsi/wsi_common_private.h
+@@ -336,6 +336,9 @@
+
+ #ifdef HAVE_LIBDRM
+ VkResult
++wsi_dma_buf_export_sync_file(int dma_buf_fd, int *sync_file_fd);
++
++VkResult
+ wsi_prepare_signal_dma_buf_from_semaphore(struct wsi_swapchain *chain,
+                                           const struct wsi_image *image);
+ VkResult
+--- a/src/vulkan/wsi/wsi_common_wayland.c
++++ b/src/vulkan/wsi/wsi_common_wayland.c
+@@ -46,10 +46,12 @@
+ #include "linux-dmabuf-unstable-v1-client-protocol.h"
+ #include "presentation-time-client-protocol.h"
+ #include "linux-drm-syncobj-v1-client-protocol.h"
++#include "linux-explicit-synchronization-unstable-v1-client-protocol.h"
+ #include "tearing-control-v1-client-protocol.h"
+
+ #include <util/cnd_monotonic.h>
+ #include <util/compiler.h>
++#include <util/u_debug.h>
+ #include <util/hash_table.h>
+ #include <util/timespec.h>
+ #include <util/u_endian.h>
+@@ -109,6 +111,7 @@
+    struct zwp_linux_dmabuf_feedback_v1 *wl_dmabuf_feedback;
+    struct wp_tearing_control_manager_v1 *tearing_control_manager;
+    struct wp_linux_drm_syncobj_manager_v1 *wl_syncobj;
++   struct zwp_linux_explicit_synchronization_v1 *wl_legacy_sync;
+
+    struct dmabuf_feedback_format_table format_table;
+
+@@ -180,6 +183,7 @@
+    struct dmabuf_feedback dmabuf_feedback, pending_dmabuf_feedback;
+
+    struct wp_linux_drm_syncobj_surface_v1 *wl_syncobj_surface;
++   struct zwp_linux_surface_synchronization_v1 *wl_legacy_sync_surface;
+ };
+
+ struct wsi_wl_swapchain {
+@@ -918,6 +922,10 @@
+       } else if (strcmp(interface, wp_linux_drm_syncobj_manager_v1_interface.name) == 0) {
+          display->wl_syncobj =
+             wl_registry_bind(registry, name, &wp_linux_drm_syncobj_manager_v1_interface, 1);
++      } else if (strcmp(interface, zwp_linux_explicit_synchronization_v1_interface.name) == 0 &&
++                 debug_get_bool_option("PODISH_WAYLAND_EXPLICIT_SYNC", false)) {
++         display->wl_legacy_sync = wl_registry_bind(registry, name,
++            &zwp_linux_explicit_synchronization_v1_interface, 1);
+       }
+    }
+
+@@ -965,6 +973,8 @@
+       wl_shm_destroy(display->wl_shm);
+    if (display->wl_syncobj)
+       wp_linux_drm_syncobj_manager_v1_destroy(display->wl_syncobj);
++   if (display->wl_legacy_sync)
++      zwp_linux_explicit_synchronization_v1_destroy(display->wl_legacy_sync);
+    if (display->wl_dmabuf)
+       zwp_linux_dmabuf_v1_destroy(display->wl_dmabuf);
+    if (display->wp_presentation_notwrapped)
+@@ -1508,6 +1518,8 @@
+
+    if (wsi_wl_surface->wl_syncobj_surface)
+       wp_linux_drm_syncobj_surface_v1_destroy(wsi_wl_surface->wl_syncobj_surface);
++   if (wsi_wl_surface->wl_legacy_sync_surface)
++      zwp_linux_surface_synchronization_v1_destroy(wsi_wl_surface->wl_legacy_sync_surface);
+
+    if (wsi_wl_surface->wl_dmabuf_feedback) {
+       zwp_linux_dmabuf_feedback_v1_destroy(wsi_wl_surface->wl_dmabuf_feedback);
+@@ -1792,7 +1804,21 @@
+                                  wsi_wl_surface->display->queue);
+    }
+
+-   if (wsi_wl_use_explicit_sync(wsi_wl_surface->display, wsi_device)) {
++   if (debug_get_bool_option("PODISH_WAYLAND_EXPLICIT_SYNC", false)) {
++      if (wsi_device->sw || !wsi_wl_surface->display->wl_legacy_sync ||
++          !(wsi_device->semaphore_export_handle_types & VK_EXTERNAL_SEMAPHORE_HANDLE_TYPE_SYNC_FD_BIT)) {
++         result = VK_ERROR_FEATURE_NOT_PRESENT;
++         goto fail;
++      }
++
++      wsi_wl_surface->wl_legacy_sync_surface =
++         zwp_linux_explicit_synchronization_v1_get_synchronization(
++            wsi_wl_surface->display->wl_legacy_sync, wsi_wl_surface->surface);
++      if (!wsi_wl_surface->wl_legacy_sync_surface) {
++         result = VK_ERROR_OUT_OF_HOST_MEMORY;
++         goto fail;
++      }
++   } else if (wsi_wl_use_explicit_sync(wsi_wl_surface->display, wsi_device)) {
+       wsi_wl_surface->wl_syncobj_surface =
+          wp_linux_drm_syncobj_manager_v1_get_surface(wsi_wl_surface->display->wl_syncobj,
+                                                      wsi_wl_surface->surface);
+@@ -1806,11 +1832,21 @@
+    return VK_SUCCESS;
+
+ fail:
+-   if (wsi_wl_surface->surface)
++   if (wsi_wl_surface->wl_dmabuf_feedback) {
++      zwp_linux_dmabuf_feedback_v1_destroy(wsi_wl_surface->wl_dmabuf_feedback);
++      wsi_wl_surface->wl_dmabuf_feedback = NULL;
++      dmabuf_feedback_fini(&wsi_wl_surface->dmabuf_feedback);
++      dmabuf_feedback_fini(&wsi_wl_surface->pending_dmabuf_feedback);
++   }
++   if (wsi_wl_surface->surface) {
+       wl_proxy_wrapper_destroy(wsi_wl_surface->surface);
++      wsi_wl_surface->surface = NULL;
++   }
+
+-   if (wsi_wl_surface->display)
++   if (wsi_wl_surface->display) {
+       wsi_wl_display_destroy(wsi_wl_surface->display);
++      wsi_wl_surface->display = NULL;
++   }
+    return result;
+ }
+
+@@ -2483,6 +2519,30 @@
+                                                         image->wl_syncobj_timeline[WSI_ES_RELEASE],
+                                                         (uint32_t)(release_point >> 32),
+                                                         (uint32_t)(release_point & 0xffffffff));
++   }
++
++   if (wsi_wl_surface->wl_legacy_sync_surface) {
++#ifdef HAVE_LIBDRM
++      /* The common present path has signaled a semaphore from this submit
++       * and imported its sync file into the image's dma-buf. */
++      struct wsi_image *image = &chain->images[image_index].base;
++      VkResult result = wsi_prepare_signal_dma_buf_from_semaphore(&chain->base, image);
++      if (result != VK_SUCCESS)
++         return result;
++
++      int sync_file_fd = -1;
++      result = wsi_dma_buf_export_sync_file(image->dma_buf_fd, &sync_file_fd);
++      if (result != VK_SUCCESS)
++         return result;
++
++      if (sync_file_fd < 0)
++         return VK_ERROR_DEVICE_LOST;
++      zwp_linux_surface_synchronization_v1_set_acquire_fence(
++         wsi_wl_surface->wl_legacy_sync_surface, sync_file_fd);
++      close(sync_file_fd);
++#else
++      return VK_ERROR_FEATURE_NOT_PRESENT;
++#endif
+    }
+
+    assert(image_index < chain->base.image_count);
+@@ -2983,6 +3043,7 @@
+    struct wsi_base_image_params *image_params = NULL;
+    struct wsi_cpu_image_params cpu_image_params;
+    struct wsi_drm_image_params drm_image_params;
++   static const uint64_t linear_modifier = DRM_FORMAT_MOD_LINEAR;
+    uint32_t num_drm_modifiers = 0;
+    const uint64_t *drm_modifiers = NULL;
+    if (wsi_device->sw) {
+@@ -3000,8 +3061,12 @@
+    } else {
+       drm_image_params = (struct wsi_drm_image_params) {
+          .base.image_type = WSI_IMAGE_TYPE_DRM,
+-         .same_gpu = wsi_wl_surface->display->same_gpu,
+-         .explicit_sync = wsi_wl_use_explicit_sync(wsi_wl_surface->display, wsi_device),
++         /* Podish consumes the linear PRIME blit buffer in its compositor,
++          * which uses an independent renderer. */
++         .same_gpu = !wsi_wl_surface->wl_legacy_sync_surface &&
++            wsi_wl_surface->display->same_gpu,
++         .explicit_sync = !wsi_wl_surface->wl_legacy_sync_surface &&
++            wsi_wl_use_explicit_sync(wsi_wl_surface->display, wsi_device),
+       };
+       /* Use explicit DRM format modifiers when both the server and the driver
+        * support them.
+@@ -3026,7 +3091,18 @@
+                drm_image_params.num_modifier_lists = 0;
+             drm_image_params.num_modifiers = &num_drm_modifiers;
+             drm_image_params.modifiers = &drm_modifiers;
++         }
++      }
++      if (wsi_wl_surface->wl_legacy_sync_surface) {
++         bool has_linear = false;
++         for (uint32_t i = 0; i < num_drm_modifiers; i++)
++            has_linear |= drm_modifiers[i] == linear_modifier;
++         if (!has_linear) {
++            result = VK_ERROR_FORMAT_NOT_SUPPORTED;
++            goto fail;
+          }
++         num_drm_modifiers = 1;
++         drm_modifiers = &linear_modifier;
+       }
+       buffer_type = WSI_WL_BUFFER_NATIVE;
+       image_params = &drm_image_params.base;

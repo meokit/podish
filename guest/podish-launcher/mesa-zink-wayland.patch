@@ -1,0 +1,35 @@
+--- a/src/egl/drivers/dri2/platform_wayland.c
++++ b/src/egl/drivers/dri2/platform_wayland.c
+@@ -42,6 +42,7 @@
+ #include <vulkan/vulkan_wayland.h>
+
+ #include "util/anon_file.h"
++#include "util/u_debug.h"
+ #include "util/u_vector.h"
+ #include "util/format/u_formats.h"
+ #include "main/glconfig.h"
+@@ -3043,8 +3044,23 @@
+       goto cleanup;
+
+    if (disp->Options.Zink) {
+-      if (!dri2_initialize_wayland_drm_extensions(dri2_dpy) && !disp->Options.ForceSoftware)
++      const char *podish_render_node = getenv("PODISH_WAYLAND_RENDER_NODE");
++      if (podish_render_node && !disp->Options.ForceSoftware) {
++         /* This compositor's dma-buf formats belong to a different renderer.
++          * Kopper presents through Vulkan's wl_shm path, so only the render
++          * device is needed here. */
++         if (debug_get_bool_option("LIBGL_KOPPER_DISABLE", false))
++            goto cleanup;
++         dri2_dpy->fd_render_gpu = loader_open_device(podish_render_node);
++         if (dri2_dpy->fd_render_gpu < 0)
++            goto cleanup;
++         dri2_dpy->device_name = strdup(podish_render_node);
++         if (!dri2_dpy->device_name)
++            goto cleanup;
++      } else if (!dri2_initialize_wayland_drm_extensions(dri2_dpy) &&
++                 !disp->Options.ForceSoftware) {
+          goto cleanup;
++      }
+
+       if (!disp->Options.ForceSoftware) {
+          loader_get_user_preferred_fd(&dri2_dpy->fd_render_gpu,

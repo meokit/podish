@@ -2,8 +2,9 @@
 #
 # Build the embedded i386 Debian Trixie + LXQt + Qt6 Touch Launcher rootfs
 # and package it as a pre-indexed tarfs store (for tarfs + silkfs overlay) at:
-#   PodishApp/Resources/PodishRootfs/
+#   PodishApp/Resources/<graphics-backend>/PodishRootfs/
 #     ├── image.json
+#     ├── graphics-backend
 #     ├── blobs/rootfs.tar
 #     └── indexes/rootfs.index.json
 #
@@ -12,7 +13,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 LAUNCHER_SRC="${REPO_ROOT}/guest/podish-launcher"
-OUT_STORE="${PODISH_ROOTFS_STORE_DIR:-${REPO_ROOT}/PodishApp/Resources/PodishRootfs}"
+BACKEND="${PODISH_GRAPHICS_BACKEND:-vulkan}"
+case "${BACKEND}" in
+    vulkan|gles) ;;
+    *) echo "error: PODISH_GRAPHICS_BACKEND must be vulkan or gles" >&2; exit 2 ;;
+esac
+OUT_STORE="${PODISH_ROOTFS_STORE_DIR:-${REPO_ROOT}/PodishApp/Resources/${BACKEND}/PodishRootfs}"
 DEBIAN_IMAGE="${PODISH_DEBIAN_IMAGE:-docker.io/library/debian:trixie}"
 
 if [[ -n "${PODISH_CONTAINER_RUNTIME:-}" ]]; then
@@ -35,15 +41,23 @@ TMP_DIR="$(mktemp -d -t podish-debian-rootfs-XXXXXX)"
 CTR_NAME="podish-debian-i386-build-$$"
 trap 'rm -rf "${TMP_DIR}"; "${RUNTIME}" rm -f "${CTR_NAME}" >/dev/null 2>&1 || true' EXIT
 
-echo "Building i386 Debian Trixie + LXQt + podish-launcher inside ${DEBIAN_IMAGE}..."
+echo "Building i386 Debian Trixie + LXQt + podish-launcher (${BACKEND}) inside ${DEBIAN_IMAGE}..."
 "${RUNTIME}" run \
     --platform linux/386 \
     --name "${CTR_NAME}" \
     -v "${LAUNCHER_SRC}:/src/podish-launcher:ro" \
+    -v "${REPO_ROOT}/tests/vulkan:/src/vulkan-tests:ro" \
     -e DEBIAN_FRONTEND=noninteractive \
+    -e PODISH_GRAPHICS_BACKEND="${BACKEND}" \
     "${DEBIAN_IMAGE}" \
     /bin/bash -euxc '
 apt-get update
+
+if [[ "$PODISH_GRAPHICS_BACKEND" == vulkan ]]; then
+    renderer_packages=(libvulkan1)
+else
+    renderer_packages=(libgl4es0)
+fi
 
 # Runtime packages: Debian base utils + Qt6 Wayland + LXQt common apps + Breeze icons + fonts
 apt-get install -y --no-install-recommends \
@@ -93,6 +107,9 @@ apt-get install -y --no-install-recommends \
     libwayland-cursor0 \
     libwayland-egl1 \
     libxkbcommon0 \
+    libegl1 \
+    libgl1 \
+    libdrm2 \
     qt6-wayland \
     qt6-svg-plugins \
     qt6-qpa-plugins \
@@ -107,22 +124,53 @@ apt-get install -y --no-install-recommends \
     featherpad \
     qps \
     screengrab \
-    libgl4es0 \
+    "${renderer_packages[@]}" \
     supertuxkart
 
-# Temporary build dependencies for compiling podish-launcher (purged after install)
-apt-get install -y --no-install-recommends \
+# Temporary build dependencies for the launcher.
+build_packages=(
     g++ \
     cmake \
     ninja-build \
     pkg-config \
     qt6-base-dev
+)
+if [[ "$PODISH_GRAPHICS_BACKEND" == vulkan ]]; then
+    build_packages+=(
+        meson \
+        bison \
+        flex \
+        patch \
+        python3-mako \
+        python3-packaging \
+        python3-yaml \
+        libdrm-dev \
+        libexpat1-dev \
+        libglvnd-dev \
+        libvulkan-dev \
+        libwayland-dev \
+        libwayland-egl-backend-dev \
+        libzstd-dev \
+        zlib1g-dev \
+        wayland-protocols
+    )
+fi
+apt-get install -y --no-install-recommends "${build_packages[@]}"
 
-cmake -S /src/podish-launcher -B /tmp/build-launcher -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake -S /src/podish-launcher -B /tmp/build-launcher -G Ninja -DCMAKE_BUILD_TYPE=Release \
+    -DPODISH_GRAPHICS_BACKEND="$PODISH_GRAPHICS_BACKEND" \
+    -DCMAKE_INSTALL_PREFIX=/usr/local
 cmake --build /tmp/build-launcher
-install -Dm755 /tmp/build-launcher/podish-launcher /usr/local/bin/podish-launcher
-install -Dm755 /tmp/build-launcher/podish-gl4es-sdl-shim.so /usr/local/lib/podish-gl4es-sdl-shim.so
-strip --strip-unneeded /usr/local/bin/podish-launcher /usr/local/lib/podish-gl4es-sdl-shim.so || true
+cmake --install /tmp/build-launcher --strip
+install -d /usr/local/libexec
+printf "%s\n" "$PODISH_GRAPHICS_BACKEND" > /usr/local/libexec/podish-graphics-backend
+if [[ "$PODISH_GRAPHICS_BACKEND" == vulkan ]]; then
+    bash /src/podish-launcher/build-mesa.sh
+    bash /src/vulkan-tests/build.sh /usr/local/bin
+    install -Dm644 /src/podish-launcher/podish-vulkan-env /usr/local/libexec/podish-vulkan-env
+else
+    install -d /run/podish-gles
+fi
 install -Dm755 /src/podish-launcher/podish-desktop-session /usr/local/bin/podish-desktop-session
 install -Dm755 /src/podish-launcher/podish-supertuxkart /usr/local/bin/supertuxkart
 install -Dm644 /src/podish-launcher/podish-launcher.desktop /usr/local/share/applications/podish-launcher.desktop
@@ -130,12 +178,7 @@ install -Dm644 /src/podish-launcher/podish-launcher.svg /usr/local/share/icons/h
 rm -rf /tmp/build-launcher
 
 # Remove build-only toolchain packages to keep embedded rootfs lean
-apt-get purge -y --auto-remove \
-    g++ \
-    cmake \
-    ninja-build \
-    pkg-config \
-    qt6-base-dev
+apt-get purge -y --auto-remove "${build_packages[@]}"
 
 # Configure default root password, desktop user account (uid 1000), and desktop directories
 echo "root:podish" | chpasswd
@@ -143,7 +186,7 @@ if ! id -u user >/dev/null 2>&1; then
     useradd -m -U -u 1000 -s /bin/bash user
 fi
 install -d -m 1777 /tmp /tmp/.X11-unix /var/tmp
-install -d -m 755 /run /run/podish-gles
+install -d -m 755 /run
 install -d -m 755 -o 1000 -g 1000 \
     /home/user/Desktop \
     /home/user/Documents \
@@ -161,7 +204,8 @@ EOF
 chown -R 1000:1000 /home/user
 
 dbus-uuidgen --ensure=/etc/machine-id
-echo "/usr/lib/i386-linux-gnu/gl4es" > /etc/ld.so.conf.d/podish-gl4es.conf
+# gl4es is selected by the legacy SuperTuxKart wrapper only.
+rm -f /etc/ld.so.conf.d/podish-gl4es.conf
 ldconfig
 update-desktop-database /usr/share/applications /usr/local/share/applications || true
 fc-cache -f
@@ -182,7 +226,21 @@ rm -rf \
 
 # Verify launcher links cleanly and is an IA-32 ELF binary
 file /usr/local/bin/podish-launcher
-ldd /usr/local/bin/podish-launcher | head -n 20
+ldd /usr/local/bin/podish-launcher
+if [[ "$PODISH_GRAPHICS_BACKEND" == vulkan ]]; then
+    test -r /usr/local/lib/podish-zink/share/vulkan/icd.d/virtio_icd.json
+    test -r /usr/local/lib/podish-zink/share/glvnd/egl_vendor.d/50_podish_zink.json
+    test ! -e /usr/local/lib/podish-gl4es-sdl-shim.so
+    test ! -e /usr/lib/i386-linux-gnu/gl4es
+    test ! -e /run/podish-gles
+else
+    test -r /usr/local/lib/podish-gl4es-sdl-shim.so
+    test -r /usr/lib/i386-linux-gnu/gl4es/libGL.so.1
+    test ! -e /usr/local/lib/podish-zink
+    test ! -e /usr/local/libexec/podish-vulkan-env
+    test ! -e /usr/lib/i386-linux-gnu/libvulkan_virtio.so
+    ! compgen -G "/usr/share/vulkan/icd.d/virtio_icd*.json"
+fi
 '
 
 echo "Exporting container filesystem to uncompressed tar..."
@@ -191,7 +249,9 @@ RAW_TAR="${TMP_DIR}/rootfs.tar"
 
 rm -rf "${OUT_STORE}"
 mkdir -p "${OUT_STORE}"
-python3 "${SCRIPT_DIR}/index-tarfs.py" "${RAW_TAR}" "${OUT_STORE}" "podish/debian-lxqt:i386"
+"${PODISH_PYTHON:-/usr/bin/python3}" "${SCRIPT_DIR}/index-tarfs.py" \
+    "${RAW_TAR}" "${OUT_STORE}" "podish/debian-lxqt-${BACKEND}:i386"
+printf '%s\n' "${BACKEND}" > "${OUT_STORE}/graphics-backend"
 
 echo "Debian i386 tarfs rootfs ready at ${OUT_STORE}"
 ls -lh "${OUT_STORE}" "${OUT_STORE}/blobs" "${OUT_STORE}/indexes"

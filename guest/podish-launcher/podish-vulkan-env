@@ -1,0 +1,35 @@
+# Sourced by podish-desktop-session for Vulkan-enabled desktops.
+podish_zink=/usr/local/lib/podish-zink
+export __EGL_VENDOR_LIBRARY_FILENAMES="$podish_zink/share/glvnd/egl_vendor.d/50_podish_zink.json"
+export PODISH_WAYLAND_RENDER_NODE=/dev/dri/renderD129
+export VK_DRIVER_FILES="$podish_zink/share/vulkan/icd.d/virtio_icd.json"
+
+case "${PODISH_GUEST_GL_DRIVER:-zink}" in
+    zink)
+        export MESA_LOADER_DRIVER_OVERRIDE=zink
+        unset PODISH_VIRGL_EXPLICIT_SYNC
+        ;;
+    virgl)
+        export MESA_LOADER_DRIVER_OVERRIDE=virtio_gpu
+        export PODISH_VIRGL_EXPLICIT_SYNC=1
+        # VirGL's resource transfers use the guest-backed GEM path.
+        case ",${VIRGL_DEBUG:-}," in
+            *,nocoherent,*) ;;
+            *) export VIRGL_DEBUG="${VIRGL_DEBUG:+$VIRGL_DEBUG,}nocoherent" ;;
+        esac
+        ;;
+    *)
+        echo "PODISH_GUEST_GL_DRIVER must be zink or virgl" >&2
+        return 2
+        ;;
+esac
+
+export PODISH_WAYLAND_EXPLICIT_SYNC=1
+unset MESA_VK_WSI_DEBUG
+export LIBGL_ALWAYS_SOFTWARE=0
+
+case ":${LD_LIBRARY_PATH:-}:" in
+    *":$podish_zink/lib:"*) ;;
+    *) export LD_LIBRARY_PATH="$podish_zink/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" ;;
+esac
+unset podish_zink LIBGL_ES LIBGL_GL LIBGL_EGL LIBGL_GLES
