@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/../.." && pwd)"
 PROJ="$ROOT_DIR/Podish.Core.Native/Podish.Core.Native.csproj"
 NETSTACK_MANIFEST="$ROOT_DIR/Fiberish.Netstack/Cargo.toml"
-TFM="net10.0"
+TFM="net11.0"
 NUGET_ROOT="${NUGET_PACKAGES:-$HOME/.nuget/packages}"
 OUT_ROOT="$ROOT_DIR/PodishApp/artifacts/podish-native"
 WORK_ROOT="$OUT_ROOT/_staging"

@@ -11,7 +11,7 @@ repo=$(cd "$here/../.." && pwd)
 rootfs=$(cd "$1" && pwd)
 cd "$repo"
 
-cli=${PODISH_CLI:-"$repo/Podish.Cli/bin/Release/net10.0/Podish.Cli.dll"}
+cli=${PODISH_CLI:-"$repo/Podish.Cli/bin/Release/net11.0/Podish.Cli.dll"}
 if [[ ! -f $cli && -z ${PODISH_CLI:-} ]]; then
     dotnet build Podish.Cli -c Release --nologo
 fi

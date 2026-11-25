@@ -54,7 +54,7 @@ and keep their paths/vectors inside a tiny ELF fixture that is remapped by each
 exec. Fixture creation, runtime construction, and input-array preparation are
 outside measurements. Full exec still allocates its staged address space and
 image/stack data; the two small fast-path cases can separately detect accidental
-per-call allocation. On a net11-only host set `DOTNET_ROLL_FORWARD=LatestMajor`.
+per-call allocation.
 For controlled before/after comparisons, keep native/dependency DLL hashes and
 JIT-tiering settings identical; Debug and Release share a native build directory.
 The exec repair comparison uses `DOTNET_TieredCompilation=0` to avoid tier

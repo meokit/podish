@@ -39,6 +39,17 @@ option(USE_SOFTFLOAT "Use Berkeley SoftFloat 3 for x87 FPU emulation" ON)
 option(ENABLE_TLB_STATS "Enable tracking of L1/L2 TLB hits and misses" OFF)
 option(FIBERCPU_BUILD_STATIC "Build fibercpu as a static library instead of shared" OFF)
 option(FIBERCPU_ENABLE_LTO "Enable interprocedural optimization (LTO/IPO)" ON)
+set(FIBERCPU_WASM_HOT_DISPATCH_HANDLERS "0" CACHE STRING "Profiled cases in the inlined Wasm dispatch loop")
+set(FIBERCPU_WASM_HOT_DISPATCH_PLAN "" CACHE FILEPATH "Optional ranked Wasm handler plan")
+if(NOT FIBERCPU_WASM_HOT_DISPATCH_HANDLERS MATCHES "^(0|[1-9][0-9]*)$")
+    message(FATAL_ERROR "FIBERCPU_WASM_HOT_DISPATCH_HANDLERS must be a nonnegative integer")
+endif()
+if(FIBERCPU_WASM_HOT_DISPATCH_HANDLERS)
+    if(NOT EMSCRIPTEN)
+        message(FATAL_ERROR "The Wasm hot dispatch loop requires Emscripten")
+    endif()
+    add_compile_definitions(FIBERCPU_WASM_HOT_DISPATCH=1)
+endif()
 option(FIBERCPU_ENABLE_BLOCK_PROFILE "Enable lightweight per-block execution counting" OFF)
 option(FIBERCPU_ENABLE_HANDLER_PROFILE "Enable approximate per-handler execution profiling" OFF)
 option(FIBERCPU_ENABLE_SEQUENCE_PROFILE "Count actual unfused within-block Continue edges (training only)" OFF)
@@ -361,6 +372,32 @@ if(FIBERCPU_HAVE_GENERATED_SUPEROPCODES)
 endif()
 list(FILTER SOURCES EXCLUDE REGEX "handler_reflection_exports\\.cpp$")
 list(FILTER SOURCES EXCLUDE REGEX "dynamic_operand_specialization\\.cpp$")
+
+if(FIBERCPU_WASM_HOT_DISPATCH_HANDLERS)
+    set(_hot_generator "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/gen_wasm_hot_dispatch.py")
+    set(_hot_plan "${_default_baking_directory}/wasm-hot-dispatch.json")
+    if(FIBERCPU_WASM_HOT_DISPATCH_PLAN)
+        set(_hot_plan "${FIBERCPU_WASM_HOT_DISPATCH_PLAN}")
+    elseif(DEFINED _preset_directory AND EXISTS "${_preset_directory}/wasm-hot-dispatch.json")
+        set(_hot_plan "${_preset_directory}/wasm-hot-dispatch.json")
+    endif()
+    set(_hot_options "${CMAKE_CURRENT_BINARY_DIR}/generated/wasm-hot-dispatch-options.txt")
+    file(CONFIGURE OUTPUT "${_hot_options}" CONTENT "@FIBERCPU_WASM_HOT_DISPATCH_HANDLERS@\n")
+    set(_hot_outputs
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/wasm_hot_kernels.inc"
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/wasm_hot_cases.inc")
+    if(FIBERCPU_HAVE_GENERATED_SUPEROPCODES)
+        set(_hot_fusion_args --fusions "${_operand_output}")
+        set(_hot_fusion_input "${_operand_output}")
+    endif()
+    add_custom_command(OUTPUT ${_hot_outputs}
+        COMMAND "${Python3_EXECUTABLE}" "${_hot_generator}" --plan "${_hot_plan}"
+            --budget "${FIBERCPU_WASM_HOT_DISPATCH_HANDLERS}" --scalar ${_scalar_bindings}
+            ${_hot_fusion_args} --output "${CMAKE_CURRENT_BINARY_DIR}/generated"
+        DEPENDS "${_hot_generator}" "${_hot_plan}" "${_hot_options}" ${_scalar_bindings} ${_hot_fusion_input}
+        VERBATIM)
+    list(APPEND SOURCES ${_hot_outputs})
+endif()
 
 if(NOT MSVC AND NOT EMSCRIPTEN)
     add_compile_options(

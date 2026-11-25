@@ -17,7 +17,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $repo = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
-if ($Cli -eq "") { $Cli = Join-Path $repo "Podish.Cli\bin\Debug\net10.0\Podish.Cli.dll" }
+if ($Cli -eq "") { $Cli = Join-Path $repo "Podish.Cli\bin\Debug\net11.0\Podish.Cli.dll" }
 $Cli = (Resolve-Path $Cli).Path
 if ($RootfsTar -ne "") { $RootfsTar = (Resolve-Path $RootfsTar).Path }
 $work = Join-Path $repo ("artifacts\verification\node-" + [guid]::NewGuid().ToString("N"))

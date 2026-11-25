@@ -302,7 +302,7 @@ def main():
     parser.add_argument("--backend", choices=("native", "podish"), required=True)
     parser.add_argument("--artifacts", type=Path, default=REPO / "artifacts/ltp")
     parser.add_argument("--manifest", type=Path, default=HERE / "cases.json")
-    parser.add_argument("--cli", type=Path, default=REPO / "Podish.Cli/bin/Debug/net10.0/Podish.Cli.dll")
+    parser.add_argument("--cli", type=Path, default=REPO / "Podish.Cli/bin/Debug/net11.0/Podish.Cli.dll")
     parser.add_argument("--baseline", type=Path, help="Native report (required for Podish; defaults to results/native.json)")
     parser.add_argument("--output", type=Path, help="JSON report; defaults to results/<backend>.json")
     parser.add_argument("--filter", default="*", help="Comma-separated glob patterns for case names")
@@ -406,7 +406,7 @@ def main():
                   "KCONFIG_SKIP_CHECK": "1"}
     base_env = os.environ.copy()
     base_env.update(common_env)
-    # Preserve the repository's net10.0 TFM when using a net11-only host.
+    # Preserve the repository's net11.0 TFM when using a net11-only host.
     base_env.setdefault("DOTNET_ROLL_FORWARD", "LatestMajor")
     image_ref = "localhost/podish-ltp:latest"
     image_work = None

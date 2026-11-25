@@ -175,7 +175,7 @@ internal static partial class Program
     {
         if (RuntimeInformation.IsOSPlatform(OSPlatform.OSX))
             return Path.Combine(RepoRoot(), "build", "nativeaot", "podish-cli-static", "Podish.Cli");
-        return Path.Combine(RepoRoot(), "Podish.Cli", "bin", "Debug", "net10.0", "Podish.Cli");
+        return Path.Combine(RepoRoot(), "Podish.Cli", "bin", "Debug", "net11.0", "Podish.Cli");
     }
 
     private static void RefreshDefaultProfileBinary(string binaryPath)

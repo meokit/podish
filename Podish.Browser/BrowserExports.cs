@@ -498,7 +498,7 @@ public static partial class BrowserExports
     private sealed class BrowserSessionState(PodishContext context, PodishContainerSession session)
     {
         private readonly Lock _outputLock = new();
-        private readonly Queue<byte[]> _pendingOutputPackets = [];
+        private readonly Queue<(int EventType, byte[] Payload)> _pendingOutputPackets = [];
 
         public PodishContext Context { get; } = context;
         public PodishContainerSession Session { get; } = session;
@@ -506,9 +506,9 @@ public static partial class BrowserExports
         public int? ExitCode { get; private set; }
         public bool RunStarted { get; private set; }
 
-        public void EnqueueOutput(ReadOnlySpan<byte> payload)
+        public void EnqueueOutput(ReadOnlySpan<byte> payload, int eventType = BrowserSabInterop.EventOutputBytes)
         {
-            if (Dispatcher.Emit(BrowserSabQueueKind.Output, BrowserSabInterop.EventOutputBytes, payload) > 0)
+            if (Dispatcher.Emit(BrowserSabQueueKind.Output, eventType, payload) > 0)
             {
                 SignalInterrupt(IrqOutputReady);
                 return;
@@ -516,7 +516,7 @@ public static partial class BrowserExports
 
             lock (_outputLock)
             {
-                _pendingOutputPackets.Enqueue(payload.ToArray());
+                _pendingOutputPackets.Enqueue((eventType, payload.ToArray()));
             }
         }
 
@@ -528,20 +528,20 @@ public static partial class BrowserExports
             var flushed = 0;
             while (flushed < maxPackets)
             {
-                byte[]? payload;
+                (int EventType, byte[] Payload) packet;
                 lock (_outputLock)
                 {
                     if (_pendingOutputPackets.Count == 0)
                         break;
-                    payload = _pendingOutputPackets.Peek();
+                    packet = _pendingOutputPackets.Peek();
                 }
 
-                if (Dispatcher.Emit(BrowserSabQueueKind.Output, BrowserSabInterop.EventOutputBytes, payload) <= 0)
+                if (Dispatcher.Emit(BrowserSabQueueKind.Output, packet.EventType, packet.Payload) <= 0)
                     break;
 
                 lock (_outputLock)
                 {
-                    if (_pendingOutputPackets.Count > 0 && ReferenceEquals(_pendingOutputPackets.Peek(), payload))
+                    if (_pendingOutputPackets.Count > 0 && ReferenceEquals(_pendingOutputPackets.Peek().Payload, packet.Payload))
                         _pendingOutputPackets.Dequeue();
                 }
 
@@ -580,7 +580,7 @@ public static partial class BrowserExports
             Span<byte> payload = stackalloc byte[5];
             payload[0] = ControlSessionExited;
             BitConverter.TryWriteBytes(payload[1..], exitCode);
-            EnqueueOutput(payload);
+            EnqueueOutput(payload, BrowserSabInterop.EventControl);
         }
     }
 }

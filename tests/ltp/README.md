@@ -198,9 +198,9 @@ dotnet build Podish.Cli/Podish.Cli.csproj -c Debug
 python tests/ltp/run.py --backend podish
 ```
 
-The default CLI is `Podish.Cli/bin/Debug/net10.0/Podish.Cli.dll`. `--cli` can
+The default CLI is `Podish.Cli/bin/Debug/net11.0/Podish.Cli.dll`. `--cli` can
 select another build. On a net11-only host the runner defaults
-`DOTNET_ROLL_FORWARD=LatestMajor`; the repository TFM remains net10.0.
+`DOTNET_ROLL_FORWARD=LatestMajor`; the repository TFM remains net11.0.
 The runner also works with a Linux-native Podish CLI build.
 
 Every selected Podish case **must** have a passing native baseline from the

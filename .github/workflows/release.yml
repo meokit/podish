@@ -33,7 +33,7 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 10.0.x
+          dotnet-version: 11.0.x
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -51,7 +51,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: podishcli-linux-x64-nativeaot-publish
-          path: Podish.Cli/bin/Release/net10.0/linux-x64/publish/**
+          path: Podish.Cli/bin/Release/net11.0/linux-x64/publish/**
 
   publish-macos:
     name: Publish macOS PodishCli NativeAOT
@@ -67,7 +67,7 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 10.0.x
+          dotnet-version: 11.0.x
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -83,7 +83,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: podishcli-osx-arm64-nativeaot-publish
-          path: Podish.Cli/bin/Release/net10.0/osx-arm64/publish/**
+          path: Podish.Cli/bin/Release/net11.0/osx-arm64/publish/**
 
   publish-windows:
     name: Publish Windows PodishCli NativeAOT
@@ -99,7 +99,7 @@ jobs:
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: 10.0.x
+          dotnet-version: 11.0.x
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -112,7 +112,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: podishcli-win-x64-nativeaot-publish
-          path: Podish.Cli/bin/Release/net10.0/win-x64/publish/**
+          path: Podish.Cli/bin/Release/net11.0/win-x64/publish/**
 
   publish-release:
     name: Publish GitHub Release

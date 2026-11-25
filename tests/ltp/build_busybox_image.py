@@ -36,7 +36,7 @@ def main():
     parser.add_argument("--import", dest="do_import", action="store_true",
                         help="Import the tar with Podish.Cli")
     parser.add_argument("--cli", type=Path,
-                        default=REPO / "Podish.Cli/bin/Debug/net10.0/Podish.Cli.dll",
+                        default=REPO / "Podish.Cli/bin/Debug/net11.0/Podish.Cli.dll",
                         help="Podish.Cli.dll used by --import")
     parser.add_argument("--reference", default="localhost/podish-ltp-base:latest",
                         help="Image reference used by --import")

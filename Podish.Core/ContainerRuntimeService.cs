@@ -140,6 +140,8 @@ public sealed class ContainerRuntimeService
             consoleDriver.BindTty(ttyDiag);
         if (request.TerminalBridge != null)
             request.TerminalBridge.BindTty(ttyDiag);
+        if (OperatingSystem.IsBrowser() && !request.UseTty)
+            ttyDiag.CloseInput();
 
         if (hostInputEnabled)
         {

@@ -111,7 +111,7 @@ and runs in the same worktree automatically.
 
 ```powershell
 cd <repo>
-dotnet .\Podish.Cli\bin\Debug\net10.0\Podish.Cli.dll import `
+dotnet .\Podish.Cli\bin\Debug\net11.0\Podish.Cli.dll import `
     <absolute-path>\node-rootfs.tar localhost/podish-node:latest
 ```
 
@@ -147,7 +147,7 @@ the corrupted allocator state; both are the same defect.
 ### Manual invocation
 
 ```powershell
-dotnet <repo>\Podish.Cli\bin\Debug\net10.0\Podish.Cli.dll run --rm --init `
+dotnet <repo>\Podish.Cli\bin\Debug\net11.0\Podish.Cli.dll run --rm --init `
     --log-driver none --network private --fs-backend tmpfs `
     localhost/podish-node:latest -- /usr/bin/node /app/repro.js 6 3000 32768
 ```
@@ -171,7 +171,7 @@ reservation.
 ## Diagnostics
 
 ```
-dotnet <repo>\Podish.Cli\bin\Debug\net10.0\Podish.Cli.dll --log-level debug `
+dotnet <repo>\Podish.Cli\bin\Debug\net11.0\Podish.Cli.dll --log-level debug `
     --log-file repro.log run --rm --init --log-driver none --network private `
     --fs-backend tmpfs localhost/podish-node:latest -- /usr/bin/node /app/repro.js 6 3000 32768
 ```

@@ -6,7 +6,7 @@ Linux (WSL2 is fine) with Docker or `CONTAINER_ENGINE=podman`:
 ```sh
 bash tests/media/build-fixture.sh media-fixture
 dotnet build Podish.Cli -c Release -m:1
-python tests/media/run.py --cli Podish.Cli/bin/Release/net10.0/Podish.Cli.dll --fixture media-fixture
+python tests/media/run.py --cli Podish.Cli/bin/Release/net11.0/Podish.Cli.dll --fixture media-fixture
 ```
 
 On Windows, point the same command at the Windows CLI and fixture directory.
@@ -32,7 +32,7 @@ path; the Wayland test flag always refers to the **guest** protocol and also
 works on a Win32 or X11 host.
 
 ```sh
-python tests/media/run.py --cli Podish.Cli/bin/Release/net10.0/Podish.Cli.dll --fixture media-fixture \
+python tests/media/run.py --cli Podish.Cli/bin/Release/net11.0/Podish.Cli.dll --fixture media-fixture \
     --case fbdev-egl --case fbdev-es3 --case wayland-egl --case kms-egl --case kms-es3
 ```
 
@@ -50,7 +50,7 @@ checksum and exports a rootfs tar. It needs several GB of disk space.
 
 ```sh
 bash tests/media/build-stk.sh stk-fixture
-python tests/media/run.py --cli Podish.Cli/bin/Release/net10.0/Podish.Cli.dll --fixture media-fixture \
+python tests/media/run.py --cli Podish.Cli/bin/Release/net11.0/Podish.Cli.dll --fixture media-fixture \
     --stk-rootfs stk-fixture/stk-rootfs.tar --logs stk-logs
 ```
 

@@ -9,7 +9,7 @@
     <BenchmarkRepeat Condition="'$(BenchmarkRepeat)' == ''">7</BenchmarkRepeat>
     <SearchPlan Condition="'$(SearchPlan)' == ''">$(RepositoryRoot)/benchmark/superopcode/search-v1.json</SearchPlan>
     <SearchStage Condition="'$(SearchStage)' == ''">screen</SearchStage>
-    <PerfTool>$(RepositoryRoot)/Podish.PerfTools/bin/Release/net10.0/Podish.PerfTools.dll</PerfTool>
+    <PerfTool>$(RepositoryRoot)/Podish.PerfTools/bin/Release/net11.0/Podish.PerfTools.dll</PerfTool>
   </PropertyGroup>
   <Target Name="BuildTools">
     <Exec Command="dotnet build &quot;$(RepositoryRoot)/Podish.PerfTools/Podish.PerfTools.csproj&quot; -c Release --nologo" />

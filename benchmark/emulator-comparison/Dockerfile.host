@@ -1,4 +1,4 @@
-FROM mcr.microsoft.com/dotnet/sdk:10.0-noble
+FROM mcr.microsoft.com/dotnet/sdk:11.0-resolute
 ARG PODISH_UBUNTU_MIRROR
 RUN if [ -n "$PODISH_UBUNTU_MIRROR" ]; then \
         sed -i -E "s#http://(archive|security)[.]ubuntu[.]com/ubuntu/?#$PODISH_UBUNTU_MIRROR#g" \

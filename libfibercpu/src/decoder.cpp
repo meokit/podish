@@ -727,8 +727,8 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
             goto finalize;
         }
 
-        const auto binding = FinalizeDecodedInstructionAt(current_eip, handler_index, &inst.head,
-                                                          DecodeHandlerMode::Native);
+        const auto binding =
+            FinalizeDecodedInstructionAt(current_eip, handler_index, &inst.head, DecodeHandlerMode::Native);
 
         index_storage[index_count++] = raw_opcode;
 
@@ -1079,12 +1079,13 @@ void BasicBlock::WriteOps(BlockSlotLayout layout, std::span<const DecodedInstruc
         } else {
             slot.payload = PackOperand(op);
         }
-        slot.handler = op.handler;
+        HandlerFunc target = op.handler;
         if (!preserve_handlers) {
             const auto index = binding_indices.empty() ? ScalarBindingIndex::Unknown : binding_indices[i];
             const auto binding = BindScalarHandler(op, index);
-            if (binding.handler) slot.handler = binding.handler;
+            if (binding.handler) target = binding.handler;
         }
+        slot.SetDispatchHandler(target);
         const bool branch_link = HasBranchLinkSlot(op.meta.all);
         const bool memory_immediate = compact_imm::NeedsSeparateSlot(op);
         if (branch_link || memory_immediate) {
@@ -1092,16 +1093,16 @@ void BasicBlock::WriteOps(BlockSlotLayout layout, std::span<const DecodedInstruc
             data_mask->physical[physical_index / 64] |= uint64_t{1} << (physical_index % 64);
             auto& data = FirstOp()[physical_index++];
             if (branch_link) {
-                data.handler = nullptr;
+                data.SetDispatchHandler(nullptr);
                 data.StoreBlockLink(invalid);
             } else {
-                data.handler = ForwardMemoryImmediateSlot;
+                data.SetDispatchHandler(ForwardMemoryImmediateSlot);
                 data.payload = GetImm(&op);
             }
         }
     }
     assert(physical_index == sentinel_slot_index);
-    Sentinel()->handler = ops.back().handler;
+    Sentinel()->SetDispatchHandler(ops.back().handler);
     entry = FirstOp()->handler;
     SetFallthroughLink(invalid);
 }
@@ -1109,7 +1110,7 @@ void BasicBlock::WriteOps(BlockSlotLayout layout, std::span<const DecodedInstruc
 DecodedInstruction BasicBlock::ReadOp(size_t slot) const {
     const auto& op = *LogicalOp(slot);
     DecodedInstruction result{};
-    result.handler = op.handler;
+    result.handler = op.OriginalHandler();
     result.next_eip = GetNextEip(slot);
     if (slot == inst_count()) {
         SetExtKind(&result, ExtKind::Link);

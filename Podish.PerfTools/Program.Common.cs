@@ -150,7 +150,7 @@ internal static partial class Program
     {
         if (!string.IsNullOrWhiteSpace(jitConfiguration))
         {
-            var cliDir = Path.Combine(projectRoot, "Podish.Cli", "bin", jitConfiguration, "net10.0");
+            var cliDir = Path.Combine(projectRoot, "Podish.Cli", "bin", jitConfiguration, "net11.0");
             foreach (var name in new[] { "libfibercpu.dylib", "libfibercpu.so", "fibercpu.dll" })
             {
                 var candidate = Path.Combine(cliDir, name);

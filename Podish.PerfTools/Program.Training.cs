@@ -114,7 +114,7 @@ internal static partial class Program
         };
         if (generated is not null) arguments.Add("-p:SuperOpcodeSource=" + Path.GetFullPath(generated));
         TrainingProcess("dotnet", arguments, root, 1800);
-        var directory = Path.Combine(root, "artifacts", "superopcode", "builds", flavor, "managed", "Podish.Cli", "bin", "Release", "net10.0");
+        var directory = Path.Combine(root, "artifacts", "superopcode", "builds", flavor, "managed", "Podish.Cli", "bin", "Release", "net11.0");
         var file = OperatingSystem.IsWindows() ? "fibercpu.dll" : OperatingSystem.IsMacOS() ? "libfibercpu.dylib" : "libfibercpu.so";
         var native = Path.Combine(root, "Fiberish.X86", "build_native", flavor,
             OperatingSystem.IsWindows() ? "Release" : "", file);
