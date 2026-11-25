@@ -54,8 +54,10 @@ def summarize(backend, log, exit_code):
     if exit_code is None:
         exits = EXIT.findall(log)
         exit_code = int(exits[-1]) if exits else None
-    accelerated = renderer and "zink" in renderer.lower() and "llvmpipe" not in renderer.lower()
-    renderer_matches_backend = accelerated and (("Venus" in renderer) == (backend == "guest-zink"))
+    renderer_name = renderer.lower() if renderer else ""
+    accelerated = "zink" in renderer_name and "llvmpipe" not in renderer_name
+    expected_driver = {"guest-zink": "venus", "host-zink": "virgl"}[backend]
+    renderer_matches_backend = accelerated and expected_driver in renderer_name
 
     if exit_code is None:
         state = "incomplete"
