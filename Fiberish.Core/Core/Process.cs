@@ -474,13 +474,12 @@ public class Process
 
     private ExecIdentity LoadExecutableImage(Dentry dentry, byte[] guestPathRaw, byte[][] argsRaw, byte[][] envsRaw,
         Mount mount, byte[]? execFnPathRaw = null, ExecIdentity? execIdentity = null, bool takeArgvOwnership = false,
-        bool knownElf = false)
+        ElfLoader.PreparedImage? preparedMain = null, ElfLoader.PreparedImage? preparedInterpreter = null)
     {
-        // SysExecve has already checked access and sniffed the main ELF header.
-        // Reuse that result instead of opening/sniffing the same inode twice.
-        var resolved = knownElf ? new ResolvedImage(dentry, mount, guestPathRaw, argsRaw) :
+        var resolved = preparedMain != null ? new ResolvedImage(dentry, mount, guestPathRaw, argsRaw) :
             ResolveExecutableImage(dentry, guestPathRaw, argsRaw, mount);
-        var identity = execIdentity ?? CredentialService.ComputeExecIdentity(this, resolved.Dentry.Inode!,
+        var identity = execIdentity ?? CredentialService.ComputeExecIdentity(this,
+            preparedMain?.File.OpenedInode ?? resolved.Dentry.Inode!,
             (resolved.Mount.Flags & LinuxConstants.MS_NOSUID) == 0);
         UpdateProcessImage(resolved.ExecutablePathRaw, execFnPathRaw ?? guestPathRaw, resolved.ArgvRaw,
             takeArgvOwnership);
@@ -493,7 +492,7 @@ public class Process
 
         var res = ElfLoader.Load(resolved.Dentry, resolved.ExecutablePathRaw,
             execFnPathRaw ?? guestPathRaw, Syscalls, resolved.ArgvRaw, envsRaw,
-            resolved.Mount, layout, identity, this);
+            resolved.Mount, layout, identity, this, preparedMain, preparedInterpreter);
         Syscalls.BrkAddr = res.BrkAddr;
 
         var engine = Syscalls.CurrentSyscallEngine;
@@ -580,9 +579,10 @@ public class Process
         return result;
     }
 
-    internal int CheckExecutableAccess(Dentry dentry, Mount mount)
+    internal int CheckExecutableAccess(Dentry dentry, Mount mount) => CheckExecutableAccess(dentry.Inode, mount);
+
+    internal int CheckExecutableAccess(Inode? inode, Mount mount)
     {
-        var inode = dentry.Inode;
         if (inode == null) return -(int)Errno.ENOENT;
         if (inode is HostInode hostInode)
             hostInode.RefreshProjectedMetadata(EUID, EGID);
@@ -613,10 +613,12 @@ public class Process
     }
 
     internal ExecIdentity Exec(Dentry dentry, byte[] guestPathRaw, byte[][] argsRaw, byte[][] envsRaw, Mount mount,
-        byte[]? execFnPathRaw = null, bool knownElf = false)
+        byte[]? execFnPathRaw = null, Engine? callerEngine = null,
+        ElfLoader.PreparedImage? preparedMain = null, ElfLoader.PreparedImage? preparedInterpreter = null)
     {
         var oldMem = Mem;
-        var oldEngine = Syscalls.CurrentSyscallEngine;
+        var previousSyscallEngine = Syscalls.CurrentSyscallEngine;
+        var oldEngine = callerEngine ?? previousSyscallEngine;
         var oldBrkAddr = Syscalls.BrkAddr;
         var oldLayout = oldMem.Layout;
         var oldSigReturnAddr = Syscalls.SigReturnAddr;
@@ -646,7 +648,8 @@ public class Process
             Syscalls.CurrentSyscallEngine = stagedEngine;
             Syscalls.RestoreVdsoAddresses(0, 0);
             identity = LoadExecutableImage(dentry, guestPathRaw, argsRaw, envsRaw, mount,
-                execFnPathRaw ?? guestPathRaw, takeArgvOwnership: true, knownElf: knownElf);
+                execFnPathRaw ?? guestPathRaw, takeArgvOwnership: true,
+                preparedMain: preparedMain, preparedInterpreter: preparedInterpreter);
 
             Syscalls.Mem = oldMem;
             Syscalls.CurrentSyscallEngine = oldEngine;
@@ -724,7 +727,7 @@ public class Process
         }
         finally
         {
-            Syscalls.CurrentSyscallEngine = oldEngine;
+            Syscalls.CurrentSyscallEngine = previousSyscallEngine;
             Syscalls.Mem = installed ? stagedMem : oldMem;
             try
             {

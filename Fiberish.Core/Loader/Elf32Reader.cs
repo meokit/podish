@@ -1,5 +1,7 @@
 using System.Buffers;
 using System.Buffers.Binary;
+using Fiberish.Core;
+using Fiberish.VFS;
 
 namespace Fiberish.Loader;
 
@@ -81,11 +83,7 @@ internal static class Elf32Reader
             try
             {
                 stream.ReadExactly(programHeaderTable);
-                for (var i = 0; i < programHeaderCount; i++)
-                {
-                    var entryOffset = i * programHeaderEntrySize;
-                    segments[i] = ParseProgramHeader(programHeaderTable.Slice(entryOffset, ProgramHeaderSize));
-                }
+                ReadProgramHeaders(programHeaderTable, programHeaderEntrySize, segments);
             }
             finally
             {
@@ -102,6 +100,41 @@ internal static class Elf32Reader
             ProgramHeaderEntrySize = programHeaderEntrySize,
             Segments = segments
         };
+    }
+
+    public static async ValueTask<ElfFile> ReadAsync(VfsStream stream, FiberTask task)
+    {
+        stream.Position = 0;
+        var header = new byte[ElfHeaderSize];
+        await stream.ReadExactlyForTaskAsync(task, header);
+        var (fileType, entryPoint, tableOffset, headerSize, entrySize, count) = ParseHeader(header);
+        var segments = new ElfSegment[count];
+        if (count != 0)
+        {
+            var tableSize = checked(entrySize * count);
+            if (tableOffset > stream.Length - tableSize)
+                throw new InvalidDataException("ELF program header extends past the end of the file.");
+
+            stream.Position = tableOffset;
+            var table = new byte[tableSize];
+            await stream.ReadExactlyForTaskAsync(task, table);
+            ReadProgramHeaders(table, entrySize, segments);
+        }
+
+        return new ElfFile
+        {
+            FileType = fileType,
+            EntryPointAddress = entryPoint,
+            ElfHeaderSize = headerSize,
+            ProgramHeaderEntrySize = entrySize,
+            Segments = segments
+        };
+    }
+
+    private static void ReadProgramHeaders(ReadOnlySpan<byte> table, int entrySize, Span<ElfSegment> segments)
+    {
+        for (var i = 0; i < segments.Length; i++)
+            segments[i] = ParseProgramHeader(table.Slice(i * entrySize, ProgramHeaderSize));
     }
 
     public static ElfFile Read(byte[] data)
@@ -123,11 +156,7 @@ internal static class Elf32Reader
                 throw new InvalidDataException("ELF program header extends past the end of the file.");
 
             var programHeaderTable = data.Slice(programHeaderTableOffset, programHeaderTableSize);
-            for (var i = 0; i < programHeaderCount; i++)
-            {
-                var entryOffset = i * programHeaderEntrySize;
-                segments[i] = ParseProgramHeader(programHeaderTable.Slice(entryOffset, ProgramHeaderSize));
-            }
+            ReadProgramHeaders(programHeaderTable, programHeaderEntrySize, segments);
         }
 
         return new ElfFile

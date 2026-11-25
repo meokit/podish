@@ -1,4 +1,3 @@
-using System.Buffers;
 using System.Buffers.Binary;
 using Fiberish.Auth.Cred;
 using ExecIdentity = Fiberish.Auth.Cred.CredentialService.ExecIdentity;
@@ -39,70 +38,121 @@ public class ElfLoader
             envs.Select(FsEncoding.EncodeUtf8).ToArray(), mount, layout, identity);
     }
 
+    internal sealed record PreparedImage(LinuxFile File, ElfFile Elf, byte[]? InterpPathRaw);
+
+    internal static (LinuxFile File, VfsStream Stream) OpenForExec(Dentry dentry, Mount mount, FiberTask task)
+    {
+        var file = new LinuxFile(dentry, FileFlags.O_RDONLY, mount);
+        return (file, new VfsStream(file, task));
+    }
+
+    internal static async ValueTask<PreparedImage> ReadImageAsync(LinuxFile file, VfsStream stream, FiberTask task)
+    {
+        var elf = await Elf32Reader.ReadAsync(stream, task);
+        ValidateExecutableType(elf);
+
+        byte[]? interpPath = null;
+        foreach (var segment in elf.Segments)
+        {
+            if (segment.Type != ElfSegmentType.Interpreter) continue;
+            var bytes = new byte[InterpreterPathSize(segment)];
+            stream.Position = segment.Position;
+            await stream.ReadExactlyForTaskAsync(task, bytes);
+            interpPath = ParseInterpreterPath(bytes);
+        }
+
+        return new PreparedImage(file, elf, interpPath);
+    }
+
+    private static void ValidateExecutableType(ElfFile elf)
+    {
+        if (elf.FileType is not (ElfFileType.Executable or ElfFileType.Dynamic))
+            throw new InvalidDataException("ELF is not an executable image.");
+    }
+
+    internal static bool IsInvalidElfFormat(Exception ex) =>
+        ex is InvalidDataException or EndOfStreamException or NotSupportedException;
+
+    internal static PathLocation ResolveInterpreter(byte[] path, SyscallManager sys, Process? process)
+    {
+        var lookup = sys.PathWalker.PathWalkWithData(path, path.Length, null, LookupFlags.FollowSymlink);
+        if (lookup.HasError)
+            throw new ExecFileException((Errno)(-lookup.ErrorCode), "ELF interpreter path lookup failed.");
+        if (!lookup.Path.IsValid)
+            throw new ExecFileException(Errno.ENOENT, "ELF interpreter not found.");
+
+        var accessRc = (process ?? sys.CurrentProcess)?.CheckExecutableAccess(lookup.Path.Dentry!, lookup.Path.Mount!) ?? 0;
+        if (accessRc < 0)
+            throw new ExecFileException((Errno)(-accessRc), "ELF interpreter execute access denied.");
+        return lookup.Path;
+    }
+
     public static LoaderResult Load(Dentry dentry, byte[] guestPathRaw, byte[] execFnPathRaw, SyscallManager sys,
         byte[][] argsRaw, byte[][] envsRaw, Mount mount, GuestAddressSpaceLayout layout, ExecIdentity identity,
-        Process? process = null)
+        Process? process = null) =>
+        Load(dentry, guestPathRaw, execFnPathRaw, sys, argsRaw, envsRaw, mount, layout, identity, process, null, null);
+
+    internal static LoaderResult Load(Dentry dentry, byte[] guestPathRaw, byte[] execFnPathRaw, SyscallManager sys,
+        byte[][] argsRaw, byte[][] envsRaw, Mount mount, GuestAddressSpaceLayout layout, ExecIdentity identity,
+        Process? process, PreparedImage? preparedMain, PreparedImage? preparedInterpreter)
     {
         var mm = sys.Mem;
         var engine = sys.CurrentSyscallEngine;
 
+        ElfLoadInfo LoadMain(ElfFile elf, LinuxFile file, Stream? stream) =>
+            LoadSegments(elf, elf.FileType == ElfFileType.Executable ? 0u : layout.PieBase,
+                mm, engine, guestPathRaw, file, stream);
+
         ElfLoadInfo mainInfo;
+        if (preparedMain != null)
         {
-            var mainFile = new LinuxFile(dentry, FileFlags.O_RDONLY, mount);
-            using var mainStream = new VfsStream(mainFile);
-            var elf = Elf32Reader.Read(mainStream);
-            if (elf.FileType is not (ElfFileType.Executable or ElfFileType.Dynamic))
-                throw new InvalidDataException("ELF is not an executable image.");
-
-            var loadBase = elf.FileType == ElfFileType.Executable ? 0u : layout.PieBase;
-            if (Logger.IsEnabled(LogLevel.Debug))
-                Logger.LogDebug("ElfLoader: {Filename} FileType={Type}, selected loadBase=0x{LoadBase:x}",
-                    FsEncoding.DecodeUtf8Lossy(guestPathRaw), elf.FileType, loadBase);
-
-            mainInfo = LoadSegments(elf, loadBase, mm, engine, dentry, guestPathRaw, mainStream, mainFile, mount);
+            mainInfo = LoadMain(preparedMain.Elf, preparedMain.File, null);
+            mainInfo.InterpPathRaw = preparedMain.InterpPathRaw;
+        }
+        else
+        {
+            var file = new LinuxFile(dentry, FileFlags.O_RDONLY, mount);
+            using var stream = new VfsStream(file);
+            var elf = Elf32Reader.Read(stream);
+            ValidateExecutableType(elf);
+            mainInfo = LoadMain(elf, file, stream);
         }
 
         uint interpBase = 0;
         var interpEntry = mainInfo.EntryPoint;
 
-        if (mainInfo.InterpPathRaw != null)
+        if (mainInfo.InterpPathRaw is { } interpPath)
         {
-            var lookup = sys.PathWalker.PathWalkWithData(mainInfo.InterpPathRaw,
-                mainInfo.InterpPathRaw.Length, null, LookupFlags.FollowSymlink);
-            if (lookup.HasError)
-                throw new ExecFileException((Errno)(-lookup.ErrorCode), "ELF interpreter path lookup failed.");
-            var interpLoc = lookup.Path;
-            if (!interpLoc.IsValid)
-                throw new ExecFileException(Errno.ENOENT, "ELF interpreter not found.");
-
-            var interpDentry = interpLoc.Dentry!;
-            var interpMount = interpLoc.Mount!;
-            var accessRc = (process ?? sys.CurrentProcess)?.CheckExecutableAccess(interpDentry, interpMount) ?? 0;
-            if (accessRc < 0)
-                throw new ExecFileException((Errno)(-accessRc), "ELF interpreter execute access denied.");
-
-            var interpFile = new LinuxFile(interpDentry, FileFlags.O_RDONLY, interpMount);
-            using var interpStream = new VfsStream(interpFile);
-            ElfFile interpElf;
-            try
+            uint LoadInterpreter(ElfFile elf, LinuxFile file, Stream? stream)
             {
-                interpElf = Elf32Reader.Read(interpStream);
-                if (interpElf.FileType is not (ElfFileType.Executable or ElfFileType.Dynamic))
-                    throw new InvalidDataException("ELF interpreter is not an executable image.");
-            }
-            catch (Exception ex) when (ex is InvalidDataException or EndOfStreamException or NotSupportedException)
-            {
-                throw new ExecFileException(Errno.ELIBBAD, "Invalid ELF interpreter format.", ex);
+                if (elf.FileType == ElfFileType.Dynamic)
+                    interpBase = layout.InterpreterBaseHint;
+                return LoadSegments(elf, interpBase, mm, engine, interpPath, file, stream).EntryPoint;
             }
 
-            if (interpElf.FileType == ElfFileType.Dynamic)
-                interpBase = layout.InterpreterBaseHint;
+            if (preparedMain != null)
+            {
+                var interpreter = preparedInterpreter ?? throw new InvalidOperationException("ELF interpreter was not prepared.");
+                interpEntry = LoadInterpreter(interpreter.Elf, interpreter.File, null);
+            }
+            else
+            {
+                var loc = ResolveInterpreter(interpPath, sys, process);
+                var file = new LinuxFile(loc.Dentry!, FileFlags.O_RDONLY, loc.Mount!);
+                using var stream = new VfsStream(file);
+                ElfFile elf;
+                try
+                {
+                    elf = Elf32Reader.Read(stream);
+                    ValidateExecutableType(elf);
+                }
+                catch (Exception ex) when (IsInvalidElfFormat(ex))
+                {
+                    throw new ExecFileException(Errno.ELIBBAD, "Invalid ELF interpreter format.", ex);
+                }
 
-            if (Logger.IsEnabled(LogLevel.Debug))
-                Logger.LogDebug("ElfLoader: Loading interpreter at base=0x{InterpBase:x}", interpBase);
-            var interpInfo = LoadSegments(interpElf, interpBase, mm, engine, interpDentry, mainInfo.InterpPathRaw,
-                interpStream, interpFile, interpMount);
-            interpEntry = interpInfo.EntryPoint;
+                interpEntry = LoadInterpreter(elf, file, stream);
+            }
         }
 
         var randBytes = layout.AuxRandomBytes;
@@ -254,32 +304,31 @@ public class ElfLoader
         return res;
     }
 
-    private static ElfLoadInfo LoadSegments(ElfFile elf, uint loadBase, VMAManager mm, Engine engine,
-        Dentry? dentry, byte[] fileDescRaw, Stream elfStream, LinuxFile? sharedFile, Mount? mount = null)
+    private static int InterpreterPathSize(ElfSegment segment)
     {
-        static byte[]? ReadNulTerminatedBytes(Stream stream, long position, int size)
-        {
-            if (size < 2 || size > LinuxConstants.PathMax)
-                throw new InvalidDataException("Invalid PT_INTERP path length.");
-            stream.Seek(position, SeekOrigin.Begin);
-            byte[]? rented = null;
-            var buffer = size <= 256
-                ? stackalloc byte[size]
-                : (rented = ArrayPool<byte>.Shared.Rent(size)).AsSpan(0, size);
-            try
-            {
-                stream.ReadExactly(buffer);
-                if (buffer[^1] != 0)
-                    throw new InvalidDataException("PT_INTERP path is not NUL terminated.");
-                return buffer[..buffer.IndexOf((byte)0)].ToArray();
-            }
-            finally
-            {
-                if (rented != null)
-                    ArrayPool<byte>.Shared.Return(rented);
-            }
-        }
+        if (segment.Size < 2 || segment.Size > LinuxConstants.PathMax)
+            throw new InvalidDataException("Invalid PT_INTERP path length.");
+        return (int)segment.Size;
+    }
 
+    private static byte[] ParseInterpreterPath(ReadOnlySpan<byte> buffer)
+    {
+        if (buffer[^1] != 0)
+            throw new InvalidDataException("PT_INTERP path is not NUL terminated.");
+        return buffer[..buffer.IndexOf((byte)0)].ToArray();
+    }
+
+    private static byte[] ReadInterpreterPath(Stream stream, ElfSegment segment)
+    {
+        Span<byte> buffer = stackalloc byte[InterpreterPathSize(segment)];
+        stream.Position = segment.Position;
+        stream.ReadExactly(buffer);
+        return ParseInterpreterPath(buffer);
+    }
+
+    private static ElfLoadInfo LoadSegments(ElfFile elf, uint loadBase, VMAManager mm, Engine engine,
+        byte[] fileDescRaw, LinuxFile sharedFile, Stream? elfStream)
+    {
         static void MmapSharedFile(VMAManager mm, Engine engine, uint pageStart, uint fileMapLen, Protection perms,
             LinuxFile sharedFile, long pageOffset)
         {
@@ -336,10 +385,6 @@ public class ElfLoader
                 var pageOffset = offsetRaw & LinuxConstants.PageMask;
                 if (sizeRaw > 0)
                 {
-                    if (dentry == null)
-                        throw new FileNotFoundException(
-                            $"Could not find file in VFS or Host for mapping: {FsEncoding.DecodeUtf8Lossy(fileDescRaw)}");
-
                     var bssStart = vaddrRaw + segment.Size;
                     var bssEnd = vaddrRaw + sizeRaw;
 
@@ -348,9 +393,6 @@ public class ElfLoader
 
                     if (fileMapLen > 0)
                     {
-                        if (sharedFile == null)
-                            throw new InvalidOperationException("ELF segment mapping requires a shared file.");
-
                         MmapSharedFile(mm, engine, pageStart, fileMapLen, perms, sharedFile, pageOffset);
 
                         if (bssStart < fileMapEnd)
@@ -381,8 +423,8 @@ public class ElfLoader
             if (segment.Type == ElfSegmentType.ProgramHeader)
                 info.PhdrAddr = segment.VirtualAddress + loadBase;
 
-            if (segment.Type == ElfSegmentType.Interpreter)
-                info.InterpPathRaw = ReadNulTerminatedBytes(elfStream, segment.Position, checked((int)segment.Size));
+            if (segment.Type == ElfSegmentType.Interpreter && elfStream != null)
+                info.InterpPathRaw = ReadInterpreterPath(elfStream, segment);
 
             info.PhNum++;
         }

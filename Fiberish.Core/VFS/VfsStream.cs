@@ -1,3 +1,4 @@
+using Fiberish.Core;
 using Fiberish.Native;
 
 namespace Fiberish.VFS;
@@ -11,9 +12,11 @@ public class VfsStream : Stream
     private readonly LinuxFile _file;
     private readonly FileMutationContext _mutationContext;
     private long _position;
+    private bool _disposed;
+    private readonly TaskAsyncOperationHandle? _fileLifetime;
 
     public VfsStream(LinuxFile file)
-        : this(file, default)
+        : this(file, default(FileMutationContext))
     {
     }
 
@@ -22,6 +25,20 @@ public class VfsStream : Stream
         _file = file;
         _mutationContext = mutationContext;
         _position = file.Position;
+    }
+
+    internal VfsStream(LinuxFile file, FiberTask task)
+        : this(file, default(FileMutationContext))
+    {
+        // Retirement can cancel the I/O without resuming the awaiter.
+        if (!task.TryEnterAsyncOperation(null, out _fileLifetime) || _fileLifetime == null)
+        {
+            file.Close();
+            throw new OperationCanceledException();
+        }
+
+        if (!_fileLifetime.TryAddRegistration(TaskAsyncRegistration.From(file)))
+            throw new OperationCanceledException();
     }
 
     public override bool CanRead => (_file.Flags & FileFlags.O_WRONLY) == 0;
@@ -56,6 +73,26 @@ public class VfsStream : Stream
         if (n < 0)
             throw new IOException(BuildIoFailureMessage("read", n, buffer.Length));
         if (n > 0) _position += n;
+        return n;
+    }
+
+    internal async ValueTask ReadExactlyForTaskAsync(FiberTask task, Memory<byte> buffer)
+    {
+        while (!buffer.IsEmpty)
+        {
+            var count = await ReadForTaskAsync(task, buffer);
+            if (count == 0) throw new EndOfStreamException();
+            buffer = buffer[count..];
+        }
+    }
+
+    internal async ValueTask<int> ReadForTaskAsync(FiberTask task, Memory<byte> buffer)
+    {
+        if (_file.OpenedInode is not { } inode) return 0;
+        var n = await inode.ReadToHostAsync(task, _file, buffer, _position);
+        if (n < 0)
+            throw new ExecFileException((Errno)(-n), BuildIoFailureMessage("read", n, buffer.Length));
+        _position += n;
         return n;
     }
 
@@ -110,7 +147,14 @@ public class VfsStream : Stream
 
     protected override void Dispose(bool disposing)
     {
-        if (disposing) _file.Close();
+        if (disposing && !_disposed)
+        {
+            _disposed = true;
+            if (_fileLifetime != null)
+                _fileLifetime.TryCompleteWithoutScheduling();
+            else
+                _file.Close();
+        }
 
         base.Dispose(disposing);
     }

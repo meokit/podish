@@ -2,6 +2,7 @@ using System.Buffers.Binary;
 using Fiberish.Auth.Cred;
 using Fiberish.Auth.Permission;
 using Fiberish.Core;
+using Fiberish.Loader;
 using Fiberish.Native;
 using Fiberish.VFS;
 using Microsoft.Extensions.Logging;
@@ -624,68 +625,74 @@ public partial class SyscallManager
 
         var loc = lookup.Path;
         var guestPathRaw = filename.Span.ToArray();
-        var displayPath = FsEncoding.DecodeUtf8Lossy(guestPathRaw);
-
         if (!loc.IsValid)
             return -(int)Errno.ENOENT;
 
-        var dentry = loc.Dentry!;
-        var mount = loc.Mount!;
-        if (dentry.Inode == null)
-            return -(int)Errno.ENOENT;
-        var execAccessRc = task.Process.CheckExecutableAccess(dentry, mount);
-        if (execAccessRc < 0)
-            return execAccessRc;
-
-        Span<byte> headerBuf = stackalloc byte[256];
-        var headerLen = 0;
-        if (dentry.Inode != null)
+        var execFnPathRaw = guestPathRaw;
+        var imageInstalled = false;
+        try
         {
-            using var tmpFile = new LinuxFile(dentry, FileFlags.O_RDONLY, mount);
-            headerLen = dentry.Inode.ReadToHost(task, tmpFile, headerBuf, 0);
-            if (headerLen < 0) headerLen = 0;
-        }
-
-        if (ShebangParser.TryParse(headerBuf[..headerLen], out var interpPathRaw, out var interpArgRaw))
-        {
-            if (Logger.IsEnabled(LogLevel.Information))
-                Logger.LogInformation(
-                    "[SysExecve] Shebang detected: interpreter='{Interp}', arg='{Arg}', script='{Script}'",
-                    FsEncoding.DecodeUtf8Lossy(interpPathRaw),
-                    interpArgRaw != null ? FsEncoding.DecodeUtf8Lossy(interpArgRaw) : "(none)",
-                    displayPath);
-
-            var (interpLoc, _, _) = ResolvePathBytes(interpPathRaw);
-            if (!interpLoc.IsValid)
+            // The syscall's initial shebang check can be followed by four
+            // interpreter probes, including the final ELF probe.
+            for (var depth = 0; depth <= 4; depth++)
             {
-                Logger.LogWarning("[SysExecve] Shebang interpreter '{Interp}' not found",
-                    FsEncoding.DecodeUtf8Lossy(interpPathRaw));
-                return -(int)Errno.ENOENT;
-            }
+                var dentry = loc.Dentry!;
+                var mount = loc.Mount!;
+                var access = task.Process.CheckExecutableAccess(dentry, mount);
+                if (access < 0) return access;
 
-            var interpDentry = interpLoc.Dentry!;
-            var interpMount = interpLoc.Mount!;
-            if (interpDentry.Inode == null)
-                return -(int)Errno.ENOENT;
-            var interpAccessRc = task.Process.CheckExecutableAccess(interpDentry, interpMount);
-            if (interpAccessRc < 0)
-                return interpAccessRc;
+                var (file, openedStream) = ElfLoader.OpenForExec(dentry, mount, task);
+                using var stream = openedStream;
+                var header = new byte[256];
+                var length = await stream.ReadForTaskAsync(task, header);
+                if (task.IsRetiring || task.Exited) return -(int)Errno.EINTR;
 
-            var newArgs = Process.RewriteShebangArguments(interpPathRaw, interpArgRaw, guestPathRaw, args);
+                if (ShebangParser.TryParse(header.AsSpan(0, length), out var interpreter, out var option))
+                {
+                    loc = WithExecEngine(engine, () => ResolvePathBytes(interpreter).loc);
+                    if (!loc.IsValid) return -(int)Errno.ENOENT;
+                    args = Process.RewriteShebangArguments(interpreter, option, guestPathRaw, args);
+                    guestPathRaw = interpreter;
+                    continue;
+                }
 
-            if (Logger.IsEnabled(LogLevel.Information))
-                Logger.LogInformation("[SysExecve] Re-executing as: {Args}",
-                    string.Join(" ", newArgs.Select(a => FsEncoding.DecodeUtf8Lossy(a))));
-            if (Logger.IsEnabled(LogLevel.Debug))
-                Logger.LogDebug("[SysExecve] Shebang re-exec argc={ArgCount} envc={EnvCount}",
-                    newArgs.Length, envs.Length);
+                var main = await ElfLoader.ReadImageAsync(file, stream, task);
+                if (task.IsRetiring || task.Exited) return -(int)Errno.EINTR;
+                var interpLoc = main.InterpPathRaw is { } path
+                    ? WithExecEngine(engine, () => ElfLoader.ResolveInterpreter(path, this, task.Process))
+                    : PathLocation.None;
+                var (interpFile, openedInterpStream) = interpLoc.IsValid
+                    ? ElfLoader.OpenForExec(interpLoc.Dentry!, interpLoc.Mount!, task)
+                    : default;
+                using var interpStream = openedInterpStream;
+                ElfLoader.PreparedImage? interpImage = null;
+                if (interpStream != null)
+                {
+                    try
+                    {
+                        interpImage = await ElfLoader.ReadImageAsync(interpFile!, interpStream, task);
+                    }
+                    catch (Exception ex) when (ElfLoader.IsInvalidElfFormat(ex))
+                    {
+                        throw new ExecFileException(Errno.ELIBBAD, "Invalid ELF interpreter format.", ex);
+                    }
+                }
 
-            var installed = false;
-            try
-            {
-                var identity = task.Process.Exec(interpLoc.Dentry!, interpPathRaw, newArgs, envs, interpLoc.Mount!,
-                    guestPathRaw);
-                installed = true;
+                if (task.IsRetiring || task.Exited) return -(int)Errno.EINTR;
+
+                // Recheck write access after waiting. No guest can run between
+                // this check and acquiring the executable mapping holds.
+                access = task.Process.CheckExecutableAccess(file.OpenedInode, mount);
+                if (access < 0) return access;
+                if (interpFile != null)
+                {
+                    access = task.Process.CheckExecutableAccess(interpFile.OpenedInode, interpLoc.Mount!);
+                    if (access < 0) return access;
+                }
+
+                var identity = task.Process.Exec(dentry, guestPathRaw, args, envs, mount, execFnPathRaw, engine,
+                    main, interpImage);
+                imageInstalled = true;
                 ApplyExecSuccessState(task);
                 task.Process.HasExeced = true;
                 CredentialService.ApplyExecIdentity(task.Process, identity);
@@ -693,48 +700,8 @@ public partial class SyscallManager
                 task.SignalVforkDone();
                 return 0;
             }
-            catch (Exception ex)
-            {
-                if (installed || ex is FatalExecException)
-                {
-                    Logger.LogError(ex, "Fatal shebang exec failure");
-                    task.TerminateFailedExec();
-                    return 0;
-                }
-                var rc = MapExecveExceptionToErrno(ex);
-                Logger.LogWarning(ex, "[SysExecve] Shebang exec failed: rc={Rc} message={Message}", rc, ex.Message);
-                return rc;
-            }
-        }
 
-        if (headerLen < 4 || headerBuf[0] != 0x7F || headerBuf[1] != (byte)'E' ||
-            headerBuf[2] != (byte)'L' || headerBuf[3] != (byte)'F')
-        {
-            Logger.LogWarning("[SysExecve] '{Path}' is not an ELF binary (magic: {M0:X2} {M1:X2} {M2:X2} {M3:X2})",
-                displayPath,
-                headerLen > 0 ? headerBuf[0] : 0, headerLen > 1 ? headerBuf[1] : 0,
-                headerLen > 2 ? headerBuf[2] : 0, headerLen > 3 ? headerBuf[3] : 0);
             return -(int)Errno.ENOEXEC;
-        }
-
-        if (Logger.IsEnabled(LogLevel.Information))
-            Logger.LogInformation("[SysExecve] Loading {GuestPath} with {ArgCount} args, {EnvCount} envs via Process.Exec",
-                displayPath, args.Length, envs.Length);
-        if (Logger.IsEnabled(LogLevel.Debug))
-            foreach (var arg in args)
-                Logger.LogDebug("  arg: {Arg}", FsEncoding.DecodeUtf8Lossy(arg));
-
-        var imageInstalled = false;
-        try
-        {
-            var identity = task.Process.Exec(dentry, guestPathRaw, args, envs, mount, guestPathRaw, knownElf: true);
-            imageInstalled = true;
-            ApplyExecSuccessState(task);
-            task.Process.HasExeced = true;
-            CredentialService.ApplyExecIdentity(task.Process, identity);
-            ProcFsManager.OnProcessExec(this, task.Process);
-            task.SignalVforkDone();
-            return 0;
         }
         catch (Exception ex)
         {
@@ -744,9 +711,24 @@ public partial class SyscallManager
                 task.TerminateFailedExec();
                 return 0;
             }
+
             var rc = MapExecveExceptionToErrno(ex);
-            Logger.LogWarning(ex, "Execve failed: rc={Rc} message={Message}", rc, ex.Message);
+            Logger.LogDebug(ex, "Execve failed: rc={Rc} path={Path}", rc, FsEncoding.DecodeUtf8Lossy(guestPathRaw));
             return rc;
+        }
+    }
+
+    private T WithExecEngine<T>(Engine engine, Func<T> action)
+    {
+        var previous = CurrentSyscallEngine;
+        CurrentSyscallEngine = engine;
+        try
+        {
+            return action();
+        }
+        finally
+        {
+            CurrentSyscallEngine = previous;
         }
     }
 
