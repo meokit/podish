@@ -23,6 +23,12 @@ The virtio-gpu interface follows [iSH-AOK’s Apple Venus implementation](https:
 
 The i386 Venus driver issues explicit memory barriers when consuming the command ring head, publishing the tail, and checking idle status after submission. These barriers order shared-memory accesses between the emulated x86 producer and the native ARM consumer without waiting for GPU work.
 
+### Guest OpenGL 4.3 core compatibility mode
+
+Guest Zink over Venus allows applications to open an OpenGL 4.3 core context. Mesa uses the device's reported Vulkan features to set OpenGL limits and extensions. Mesa returns a GL error when an application invokes an unavailable operation, including geometry shaders, transform feedback, non-solid polygon fill, nonstandard sampler border colors, and unsupported RGB32 buffer texture formats. Compatibility-profile applications retain the driver's negotiated version.
+
+The guest desktop session enables this mode by default. Set `PODISH_GUEST_GL43=0` for an application to use the driver's ordinary version negotiation. Run `podish-zink-probe --gl43` in the bundled guest to verify the runtime errors, GLSL 4.30 compute with an SSBO, and Wayland presentation.
+
 ## Build
 
 Use one of these commands from the repository root. See the [Apple app build instructions](../PodishApp/README.md) for tooling and individual build steps.

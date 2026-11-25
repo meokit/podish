@@ -16,6 +16,7 @@ patch -d "$source" -p1 < "$here/mesa-zink-wayland.patch"
 patch -d "$source" -p1 < "$here/mesa-venus-explicit-sync.patch"
 patch -d "$source" -p1 < "$here/mesa-virgl-wayland.patch"
 patch --batch --forward --fuzz=0 -d "$source" -p1 < "$here/mesa-venus-ring-order.patch"
+patch --batch --forward --fuzz=0 -d "$source" -p1 < "$here/mesa-zink-gl43-core.patch"
 prefix=/usr/local/lib/podish-zink
 meson setup "$work/build" "$source" \
     --buildtype=release --prefix="$prefix" --libdir=lib --strip \

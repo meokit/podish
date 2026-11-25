@@ -7,6 +7,7 @@ export VK_DRIVER_FILES="$podish_zink/share/vulkan/icd.d/virtio_icd.json"
 case "${PODISH_GUEST_GL_DRIVER:-zink}" in
     zink)
         export MESA_LOADER_DRIVER_OVERRIDE=zink
+        export PODISH_GUEST_GL43="${PODISH_GUEST_GL43:-1}"
         unset PODISH_VIRGL_EXPLICIT_SYNC
         ;;
     virgl)

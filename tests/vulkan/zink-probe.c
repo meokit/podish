@@ -1,6 +1,6 @@
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
-#include <GLES2/gl2.h>
+#include <GL/glcorearb.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -129,11 +129,114 @@ static void render_frame(const struct gl_api* gl, int width, int height, unsigne
     }
 }
 
+static void check_gl43(const struct gl_api* gl) {
+#define GL_PROC(type, name)                                                                                            \
+    type name = (type)eglGetProcAddress(#name);                                                                        \
+    require(name != NULL, "missing " #name)
+    GL_PROC(PFNGLGETINTEGERVPROC, glGetIntegerv);
+    GL_PROC(PFNGLCREATESHADERPROC, glCreateShader);
+    GL_PROC(PFNGLSHADERSOURCEPROC, glShaderSource);
+    GL_PROC(PFNGLCOMPILESHADERPROC, glCompileShader);
+    GL_PROC(PFNGLGETSHADERIVPROC, glGetShaderiv);
+    GL_PROC(PFNGLGENTRANSFORMFEEDBACKSPROC, glGenTransformFeedbacks);
+    GL_PROC(PFNGLBEGINTRANSFORMFEEDBACKPROC, glBeginTransformFeedback);
+    GL_PROC(PFNGLPOLYGONMODEPROC, glPolygonMode);
+    GL_PROC(PFNGLGENSAMPLERSPROC, glGenSamplers);
+    GL_PROC(PFNGLSAMPLERPARAMETERFVPROC, glSamplerParameterfv);
+    GL_PROC(PFNGLDELETESAMPLERSPROC, glDeleteSamplers);
+    GL_PROC(PFNGLGENTEXTURESPROC, glGenTextures);
+    GL_PROC(PFNGLBINDTEXTUREPROC, glBindTexture);
+    GL_PROC(PFNGLTEXBUFFERPROC, glTexBuffer);
+    GL_PROC(PFNGLDELETETEXTURESPROC, glDeleteTextures);
+    GL_PROC(PFNGLCREATEPROGRAMPROC, glCreateProgram);
+    GL_PROC(PFNGLATTACHSHADERPROC, glAttachShader);
+    GL_PROC(PFNGLLINKPROGRAMPROC, glLinkProgram);
+    GL_PROC(PFNGLGETPROGRAMIVPROC, glGetProgramiv);
+    GL_PROC(PFNGLUSEPROGRAMPROC, glUseProgram);
+    GL_PROC(PFNGLGENBUFFERSPROC, glGenBuffers);
+    GL_PROC(PFNGLBINDBUFFERPROC, glBindBuffer);
+    GL_PROC(PFNGLBUFFERDATAPROC, glBufferData);
+    GL_PROC(PFNGLBINDBUFFERBASEPROC, glBindBufferBase);
+    GL_PROC(PFNGLDISPATCHCOMPUTEPROC, glDispatchCompute);
+    GL_PROC(PFNGLMEMORYBARRIERPROC, glMemoryBarrier);
+    GL_PROC(PFNGLGETBUFFERSUBDATAPROC, glGetBufferSubData);
+    GL_PROC(PFNGLDELETEBUFFERSPROC, glDeleteBuffers);
+    GL_PROC(PFNGLDELETEPROGRAMPROC, glDeleteProgram);
+    GL_PROC(PFNGLDELETESHADERPROC, glDeleteShader);
+#undef GL_PROC
+
+    GLint profile = 0;
+    glGetIntegerv(GL_CONTEXT_PROFILE_MASK, &profile);
+    require(profile == GL_CONTEXT_CORE_PROFILE_BIT, "expected an OpenGL core profile");
+
+    require(glCreateShader(GL_GEOMETRY_SHADER) == 0 && gl->get_error() == GL_INVALID_ENUM,
+            "unsupported geometry shaders must fail at creation");
+    GLuint feedback = 0;
+    glGenTransformFeedbacks(1, &feedback);
+    require(!feedback && gl->get_error() == GL_INVALID_OPERATION, "unsupported transform feedback object was created");
+    glBeginTransformFeedback(GL_TRIANGLES);
+    require(gl->get_error() == GL_INVALID_OPERATION, "unsupported transform feedback must fail at runtime");
+    glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+    require(gl->get_error() == GL_INVALID_OPERATION, "unsupported non-solid fill must fail at runtime");
+
+    GLuint sampler;
+    const GLfloat custom[] = {0.25f, 0.5f, 0.75f, 1.0f};
+    const GLfloat white[] = {1.0f, 1.0f, 1.0f, 1.0f};
+    glGenSamplers(1, &sampler);
+    glSamplerParameterfv(sampler, GL_TEXTURE_BORDER_COLOR, custom);
+    require(gl->get_error() == GL_INVALID_OPERATION, "unsupported custom border color must fail at runtime");
+    glSamplerParameterfv(sampler, GL_TEXTURE_BORDER_COLOR, white);
+    require(gl->get_error() == GL_NO_ERROR, "standard border color must remain usable");
+    glDeleteSamplers(1, &sampler);
+
+    GLuint shader = glCreateShader(GL_COMPUTE_SHADER);
+    const char* source = "#version 430\n"
+                         "layout(local_size_x = 1) in;\n"
+                         "layout(std430, binding = 0) buffer Output { uint value; };\n"
+                         "void main() { value = 0x5a43u; }\n";
+    glShaderSource(shader, 1, &source, NULL);
+    glCompileShader(shader);
+    GLint compiled = 0;
+    glGetShaderiv(shader, GL_COMPILE_STATUS, &compiled);
+    require(compiled == GL_TRUE, "GLSL 4.30 compute shader did not compile");
+    GLuint program = glCreateProgram();
+    glAttachShader(program, shader);
+    glLinkProgram(program);
+    GLint linked = 0;
+    glGetProgramiv(program, GL_LINK_STATUS, &linked);
+    require(linked == GL_TRUE, "GLSL 4.30 compute program did not link");
+
+    GLuint buffer, texture, value = 0;
+    glGenBuffers(1, &buffer);
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, buffer);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, sizeof(value), &value, GL_DYNAMIC_COPY);
+    glGenTextures(1, &texture);
+    glBindTexture(GL_TEXTURE_BUFFER, texture);
+    glTexBuffer(GL_TEXTURE_BUFFER, GL_RGB32F, buffer);
+    require(gl->get_error() == GL_INVALID_ENUM, "unsupported RGB32 texel format must fail at runtime");
+    glTexBuffer(GL_TEXTURE_BUFFER, GL_R32UI, buffer);
+    require(gl->get_error() == GL_NO_ERROR, "supported texel format must remain usable");
+    glDeleteTextures(1, &texture);
+
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 0, buffer);
+    glUseProgram(program);
+    glDispatchCompute(1, 1, 1);
+    glMemoryBarrier(GL_BUFFER_UPDATE_BARRIER_BIT);
+    glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(value), &value);
+    require(gl->get_error() == GL_NO_ERROR && value == 0x5a43u, "GLSL 4.30 compute did not write the SSBO");
+    glUseProgram(0);
+    glDeleteBuffers(1, &buffer);
+    glDeleteProgram(program);
+    glDeleteShader(shader);
+    puts("GL 4.3 runtime guards and GLSL 4.30 compute/SSBO passed");
+}
+
 int main(int argc, char** argv) {
     const bool gles = argc == 2 && strcmp(argv[1], "--gles") == 0;
     const bool virgl = argc == 2 && strcmp(argv[1], "--virgl") == 0;
-    if (argc != 1 && !gles && !virgl) {
-        fprintf(stderr, "Usage: %s [--gles|--virgl]\n", argv[0]);
+    const bool gl43 = argc == 2 && strcmp(argv[1], "--gl43") == 0;
+    if (argc != 1 && !gles && !virgl && !gl43) {
+        fprintf(stderr, "Usage: %s [--gles|--virgl|--gl43]\n", argv[0]);
         return 2;
     }
 
@@ -182,11 +285,15 @@ int main(int argc, char** argv) {
                               8,
                               EGL_NONE};
     const EGLint es_context[] = {EGL_CONTEXT_CLIENT_VERSION, 2, EGL_NONE};
+    const EGLint core_context[] = {
+        EGL_CONTEXT_MAJOR_VERSION,           4,       EGL_CONTEXT_MINOR_VERSION, 3, EGL_CONTEXT_OPENGL_PROFILE_MASK,
+        EGL_CONTEXT_OPENGL_CORE_PROFILE_BIT, EGL_NONE};
     EGLint count;
     EGLConfig config;
     require(eglChooseConfig(egl, attribs, &config, 1, &count) && count == 1,
             "no window config for the requested GL API");
-    EGLContext context = eglCreateContext(egl, config, EGL_NO_CONTEXT, gles ? es_context : NULL);
+    const EGLint* context_attribs = gles ? es_context : (gl43 ? core_context : NULL);
+    EGLContext context = eglCreateContext(egl, config, EGL_NO_CONTEXT, context_attribs);
     require(context != EGL_NO_CONTEXT, "could not create a GL context");
     EGLSurface egl_surface = eglCreatePlatformWindowSurface(egl, config, native_window, NULL);
     require(egl_surface != EGL_NO_SURFACE && eglMakeCurrent(egl, egl_surface, egl_surface, context),
@@ -223,6 +330,10 @@ int main(int argc, char** argv) {
     require(version && sscanf(version, "%d.%d", &major, &minor) == 2 &&
                 (major > 2 || (major == 2 && minor >= (gles ? 0 : 1))),
             "GL context version is too old");
+    if (gl43) {
+        require(major > 4 || (major == 4 && minor >= 3), "expected OpenGL 4.3 or newer");
+        check_gl43(&gl);
+    }
 
     static const struct wl_callback_listener frame_listener = {on_frame};
     const unsigned frame_count = 12;
