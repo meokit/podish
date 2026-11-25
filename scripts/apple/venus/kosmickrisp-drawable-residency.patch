@@ -1,0 +1,97 @@
+diff --git a/src/kosmickrisp/bridge/mtl_command_buffer.h b/src/kosmickrisp/bridge/mtl_command_buffer.h
+--- a/src/kosmickrisp/bridge/mtl_command_buffer.h
++++ b/src/kosmickrisp/bridge/mtl_command_buffer.h
+@@ -17,6 +17,9 @@
+                               mtl_command_allocator *allocator);
+ void mtl_end_command_buffer(mtl_command_buffer *command_buffer);
+ 
++void mtl_use_drawable_residency_set(mtl_command_buffer *command_buffer,
++                                    void *drawable);
++
+ void mtl_command_resolve_counter_heap(mtl_command_buffer *command_buffer,
+                                       mtl_counter_heap *heap,
+                                       uint32_t first_index, uint32_t count,
+diff --git a/src/kosmickrisp/bridge/mtl_command_buffer.m b/src/kosmickrisp/bridge/mtl_command_buffer.m
+--- a/src/kosmickrisp/bridge/mtl_command_buffer.m
++++ b/src/kosmickrisp/bridge/mtl_command_buffer.m
+@@ -10,6 +10,7 @@
+ #include <Metal/MTL4CommandAllocator.h>
+ #include <Metal/MTL4CommandBuffer.h>
+ #include <Metal/MTL4Counters.h>
++#include <QuartzCore/CAMetalLayer.h>
+ 
+ void
+ mtl_command_allocator_reset(mtl_command_allocator *allocator)
+@@ -41,6 +42,19 @@
+ }
+ 
+ void
++mtl_use_drawable_residency_set(mtl_command_buffer *command_buffer,
++                               void *drawable)
++{
++   @autoreleasepool {
++      id<MTL4CommandBuffer> cmd_buf = (id<MTL4CommandBuffer>)command_buffer;
++      id<CAMetalDrawable> metal_drawable = (id<CAMetalDrawable>)drawable;
++      id<MTLResidencySet> residency = metal_drawable.layer.residencySet;
++      if (residency)
++         [cmd_buf useResidencySet:residency];
++   }
++}
++
++void
+ mtl_command_resolve_counter_heap(mtl_command_buffer *command_buffer,
+                                  mtl_counter_heap *heap, uint32_t first_index,
+                                  uint32_t count, uint64_t dst_addr)
+diff --git a/src/kosmickrisp/bridge/stubs/mtl_command_buffer.c b/src/kosmickrisp/bridge/stubs/mtl_command_buffer.c
+--- a/src/kosmickrisp/bridge/stubs/mtl_command_buffer.c
++++ b/src/kosmickrisp/bridge/stubs/mtl_command_buffer.c
+@@ -23,6 +23,12 @@
+ }
+ 
+ void
++mtl_use_drawable_residency_set(mtl_command_buffer *command_buffer,
++                               void *drawable)
++{
++}
++
++void
+ mtl_command_resolve_counter_heap(mtl_command_buffer *command_buffer,
+                                  mtl_counter_heap *heap, uint32_t first_index,
+                                  uint32_t count, uint64_t dst_addr)
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_buffer.c b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
+--- a/src/kosmickrisp/vulkan/kk_cmd_buffer.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
+@@ -356,6 +356,11 @@
+    }
+ 
+    util_dynarray_clear(&es->ts_resolves);
++
++   /* The WindowServer owns the drawable allocations. Metal 4 needs
++    * the layer's residency set for the command buffers writing them. */
++   if (cmd->drawable)
++      mtl_use_drawable_residency_set(es->cmd_buf, cmd->drawable);
+ 
+    mtl_end_command_buffer(es->cmd_buf);
+ 
+diff --git a/src/vulkan/wsi/wsi_common_metal.c b/src/vulkan/wsi/wsi_common_metal.c
+--- a/src/vulkan/wsi/wsi_common_metal.c
++++ b/src/vulkan/wsi/wsi_common_metal.c
+@@ -379,6 +379,9 @@
+          .sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO,
+       };
+       wsi->BeginCommandBuffer(image->blit.cmd_buffers[i], &begin_info);
++
++      /* The driver needs the drawable while encoding the blit. */
++      wsi->metal.encode_drawable_present(image->blit.cmd_buffers[i], metal_image->drawable);
+ 
+       VkImageMemoryBarrier img_mem_barriers[] = {
+          {
+@@ -469,8 +472,6 @@
+                               img_mem_barrier_count, img_mem_barriers);
+ 
+       result = wsi->EndCommandBuffer(image->blit.cmd_buffers[i]);
+-
+-      wsi->metal.encode_drawable_present(image->blit.cmd_buffers[i], metal_image->drawable);
+    }
+ 
+    /* Release the drawable since command buffers should have retained the drawable. */

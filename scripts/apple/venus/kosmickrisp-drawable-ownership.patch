@@ -1,0 +1,87 @@
+diff --git a/src/kosmickrisp/bridge/mtl_command_queue.h b/src/kosmickrisp/bridge/mtl_command_queue.h
+--- a/src/kosmickrisp/bridge/mtl_command_queue.h
++++ b/src/kosmickrisp/bridge/mtl_command_queue.h
+@@ -36,6 +36,9 @@
+                               mtl_command_buffer **command_buffers,
+                               uint32_t count, mtl_commit_options *options);
+ 
++void mtl_command_queue_wait_for_drawable(mtl_command_queue *queue,
++                                         void *drawable);
++
+ void mtl_command_queue_signal_drawable(mtl_command_queue *queue,
+                                        void *drawable);
+ 
+diff --git a/src/kosmickrisp/bridge/mtl_command_queue.m b/src/kosmickrisp/bridge/mtl_command_queue.m
+--- a/src/kosmickrisp/bridge/mtl_command_queue.m
++++ b/src/kosmickrisp/bridge/mtl_command_queue.m
+@@ -110,6 +110,15 @@
+ }
+ 
+ void
++mtl_command_queue_wait_for_drawable(mtl_command_queue *queue, void *drawable)
++{
++   @autoreleasepool {
++      id<MTL4CommandQueue> q = (id<MTL4CommandQueue>)queue;
++      [q waitForDrawable:(id<MTLDrawable>)drawable];
++   }
++}
++
++void
+ mtl_command_queue_signal_drawable(mtl_command_queue *queue, void *drawable)
+ {
+    @autoreleasepool {
+diff --git a/src/kosmickrisp/bridge/stubs/mtl_command_queue.c b/src/kosmickrisp/bridge/stubs/mtl_command_queue.c
+--- a/src/kosmickrisp/bridge/stubs/mtl_command_queue.c
++++ b/src/kosmickrisp/bridge/stubs/mtl_command_queue.c
+@@ -57,6 +57,11 @@
+ }
+ 
+ void
++mtl_command_queue_wait_for_drawable(mtl_command_queue *queue, void *drawable)
++{
++}
++
++void
+ mtl_command_queue_signal_drawable(mtl_command_queue *queue, void *drawable)
+ {
+ }
+diff --git a/src/kosmickrisp/vulkan/kk_queue.c b/src/kosmickrisp/vulkan/kk_queue.c
+--- a/src/kosmickrisp/vulkan/kk_queue.c
++++ b/src/kosmickrisp/vulkan/kk_queue.c
+@@ -81,6 +81,12 @@
+       uint32_t count = util_dynarray_num_elements(&cmd_buffer->submit_cmd_bufs,
+                                                   mtl_command_buffer *);
+ 
++      /* nextDrawable acquires ownership on the CPU. The Metal 4 queue
++       * must also wait for the display to finish using the texture. */
++      if (cmd_buffer->drawable)
++         mtl_command_queue_wait_for_drawable(queue->mtl_handle,
++                                             cmd_buffer->drawable);
++
+       /* Metal complains with empty submissions. */
+       if (count > 0u) {
+          mtl_commit_options_add_feedback_handler(queue->commit_options,
+@@ -93,6 +99,7 @@
+          mtl_command_queue_signal_drawable(queue->mtl_handle,
+                                            cmd_buffer->drawable);
+          mtl_drawable_present(cmd_buffer->drawable);
++         mtl_release(cmd_buffer->drawable);
+          cmd_buffer->drawable = NULL;
+       }
+    }
+diff --git a/src/kosmickrisp/vulkan/kk_cmd_buffer.c b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
+--- a/src/kosmickrisp/vulkan/kk_cmd_buffer.c
++++ b/src/kosmickrisp/vulkan/kk_cmd_buffer.c
+@@ -42,6 +42,12 @@
+    kk_descriptor_state_fini(cmd, &cmd->state.cs.descriptors);
+ 
+    kk_cmd_pool_free_bo_list(pool, &cmd->uploader.bos);
++
++   /* A swapchain can discard the blit before it gets submitted. */
++   if (cmd->drawable) {
++      mtl_release(cmd->drawable);
++      cmd->drawable = NULL;
++   }
+ 
+    /* Release all command buffers used */
+    util_dynarray_foreach(&cmd->submit_cmd_bufs, mtl_command_buffer *, cmd_buf) {
