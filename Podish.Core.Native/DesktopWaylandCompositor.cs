@@ -1059,7 +1059,8 @@ internal sealed class DesktopWaylandDaemon : IVirtualDaemon
         IWaylandFramePresenter presenter, DesktopIngressBridge bridge,
         int width, int height, bool enableGpuBuffers, uint scale120,
         bool mobileMode = false, int reservedBottomInset = 0, int initialGlobalDpi = 0,
-        Action<WaylandServer.ToplevelSnapshot[]>? onToplevelsChanged = null)
+        Action<WaylandServer.ToplevelSnapshot[]>? onToplevelsChanged = null,
+        bool enableExplicitSync = false, bool enableVenusPrime = false, bool enableVirglPrime = false)
     {
         UnixPath = unixPath;
         _ownerPid = ownerPid;
@@ -1068,12 +1069,13 @@ internal sealed class DesktopWaylandDaemon : IVirtualDaemon
         _displayPolicy = new DesktopDisplayPolicy(mobileMode, initialGlobalDpi, _logger);
         _server = new WaylandServer(presenter, new WaylandServer.OutputInfo(
             width, height, Math.Max(1, (int)((scale120 + 119) / 120)),
-            "WL-1", "Podish Apple Display", "Podish", "Metal ANGLE")
+            "WL-1", "Podish Apple Display", "Podish", enableVenusPrime ? "Vulkan" : "Metal ANGLE")
         {
             Scale120 = scale120,
             ClientDpi = (int)Math.Round(scale120 * 96.0 / 120.0)
         },
-            _logger, appId => _icons?.Resolve(appId), enableGpuBuffers)
+            _logger, appId => _icons?.Resolve(appId), enableGpuBuffers, enableExplicitSync, enableVenusPrime,
+            enableVirglPrime)
         {
             MobileMode = mobileMode,
             ReservedBottomInset = Math.Max(0, reservedBottomInset),
@@ -1189,7 +1191,7 @@ internal sealed class DesktopWaylandDaemon : IVirtualDaemon
             using (connection)
             {
                 var wlConn = new WaylandConnection(connection);
-                client = _server.CreateClient(msg => wlConn.SendAsync(msg));
+                client = _server.CreateClient(msg => wlConn.SendAsync(msg), connection.Task);
                 client.PeerExecutableName = peerExeName;
                 client.OnClosed += () =>
                 {
@@ -1335,7 +1337,9 @@ internal sealed class DesktopCompositorHost : IDisposable
     private readonly ILogger _logger;
     private readonly string _angleDir;
     private readonly nint _metalLayer;
+#if !PODISH_APPLE_VULKAN
     private readonly bool _enableGles;
+#endif
     private readonly bool _mobileMode;
     private readonly DesktopHostCallbacks _callbacks;
     private readonly WaylandUiTheme _theme;
@@ -1348,7 +1352,7 @@ internal sealed class DesktopCompositorHost : IDisposable
     private readonly Dictionary<(WaylandSceneHitKind, WaylandColor, WaylandButtonBitmap?), IDisplayTexture> _buttonIcons = [];
     private readonly Dictionary<(string Text, int Width, int Height, int Align), IDisplayTexture> _uiTextCache = [];
 
-    private DesktopAngleRenderer? _renderer;
+    private IDesktopSceneRenderer? _renderer;
     private int _logicalWidth;
     private int _logicalHeight;
     private int _pixelWidth;
@@ -1357,7 +1361,9 @@ internal sealed class DesktopCompositorHost : IDisposable
     private int _clientDpi;
     private int _visible = 1;
     private ulong _sceneFrameSequence;
+#if !PODISH_APPLE_VULKAN
     private ulong _scanoutFrameSequence;
+#endif
     private WaylandSceneHit _hoveredDecoration;
     private WaylandSceneHit _pressedDecoration;
     private ulong _textInputSurfaceId;
@@ -1426,14 +1432,18 @@ internal sealed class DesktopCompositorHost : IDisposable
         _pixelHeight = Math.Clamp(pixelHeight, 1, FramebufferDevice.DimensionLimit);
         _scale120 = Math.Clamp(scale120 == 0 ? 120u : scale120, 60u, 480u);
         _clientDpi = Math.Clamp((int)Math.Round(_scale120 * 96.0 / 120.0), 72, 480);
+#if !PODISH_APPLE_VULKAN
         _enableGles = enableGles;
+#endif
         _mobileMode = touchMode;
         _callbacks = callbacks;
         _theme = CreateTheme(touchMode);
         _cursorX = _logicalWidth / 2;
         _cursorY = Math.Max(1, (_logicalHeight - ComputeNavBarHeight(_logicalWidth, _logicalHeight, _mobileMode)) / 2);
 
+#if !PODISH_APPLE_VULKAN
         Scanout = new VirtualDrmScanout(_pixelWidth, _pixelHeight);
+#endif
         IngressBridge = new DesktopIngressBridge();
         Presenter = new DesktopScenePresenter(
             _logicalWidth,
@@ -1444,10 +1454,14 @@ internal sealed class DesktopCompositorHost : IDisposable
             reservedBottomInset: ComputeNavBarHeight(_logicalWidth, _logicalHeight, _mobileMode));
     }
 
-    public VirtualDrmScanout Scanout { get; }
+    public VirtualDrmScanout? Scanout { get; }
     public DesktopIngressBridge IngressBridge { get; }
     public DesktopScenePresenter Presenter { get; }
-    public KmsEglOutput? GuestTextures => _renderer?.GuestTextures;
+#if PODISH_APPLE_VULKAN
+    public KmsEglOutput? GuestTextures => null;
+#else
+    public KmsEglOutput? GuestTextures => (_renderer as DesktopAngleRenderer)?.GuestTextures;
+#endif
     public int LogicalWidth => Volatile.Read(ref _logicalWidth);
     public int LogicalHeight => Volatile.Read(ref _logicalHeight);
     public uint Scale120 => Volatile.Read(ref _scale120);
@@ -1487,7 +1501,7 @@ internal sealed class DesktopCompositorHost : IDisposable
         using var ready = new ManualResetEventSlim(false);
         _renderThread = new Thread(() => RenderLoop(ready))
         {
-            Name = "PodishAngleCompositor",
+            Name = "PodishCompositor",
             IsBackground = true
         };
         _renderThread.Start();
@@ -2062,8 +2076,8 @@ internal sealed class DesktopCompositorHost : IDisposable
     {
         _stopRequested = true;
         Wake();
-        _renderThread?.Join(TimeSpan.FromSeconds(5));
-        _renderThread = null;
+        if (_renderThread?.Join(TimeSpan.FromSeconds(5)) == true)
+            _renderThread = null;
     }
 
     public void Dispose()
@@ -2074,25 +2088,47 @@ internal sealed class DesktopCompositorHost : IDisposable
             _disposed = true;
             _stopRequested = true;
         }
-        Scanout.FrameReady -= Wake;
+        if (Scanout is { } scanout)
+            scanout.FrameReady -= Wake;
         _wake.Set();
-        _renderThread?.Join(TimeSpan.FromSeconds(5));
+        var thread = _renderThread;
         _renderThread = null;
+        bool joined = thread == null || thread.Join(TimeSpan.FromSeconds(5));
 
         while (_commands.TryDequeue(out var cmd))
             cmd.ReleaseBuffer();
 
         Presenter.Dispose();
-        _wake.Dispose();
+        if (joined)
+        {
+            _wake.Dispose();
+        }
+        else
+        {
+            _logger.LogWarning("The compositor thread is still stopping");
+            ThreadPool.QueueUserWorkItem(_ =>
+            {
+                thread!.Join();
+                _wake.Dispose();
+            });
+        }
     }
 
-    private bool CanImportGpu(DrmScanoutBuffer buffer) => _renderer?.CanImport(buffer) == true;
+    private bool CanImportGpu(DrmScanoutBuffer buffer)
+    {
+#if PODISH_APPLE_VULKAN
+        return _renderer is DesktopVulkanRenderer renderer && (buffer is VenusScanoutBuffer ||
+            (buffer is VirglScanoutBuffer && renderer.SupportsVirglTextures));
+#else
+        return (_renderer as DesktopAngleRenderer)?.CanImport(buffer) == true;
+#endif
+    }
 
     private void EnqueueCommand(DesktopDisplayCommand command)
     {
         lock (_commandLock)
         {
-            if (_disposed) return;
+            if (_disposed || _stopRequested) return;
             command.RetainBuffer();
             _commands.Enqueue(command);
             _wake.Set();
@@ -2177,21 +2213,89 @@ internal sealed class DesktopCompositorHost : IDisposable
 
     private void RenderLoop(ManualResetEventSlim ready)
     {
+        bool initialized = false;
         try
         {
+            var logical = new DisplaySize(_logicalWidth, _logicalHeight);
+#if PODISH_APPLE_VULKAN
+            var renderer = DesktopVulkanRenderer.Create(_angleDir, _metalLayer, logical,
+                new DisplaySize(_pixelWidth, _pixelHeight), _logger);
+#else
             var kmsWindow = new KmsEglWindow(_metalLayer, CanPresent: () => Volatile.Read(ref _visible) != 0);
-            _renderer = DesktopAngleRenderer.Create(_angleDir, kmsWindow, Scanout,
-                new DisplaySize(_logicalWidth, _logicalHeight), _enableGles, _logger);
-            Scanout.FrameReady += Wake;
+            var renderer = DesktopAngleRenderer.Create(_angleDir, kmsWindow, Scanout!, logical, _enableGles, _logger);
+#endif
+            _renderer = renderer;
+            initialized = true;
             ready.Set();
+
+            try
+            {
+                RenderFrames(renderer);
+            }
+            finally
+            {
+#if !PODISH_APPLE_VULKAN
+                using var displayLock = renderer.EnterDisplayLock();
+#endif
+                CleanupRendererResources();
+            }
         }
         catch (Exception ex)
         {
-            _initException = ex;
-            ready.Set();
-            return;
-        }
+            if (!initialized)
+            {
+                _initException = ex;
+                ready.Set();
+            }
+            else if (!_stopRequested)
+            {
+                lock (_commandLock)
+                    _stopRequested = true;
+                while (_commands.TryDequeue(out var command))
+                    command.ReleaseBuffer();
 
+                _logger.LogError(ex, "Apple compositor loop failed");
+                _callbacks.NotifyStatus(-1, ex.Message);
+                IngressBridge.Post(new DesktopIngressEvent(DesktopIngressKind.WindowClosed));
+            }
+        }
+    }
+
+#if PODISH_APPLE_VULKAN
+    private void RenderFrames(DesktopVulkanRenderer renderer)
+    {
+        bool needsFrame = true;
+        bool wasVisible = false;
+        while (!_stopRequested)
+        {
+            needsFrame |= DrainCommands(out var consumed);
+            renderer.TakeCompletedUploads(consumed);
+            PostConsumed(consumed);
+
+            needsFrame |= StepAnimations(out bool animating);
+            bool visible = Volatile.Read(ref _visible) != 0;
+            needsFrame |= visible && !wasVisible;
+            if (needsFrame && (!visible || renderer.BeginScene()))
+            {
+                if (visible)
+                {
+                    DrawScene();
+                    renderer.EndScene();
+                }
+                IngressBridge.Post(new DesktopIngressEvent(DesktopIngressKind.VSyncTick,
+                    Timestamp: unchecked((uint)Environment.TickCount64), FrameSequence: _sceneFrameSequence));
+                needsFrame = false;
+            }
+
+            wasVisible = visible;
+            _wake.WaitOne(renderer.HasPendingUploads ? 1 : animating ? 8 : 12);
+        }
+    }
+#else
+    private void RenderFrames(DesktopAngleRenderer renderer)
+    {
+        var scanout = Scanout!;
+        scanout.FrameReady += Wake;
         try
         {
             bool scanoutDirty = true;
@@ -2199,25 +2303,21 @@ internal sealed class DesktopCompositorHost : IDisposable
             {
                 bool dirty;
                 List<ulong> consumed;
-                using (_renderer.EnterDisplayLock())
+                using (renderer.EnterDisplayLock())
                 {
                     dirty = DrainCommands(out consumed);
+                    renderer.TakeCompletedUploads(consumed);
                     if (dirty)
-                        _renderer.Flush();
+                        renderer.Flush();
                 }
-                foreach (var lease in consumed)
-                    IngressBridge.Post(new DesktopIngressEvent(DesktopIngressKind.BufferConsumed, LeaseToken: lease));
+                PostConsumed(consumed);
 
                 bool animDirty = StepAnimations(out bool animating);
-
-                if (Scanout.TryTakeGpuFrame(out var buffer, out uint timestamp))
+                if (scanout.TryTakeGpuFrame(out var buffer, out uint timestamp) && buffer != null)
                 {
-                    bool presented = false;
-                    if (buffer != null)
-                    {
-                        using (_renderer.EnterDisplayLock())
-                            presented = buffer.Present();
-                    }
+                    bool presented;
+                    using (renderer.EnterDisplayLock())
+                        presented = buffer.Present();
                     if (presented)
                     {
                         IngressBridge.Post(new DesktopIngressEvent(DesktopIngressKind.VSyncTick,
@@ -2229,8 +2329,15 @@ internal sealed class DesktopCompositorHost : IDisposable
                 if (scanoutDirty)
                 {
                     bool queued;
-                    using (_renderer.EnterDisplayLock())
-                        queued = Scanout.TryQueueGpuFrame(CaptureScanoutFrame);
+                    using (renderer.EnterDisplayLock())
+                    {
+                        queued = scanout.TryQueueGpuFrame(target =>
+                        {
+                            renderer.BeginScene(target);
+                            DrawScene();
+                            renderer.EndScene();
+                        });
+                    }
                     if (queued)
                     {
                         _scanoutFrameSequence = _sceneFrameSequence;
@@ -2238,43 +2345,40 @@ internal sealed class DesktopCompositorHost : IDisposable
                     }
                 }
 
-                int waitMs = _renderer.HasPendingUploads ? 1 : (animating ? 8 : 12);
-                _wake.WaitOne(waitMs);
+                _wake.WaitOne(renderer.HasPendingUploads ? 1 : animating ? 8 : 12);
             }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Apple ANGLE compositor loop failed");
-            _callbacks.NotifyStatus(-1, ex.Message);
         }
         finally
         {
-            Scanout.FrameReady -= Wake;
-            CleanupRendererResources();
+            scanout.FrameReady -= Wake;
         }
+    }
+#endif
+
+    private void PostConsumed(List<ulong> consumed)
+    {
+        foreach (var lease in consumed)
+            IngressBridge.Post(new DesktopIngressEvent(DesktopIngressKind.BufferConsumed, LeaseToken: lease));
     }
 
     private void CleanupRendererResources()
     {
-        using (_renderer?.EnterDisplayLock() ?? default)
+        foreach (var s in _surfaces.Values)
         {
-            foreach (var s in _surfaces.Values)
-            {
-                s.Texture?.Dispose();
-                s.TitleTexture?.Dispose();
-                s.AppIconTexture?.Dispose();
-            }
-            _surfaces.Clear();
-            _zOrder.Clear();
-            foreach (var tex in _buttonIcons.Values)
-                tex.Dispose();
-            _buttonIcons.Clear();
-            foreach (var tex in _uiTextCache.Values)
-                tex.Dispose();
-            _uiTextCache.Clear();
-            _renderer?.Dispose();
-            _renderer = null;
+            s.Texture?.Dispose();
+            s.TitleTexture?.Dispose();
+            s.AppIconTexture?.Dispose();
         }
+        _surfaces.Clear();
+        _zOrder.Clear();
+        foreach (var tex in _buttonIcons.Values)
+            tex.Dispose();
+        _buttonIcons.Clear();
+        foreach (var tex in _uiTextCache.Values)
+            tex.Dispose();
+        _uiTextCache.Clear();
+        _renderer?.Dispose();
+        _renderer = null;
     }
 
     private bool DrainCommands(out List<ulong> consumed)
@@ -2383,7 +2487,6 @@ internal sealed class DesktopCompositorHost : IDisposable
             if (textInputChanged || (dirty && _textInputSurfaceId != 0))
                 NotifyTextInputRect();
 
-            _renderer!.TakeCompletedUploads(consumed);
             return dirty;
         }
         finally
@@ -2393,7 +2496,7 @@ internal sealed class DesktopCompositorHost : IDisposable
         }
     }
 
-    private void CaptureScanoutFrame(DrmScanoutBuffer buffer)
+    private void DrawScene()
     {
         float recentsProgress;
         float recentsScrollX;
@@ -2422,7 +2525,7 @@ internal sealed class DesktopCompositorHost : IDisposable
             dismissingSnapshot = [.. _dismissingCards];
         }
 
-        _renderer!.BeginScene(buffer);
+        var renderer = _renderer!;
 
         // 1. Normal desktop surfaces (skip the source app surface while Recents is animating it directly as a card)
         bool recentsVisible = recentsProgress > 0.001f;
@@ -2440,7 +2543,7 @@ internal sealed class DesktopCompositorHost : IDisposable
                     continue;
             }
             DrawDecoration(id, surface);
-            _renderer.Blit(surface.Texture, new DisplayRect(surface.Bounds.X, surface.Bounds.Y,
+            renderer.Blit(surface.Texture, new DisplayRect(surface.Bounds.X, surface.Bounds.Y,
                 surface.Bounds.Width, surface.Bounds.Height), surface.Mapping);
         }
 
@@ -2461,13 +2564,12 @@ internal sealed class DesktopCompositorHost : IDisposable
         if (trackpadMode)
         {
             int curSize = Math.Clamp((int)Math.Round(Math.Min(LogicalWidth, LogicalHeight) * 0.042), 20, 32);
-            _renderer.DrawVectorIcon(
+            renderer.DrawVectorIcon(
                 new DisplayRect(cursorX - 2, cursorY - 2, curSize, curSize),
                 iconKind: 4,
                 new DisplayColor(255, 255, 255, 255));
         }
 
-        _renderer.EndScene();
     }
 
     private void RenderAndroidNavBar(int pressedButton)
@@ -2802,7 +2904,7 @@ internal sealed class DesktopCompositorHost : IDisposable
         if (frame.Width <= 0 || frame.Height <= 0 || frame.Stride <= 0) return;
         var format = frame.Format == WlShmFormat.Argb8888 ? DisplayPixelFormat.Argb8888 : DisplayPixelFormat.Xrgb8888;
         bool hadExisting = _surfaces.TryGetValue(id, out var prev) && prev.Texture != null &&
-                           prev.Width == frame.Width && prev.Height == frame.Height && prev.Format == format;
+                           !prev.Imported && prev.Width == frame.Width && prev.Height == frame.Height && prev.Format == format;
         var state = EnsureSurfaceTexture(id, frame.Width, frame.Height, format);
         UploadShmFrame(state.Texture!, frame, allowPartialDamage: hadExisting);
         state.Mapping = frame.Mapping;
@@ -2816,14 +2918,23 @@ internal sealed class DesktopCompositorHost : IDisposable
         var format = frame.Buffer.PrimeFormat == 0x34325241 ? DisplayPixelFormat.Argb8888 : DisplayPixelFormat.Xrgb8888;
         int w = (int)frame.Buffer.Width, h = (int)frame.Buffer.Height;
         var state = EnsureSurfaceState(id);
+        var descriptor = new DisplayTextureDescriptor(w, h, format);
+#if PODISH_APPLE_VULKAN
+        var tex = ((DesktopVulkanRenderer)_renderer!).ImportTexture(frame, descriptor);
+        if (tex == null)
+            return false;
+        const bool reuse = false;
+        state.Imported = true;
+#else
         bool reuse = state.Texture != null && state.Width == w && state.Height == h && state.Format == format;
-        var tex = reuse ? state.Texture! : _renderer!.CreateTexture(new DisplayTextureDescriptor(w, h, format));
-        if (!_renderer!.UploadGpuBuffer(tex, frame.Buffer, frame.YInverted, frame.LeaseToken))
+        var tex = reuse ? state.Texture! : _renderer!.CreateTexture(descriptor);
+        if (!((DesktopAngleRenderer)_renderer!).UploadGpuBuffer(tex, frame.Buffer, frame.YInverted, frame.LeaseToken))
         {
             _logger.LogWarning("UpsertGpuSurface rejected buffer id={Id} {W}x{H} bounds={Bounds}", id, w, h, bounds);
             if (!reuse) tex.Dispose();
             return false;
         }
+#endif
         if (!reuse)
         {
             state.Texture?.Dispose();
@@ -2895,12 +3006,13 @@ internal sealed class DesktopCompositorHost : IDisposable
 
     private SurfaceRenderState EnsureSurfaceTexture(ulong id, int w, int h, DisplayPixelFormat format)
     {
-        if (_surfaces.TryGetValue(id, out var existing) && existing.Texture != null &&
+        if (_surfaces.TryGetValue(id, out var existing) && existing.Texture != null && !existing.Imported &&
             existing.Width == w && existing.Height == h && existing.Format == format)
             return existing;
 
         var state = EnsureSurfaceState(id);
         state.Texture?.Dispose();
+        state.Imported = false;
         state.Texture = _renderer!.CreateTexture(new DisplayTextureDescriptor(w, h, format));
         state.Width = w;
         state.Height = h;
@@ -3197,6 +3309,7 @@ internal sealed class DesktopCompositorHost : IDisposable
     private sealed class SurfaceRenderState
     {
         public IDisplayTexture? Texture;
+        public bool Imported;
         public IDisplayTexture? TitleTexture;
         public IDisplayTexture? AppIconTexture;
         public int Width;

@@ -21,7 +21,19 @@
         <InvariantGlobalization Condition="'$(TargetFramework)' == 'net10.0'">true</InvariantGlobalization>
         <PodishStaticNative>true</PodishStaticNative>
         <IsAotCompatible>true</IsAotCompatible>
+        <PodishGraphicsBackend Condition="'$(PodishGraphicsBackend)' == ''">gles</PodishGraphicsBackend>
+        <DefineConstants Condition="'$(PodishGraphicsBackend)' == 'vulkan'">$(DefineConstants);PODISH_APPLE_VULKAN</DefineConstants>
     </PropertyGroup>
+
+    <ItemGroup>
+        <Compile Remove="DesktopAngleRenderer.cs" Condition="'$(PodishGraphicsBackend)' == 'vulkan'"/>
+        <Compile Remove="DesktopVulkanRenderer.cs" Condition="'$(PodishGraphicsBackend)' != 'vulkan'"/>
+    </ItemGroup>
+
+    <Target Name="ValidatePodishGraphicsBackend" BeforeTargets="CoreCompile"
+            Condition="'$(PodishGraphicsBackend)' != 'vulkan' And '$(PodishGraphicsBackend)' != 'gles'">
+        <Error Text="PodishGraphicsBackend must be vulkan or gles."/>
+    </Target>
 
     <ItemGroup>
         <DirectPInvoke Include="fibercpu"/>

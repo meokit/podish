@@ -7,6 +7,7 @@ using Fiberish.Diagnostics;
 using Fiberish.Native;
 using Microsoft.Extensions.Logging;
 using Podish.Display;
+using Podish.Core.Graphics;
 
 namespace Podish.Core.Native;
 
@@ -133,9 +134,22 @@ internal sealed class NativeDesktopSession : IDisposable
 
         try
         {
+#if PODISH_APPLE_VULKAN
+            _callbacks.NotifyStatus(1, "Initializing DiligentCore Vulkan compositor...");
+            const bool glesEnabled = false;
+            bool hostZink = Environment.GetEnvironmentVariable("PODISH_GUEST_GL_DRIVER") == "virgl";
+            var venus = VenusRenderer.TryLoad(Path.Combine(_angleDir, "PodishVenus.framework", "PodishVenus"), _logger,
+                enableVirgl: hostZink)
+                ?? throw new InvalidOperationException("Unable to start the bundled Venus Vulkan renderer.");
+            if (hostZink && !venus.CanExportVirglTexture)
+                throw new InvalidOperationException("Host Zink requires the bundled VirGL renderer and Metal texture export.");
+#else
             _callbacks.NotifyStatus(1, "Initializing ANGLE Metal compositor...");
             var glesEnabled = _enableGles && !string.IsNullOrWhiteSpace(_glesGuestDir) &&
                               File.Exists(Path.Combine(_glesGuestDir, "libEGL.so.1"));
+            VenusRenderer? venus = null;
+            bool hostZink = false;
+#endif
 
             _compositor = new DesktopCompositorHost(
                 _context.LoggerFactory,
@@ -178,11 +192,17 @@ internal sealed class NativeDesktopSession : IDisposable
                 "XDG_MENU_PREFIX=lxqt-",
                 $"PODISH_TOUCH_MODE={(_touchMode ? "1" : "0")}",
                 "LIBGL_ALWAYS_SOFTWARE=0",
+#if PODISH_APPLE_VULKAN
+                "PODISH_VULKAN_PRESENT=explicit"
+#else
                 "LIBGL_ES=2",
                 "LIBGL_GL=21",
                 "LIBGL_EGL=/run/podish-gles/libEGL.so.1",
                 "LIBGL_GLES=/run/podish-gles/libGLESv2.so.2"
+#endif
             };
+            if (hostZink)
+                guestEnvs.Add("PODISH_GUEST_GL_DRIVER=virgl");
             var autostartApp = Environment.GetEnvironmentVariable("PODISH_AUTOSTART_APP");
             if (!string.IsNullOrWhiteSpace(autostartApp))
                 guestEnvs.Add($"PODISH_AUTOSTART_APP={autostartApp}");
@@ -226,8 +246,9 @@ internal sealed class NativeDesktopSession : IDisposable
                 EnableKmsDrm = false,
                 CompositorScanout = _compositor.Scanout,
                 CompositorTextures = _compositor.GuestTextures,
-                AngleLibraryDirectory = _angleDir,
-                GlesGuestLibraryDirectory = _glesGuestDir,
+                AngleLibraryDirectory = glesEnabled ? _angleDir : null,
+                GlesGuestLibraryDirectory = glesEnabled ? _glesGuestDir : null,
+                GuestVulkan = venus,
                 // Mount a clean tmpfs at /run owned by desktop uid=1000 (0700) BEFORE ContainerGraphics.Mount
                 // so /run/podish-gles is mounted inside /run instead of being shadowed by a later /run mount.
                 MountRunTmpfs = true,
@@ -251,7 +272,10 @@ internal sealed class NativeDesktopSession : IDisposable
                         mobileMode: _touchMode,
                         reservedBottomInset: _compositor.NavBarHeight,
                         initialGlobalDpi: _initialGlobalDpi,
-                        onToplevelsChanged: _compositor.UpdateToplevelSnapshots);
+                        onToplevelsChanged: _compositor.UpdateToplevelSnapshots,
+                        enableExplicitSync: venus != null,
+                        enableVenusPrime: venus != null,
+                        enableVirglPrime: hostZink);
                     var proc = registry.Spawn(waylandDaemon, parentPid: parentPid, uts: uts);
                     var controlDaemon = new DesktopControlDaemon(
                         "/run/podish-control.sock",

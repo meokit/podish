@@ -12,7 +12,7 @@ namespace Podish.Core.Native;
 /// GLES3 ANGLE compositor renderer targeting an Apple CAMetalLayer directly via EGL.
 /// Supports dynamic resize for macOS windows and iOS orientation/split-screen changes.
 /// </summary>
-internal sealed unsafe class DesktopAngleRenderer : IDisposable
+internal sealed unsafe class DesktopAngleRenderer : IDesktopSceneRenderer
 {
     private const uint Texture2D = 0x0DE1, Rgba = 0x1908, Rgba8 = 0x8058, UnsignedByte = 0x1401;
     private const uint Framebuffer = 0x8D40, ColorAttachment0 = 0x8CE0, FramebufferComplete = 0x8CD5;
@@ -473,7 +473,7 @@ internal sealed unsafe class DesktopAngleRenderer : IDisposable
             Marshal.PtrToStringUTF8(_glGetString(0x1F02)));
     }
 
-    internal void Resize(DisplaySize logicalSize, DisplaySize pixelSize)
+    public void Resize(DisplaySize logicalSize, DisplaySize pixelSize)
     {
         if (logicalSize.Width <= 0 || logicalSize.Height <= 0 || pixelSize.Width <= 0 || pixelSize.Height <= 0)
             return;
@@ -637,7 +637,7 @@ internal sealed unsafe class DesktopAngleRenderer : IDisposable
         return true;
     }
 
-    internal void DrawChrome(DisplayRect bounds, DisplayColor border, DisplayColor title, int radius, int inset, int titleHeight)
+    public void DrawChrome(DisplayRect bounds, DisplayColor border, DisplayColor title, int radius, int inset, int titleHeight)
     {
         var pixels = GetPixelBounds(bounds);
         var titlePixels = GetPixelBounds(new DisplayRect(bounds.X + inset, bounds.Y, bounds.Width - 2 * inset, titleHeight));
@@ -648,13 +648,13 @@ internal sealed unsafe class DesktopAngleRenderer : IDisposable
         Draw(4, pixels);
     }
 
-    internal void FillRect(DisplayRect rect, DisplayColor color)
+    public void FillRect(DisplayRect rect, DisplayColor color)
     {
         SetColor(_color, color);
         Draw(0, GetPixelBounds(rect));
     }
 
-    internal void DrawRoundedRect(DisplayRect rect, DisplayColor color, float radiusLogical)
+    public void DrawRoundedRect(DisplayRect rect, DisplayColor color, float radiusLogical)
     {
         var pixels = GetPixelBounds(rect);
         if (pixels.Width <= 0 || pixels.Height <= 0) return;
@@ -664,7 +664,7 @@ internal sealed unsafe class DesktopAngleRenderer : IDisposable
         Draw(7, pixels);
     }
 
-    internal void BlitRounded(IDisplayTexture texture, DisplayRect destination, float radiusLogical, float alpha = 1f,
+    public void BlitRounded(IDisplayTexture texture, DisplayRect destination, float radiusLogical, float alpha = 1f,
         WaylandSurfaceMapping? mapping = null)
     {
         var pixels = GetPixelBounds(destination);
@@ -682,7 +682,7 @@ internal sealed unsafe class DesktopAngleRenderer : IDisposable
         Draw(8, pixels);
     }
 
-    internal void DrawVectorIcon(DisplayRect rect, int iconKind, DisplayColor color)
+    public void DrawVectorIcon(DisplayRect rect, int iconKind, DisplayColor color)
     {
         var pixels = GetPixelBounds(rect);
         if (pixels.Width <= 0 || pixels.Height <= 0) return;
@@ -697,10 +697,10 @@ internal sealed unsafe class DesktopAngleRenderer : IDisposable
         _glUniform4f(uniform, color.R / 255f * alpha, color.G / 255f * alpha, color.B / 255f * alpha, alpha);
     }
 
-    internal void Blit(IDisplayTexture texture, DisplayRect destination, WaylandSurfaceMapping? mapping = null)
+    public void Blit(IDisplayTexture texture, DisplayRect destination, WaylandSurfaceMapping? mapping = null)
         => BlitPixels(texture, GetPixelBounds(destination), mapping);
 
-    internal void BlitPixels(IDisplayTexture texture, DisplayRect destination, WaylandSurfaceMapping? mapping = null)
+    public void BlitPixels(IDisplayTexture texture, DisplayRect destination, WaylandSurfaceMapping? mapping = null)
     {
         var image = (Texture)texture;
         var sample = mapping ?? new WaylandSurfaceMapping(0, 0, 0, 0, 1, 0, 0, 1);
@@ -711,18 +711,8 @@ internal sealed unsafe class DesktopAngleRenderer : IDisposable
         Draw(image.NativeRgba ? mode + 4 : mode, destination);
     }
 
-    internal DisplayRect GetPixelBounds(DisplayRect logical)
-    {
-        static int Snap(long edge, int source, int target) =>
-            (int)Math.Clamp(Math.Floor((double)edge * target / Math.Max(1, source) + 0.5), int.MinValue, int.MaxValue);
-
-        int left = Snap(logical.X, _logicalSize.Width, _size.Width);
-        int top = Snap(logical.Y, _logicalSize.Height, _size.Height);
-        int right = Snap((long)logical.X + logical.Width, _logicalSize.Width, _size.Width);
-        int bottom = Snap((long)logical.Y + logical.Height, _logicalSize.Height, _size.Height);
-        return new DisplayRect(left, top, (int)Math.Clamp((long)right - left, 0, int.MaxValue),
-            (int)Math.Clamp((long)bottom - top, 0, int.MaxValue));
-    }
+    public DisplayRect GetPixelBounds(DisplayRect logical) =>
+        DesktopSceneGeometry.GetPixelBounds(logical, _logicalSize, _size);
 
     private void Draw(int mode, DisplayRect rect)
     {
@@ -731,7 +721,7 @@ internal sealed unsafe class DesktopAngleRenderer : IDisposable
         _glDrawArrays(0x0005 /* GL_TRIANGLE_STRIP */, 0, 4);
     }
 
-    internal IDisplayTexture CreateTexture(DisplayTextureDescriptor descriptor, bool nearest = false) =>
+    public IDisplayTexture CreateTexture(DisplayTextureDescriptor descriptor, bool nearest = false) =>
         new Texture(this, AllocateTexture(descriptor.Width, descriptor.Height, nearest), descriptor);
 
     private uint AllocateTexture(int width, int height, bool nearest = false)
