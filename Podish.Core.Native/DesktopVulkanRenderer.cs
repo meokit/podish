@@ -22,6 +22,7 @@ internal sealed unsafe class DesktopVulkanRenderer : IDesktopSceneRenderer
     private readonly delegate* unmanaged[Cdecl]<nint, nint, int, int, int, int, byte*, int, int> _updateTexture;
     private readonly delegate* unmanaged[Cdecl]<nint, nint, void> _destroyTexture;
     private readonly delegate* unmanaged[Cdecl]<nint, int, ulong, ulong, int, int, int, int, nint> _importTexture;
+    private readonly delegate* unmanaged[Cdecl]<nint, nint, int, int, int, nint> _importMetalTexture;
     private readonly delegate* unmanaged[Cdecl]<nint, nint, DrawArgs*, void> _draw;
     private readonly delegate* unmanaged[Cdecl]<byte*> _lastError;
     private readonly HashSet<Texture> _usedImports = [];
@@ -46,6 +47,8 @@ internal sealed unsafe class DesktopVulkanRenderer : IDesktopSceneRenderer
         _updateTexture = (delegate* unmanaged[Cdecl]<nint, nint, int, int, int, int, byte*, int, int>)Symbol("texture_update");
         _destroyTexture = (delegate* unmanaged[Cdecl]<nint, nint, void>)Symbol("texture_destroy");
         _importTexture = (delegate* unmanaged[Cdecl]<nint, int, ulong, ulong, int, int, int, int, nint>)Symbol("texture_import_fd");
+        if (NativeLibrary.TryGetExport(library, "podish_compositor_texture_import_metal", out nint importMetalTexture))
+            _importMetalTexture = (delegate* unmanaged[Cdecl]<nint, nint, int, int, int, nint>)importMetalTexture;
         _draw = (delegate* unmanaged[Cdecl]<nint, nint, DrawArgs*, void>)Symbol("draw");
         _lastError = (delegate* unmanaged[Cdecl]<byte*>)Symbol("last_error");
 
@@ -74,7 +77,7 @@ internal sealed unsafe class DesktopVulkanRenderer : IDesktopSceneRenderer
     }
 
     internal bool HasPendingUploads => _retiredImports.Count != 0;
-    internal bool SupportsVirglTextures => false;
+    internal bool SupportsVirglTextures => _importMetalTexture != null;
 
     internal bool BeginScene()
     {
@@ -133,11 +136,21 @@ internal sealed unsafe class DesktopVulkanRenderer : IDesktopSceneRenderer
     internal IDisplayTexture? ImportTexture(WaylandGpuFrame frame, DisplayTextureDescriptor descriptor)
     {
         int format = NativeFormat(descriptor.Format);
-        if (frame.Buffer is not VenusScanoutBuffer source || frame.YInverted)
-            return null;
+        nint texture;
+        switch (frame.Buffer)
+        {
+            case VenusScanoutBuffer source when !frame.YInverted:
+                texture = _importTexture(_renderer, source.HostFd, source.BackingSize, source.Offset,
+                    checked((int)source.Pitch), descriptor.Width, descriptor.Height, format);
+                break;
+            case VirglScanoutBuffer source when SupportsVirglTextures:
+                texture = _importMetalTexture(_renderer, source.GetMetalTexture(), descriptor.Width, descriptor.Height,
+                    format);
+                break;
+            default:
+                return null;
+        }
 
-        nint texture = _importTexture(_renderer, source.HostFd, source.BackingSize, source.Offset,
-            checked((int)source.Pitch), descriptor.Width, descriptor.Height, format);
         if (texture == 0)
         {
             _logger.LogWarning("Failed to import {BufferType} {Width}x{Height} stride={Stride}: {Error}",

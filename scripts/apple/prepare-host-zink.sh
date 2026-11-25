@@ -54,7 +54,7 @@ source_dir="${source_parent}/mesa-${MESA_VERSION}"
 if [[ ! -f "${source_dir}/.podish-source-ready" ]]; then
     mkdir -p "${source_parent}"
     tar -xf "${archive}" -C "${source_parent}"
-    git -C "${source_dir}" apply "${bridge}/mesa-apple-zink.patch"
+    GIT_CEILING_DIRECTORIES="${source_parent}" git -C "${source_dir}" apply "${bridge}/mesa-apple-zink.patch"
     touch "${source_dir}/.podish-source-ready"
 fi
 cp "${bridge}/bridge.c" "${source_dir}/src/egl/podish_host_zink_bridge.c"

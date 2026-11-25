@@ -93,6 +93,7 @@ struct Texture {
     RefCntAutoPtr<IBuffer> buffer;
     RefCntAutoPtr<IShaderResourceBinding> bindings;
     VkDevice vkDevice = VK_NULL_HANDLE;
+    VkImage vkImage = VK_NULL_HANDLE;
     VkBuffer vkBuffer = VK_NULL_HANDLE;
     VkDeviceMemory vkMemory = VK_NULL_HANDLE;
     void* mapping = MAP_FAILED;
@@ -111,6 +112,8 @@ struct Texture {
         bindings.Release();
         image.Release();
         buffer.Release();
+        if (vkImage != VK_NULL_HANDLE)
+            vkDestroyImage(vkDevice, vkImage, nullptr);
         if (vkBuffer != VK_NULL_HANDLE)
             vkDestroyBuffer(vkDevice, vkBuffer, nullptr);
         if (vkMemory != VK_NULL_HANDLE)
@@ -246,6 +249,42 @@ struct Compositor {
         image->Set(texture.image->GetDefaultView(TEXTURE_VIEW_SHADER_RESOURCE));
         sampler->Set(pixelated ? nearest : linear);
         return true;
+    }
+
+    std::unique_ptr<Texture> importMetalTexture(void* metalTexture, int width, int height, int format)
+    {
+        using Import = VkResult (VKAPI_PTR *)(VkDevice, void*, uint32_t, uint32_t, VkImage*, VkFormat*);
+        auto import = reinterpret_cast<Import>(vkGetDeviceProcAddr(vkDevice, "vkPodishImportMetalTexture"));
+        if (!import) {
+            setError("KosmicKrisp cannot import a shared Metal texture");
+            return {};
+        }
+
+        auto texture = std::make_unique<Texture>(width, height, format);
+        texture->vkDevice = vkDevice;
+        VkFormat imageFormat = VK_FORMAT_UNDEFINED;
+        VkResult result = import(vkDevice, metalTexture, width, height, &texture->vkImage, &imageFormat);
+        if (result != VK_SUCCESS) {
+            setVulkanError("Import shared VirGL Metal texture", result);
+            return {};
+        }
+
+        TextureDesc desc;
+        desc.Name = "Podish shared VirGL texture";
+        desc.Type = RESOURCE_DIM_TEX_2D;
+        desc.Width = width;
+        desc.Height = height;
+        desc.Format = imageFormat == VK_FORMAT_R8G8B8A8_UNORM ? TEX_FORMAT_RGBA8_UNORM : TEX_FORMAT_BGRA8_UNORM;
+        desc.BindFlags = BIND_SHADER_RESOURCE;
+        desc.Usage = USAGE_DEFAULT;
+        // KosmicKrisp wraps the existing Metal texture. No layout transition or copy is needed.
+        RefCntAutoPtr<IRenderDeviceVk> vulkan(device, IID_RenderDeviceVk);
+        vulkan->CreateTextureFromVulkanImage(texture->vkImage, desc, RESOURCE_STATE_SHADER_RESOURCE, &texture->image);
+        if (!texture->image) {
+            setError("DiligentCore could not wrap the shared VirGL image");
+            return {};
+        }
+        return bindImage(*texture, false) ? std::move(texture) : nullptr;
     }
 
     bool create(void* metalLayer, int width, int height)
@@ -628,6 +667,18 @@ void *podish_compositor_texture_import_fd(void* ctx, int fd, uint64_t backingSiz
             if (!validTexture(width, height, format))
                 return nullptr;
             return compositor.registerTexture(compositor.import(fd, backingSize, offset, stride, width, height, format));
+        }
+    });
+}
+
+void* podish_compositor_texture_import_metal(void* ctx, void* metalTexture, int width, int height, int format)
+{
+    return protect<void*>(nullptr, [&]() -> void* {
+        @autoreleasepool {
+            auto& compositor = *static_cast<Compositor*>(ctx);
+            if (!validTexture(width, height, format))
+                return nullptr;
+            return compositor.registerTexture(compositor.importMetalTexture(metalTexture, width, height, format));
         }
     });
 }

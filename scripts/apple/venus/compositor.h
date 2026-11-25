@@ -33,6 +33,7 @@ int podish_compositor_texture_update(void* ctx, void* texture, int x, int y, int
 void podish_compositor_texture_destroy(void* ctx, void* texture);
 void* podish_compositor_texture_import_fd(void* ctx, int host_fd, uint64_t backing_size, uint64_t offset, int stride,
                                           int width, int height, int format);
+void* podish_compositor_texture_import_metal(void* ctx, void* metal_texture, int width, int height, int format);
 void podish_compositor_draw(void* ctx, void* texture, const struct podish_compositor_draw* args);
 
 #ifdef __cplusplus

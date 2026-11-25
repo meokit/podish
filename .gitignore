@@ -57,5 +57,6 @@ dist/
 PodishApp/Resources/PodishRootfs/
 PodishApp/Resources/PodishGlesGuest/
 PodishApp/Resources/vulkan/
+PodishApp/Resources/vulkan-host-zink/
 PodishApp/Resources/gles/
 PodishApp/artifacts/

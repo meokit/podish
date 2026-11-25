@@ -140,18 +140,6 @@ index d264c0f..6763018 100644
     ctx->compute_pipeline_state.dirty = true;
     ctx->fb_changed = ctx->rp_changed = true;
     ctx->sample_mask_changed = true;
-diff --git a/src/gallium/drivers/zink/zink_device_info.py b/src/gallium/drivers/zink/zink_device_info.py
-index 0af02cc..174364a 100644
---- a/src/gallium/drivers/zink/zink_device_info.py
-+++ b/src/gallium/drivers/zink/zink_device_info.py
-@@ -139,6 +139,7 @@ EXTENSIONS = [
-               alias="driver",
-               properties=True),
-     Extension("VK_EXT_memory_budget"),
-+    Extension("VK_EXT_metal_objects"),
-     Extension("VK_EXT_memory_priority", alias="memprio", features=True),
-     Extension("VK_EXT_pageable_device_local_memory", alias="mempage", features=True),
-     Extension("VK_KHR_draw_indirect_count"),
 diff --git a/src/gallium/drivers/zink/zink_instance.py b/src/gallium/drivers/zink/zink_instance.py
 index 00cdc8e..989f980 100644
 --- a/src/gallium/drivers/zink/zink_instance.py
@@ -220,7 +208,7 @@ index 00cdc8e..989f980 100644
     ici.pApplicationInfo = &ai;
     ici.ppEnabledExtensionNames = extensions;
 diff --git a/src/gallium/drivers/zink/zink_resource.c b/src/gallium/drivers/zink/zink_resource.c
-index 0e29737..b78abc3 100644
+index 0e29737..9f2a883 100644
 --- a/src/gallium/drivers/zink/zink_resource.c
 +++ b/src/gallium/drivers/zink/zink_resource.c
 @@ -59,12 +59,6 @@
@@ -249,25 +237,7 @@ index 0e29737..b78abc3 100644
     } else
        ret = VKSCR(GetPhysicalDeviceImageFormatProperties)(screen->pdev, ici->format, ici->imageType,
                                                     ici->tiling, ici->usage, ici->flags, &image_props);
-@@ -1398,6 +1386,17 @@ create_image(struct zink_screen *screen, struct zink_resource_object *obj,
-       obj->plane_strides[alloc_info->whandle->plane] = alloc_info->whandle->stride;
-    }
- 
-+#ifdef VK_USE_PLATFORM_METAL_EXT
-+   VkExportMetalObjectCreateInfoEXT metal_export = {
-+      .sType = VK_STRUCTURE_TYPE_EXPORT_METAL_OBJECT_CREATE_INFO_EXT,
-+      .pNext = ici.pNext,
-+      .exportObjectType = VK_EXPORT_METAL_OBJECT_TYPE_METAL_TEXTURE_BIT_EXT,
-+   };
-+   if (screen->info.have_EXT_metal_objects && templ->target == PIPE_TEXTURE_2D &&
-+       ici.samples == VK_SAMPLE_COUNT_1_BIT)
-+      ici.pNext = &metal_export;
-+#endif
-+
-    VkResult result = VKSCR(CreateImage)(screen->dev, &ici, NULL, &obj->image);
-    if (result != VK_SUCCESS) {
-       mesa_loge("ZINK: vkCreateImage failed (%s)", vk_Result_to_str(result));
-@@ -2434,14 +2433,6 @@ overwrite:
+@@ -2434,14 +2422,6 @@ overwrite:
     }
  
     if (!res->obj->coherent
@@ -282,7 +252,7 @@ index 0e29737..b78abc3 100644
        ) {
        VkDeviceSize size = box->width;
        VkDeviceSize offset = res->obj->offset + trans->offset;
-@@ -3252,3 +3243,38 @@ zink_context_resource_init(struct pipe_context *pctx)
+@@ -3252,3 +3232,24 @@ zink_context_resource_init(struct pipe_context *pctx)
     pctx->texture_subdata = zink_image_subdata;
     pctx->invalidate_resource = zink_resource_invalidate;
  }
@@ -297,28 +267,14 @@ index 0e29737..b78abc3 100644
 +      return NULL;
 +
 +   struct zink_screen *screen = zink_screen(resource->screen);
-+   if (!screen->info.have_EXT_metal_objects)
-+      return NULL;
 +   struct zink_resource *res = zink_resource(resource);
 +   if (!res->obj || !res->obj->image)
 +      return NULL;
 +
-+   PFN_vkExportMetalObjectsEXT export_objects = (PFN_vkExportMetalObjectsEXT)
-+      screen->vk_GetDeviceProcAddr(screen->dev, "vkExportMetalObjectsEXT");
-+   if (!export_objects)
-+      return NULL;
-+
-+   VkExportMetalTextureInfoEXT texture = {
-+      .sType = VK_STRUCTURE_TYPE_EXPORT_METAL_TEXTURE_INFO_EXT,
-+      .image = res->obj->image,
-+      .plane = VK_IMAGE_ASPECT_COLOR_BIT,
-+   };
-+   VkExportMetalObjectsInfoEXT objects = {
-+      .sType = VK_STRUCTURE_TYPE_EXPORT_METAL_OBJECTS_INFO_EXT,
-+      .pNext = &texture,
-+   };
-+   export_objects(screen->dev, &objects);
-+   return (__bridge void *)texture.mtlTexture;
++   typedef void *(VKAPI_PTR *GetMetalTexture)(VkImage image);
++   GetMetalTexture get_texture = (GetMetalTexture)
++      screen->vk_GetDeviceProcAddr(screen->dev, "vkPodishGetMetalTexture");
++   return get_texture ? get_texture(res->obj->image) : NULL;
 +}
 +#endif
 diff --git a/src/gallium/drivers/zink/zink_screen.c b/src/gallium/drivers/zink/zink_screen.c
@@ -559,3 +515,22 @@ index 754fdd3..3f8d620 100644
  extern struct gl_texture_object *
  _mesa_lookup_texture_err(struct gl_context *ctx, GLuint id, const char* func);
  
+diff --git a/src/mesa/main/version.c b/src/mesa/main/version.c
+index c3809bc..bc09dec 100644
+--- a/src/mesa/main/version.c
++++ b/src/mesa/main/version.c
+@@ -607,8 +607,13 @@ _mesa_compute_version(struct gl_context *ctx)
+    if (_mesa_is_desktop_gl(ctx)) {
+       switch (ctx->Version) {
+       case 20:
+-         FALLTHROUGH; /* GLSL 1.20 is the minimum we support */
+       case 21:
++#ifdef __APPLE__
++         /* The private Host Zink library uses the shader level reported by
++          * Zink for vrend even when the GL API version remains 2.1. */
++         if (ctx->Version == 21)
++            break;
++#endif
+          ctx->Const.GLSLVersion = 120;
+          break;
+       case 30:

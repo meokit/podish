@@ -20,7 +20,8 @@ VULKAN_HEADERS_REV=6802bb4733b63ed5efd3adb308a6c885ef180ea1
 mesa_patches=("${SCRIPT_DIR}/venus/kosmickrisp-ios-metal-wsi.patch"
     "${SCRIPT_DIR}/venus/kosmickrisp-metal-texture-capabilities.patch"
     "${SCRIPT_DIR}/venus/kosmickrisp-drawable-ownership.patch"
-    "${SCRIPT_DIR}/venus/kosmickrisp-drawable-residency.patch")
+    "${SCRIPT_DIR}/venus/kosmickrisp-drawable-residency.patch"
+    "${SCRIPT_DIR}/venus/kosmickrisp-virgl-metal-texture.patch")
 
 prepare_mesa_source() (
     local destination="$1"

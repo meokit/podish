@@ -206,7 +206,11 @@ public:
         }
         virgl_renderer_resource_create_args args{resource, data[0], data[1], data[2], data[3],
             data[4], data[5], data[6], data[7], data[8], data[9]};
-        if (virgl_renderer_resource_create(&args, fd >= 0 ? &at->second.view : nullptr, fd >= 0 ? 1u : 0u) != 0) {
+        const bool created = virgl_renderer_resource_create(&args, nullptr, 0) == 0;
+        // The attach API also registers the I/O vector with vrend for encoded transfers.
+        if (!created || (fd >= 0 && virgl_renderer_resource_attach_iov(resource, &at->second.view, 1) != 0)) {
+            if (created)
+                virgl_renderer_resource_unref(resource);
             if (fd >= 0)
                 close(fd);
             staging.erase(at);
