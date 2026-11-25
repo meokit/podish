@@ -13,7 +13,8 @@ internal static class ContainerGraphics
     internal static AngleDevice? Mount(SyscallManager syscalls, KernelScheduler scheduler,
         FramebufferDevice? framebuffer, VirtualConsoleInput? kmsInput, bool gles, bool kmsDrm,
         KmsEglWindow? kmsWindow, VirtualDrmScanout? compositorScanout, KmsEglOutput? compositorTextures, ILogger logger,
-        string? angleDirectory = null, string? guestDirectory = null)
+        string? angleDirectory = null, string? guestDirectory = null,
+        VenusRenderer? venus = null)
     {
         if (gles && OperatingSystem.IsBrowser())
             throw new ContainerConfigurationException("ANGLE GLES is not available in browser WebAssembly.");
@@ -47,8 +48,12 @@ internal static class ContainerGraphics
                     syscalls.RegisterVirtualCharacterDevice("dri/renderD128", _ => card!.CreateRenderNode());
                     var input = framebuffer?.Input ?? kmsInput;
                     input?.RegisterEvdev(syscalls, scheduler);
-                    MountGraphicsSysfs(syscalls, input != null);
                 }
+                if (venus != null)
+                    syscalls.RegisterVirtualCharacterDevice("dri/" + VirtioGpuNode.Name, sb => new VirtioGpuNode(sb, venus, logger));
+                if (kmsDrm || compositorScanout != null || venus != null)
+                    MountGraphicsSysfs(syscalls, kmsDrm || compositorScanout != null, venus != null,
+                        (kmsDrm || compositorScanout != null) && (framebuffer?.Input ?? kmsInput) != null);
                 return device;
             }
             catch
@@ -86,24 +91,38 @@ internal static class ContainerGraphics
         syscalls.BindMountSubtree(source.Mount!, "", GuestPath, readOnly: true);
     }
 
-    private static void MountGraphicsSysfs(SyscallManager syscalls, bool input)
+    private static void MountGraphicsSysfs(SyscallManager syscalls, bool kms, bool venus, bool input)
     {
         using var source = new MountFile(syscalls.CreateDetachedTmpfsMount("podish-graphics-sysfs"));
         var mount = source.Mount!;
         // libudev verifies the filesystem type of the canonical device directory.
         mount.Root.SuperBlock.Type = new FileSystemType { Name = "sysfs" };
-        const string device = "devices/platform/podish-drm";
-        WriteNode("card0", 0);
-        WriteNode("renderD128", 128);
-        syscalls.WriteFileInDetachedMount(mount, device + "/uevent", "DRIVER=podish\nMODALIAS=platform:podish-drm\n"u8);
+        const string kmsDevice = "devices/platform/podish-drm";
+        const string venusDevice = "devices/platform/podish-virtio-gpu";
+        if (kms)
+        {
+            WriteNode(kmsDevice, "card0", 0);
+            WriteNode(kmsDevice, "renderD128", 128);
+            WriteDevice(kmsDevice, "DRIVER=podish\nMODALIAS=platform:podish-drm\n"u8);
+        }
+        if (venus)
+        {
+            WriteNode(venusDevice, VirtioGpuNode.Name, VirtioGpuNode.Minor);
+            WriteDevice(venusDevice, "DRIVER=virtio_gpu\nMODALIAS=platform:podish-virtio-gpu\n"u8);
+        }
         syscalls.WriteFileInDetachedMount(mount, "bus/platform/uevent", []);
-        syscalls.CreateSymlinkInDetachedMount(mount, device + "/subsystem", "/sys/bus/platform");
-
         if (input) MountInputDiscovery(syscalls, mount);
-        foreach (var tree in new[] { "dev/char", "class/drm", device, "bus/platform" })
+        foreach (var tree in new[] { "dev/char", "class/drm", "bus/platform" })
             syscalls.BindMountSubtree(mount, tree, "/sys/" + tree, readOnly: true);
 
-        void WriteNode(string name, int minor)
+        void WriteDevice(string device, ReadOnlySpan<byte> uevent)
+        {
+            syscalls.WriteFileInDetachedMount(mount, device + "/uevent", uevent);
+            syscalls.CreateSymlinkInDetachedMount(mount, device + "/subsystem", "/sys/bus/platform");
+            syscalls.BindMountSubtree(mount, device, "/sys/" + device, readOnly: true);
+        }
+
+        void WriteNode(string device, string name, int minor)
         {
             var path = device + "/drm/" + name;
             var uevent = $"MAJOR=226\nMINOR={minor}\nDEVNAME=dri/{name}\nDEVTYPE=drm_minor\n";
