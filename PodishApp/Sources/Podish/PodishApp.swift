@@ -1,3 +1,4 @@
+import Darwin
 import SwiftUI
 
 #if os(macOS)
@@ -40,6 +41,34 @@ struct PodishApp: App {
 
     @StateObject private var desktopSession = PodishDesktopSession()
     @Environment(\.scenePhase) private var scenePhase
+
+    init() {
+        Self.raiseOpenFileLimit()
+    }
+
+    private static func raiseOpenFileLimit() {
+        var limit = rlimit()
+        guard getrlimit(RLIMIT_NOFILE, &limit) == 0 else {
+            let error = errno
+            PodishLog.appError("getrlimit(RLIMIT_NOFILE) failed: \(String(cString: strerror(error)))")
+            return
+        }
+
+        let target = min(rlim_t(OPEN_MAX), limit.rlim_max)
+        guard limit.rlim_cur < target else {
+            PodishLog.appInfo("RLIMIT_NOFILE soft limit \(limit.rlim_cur)")
+            return
+        }
+
+        let previous = limit.rlim_cur
+        limit.rlim_cur = target
+        guard setrlimit(RLIMIT_NOFILE, &limit) == 0 else {
+            let error = errno
+            PodishLog.appError("Could not raise RLIMIT_NOFILE from \(previous) to \(target): \(String(cString: strerror(error)))")
+            return
+        }
+        PodishLog.appInfo("Raised RLIMIT_NOFILE from \(previous) to \(target)")
+    }
 
     var body: some Scene {
         WindowGroup("Podish Desktop") {
