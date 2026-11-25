@@ -34,3 +34,32 @@ Set `PODISH_WASM_APP_DIR` to the published `wwwroot` directory when using a
 custom publish location. It must contain `_framework/dotnet.js`.
 
 See the [CoreMark benchmark results](../benchmark/coreclr-wasm-v8.md).
+
+## Wasm hot dispatch loop
+
+The Browser build defaults to the `1.75m` baking preset and its multi-workload
+hot dispatch plan. The build generates a C++ switch that inlines scalar and
+fused instructions. A successful case advances the cursor and returns to the
+loop head. Cold instructions, memory replay, and block-link misses use the
+threaded handlers. Wasm builds use `GprPin=OFF`.
+
+Set `WasmHotDispatchHandlers` to select a prefix of the plan. A ranked Wasm body
+can contribute several cases through its C++ bindings. Set the budget to `0`
+to use threaded dispatch throughout. Set `FibercpuBakingPreset=3.5m` to compare
+the larger preset with its own plan.
+
+```sh
+dotnet publish Podish.Browser -c Release -p:WasmHotDispatchHandlers=0 \
+  -o artifacts/wasm-threaded
+
+dotnet publish Podish.Browser -c Release -p:FibercpuBakingPreset=3.5m \
+  -o artifacts/wasm-hot-dispatch/3.5m
+```
+
+Train each baking preset from its own threaded-dispatch build. Collect one V8
+`.cpuprofile` per workload and pass the profiles, native Wasm, and linker
+symbols to `scripts/profile_wasm_hot_dispatch.py`. The script normalizes each
+profile by its eligible handler time before combining the rankings. The
+checked-in plans use CoreMark, GEMM, gzip, and SciMark SSE2. Check the budget
+on independent inputs such as `grep`, `sed`, SciMark x87, and a separate gzip
+corpus. Pass a custom plan's absolute path as `-p:WasmHotDispatchPlan=...`.

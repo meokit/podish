@@ -12,14 +12,18 @@
         <NativeBuildDir Condition="'$(IsBrowserWasm)' == 'true'">$(FibercpuWasmNativeBuildDir)</NativeBuildDir>
         <NativeBuildDir Condition="'$(IsBrowserWasm)' != 'true' And '$(RuntimeIdentifier)' != ''">build_native/$(RuntimeIdentifier)</NativeBuildDir>
         <NativeBuildDir Condition="'$(IsBrowserWasm)' != 'true' And '$(RuntimeIdentifier)' == ''">build_native/host</NativeBuildDir>
-        <NativeBuildDir Condition="'$(FibercpuIsolatedPreset)' == 'true'">$(NativeBuildDir)/$(FibercpuBakingPreset)</NativeBuildDir>
+        <NativeBuildDir Condition="'$(IsBrowserWasm)' != 'true' And '$(FibercpuIsolatedPreset)' == 'true'">$(NativeBuildDir)/$(FibercpuBakingPreset)</NativeBuildDir>
+        <NativeBakingPreset>$(FibercpuBakingPreset)</NativeBakingPreset>
+        <NativeBakingPreset Condition="'$(IsBrowserWasm)' == 'true'">$(FibercpuWasmBakingPreset)</NativeBakingPreset>
         <FusionStrategy Condition="'$(FusionStrategy)' == ''">AUTO</FusionStrategy>
         <OperandBudget Condition="'$(OperandBudget)' == ''">AUTO</OperandBudget>
         <PinSpecialization Condition="'$(PinSpecialization)' == ''">AUTO</PinSpecialization>
         <OperandPlanFile Condition="'$(OperandPlanFile)' == ''"></OperandPlanFile>
         <StaticInstructionSpecialization Condition="'$(StaticInstructionSpecialization)' == ''">ON</StaticInstructionSpecialization>
+        <DynamicInstructionSpecialization Condition="'$(DynamicInstructionSpecialization)' == '' And '$(IsBrowserWasm)' == 'true'">OFF</DynamicInstructionSpecialization>
         <DynamicInstructionSpecialization Condition="'$(DynamicInstructionSpecialization)' == ''">ON</DynamicInstructionSpecialization>
         <LlvmBlockJit Condition="'$(LlvmBlockJit)' == ''">OFF</LlvmBlockJit>
+        <GprPin Condition="'$(GprPin)' == '' And '$(IsBrowserWasm)' == 'true'">OFF</GprPin>
         <GprPin Condition="'$(GprPin)' == ''">AUTO</GprPin>
         <GprPinRegisters Condition="'$(GprPinRegisters)' == ''">EAX,ESP</GprPinRegisters>
         <GprWriteBack Condition="'$(GprWriteBack)' == ''">ON</GprWriteBack>
@@ -66,6 +70,8 @@
         <NativeBuildInput Include="$(EmscriptenToolchainFile)" Condition="'$(IsBrowserWasm)' == 'true'" />
         <NativeBuildInput Include="$(MSBuildThisFileDirectory)../scripts/gen_operand_specializations.py" />
         <NativeBuildInput Include="$(MSBuildThisFileDirectory)../scripts/gen_instruction_catalog.py" />
+        <NativeBuildInput Include="$(MSBuildThisFileDirectory)../scripts/gen_wasm_hot_dispatch.py" Condition="'$(IsBrowserWasm)' == 'true' And '$(WasmHotDispatchHandlers)' != '0'" />
+        <NativeBuildInput Include="$(WasmHotDispatchPlan)" Condition="'$(IsBrowserWasm)' == 'true' And '$(WasmHotDispatchPlan)' != ''" />
         <NativeBuildInput Include="$(MSBuildThisFileDirectory)../scripts/scalar_modrm.py" />
         <NativeBuildInput Include="$(MSBuildThisFileDirectory)../scripts/check_native_text_budget.py" />
         <NativeBuildInput Include="$(MSBuildThisFileDirectory)../scripts/embed_llvm_bitcode.py" />
@@ -85,7 +91,7 @@
          network asset preparation occurs inside an ordinary native build. -->
     <Target Name="PrepareSuperOpcodeGenerator" BeforeTargets="GenerateSelectedSuperOpcodes"
             Condition="'$(SuperOpcodeManifest)' != '' And '$(DesignTimeBuild)' != 'true' And '$(FiberishSkipNativeBuild)' != 'true'">
-        <Error Condition="'$(FibercpuBakingPreset)' != 'custom'" Text="SuperOpcodeManifest requires FibercpuBakingPreset=custom." />
+        <Error Condition="'$(NativeBakingPreset)' != 'custom'" Text="SuperOpcodeManifest requires FibercpuBakingPreset=custom." />
         <Error Condition="'$(EnableSuperOpcodes)' == 'false'" Text="SuperOpcodeManifest cannot be used with EnableSuperOpcodes=false." />
         <Error Condition="!$([System.IO.Path]::IsPathRooted('$(SuperOpcodeManifest)'))" Text="SuperOpcodeManifest must be an absolute path." />
         <Error Condition="!Exists('$(SuperOpcodeManifest)')" Text="Missing locked SuperOpcodeManifest: $(SuperOpcodeManifest)" />
@@ -104,11 +110,11 @@
 
     <Target Name="PrepareNativeOptions" BeforeTargets="BuildNativeLib"
             Condition="'$(DesignTimeBuild)' != 'true' And '$(FiberishSkipNativeBuild)' != 'true'">
-        <Error Condition="'$(FibercpuBakingPreset)' != 'custom' And '$(FibercpuBakingPreset)' != '1.75m' And '$(FibercpuBakingPreset)' != '3.5m' And '$(FibercpuBakingPreset)' != '10m'"
-               Text="Unknown FibercpuBakingPreset '$(FibercpuBakingPreset)'. Choose custom, 1.75m, 3.5m or 10m." />
+        <Error Condition="'$(NativeBakingPreset)' != 'custom' And '$(NativeBakingPreset)' != '1.75m' And '$(NativeBakingPreset)' != '3.5m' And '$(NativeBakingPreset)' != '10m'"
+               Text="Unknown FibercpuBakingPreset '$(NativeBakingPreset)'. Choose custom, 1.75m, 3.5m or 10m." />
         <MakeDir Directories="$(SuperOpcodeGenerationDir)" />
         <WriteLinesToFile File="$(SuperOpcodeGenerationDir)/native-options.txt"
-            Lines="baking_preset=$(FibercpuBakingPreset);fusion=$(FusionStrategy);budget=$(OperandBudget);pin=$(GprPin);pins=$(GprPinRegisters);writeback=$(GprWriteBack);coverage=$(PinSpecialization);plan=$(OperandPlanFile);static=$(StaticInstructionSpecialization);dynamic=$(DynamicInstructionSpecialization);dynamic_plan=$(DynamicOperandPlanFile);llvm=$(LlvmBlockJit);llvm_dir=$(LlvmConfigDir);native_clang=$(NativeClangDir);super=$(EnableSuperOpcodes);source=$(SuperOpcodeSource);handler=$(EnableHandlerProfile);block=$(EnableBlockProfile);sequence=$(EnableSequenceProfile)"
+            Lines="baking_preset=$(NativeBakingPreset);fusion=$(FusionStrategy);budget=$(OperandBudget);pin=$(GprPin);pins=$(GprPinRegisters);writeback=$(GprWriteBack);coverage=$(PinSpecialization);plan=$(OperandPlanFile);static=$(StaticInstructionSpecialization);dynamic=$(DynamicInstructionSpecialization);dynamic_plan=$(DynamicOperandPlanFile);llvm=$(LlvmBlockJit);llvm_dir=$(LlvmConfigDir);native_clang=$(NativeClangDir);super=$(EnableSuperOpcodes);source=$(SuperOpcodeSource);handler=$(EnableHandlerProfile);block=$(EnableBlockProfile);sequence=$(EnableSequenceProfile);wasm_hot_dispatch=$(WasmHotDispatchHandlers);wasm_hot_plan=$(WasmHotDispatchPlan)"
             Overwrite="true" WriteOnlyWhenDifferent="true" />
     </Target>
 
@@ -147,11 +153,12 @@
             <CMakeSequenceProfile Condition="'$(EnableSequenceProfile)' == 'true'">ON</CMakeSequenceProfile>
             <CMakeSequenceProfile Condition="'$(CMakeSequenceProfile)' == ''">OFF</CMakeSequenceProfile>
             <CMakeArgs>$(CMakeArgs) -DFIBERCPU_ENABLE_SEQUENCE_PROFILE=$(CMakeSequenceProfile)</CMakeArgs>
-            <CMakeArgs>$(CMakeArgs) -DFIBERCPU_BAKING_PRESET=$(FibercpuBakingPreset)</CMakeArgs>
+            <CMakeArgs>$(CMakeArgs) -DFIBERCPU_BAKING_PRESET=$(NativeBakingPreset)</CMakeArgs>
             <CMakeArgs>$(CMakeArgs) -DFIBERCPU_FUSION_STRATEGY=$(FusionStrategy) -DFIBERCPU_OPERAND_BUDGET=$(OperandBudget) -DFIBERCPU_GPR_PIN=$(GprPin) -DFIBERCPU_GPR_PIN_REGISTERS=&quot;$(GprPinRegisters)&quot; -DFIBERCPU_GPR_WRITE_BACK=$(GprWriteBack) -DFIBERCPU_PIN_SPECIALIZATION=$(PinSpecialization) -DFIBERCPU_OPERAND_PLAN_FILE=&quot;$(OperandPlanFile)&quot;</CMakeArgs>
             <CMakeArgs>$(CMakeArgs) -DFIBERCPU_GENERATED_SUPEROPCODES_FILE=&quot;$(SuperOpcodeSource)&quot;</CMakeArgs>
             <CMakeArgs>$(CMakeArgs) -DFIBERCPU_DYNAMIC_OPERAND_PLAN_FILE=&quot;$(DynamicOperandPlanFile)&quot;</CMakeArgs>
             <CMakeArgs>$(CMakeArgs) -DFIBERCPU_STATIC_SPECIALIZATION=$(StaticInstructionSpecialization) -DFIBERCPU_ENABLE_DYNAMIC_SPECIALIZATION=$(DynamicInstructionSpecialization) -DFIBERCPU_ENABLE_LLVM_JIT=$(LlvmBlockJit)</CMakeArgs>
+            <CMakeArgs Condition="'$(IsBrowserWasm)' == 'true'">$(CMakeArgs) -DFIBERCPU_WASM_HOT_DISPATCH_HANDLERS=$(WasmHotDispatchHandlers) -DFIBERCPU_WASM_HOT_DISPATCH_PLAN=&quot;$(WasmHotDispatchPlan)&quot;</CMakeArgs>
             <CMakeArgs Condition="'$(LlvmConfigDir)' != ''">$(CMakeArgs) -DLLVM_DIR=&quot;$(LlvmConfigDir)&quot;</CMakeArgs>
             <CMakeGeneratorArgs Condition="'$(IsBrowserWasm)' == 'true'">-G Ninja</CMakeGeneratorArgs>
             <CMakeArgs Condition="'$(IsBrowserWasm)' == 'true'">$(CMakeArgs) -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY -DCMAKE_TOOLCHAIN_FILE=&quot;$(EmscriptenToolchainFile)&quot; -DCMAKE_CROSSCOMPILING_EMULATOR=&quot;$(BrowserWasmNodeExecutable)&quot;</CMakeArgs>

@@ -48,14 +48,14 @@ FORCE_INLINE void RecordBlockHandlersUntil(EmuState* state, const DecodedOp* sto
     if (!state->current_block_head) return;
     for (const DecodedOp* current = state->current_block_head; current != stop_op;
          current = state->last_block->NextOp(current)) {
-        state->handler_exec_counts[reinterpret_cast<uintptr_t>(current->handler)]++;
+        state->handler_exec_counts[reinterpret_cast<uintptr_t>(current->OriginalHandler())]++;
     }
 }
 
 FORCE_INLINE void RecordBlockHandlersThrough(EmuState* state, const DecodedOp* stop_op) {
     if (!state->current_block_head) return;
     for (const DecodedOp* current = state->current_block_head;; current = state->last_block->NextOp(current)) {
-        state->handler_exec_counts[reinterpret_cast<uintptr_t>(current->handler)]++;
+        state->handler_exec_counts[reinterpret_cast<uintptr_t>(current->OriginalHandler())]++;
         if (current == stop_op) break;
     }
 }
@@ -124,6 +124,34 @@ FORCE_INLINE ATTR_PRESERVE_NONE int64_t ReturnFromBlock(EmuState* RESTRICT state
     return instr_limit;
 }
 
+struct BlockChainTarget {
+    DecodedOp* op;
+    HandlerFunc entry;
+};
+
+template <unsigned LinkSlot>
+FORCE_INLINE BlockChainTarget TryChainBlock(EmuState* state, DecodedOp* op, uint32_t target_eip, int64_t& instr_limit) {
+    static_assert(LinkSlot <= 1);
+    BasicBlock* next_block = (op + LinkSlot)->LoadBlockLink();
+    auto header = *reinterpret_cast<const volatile __uint128_t*>(next_block);
+    auto header_ptr = reinterpret_cast<const BasicBlock*>(&header);
+    if (!header_ptr->MatchesChainTarget(target_eip)) [[unlikely]]
+        return {};
+    state->last_block = next_block;
+    instr_limit -= header_ptr->inst_count();
+    DecodedOp* next_head = next_block->FirstOp();
+    CountLLVMBlockEntry(state, next_block, header_ptr->chain);
+#if defined(FIBERCPU_ENABLE_BLOCK_PROFILE) || defined(FIBERCPU_ENABLE_HANDLER_PROFILE)
+    next_block->exec_count++;
+#endif
+#ifdef FIBERCPU_ENABLE_HANDLER_PROFILE
+    state->current_block_head = next_head;
+#endif
+    auto entry = header_ptr->entry;
+    __builtin_assume(entry != nullptr);
+    return {next_head, entry};
+}
+
 template <unsigned LinkSlot, bool EmitRegionEdge = true>
 FORCE_INLINE ATTR_PRESERVE_NONE int64_t ResolveBranchTargetInline(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
                                                                   int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags,
@@ -158,25 +186,10 @@ FORCE_INLINE ATTR_PRESERVE_NONE int64_t ResolveBranchTargetInline(EmuState* REST
         }
     }
 #endif
-    BasicBlock* next_block = (op + LinkSlot)->LoadBlockLink();
-
-    auto header = *reinterpret_cast<const volatile __uint128_t*>(next_block);
-    auto header_ptr = reinterpret_cast<const BasicBlock*>(&header);
-    auto entry = header_ptr->entry;
-    if (header_ptr->MatchesChainTarget(target_eip)) [[likely]] {
-        state->last_block = next_block;
-        instr_limit -= header_ptr->inst_count();
-        DecodedOp* next_head = next_block->FirstOp();
-        CountLLVMBlockEntry(state, next_block, header_ptr->chain);
-#if defined(FIBERCPU_ENABLE_BLOCK_PROFILE) || defined(FIBERCPU_ENABLE_HANDLER_PROFILE)
-        next_block->exec_count++;
-#endif
-#ifdef FIBERCPU_ENABLE_HANDLER_PROFILE
-        state->current_block_head = next_head;
-#endif
-        __builtin_assume(entry != nullptr);
-        ATTR_MUSTTAIL return entry(state, next_head, instr_limit, utlb_tags, utlb_addend,
-                                   std::numeric_limits<uint32_t>::max(), flags_cache FIBERCPU_PIN_RELOAD);
+    const auto next = TryChainBlock<LinkSlot>(state, op, target_eip, instr_limit);
+    if (next.op) [[likely]] {
+        ATTR_MUSTTAIL return next.entry(state, next.op, instr_limit, utlb_tags, utlb_addend,
+                                        std::numeric_limits<uint32_t>::max(), flags_cache FIBERCPU_PIN_RELOAD);
     }
 
     // The successful chain above publishes its target. A miss still needs the source.
@@ -234,6 +247,46 @@ ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState*, DecodedOp*, int64_t, mem::
     __builtin_trap();
 }
 
+#ifdef FIBERCPU_ENABLE_SEQUENCE_PROFILE
+struct DispatchSequenceHistory {
+    uint8_t length;
+    std::array<uintptr_t, 2> handlers;
+};
+
+FORCE_INLINE DispatchSequenceHistory BeginDispatchSequence(EmuState* state, DecodedOp* op) {
+    DispatchSequenceHistory history{state->sequence_expected_op == op ? state->sequence_history_length : uint8_t{0},
+                                    state->sequence_history};
+    state->sequence_expected_op = nullptr;
+    state->sequence_history_length = 0;
+    return history;
+}
+
+FORCE_INLINE void RecordDispatchSequence(EmuState* state, DecodedOp* op, DecodedOp* next_op,
+                                         const DispatchSequenceHistory& history) {
+    if (next_op == state->last_block->Sentinel()) return;
+    const auto current = reinterpret_cast<uintptr_t>(op->OriginalHandler());
+    const auto next = reinterpret_cast<uintptr_t>(next_op->OriginalHandler());
+    state->sequence_counts[{current, next}]++;
+    if (history.length >= 1) state->ngram_counts[{{history.handlers[1], current, next, 0}}]++;
+    if (history.length >= 2) state->ngram_counts[{{history.handlers[0], history.handlers[1], current, next}}]++;
+    state->sequence_history = {history.handlers[1], current};
+    state->sequence_history_length = static_cast<uint8_t>(std::min<int>(2, history.length + 1));
+    state->sequence_expected_op = next_op;
+}
+#endif
+
+template <LogicFunc Target, OperandSpec::Executable OperandPolicy>
+FORCE_INLINE LogicFlow RunScalarLogic(EmuState* RESTRICT state, DecodedOp* RESTRICT op, mem::MicroTlbAbiWord& utlb_tags,
+                                      mem::MicroTlbAbiWord& utlb_addend, uint32_t& branch, uint64_t& flags_cache,
+                                      GprCache gpr) {
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
+    OperandPolicy::Assume(op);
+    auto flow = Target(state, op, &utlb, OperandPolicy::Immediate(op), OperandPolicy::ModRM(op), &branch, flags_cache,
+                       OperandGprCache<OperandPolicy>(gpr));
+    mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+    return flow;
+}
+
 template <LogicFunc Target, OperandSpec::Executable OperandPolicy>
 [[gnu::visibility("hidden")]]
 ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
@@ -241,17 +294,10 @@ ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState* RESTRICT state, DecodedOp* 
                                            uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
     FIBERCPU_PIN_ASSUME;
 #ifdef FIBERCPU_ENABLE_SEQUENCE_PROFILE
-    const auto history_length = state->sequence_expected_op == op ? state->sequence_history_length : 0;
-    const auto history = state->sequence_history;
-    state->sequence_expected_op = nullptr;
-    state->sequence_history_length = 0;
+    const auto history = BeginDispatchSequence(state, op);
 #endif
-    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
-    OperandPolicy::Assume(op);
-    // Execute Logic
-    auto flow = Target(state, op, &utlb, OperandPolicy::Immediate(op), OperandPolicy::ModRM(op), &branch, flags_cache,
-                       OperandGprCache<OperandPolicy>(FIBERCPU_GPR_CACHE));
-    mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+    const auto flow = RunScalarLogic<Target, OperandPolicy>(state, op, utlb_tags, utlb_addend, branch, flags_cache,
+                                                            FIBERCPU_GPR_CACHE);
 
     switch (flow) {
         case LogicFlow::Continue:
@@ -260,18 +306,7 @@ ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState* RESTRICT state, DecodedOp* 
             // (sentinel always valid)
             if (auto* next_op = OperandSpec::Advance<OperandPolicy>(op)) {
 #ifdef FIBERCPU_ENABLE_SEQUENCE_PROFILE
-                auto* logical_next = OperandSpec::Advance<OperandPolicy>(op);
-                if (logical_next != state->last_block->Sentinel()) {
-                    state->sequence_counts[{reinterpret_cast<uintptr_t>(op->handler),
-                                            reinterpret_cast<uintptr_t>(logical_next->handler)}]++;
-                    const auto current = reinterpret_cast<uintptr_t>(op->handler);
-                    const auto next = reinterpret_cast<uintptr_t>(logical_next->handler);
-                    if (history_length >= 1) state->ngram_counts[{{history[1], current, next, 0}}]++;
-                    if (history_length >= 2) state->ngram_counts[{{history[0], history[1], current, next}}]++;
-                    state->sequence_history = {history[1], current};
-                    state->sequence_history_length = static_cast<uint8_t>(std::min<int>(2, history_length + 1));
-                    state->sequence_expected_op = logical_next;
-                }
+                RecordDispatchSequence(state, op, next_op, history);
 #endif
                 ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch,
                                                       flags_cache FIBERCPU_PIN_FORWARD(OperandPolicy));

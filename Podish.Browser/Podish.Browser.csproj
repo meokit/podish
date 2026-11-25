@@ -30,8 +30,7 @@
     </ItemGroup>
 
     <PropertyGroup>
-        <FibercpuWasmNativeDir>$(MSBuildProjectDirectory)/../Fiberish.X86/$(FibercpuWasmNativeBuildDir)</FibercpuWasmNativeDir>
-        <FibercpuWasmNativeDir Condition="'$(FibercpuIsolatedPreset)' == 'true'">$(FibercpuWasmNativeDir)/$(FibercpuBakingPreset)</FibercpuWasmNativeDir>
+        <FibercpuWasmNativeDir>$([MSBuild]::NormalizePath('$(MSBuildProjectDirectory)', '../Fiberish.X86', '$(FibercpuWasmNativeBuildDir)'))</FibercpuWasmNativeDir>
     </PropertyGroup>
 
     <ItemGroup>

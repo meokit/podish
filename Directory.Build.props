@@ -1,6 +1,14 @@
 <Project>
   <PropertyGroup>
+    <!-- Resolve the Wasm preset before applying the managed/native host default. -->
+    <FibercpuWasmBakingPreset Condition="'$(FibercpuWasmBakingPreset)' == '' And '$(FibercpuBakingPreset)' != ''">$(FibercpuBakingPreset)</FibercpuWasmBakingPreset>
+    <FibercpuWasmBakingPreset Condition="'$(FibercpuWasmBakingPreset)' == ''">1.75m</FibercpuWasmBakingPreset>
+    <WasmHotDispatchHandlers Condition="'$(WasmHotDispatchHandlers)' == '' And '$(FibercpuWasmBakingPreset)' == '1.75m'">1040</WasmHotDispatchHandlers>
+    <WasmHotDispatchHandlers Condition="'$(WasmHotDispatchHandlers)' == '' And '$(FibercpuWasmBakingPreset)' == '3.5m'">1225</WasmHotDispatchHandlers>
+    <WasmHotDispatchHandlers Condition="'$(WasmHotDispatchHandlers)' == ''">0</WasmHotDispatchHandlers>
     <FibercpuWasmNativeBuildDir>build_native/browser-wasm/net11.0</FibercpuWasmNativeBuildDir>
+    <FibercpuWasmNativeBuildDir Condition="'$(WasmHotDispatchHandlers)' != '0'">$(FibercpuWasmNativeBuildDir)/hot-dispatch</FibercpuWasmNativeBuildDir>
+    <FibercpuWasmNativeBuildDir Condition="'$(FibercpuWasmBakingPreset)' == '1.75m' Or '$(FibercpuWasmBakingPreset)' == '10m'">$(FibercpuWasmNativeBuildDir)/$(FibercpuWasmBakingPreset)</FibercpuWasmNativeBuildDir>
     <FibercpuBakingPreset Condition="'$(FibercpuBakingPreset)' == ''">3.5m</FibercpuBakingPreset>
     <FibercpuIsolatedPreset Condition="'$(FibercpuBakingPreset)' == '1.75m' Or '$(FibercpuBakingPreset)' == '10m'">true</FibercpuIsolatedPreset>
   </PropertyGroup>

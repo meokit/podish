@@ -569,7 +569,8 @@ FORCE_INLINE MemResult<void> WriteModRM(EmuState* state, GprCache& gpr, DecodedO
  * Generic Helper for Direct Memory Read
  */
 template <typename T, OpOnTLBMiss Strategy>
-inline MemResult<T> ReadMem(EmuState* state, GprCache& gpr, uint32_t addr, mem::MicroTLB* utlb, const DecodedOp* op) {
+FORCE_INLINE MemResult<T> ReadMem(EmuState* state, GprCache& gpr, uint32_t addr, mem::MicroTLB* utlb,
+                                  const DecodedOp* op) {
     if constexpr (Strategy == OpOnTLBMiss::Blocking) {
         return ReadGuestMem<T, false>(state, gpr, addr, utlb, op);
     } else {

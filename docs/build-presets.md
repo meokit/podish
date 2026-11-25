@@ -1,7 +1,8 @@
 # Native build presets
 
-CMake and Podish default to `3.5m`. The three presets select instruction
-tables calibrated on macOS ARM64.
+Standalone CMake and native Podish builds default to `3.5m`. Podish.Browser
+defaults to `1.75m` with a multi-workload hot dispatch plan. The three presets
+select instruction tables calibrated on macOS ARM64.
 
 | Preset | Text size hint | Native text on macOS ARM64 with Clang 21 |
 | --- | ---: | ---: |
