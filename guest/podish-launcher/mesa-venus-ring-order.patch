@@ -1,0 +1,45 @@
+--- a/src/virtio/vulkan/vn_ring.c
++++ b/src/virtio/vulkan/vn_ring.c
+@@ -90,7 +90,13 @@
+    /* the renderer is expected to store the head with memory_order_release,
+     * forming a release-acquire ordering
+     */
+-   return atomic_load_explicit(ring->shared.head, memory_order_acquire);
++   const uint32_t head =
++      atomic_load_explicit(ring->shared.head, memory_order_acquire);
++#if defined(__i386__)
++   /* Plain i386 loads do not order accesses against Podish's ARM renderer. */
++   __asm__ __volatile__("lfence" ::: "memory");
++#endif
++   return head;
+ }
+
+ static void
+@@ -99,8 +105,14 @@
+    /* the renderer is expected to load the tail with memory_order_acquire,
+     * forming a release-acquire ordering
+     */
+-   return atomic_store_explicit(ring->shared.tail, ring->cur,
+-                                memory_order_release);
++#if defined(__i386__)
++   /* GCC implements i386 release stores as plain mov instructions. Podish
++    * executes the guest on a weakly ordered host, so explicitly publish all
++    * command bytes before letting the native renderer read the new tail.
++    */
++   __asm__ __volatile__("sfence" ::: "memory");
++#endif
++   atomic_store_explicit(ring->shared.tail, ring->cur, memory_order_release);
+ }
+
+ uint32_t
+@@ -441,6 +453,10 @@
+    }
+
+    vn_ring_store_tail(ring);
++#if defined(__i386__)
++   /* The renderer may go idle concurrently with this submission. */
++   __asm__ __volatile__("mfence" ::: "memory");
++#endif
+    const VkRingStatusFlagsMESA status = vn_ring_load_status(ring);
+    if (status & VK_RING_STATUS_FATAL_BIT_MESA) {
+       vn_log(NULL, "vn_ring_submit abort on fatal");

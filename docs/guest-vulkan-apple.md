@@ -21,6 +21,8 @@ In the Vulkan build, the packaged Qt 6 launcher uses a desktop OpenGL 2.1 contex
 
 The virtio-gpu interface follows [iSH-AOK’s Apple Venus implementation](https://github.com/emkey1/ish-AOK/tree/9c02c6538103a4b185fce489fab069ff2b1b35de). The packaged Mesa KosmicKrisp driver supplies Vulkan entry points directly to Venus and DiligentCore. Venus imports the backing of linear PRIME images through `VK_EXT_external_memory_host`. DiligentCore imports the same backing as a storage buffer and uses the Vulkan image’s actual plane offset and row pitch. The guest sees virtual DMA-BUF descriptors and `sync_file` fences, with fence completion driven by the host renderer.
 
+The i386 Venus driver issues explicit memory barriers when consuming the command ring head, publishing the tail, and checking idle status after submission. These barriers order shared-memory accesses between the emulated x86 producer and the native ARM consumer without waiting for GPU work.
+
 ## Build
 
 Use one of these commands from the repository root. See the [Apple app build instructions](../PodishApp/README.md) for tooling and individual build steps.
