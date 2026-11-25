@@ -267,6 +267,9 @@ public partial class SyscallManager
             return await SplicePipes(task, fileIn, sourcePipe, fileOut, targetPipe, len, flags);
         }
 
+        var prepare = await fileOut.IoInode!.PrepareWriteAsync(task, fileOut);
+        if (prepare < 0) return prepare;
+
         // Resolve read offset
         var readOffset = fileIn.Position;
         if (offIn != 0)
@@ -286,8 +289,9 @@ public partial class SyscallManager
         }
 
         var bufSize = Math.Min(len, 65536);
-        var buf = ArrayPool<byte>.Shared.Rent(bufSize);
-        var rented = new TaskIoBuffer<byte>(buf);
+        var asyncRead = fileIn.IoInode!.SupportsAsyncRead;
+        var buf = asyncRead ? new byte[bufSize] : ArrayPool<byte>.Shared.Rent(bufSize);
+        var rented = asyncRead ? default : new TaskIoBuffer<byte>(buf);
         var totalTransferred = 0;
 
         try
@@ -295,9 +299,20 @@ public partial class SyscallManager
             var remaining = len;
             while (remaining > 0)
             {
+                if (asyncRead && offIn == 0 && readOffset != fileIn.Position)
+                {
+                    if (totalTransferred > 0) break;
+                    readOffset = fileIn.Position;
+                }
                 var toRead = Math.Min(remaining, bufSize);
-                var bytesRead = fileIn.IoInode!.ReadToHost(task, fileIn, buf.AsSpan(0, toRead), readOffset);
+                var bytesRead = await fileIn.IoInode!.ReadToHostAsync(task, fileIn, buf.AsMemory(0, toRead), readOffset);
 
+                if (asyncRead && offIn == 0 && readOffset != fileIn.Position && bytesRead >= 0)
+                {
+                    if (totalTransferred > 0) break;
+                    readOffset = fileIn.Position;
+                    continue;
+                }
                 if (bytesRead == 0) break; // EOF
                 if (bytesRead == -(int)Errno.EAGAIN)
                 {
@@ -312,11 +327,17 @@ public partial class SyscallManager
                     continue;
                 }
 
-                if (bytesRead < 0) return bytesRead;
+                if (bytesRead < 0)
+                {
+                    if (totalTransferred == 0) return bytesRead;
+                    break;
+                }
 
                 var writeConsumed = 0;
                 while (writeConsumed < bytesRead)
                 {
+                    if (asyncRead && offIn == 0 && fileIn.Position != readOffset + writeConsumed)
+                        break;
                     var bytesWritten = fileOut.IoInode!.WriteFromHost(task, fileOut,
                         buf.AsSpan(writeConsumed, bytesRead - writeConsumed), writeOffset);
 
@@ -344,19 +365,24 @@ public partial class SyscallManager
                         return bytesWritten;
                     }
 
+                    if (bytesWritten == 0) break;
                     writeConsumed += bytesWritten;
                     writeOffset += bytesWritten;
                     totalTransferred += bytesWritten;
                     remaining -= bytesWritten;
+                    if (asyncRead && offIn == 0) fileIn.Position = readOffset + writeConsumed;
                 }
 
-                readOffset += bytesRead;
+                if (asyncRead && totalTransferred == 0 && offIn == 0 && fileIn.Position != readOffset)
+                    continue;
+                readOffset += asyncRead ? writeConsumed : bytesRead;
+                if (writeConsumed == 0 || asyncRead && writeConsumed < bytesRead) break;
             }
 
             // Update guest offsets if ptrs were provided
             if (offIn != 0)
                 task.CPU.CopyToUser(offIn, BitConverter.GetBytes(readOffset));
-            else
+            else if (!asyncRead)
                 fileIn.Position = readOffset;
 
             if (offOut != 0)

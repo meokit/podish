@@ -80,6 +80,76 @@ public class FsFdReviewRegressionTests
         Assert.Equal(-(int)Errno.EINVAL, await env.Call("SysFdatasync", (uint)socket));
     }
 
+    [Fact]
+    public async Task AsyncRead_YieldsAndKeepsOriginalOpenFileAfterFdReuse()
+    {
+        using var env = new TestEnv();
+        var inode = new DeferredReadInode { SuperBlock = env.Sm.MemfdSuperBlock, Type = InodeType.File };
+        var dentry = new Dentry(FsName.FromString("deferred"), inode, null, inode.SuperBlock);
+        var original = new LinuxFile(dentry, FileFlags.O_RDONLY, env.Sm.AnonMount);
+        var fd = env.Sm.AllocFD(original);
+
+        var pending = env.Call("SysRead", (uint)fd, DataPtr, 3);
+        Assert.False(pending.IsCompleted);
+        Assert.Equal(0, await env.Call("SysClose", (uint)fd));
+        Assert.False(original.IsClosed);
+
+        var replacement = env.AddFile("ready", "NOW");
+        Assert.Equal(fd, replacement);
+        Assert.Equal(3, await env.Call("SysRead", (uint)replacement, InfoPtr, 3));
+        Assert.False(pending.IsCompleted);
+
+        inode.Complete("OLD"u8.ToArray());
+        Assert.Equal(3, await pending);
+        var data = new byte[3];
+        Assert.True(env.Engine.CopyFromUser(DataPtr, data));
+        Assert.Equal("OLD"u8.ToArray(), data);
+        Assert.True(original.IsClosed);
+        Assert.Equal(3, env.Sm.GetFD(replacement)!.Position);
+    }
+
+    [Fact]
+    public async Task AsyncRead_RechecksSharedFilePositionAfterSuspension()
+    {
+        using var env = new TestEnv();
+        var inode = new DeferredReadInode { SuperBlock = env.Sm.MemfdSuperBlock, Type = InodeType.File };
+        var dentry = new Dentry(FsName.FromString("deferred"), inode, null, inode.SuperBlock);
+        var file = new LinuxFile(dentry, FileFlags.O_RDONLY, env.Sm.AnonMount);
+        var fd = env.Sm.AllocFD(file);
+
+        var pending = env.Call("SysRead", (uint)fd, DataPtr, 3);
+        Assert.False(pending.IsCompleted);
+        Assert.Equal(1, await env.Call("SysLseek", (uint)fd, 1, 0));
+        inode.Complete("DATA"u8.ToArray());
+
+        Assert.Equal(3, await pending);
+        var data = new byte[3];
+        Assert.True(env.Engine.CopyFromUser(DataPtr, data));
+        Assert.Equal("ATA"u8.ToArray(), data);
+        Assert.Equal(4, file.Position);
+    }
+
+    private sealed class DeferredReadInode : Inode
+    {
+        private readonly TaskCompletionSource<byte[]> _data = new();
+
+        public override bool SupportsAsyncRead => true;
+        public void Complete(byte[] bytes) => _data.SetResult(bytes);
+
+        public override int ReadToHost(FiberTask? task, LinuxFile file, Span<byte> buffer, long offset = -1)
+            => throw new InvalidOperationException("Async file used the synchronous read path.");
+
+        public override async ValueTask<int> ReadToHostAsync(FiberTask? task, LinuxFile? file, Memory<byte> buffer,
+            long offset, bool noWait = false)
+        {
+            if (noWait && !_data.Task.IsCompleted) return -(int)Errno.EAGAIN;
+            var data = await _data.Task;
+            var length = Math.Min(buffer.Length, data.Length - (int)offset);
+            data.AsMemory((int)offset, length).CopyTo(buffer);
+            return length;
+        }
+    }
+
     // Review #2: ArrayPool<T>.Rent(n) is not an n-element input vector.
     [Theory]
     [InlineData(1)]

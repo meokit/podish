@@ -1398,6 +1398,17 @@ public abstract class Inode : IAddressSpaceOperations, IBackingPageHandleRelease
         return 0;
     }
 
+    public virtual bool SupportsAsyncRead => false;
+
+    // The buffer belongs to the caller. An async backend must keep guest
+    // addresses out of its operation and write only into this managed memory.
+    public virtual ValueTask<int> ReadToHostAsync(FiberTask? task, LinuxFile? file, Memory<byte> buffer, long offset,
+        bool noWait = false)
+        => ValueTask.FromResult(ReadToHost(task, file!, buffer.Span, offset));
+
+    public virtual ValueTask<int> PrepareWriteAsync(FiberTask? task, LinuxFile file)
+        => ValueTask.FromResult(0);
+
     public virtual int WriteFromHost(FiberTask? task, LinuxFile file, ReadOnlySpan<byte> buffer, long offset = -1)
     {
         _ = file;
@@ -1424,7 +1435,60 @@ public abstract class Inode : IAddressSpaceOperations, IBackingPageHandleRelease
     public virtual async ValueTask<int> ReadV(Engine engine, LinuxFile file, FiberTask? task, ArraySegment<Iovec> iovs,
         long offset, int flags)
     {
+        if (SupportsAsyncRead && task != null)
+            return await ReadVAsync(engine, file, task, iovs, offset, flags);
         return await ReadVViaHostBuffer(engine, file, task, iovs, offset, flags);
+    }
+
+    protected async ValueTask<int> ReadVAsync(Engine engine, LinuxFile file, FiberTask task,
+        ArraySegment<Iovec> iovs, long offset, int flags)
+    {
+        const int RwfNowait = 0x8;
+        if (offset < -1) return -(int)Errno.EINVAL;
+
+        var usePosition = offset == -1;
+        var current = usePosition ? file.Position : offset;
+        if (current < 0) return -(int)Errno.EINVAL;
+        var total = 0;
+        byte[]? buffer = null;
+        foreach (var iov in iovs)
+        {
+            var remaining = iov.Len;
+            var address = iov.BaseAddr;
+            while (remaining > 0)
+            {
+                if (usePosition && file.Position != current)
+                {
+                    // Another reader or lseek changed the open description while
+                    // I/O was pending. Finish the contiguous prefix or retry.
+                    if (total > 0) return total;
+                    current = file.Position;
+                }
+
+                if (engine.GetPhysicalAddressSafe(address, true) == IntPtr.Zero &&
+                    (engine.PageFaultResolver?.Invoke(address, true) != true ||
+                     engine.GetPhysicalAddressSafe(address, true) == IntPtr.Zero))
+                    return total > 0 ? total : -(int)Errno.EFAULT;
+                var length = (int)Math.Min(remaining,
+                    (uint)LinuxConstants.PageSize - (address & LinuxConstants.PageOffsetMask));
+                buffer ??= new byte[LinuxConstants.PageSize];
+                var count = await ReadToHostAsync(task, file, buffer.AsMemory(0, length), current, (flags & RwfNowait) != 0);
+                if (usePosition && file.Position != current && count >= 0) continue;
+                if (count <= 0) return total > 0 ? total : count;
+                if ((uint)count > (uint)length) return total > 0 ? total : -(int)Errno.EIO;
+                if (!engine.CopyToUser(address, buffer.AsSpan(0, count)))
+                    return total > 0 ? total : -(int)Errno.EFAULT;
+
+                total += count;
+                current += count;
+                if (usePosition) file.Position = current;
+                if (count < length) return total;
+                remaining -= (uint)count;
+                address += (uint)count;
+            }
+        }
+
+        return total;
     }
 
     protected async ValueTask<int> ReadVViaHostBuffer(Engine engine, LinuxFile file, FiberTask? task,
@@ -3340,6 +3404,8 @@ public abstract class MappingBackedInode : Inode
     public override ValueTask<int> ReadV(Engine engine, LinuxFile file, FiberTask? task, ArraySegment<Iovec> iovs,
         long offset, int flags)
     {
+        if (SupportsAsyncRead && task != null)
+            return ReadVAsync(engine, file, task, iovs, offset, flags);
         _ = task;
         _ = flags;
         if (offset < -1)

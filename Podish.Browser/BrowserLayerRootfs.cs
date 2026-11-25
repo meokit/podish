@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
 using System.Runtime.Versioning;
 using Fiberish.Core;
+using Fiberish.Native;
 using Fiberish.VFS;
 using Microsoft.Extensions.Logging;
 using Podish.Core;
@@ -112,7 +113,7 @@ internal static class BrowserLayerRootfs
 
     private sealed class BrowserHttpLayerContentProvider(
         IReadOnlyDictionary<string, string> digestToBlobUrl,
-        int timeoutMs) : ILayerContentProvider
+        int timeoutMs) : IAsyncLayerContentProvider
     {
         private readonly Lock _sync = new();
         private readonly Dictionary<BlobWindowKey, byte[]> _windows = new();
@@ -124,63 +125,87 @@ internal static class BrowserLayerRootfs
         public bool TryRead(LayerIndexEntry entry, long offset, Span<byte> buffer, out int bytesRead)
         {
             bytesRead = 0;
-            if (entry.Type != InodeType.File)
-                return true;
+            var count = GetReadLength(entry, offset, buffer.Length);
+            if (count <= 0) return count == 0;
+            if (TryReadInline(entry, offset, buffer[..count], out bytesRead)) return true;
+            if (!TryGetReadWindow(entry, offset, count, out var key, out var url, out var skip)) return false;
 
-            var hasBlobBacking = entry.DataOffset >= 0 && !string.IsNullOrWhiteSpace(entry.BlobDigest);
-            if (!hasBlobBacking && entry.InlineData != null)
+            if (!TryGetWindow(key, out var window))
             {
-                if (offset >= entry.InlineData.Length)
-                    return true;
-
-                var remaining = entry.InlineData.Length - (int)offset;
-                var toCopy = Math.Min(buffer.Length, remaining);
-                entry.InlineData.AsSpan((int)offset, toCopy).CopyTo(buffer);
-                bytesRead = toCopy;
-                return true;
+                if (!TryFetchWindow(url, key.WindowStart, key.WindowLength, out window)) return false;
+                StoreWindow(key, window);
             }
 
-            if (entry.DataOffset < 0 || string.IsNullOrWhiteSpace(entry.BlobDigest))
-                return false;
-            if (!digestToBlobUrl.TryGetValue(entry.BlobDigest, out var blobUrl))
-                return false;
-            if (offset < 0)
-                return false;
-            if ((ulong)offset >= entry.Size)
-                return true;
-
-            var remainingInEntry = (long)entry.Size - offset;
-            if (remainingInEntry <= 0)
-                return true;
-
-            var maxReadable = (int)Math.Min(buffer.Length, remainingInEntry);
-            if (maxReadable <= 0)
-                return true;
-
-            var absoluteOffset = entry.DataOffset + offset;
-            var windowStart = AlignDown(absoluteOffset, MinimumReadAheadBytes);
-            var offsetInWindow = checked((int)(absoluteOffset - windowStart));
-            var requiredBytes = offsetInWindow + maxReadable;
-            var fetchLength = AlignUp(Math.Max(MinimumReadAheadBytes, requiredBytes), MinimumReadAheadBytes);
-            var cacheKey = new BlobWindowKey(entry.BlobDigest, windowStart, fetchLength);
-
-            if (!TryGetWindow(cacheKey, out var cachedWindow))
-            {
-                if (!TryFetchWindow(blobUrl, windowStart, fetchLength, out cachedWindow))
-                    return false;
-                StoreWindow(cacheKey, cachedWindow);
-            }
-
-            if (offsetInWindow >= cachedWindow.Length)
-                return true;
-
-            var available = Math.Min(maxReadable, cachedWindow.Length - offsetInWindow);
-            if (available <= 0)
-                return true;
-
-            cachedWindow.AsSpan(offsetInWindow, available).CopyTo(buffer);
-            bytesRead = available;
+            bytesRead = CopyWindow(window, skip, buffer[..count]);
             return true;
+        }
+
+        public async ValueTask<int> ReadAsync(LayerIndexEntry entry, long offset, Memory<byte> buffer, FiberTask task,
+            bool noWait)
+        {
+            var count = GetReadLength(entry, offset, buffer.Length);
+            if (count <= 0) return count;
+            if (TryReadInline(entry, offset, buffer.Span[..count], out var bytesRead)) return bytesRead;
+            if (!TryGetReadWindow(entry, offset, count, out var key, out var url, out var skip)) return -(int)Errno.EIO;
+
+            if (!TryGetWindow(key, out var window))
+            {
+                if (noWait) return -(int)Errno.EAGAIN;
+                var received = new byte[key.WindowLength];
+                var result = await BrowserHttpRpc.ReadRangeAsync(url, key.WindowStart, received, task, timeoutMs);
+                if (result == -(int)Errno.ERESTARTSYS) return result;
+                if (result < 0) return -(int)Errno.EIO;
+                window = result == received.Length ? received : received[..result];
+                StoreWindow(key, window);
+            }
+
+            return CopyWindow(window, skip, buffer.Span[..count]);
+        }
+
+        private static int GetReadLength(LayerIndexEntry entry, long offset, int bufferLength)
+        {
+            if (offset < 0) return -(int)Errno.EINVAL;
+            if (entry.Type != InodeType.File || (ulong)offset >= entry.Size) return 0;
+            return (int)Math.Min((ulong)bufferLength, entry.Size - (ulong)offset);
+        }
+
+        private static bool TryReadInline(LayerIndexEntry entry, long offset, Span<byte> buffer, out int bytesRead)
+        {
+            bytesRead = 0;
+            if (entry.DataOffset >= 0 && !string.IsNullOrWhiteSpace(entry.BlobDigest)) return false;
+            if (entry.InlineData is not { } data) return false;
+            if (offset < data.Length)
+            {
+                bytesRead = Math.Min(buffer.Length, data.Length - (int)offset);
+                data.AsSpan((int)offset, bytesRead).CopyTo(buffer);
+            }
+            return true;
+        }
+
+        private bool TryGetReadWindow(LayerIndexEntry entry, long offset, int count,
+            out BlobWindowKey key, out string url, out int skip)
+        {
+            key = default;
+            url = string.Empty;
+            skip = 0;
+            if (entry.DataOffset < 0 || string.IsNullOrWhiteSpace(entry.BlobDigest) ||
+                !digestToBlobUrl.TryGetValue(entry.BlobDigest, out var blobUrl))
+                return false;
+
+            url = blobUrl;
+            var absoluteOffset = checked(entry.DataOffset + offset);
+            var start = AlignDown(absoluteOffset, MinimumReadAheadBytes);
+            skip = (int)(absoluteOffset - start);
+            var length = AlignUp(checked(skip + count), MinimumReadAheadBytes);
+            key = new BlobWindowKey(entry.BlobDigest, start, length);
+            return true;
+        }
+
+        private static int CopyWindow(byte[] window, int skip, Span<byte> buffer)
+        {
+            var available = Math.Clamp(window.Length - skip, 0, buffer.Length);
+            if (available > 0) window.AsSpan(skip, available).CopyTo(buffer);
+            return available;
         }
 
         private bool TryFetchWindow(string blobUrl, long windowStart, int fetchLength, out byte[] window)

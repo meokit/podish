@@ -94,11 +94,14 @@ public partial class SyscallManager
                 return (-(int)Errno.EINVAL, null);
         }
         if (count == 0) return (0, offset);
+        var prepare = await outFile.IoInode!.PrepareWriteAsync(task, outFile);
+        if (prepare < 0) return (prepare, null);
 
         // Use a buffer
         var bufLen = Math.Min(count, 32768);
-        var buffer = ArrayPool<byte>.Shared.Rent(bufLen);
-        var rented = new TaskIoBuffer<byte>(buffer);
+        var asyncRead = inFile.IoInode!.SupportsAsyncRead;
+        var buffer = asyncRead ? new byte[bufLen] : ArrayPool<byte>.Shared.Rent(bufLen);
+        var rented = asyncRead ? default : new TaskIoBuffer<byte>(buffer);
         var totalWritten = 0;
 
         try
@@ -111,7 +114,14 @@ public partial class SyscallManager
                 var toRead = Math.Min(remaining, bufLen);
                 var bytesRead = inFile.IoInode is PipeInode inputPipe
                     ? inputPipe.Peek(buffer.AsSpan(0, toRead))
-                    : inFile.IoInode!.ReadToHost(task, inFile, buffer.AsSpan(0, toRead), readOffset);
+                    : await inFile.IoInode!.ReadToHostAsync(task, inFile, buffer.AsMemory(0, toRead), readOffset);
+
+                if (asyncRead && !offset.HasValue && inFile.Position != readOffset && bytesRead >= 0)
+                {
+                    if (totalWritten > 0) break;
+                    readOffset = inFile.Position;
+                    continue;
+                }
 
                 if (bytesRead <= 0)
                 {
@@ -831,6 +841,12 @@ public partial class SyscallManager
 
         if (f.OpenedInode == null)
             return -(int)Errno.EINVAL;
+
+        if (new ArraySegment<Iovec>(iovs, 0, iovCnt).Any(iov => iov.Len != 0))
+        {
+            var prepare = await f.IoInode!.PrepareWriteAsync(task, f);
+            if (prepare < 0) return prepare;
+        }
 
         var writeStartOffset = offset == -1
             ? (f.Flags & FileFlags.O_APPEND) != 0 ? (long)f.OpenedInode.Size : f.Position

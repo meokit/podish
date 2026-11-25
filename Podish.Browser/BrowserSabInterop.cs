@@ -78,7 +78,8 @@ internal static partial class BrowserSabInterop
         int rangeStartLow,
         int rangeStartHigh,
         int rangeLength,
-        int timeoutMs = -1);
+        int timeoutMs,
+        bool asynchronous);
 
     [JSImport("httpRpcGetRequestFlags", "podish-worker.mjs")]
     internal static partial int HttpRpcGetRequestFlags(int requestId);

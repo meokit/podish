@@ -492,6 +492,12 @@ public sealed class OverlayNodeState
         }
     }
 
+    internal bool HasChildState(FsName name, OverlayNodeState expected)
+    {
+        lock (SyncRoot)
+            return _children.TryGetValue(name, out var state) && ReferenceEquals(state, expected);
+    }
+
     public void AttachChildState(FsName name, OverlayNodeState state, IReadOnlyList<Dentry>? lowers, Dentry? upper)
     {
         lock (SyncRoot)
@@ -865,7 +871,9 @@ public class OverlayInode : MappingBackedInode
             alias.SetInitialLinkCount(refreshedLinkCount, reason);
     }
 
-    public int CopyUp(LinuxFile? linuxFile)
+    public int CopyUp(LinuxFile? linuxFile) => CopyUp(linuxFile, null);
+
+    private int CopyUp(LinuxFile? linuxFile, List<byte[]>? stagedPayload)
     {
         lock (_state.SyncRoot)
         {
@@ -875,7 +883,7 @@ public class OverlayInode : MappingBackedInode
             var ensureParentRc = EnsureParentUpper(LowerDentry, out var upperParent);
             if (ensureParentRc < 0)
                 return ensureParentRc;
-            var copyRc = CopyUpToUpper(upperParent, LowerDentry.Name, linuxFile);
+            var copyRc = CopyUpToUpper(upperParent, LowerDentry.Name, linuxFile, stagedPayload);
             if (copyRc < 0)
                 return copyRc;
         }
@@ -903,7 +911,8 @@ public class OverlayInode : MappingBackedInode
         }
     }
 
-    private int CopyUpToUpper(Dentry upperParent, FsName upperName, LinuxFile? linuxFile)
+    private int CopyUpToUpper(Dentry upperParent, FsName upperName, LinuxFile? linuxFile,
+        List<byte[]>? stagedPayload = null)
     {
         var osb = (OverlaySuperBlock)SuperBlock;
         var upperDentry = new Dentry(upperName, null, upperParent, osb.UpperSB);
@@ -964,7 +973,21 @@ public class OverlayInode : MappingBackedInode
                 if (copyPayloadRc < 0)
                     break;
 
-                if (lowerInode != null)
+                if (stagedPayload != null)
+                {
+                    long pos = 0;
+                    foreach (var chunk in stagedPayload)
+                    {
+                        var written = upperDentry.Inode!.WriteFromHost(null, null!, chunk, pos);
+                        if (written != chunk.Length)
+                        {
+                            copyPayloadRc = written < 0 ? written : -(int)Errno.EIO;
+                            break;
+                        }
+                        pos += written;
+                    }
+                }
+                else if (lowerInode != null)
                 {
                     LinuxFile? copyFile = null;
                     if (linuxFile == null && LowerDentry != null)
@@ -1766,6 +1789,39 @@ public class OverlayInode : MappingBackedInode
         return ReadWithPageCache(linuxFile, buffer, offset);
     }
 
+    public override bool SupportsAsyncRead => ResolveSourceForFile(null)?.SupportsAsyncRead == true;
+
+    public override ValueTask<int> ReadToHostAsync(FiberTask? task, LinuxFile? file, Memory<byte> buffer, long offset,
+        bool noWait = false)
+        => ResolveSourceForFile(file)?.ReadToHostAsync(task, file, buffer, offset, noWait) ?? ValueTask.FromResult(0);
+
+    public override async ValueTask<int> PrepareWriteAsync(FiberTask? task, LinuxFile file)
+    {
+        if (UpperInode != null || LowerInode is not { SupportsAsyncRead: true, Type: InodeType.File } lower ||
+            task == null)
+            return 0;
+
+        // Keep the upper entry invisible until all potentially blocking reads
+        // are complete. CopyUp rechecks the winner under the overlay lock.
+        var payload = new List<byte[]>();
+        long offset = 0;
+        while (offset < (long)lower.Size)
+        {
+            var chunk = new byte[(int)Math.Min(64 * 1024, (long)lower.Size - offset)];
+            var count = await lower.ReadToHostAsync(task, file, chunk, offset);
+            if (UpperInode != null) return 0;
+            if (count < 0) return count;
+            if (count == 0 || count > chunk.Length) return -(int)Errno.EIO;
+            payload.Add(count == chunk.Length ? chunk : chunk[..count]);
+            offset += count;
+        }
+        // The original name may have been unlinked or replaced while fetching.
+        if (file.Dentry.Parent?.Inode is OverlayInode parent &&
+            !parent._state.HasChildState(file.Dentry.Name, _state))
+            return -(int)Errno.ENOENT;
+        return CopyUp(file, payload);
+    }
+
     public override ValueTask<int> ReadV(Engine engine, LinuxFile file, FiberTask? task, ArraySegment<Iovec> iovs,
         long offset, int flags)
     {
@@ -1797,6 +1853,8 @@ public class OverlayInode : MappingBackedInode
     public override ValueTask<int> WriteV(Engine engine, LinuxFile file, FiberTask? task,
         ArraySegment<Iovec> iovs, long offset, int flags)
     {
+        if (Type == InodeType.File && !iovs.Any(iov => iov.Len != 0))
+            return ValueTask.FromResult(0);
         var copyRc = EnsureWritableBacking(file);
         if (copyRc < 0)
             return ValueTask.FromResult(copyRc);
@@ -1952,7 +2010,7 @@ public class OverlayInode : MappingBackedInode
             return rc;
         }
 
-        var res = CopyUp(null);
+        var res = CopyUp(null, size == 0 ? [] : null);
         if (res < 0) return res;
         var truncateRc = UpperInode!.Truncate(size);
         if (truncateRc == 0)
@@ -1985,7 +2043,7 @@ public class OverlayInode : MappingBackedInode
             return rc;
         }
 
-        var res = CopyUp(null);
+        var res = CopyUp(null, length == 0 ? [] : null);
         if (res < 0) return res;
         var truncateRc = UpperInode!.Truncate(length, context);
         if (truncateRc == 0)

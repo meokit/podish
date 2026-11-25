@@ -15,6 +15,7 @@ export const HTTP_RPC_STATE_CHUNK_READY = 4
 export const HTTP_RPC_STATE_EOF = 5
 export const HTTP_RPC_STATE_ERROR = 6
 export const HTTP_RPC_STATE_CANCELLED = 7
+const HTTP_RPC_STATE_ALLOCATING = 8
 
 export const HTTP_RPC_OPCODE_STREAM_GET = 1
 
@@ -36,7 +37,7 @@ export const HTTP_RPC_FLAG_CANCELLED = 1 << 4
 
 const HEADER_NEXT_REQUEST_ID_INDEX = 0
 const HEADER_I32_COUNT = 1
-const SLOT_META_I32_COUNT = 14
+const SLOT_META_I32_COUNT = 15
 
 const SLOT_META_STATE = 0
 const SLOT_META_REQUEST_ID = 1
@@ -52,6 +53,7 @@ const SLOT_META_RANGE_MODE = 10
 const SLOT_META_RANGE_START_LOW = 11
 const SLOT_META_RANGE_START_HIGH = 12
 const SLOT_META_RANGE_LENGTH = 13
+const SLOT_META_CLOSE_PENDING = 14
 
 export function createHttpRpcStorage() {
     const metadataBytes = HTTP_RPC_SLOT_COUNT * SLOT_META_I32_COUNT * 4
@@ -108,7 +110,7 @@ export function attachHttpRpcController(buffer) {
         return Atomics.load(metadata, slotFieldIndex(slotId, SLOT_META_FLAGS)) | 0
     }
 
-    function tryBeginStreamRequest(urlBytes, rangeMode = HTTP_RPC_RANGE_MODE_NONE, rangeStartLow = 0, rangeStartHigh = 0, rangeLength = -1, timeoutMs = -1) {
+    function tryBeginStreamRequest(urlBytes, rangeMode = HTTP_RPC_RANGE_MODE_NONE, rangeStartLow = 0, rangeStartHigh = 0, rangeLength = -1, timeoutMs = -1, asynchronous = false) {
         if (!(urlBytes instanceof Uint8Array))
             throw new TypeError('urlBytes must be a Uint8Array')
         if (urlBytes.length > HTTP_RPC_REQUEST_TEXT_CAPACITY)
@@ -122,9 +124,11 @@ export function attachHttpRpcController(buffer) {
         if (rangeMode === HTTP_RPC_RANGE_MODE_BOUNDED && rangeLength < 0)
             return HTTP_RPC_RESULT_INVALID_REQUEST
 
-        for (let slotId = 0; slotId < HTTP_RPC_SLOT_COUNT; slotId += 1) {
+        // Leave a slot available for synchronous callers such as the mmap pager.
+        const firstSlot = asynchronous ? 1 : 0
+        for (let slotId = firstSlot; slotId < HTTP_RPC_SLOT_COUNT; slotId += 1) {
             const stateIndex = slotFieldIndex(slotId, SLOT_META_STATE)
-            if (Atomics.compareExchange(metadata, stateIndex, HTTP_RPC_STATE_FREE, HTTP_RPC_STATE_BEGIN_PENDING) !== HTTP_RPC_STATE_FREE)
+            if (Atomics.compareExchange(metadata, stateIndex, HTTP_RPC_STATE_FREE, HTTP_RPC_STATE_ALLOCATING) !== HTTP_RPC_STATE_FREE)
                 continue
 
             const requestId = (Atomics.add(header, HEADER_NEXT_REQUEST_ID_INDEX, 1) + 1) | 0
@@ -145,6 +149,7 @@ export function attachHttpRpcController(buffer) {
             Atomics.store(metadata, slotFieldIndex(slotId, SLOT_META_RANGE_START_HIGH), rangeStartHigh | 0)
             Atomics.store(metadata, slotFieldIndex(slotId, SLOT_META_RANGE_LENGTH), rangeLength | 0)
             setFlags(slotId, 0)
+            Atomics.store(metadata, stateIndex, HTTP_RPC_STATE_BEGIN_PENDING)
             return requestId
         }
 
@@ -209,7 +214,7 @@ export function attachHttpRpcController(buffer) {
         if (slotId < 0 || slotId >= HTTP_RPC_SLOT_COUNT)
             return null
         const state = getSlotState(slotId)
-        if (state !== HTTP_RPC_STATE_BEGIN_PENDING)
+        if (state !== HTTP_RPC_STATE_BEGIN_PENDING || Atomics.load(metadata, slotFieldIndex(slotId, SLOT_META_CLOSE_PENDING)))
             return null
 
         const requestId = Atomics.load(metadata, slotFieldIndex(slotId, SLOT_META_REQUEST_ID)) | 0
@@ -240,7 +245,8 @@ export function attachHttpRpcController(buffer) {
     function readPendingChunkRequest(slotId) {
         if (slotId < 0 || slotId >= HTTP_RPC_SLOT_COUNT)
             return null
-        if (getSlotState(slotId) !== HTTP_RPC_STATE_READ_PENDING)
+        if (getSlotState(slotId) !== HTTP_RPC_STATE_READ_PENDING ||
+            Atomics.load(metadata, slotFieldIndex(slotId, SLOT_META_CLOSE_PENDING)))
             return null
 
         return {
@@ -343,23 +349,30 @@ export function attachHttpRpcController(buffer) {
         return Atomics.load(metadata, slotFieldIndex(slotId, SLOT_META_RESULT_CODE)) | 0 || HTTP_RPC_RESULT_NETWORK_ERROR
     }
 
-    function closeRequest(requestId, resultCode = HTTP_RPC_RESULT_CANCELLED) {
+    function closeRequest(requestId) {
         const slotId = findSlotByRequestId(requestId)
-        if (slotId < 0) {
-            console.warn(`[http-rpc/shared] close-missing requestId=${requestId} resultCode=${resultCode}`)
+        if (slotId < 0)
             return false
-        }
-        if (resultCode === HTTP_RPC_RESULT_CANCELLED) {
-            Atomics.store(metadata, slotFieldIndex(slotId, SLOT_META_RESULT_CODE), resultCode | 0)
-            Atomics.store(metadata, slotFieldIndex(slotId, SLOT_META_RESPONSE_LENGTH), 0)
-            Atomics.store(metadata, slotFieldIndex(slotId, SLOT_META_REQUESTED_LENGTH), 0)
-            setFlags(slotId, HTTP_RPC_FLAG_STARTED | HTTP_RPC_FLAG_CANCELLED)
-            Atomics.store(metadata, slotFieldIndex(slotId, SLOT_META_STATE), HTTP_RPC_STATE_CANCELLED)
+        const state = getSlotState(slotId)
+        if (state === HTTP_RPC_STATE_BEGIN_PENDING || state === HTTP_RPC_STATE_READ_PENDING) {
+            // The browser thread may be publishing into the shared response arena.
+            // Let that thread reclaim the slot before the worker can reuse it.
+            Atomics.store(metadata, slotFieldIndex(slotId, SLOT_META_CLOSE_PENDING), 1)
         } else {
-            completeFailure(slotId, requestId, resultCode)
+            resetSlot(slotId)
         }
-        resetSlot(slotId)
         return true
+    }
+
+    function reclaimClosedRequests() {
+        let reclaimed = false
+        for (let slotId = 0; slotId < HTTP_RPC_SLOT_COUNT; slotId += 1) {
+            if (!Atomics.load(metadata, slotFieldIndex(slotId, SLOT_META_CLOSE_PENDING)))
+                continue
+            resetSlot(slotId)
+            reclaimed = true
+        }
+        return reclaimed
     }
 
     return {
@@ -378,5 +391,6 @@ export function attachHttpRpcController(buffer) {
         completeFailure,
         tryReadStreamChunkInto,
         closeRequest,
+        reclaimClosedRequests,
     }
 }

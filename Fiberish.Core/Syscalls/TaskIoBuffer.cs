@@ -21,8 +21,8 @@ internal struct TaskIoBuffer<T>(T[] buffer, ArrayPool<T>? pool = null) : IDispos
 
     internal void TrackPending(FiberTask? task)
     {
-        if (_pending != null || task == null) return;
-        _pending = new PendingBuffer(_buffer!, _pool);
+        if (_buffer == null || _pending != null || task == null) return;
+        _pending = new PendingBuffer(_buffer, _pool);
         if (task.TryEnterAsyncOperation(null, out _cleanup) && _cleanup != null)
             _cleanup.TryAddRegistration(_pending);
         else

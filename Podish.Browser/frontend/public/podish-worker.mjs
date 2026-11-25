@@ -166,7 +166,7 @@ export function writeLogPacketFromMemory(eventType, ptr, len, flags = 0) {
     return written;
 }
 
-export function httpRpcBeginStreamGet(urlPtr, urlUtf8Length, rangeMode = 0, rangeStartLow = 0, rangeStartHigh = 0, rangeLength = -1, timeoutMs = -1) {
+export function httpRpcBeginStreamGet(urlPtr, urlUtf8Length, rangeMode = 0, rangeStartLow = 0, rangeStartHigh = 0, rangeLength = -1, timeoutMs = -1, asynchronous = false) {
     if (!runtimeInstance || !httpRpc)
         return 0;
 
@@ -180,6 +180,7 @@ export function httpRpcBeginStreamGet(urlPtr, urlUtf8Length, rangeMode = 0, rang
         rangeStartHigh | 0,
         rangeLength | 0,
         timeoutMs | 0,
+        asynchronous,
     );
     if (requestId > 0)
         self.postMessage({type: 'http-rpc-kick'});

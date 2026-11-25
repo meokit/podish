@@ -52,6 +52,11 @@ public interface ILayerContentProvider
     bool TryRead(LayerIndexEntry entry, long offset, Span<byte> buffer, out int bytesRead);
 }
 
+public interface IAsyncLayerContentProvider : ILayerContentProvider
+{
+    ValueTask<int> ReadAsync(LayerIndexEntry entry, long offset, Memory<byte> buffer, FiberTask task, bool noWait);
+}
+
 public sealed class InMemoryLayerContentProvider : ILayerContentProvider
 {
     public bool TryRead(LayerIndexEntry entry, long offset, Span<byte> buffer, out int bytesRead)
@@ -453,6 +458,16 @@ public class LayerInode : MappingBackedInode
         if (offset < 0) return -(int)Errno.EINVAL;
         if (_entry.Type != InodeType.File) return 0;
         return ReadWithPageCache(linuxFile, buffer, offset);
+    }
+
+    public override bool SupportsAsyncRead => ((LayerSuperBlock)SuperBlock).ContentProvider is IAsyncLayerContentProvider;
+
+    public override ValueTask<int> ReadToHostAsync(FiberTask? task, LinuxFile? file, Memory<byte> buffer, long offset,
+        bool noWait = false)
+    {
+        return task != null && ((LayerSuperBlock)SuperBlock).ContentProvider is IAsyncLayerContentProvider provider
+            ? provider.ReadAsync(_entry, offset, buffer, task, noWait)
+            : base.ReadToHostAsync(task, file, buffer, offset, noWait);
     }
 
     public override int Readlink(out string? target)

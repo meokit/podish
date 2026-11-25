@@ -219,36 +219,51 @@ public partial class SyscallManager
         // TODO: Permission Check
 
         var inode = loc.Dentry.Inode;
+        if (length != 0 && inode is OverlayInode { SupportsAsyncRead: true } && engine.Owner is FiberTask)
+        {
+            using var file = new LinuxFile(loc, FileFlags.O_RDONLY);
+            return sm.TruncateOpenFile(engine, file, inode, length, false);
+        }
         return new ValueTask<int>(inode.Truncate(length, sm.CreateFileMutationContext(engine)));
     }
 
-    private async ValueTask<int> SysFtruncate(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private ValueTask<int> SysFtruncate(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+        => Ftruncate(engine, (int)a1, (int)a2);
+
+    private ValueTask<int> SysFtruncate64(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+        uint a6)
+        => Ftruncate(engine, (int)a1, (long)(((ulong)a3 << 32) | a2));
+
+    private ValueTask<int> Ftruncate(Engine engine, int fd, long length)
     {
-        var fd = (int)a1;
-        var length = (long)(int)a2;
-        if (length < 0) return -(int)Errno.EINVAL;
+        if (length < 0) return ValueTask.FromResult(-(int)Errno.EINVAL);
 
-        var f = GetIoFD(fd);
-        if (f == null || f.OpenedInode == null) return -(int)Errno.EBADF;
-        if (f.OpenedInode.Type != InodeType.File) return -(int)Errno.EINVAL;
-        if ((f.Flags & FileFlags.O_ACCMODE) == FileFlags.O_RDONLY) return -(int)Errno.EINVAL;
+        var file = GetIoFD(fd);
+        if (file?.OpenedInode is not { } inode) return ValueTask.FromResult(-(int)Errno.EBADF);
+        if (inode.Type != InodeType.File || (file.Flags & FileFlags.O_ACCMODE) == FileFlags.O_RDONLY)
+            return ValueTask.FromResult(-(int)Errno.EINVAL);
 
-        return f.OpenedInode.Truncate(length, CreateFileMutationContext(engine));
+        return TruncateOpenFile(engine, file, inode, length, false);
     }
 
-    private async ValueTask<int> SysFtruncate64(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
-        uint a6)
+    private ValueTask<int> TruncateOpenFile(Engine engine, LinuxFile file, Inode inode, long length, bool onlyExtend)
     {
-        var fd = (int)a1;
-        var length = (long)(((ulong)a3 << 32) | a2);
-        if (length < 0) return -(int)Errno.EINVAL;
+        var task = engine.Owner as FiberTask;
+        var context = CreateFileMutationContext(engine);
+        var lease = new FileIoLease(file);
+        try { return lease.Complete(TruncateAsync(), task); }
+        finally { lease.Dispose(); }
 
-        var f = GetIoFD(fd);
-        if (f == null || f.OpenedInode == null) return -(int)Errno.EBADF;
-        if (f.OpenedInode.Type != InodeType.File) return -(int)Errno.EINVAL;
-        if ((f.Flags & FileFlags.O_ACCMODE) == FileFlags.O_RDONLY) return -(int)Errno.EINVAL;
-
-        return f.OpenedInode.Truncate(length, CreateFileMutationContext(engine));
+        async ValueTask<int> TruncateAsync()
+        {
+            if (length != 0)
+            {
+                var prepare = await inode.PrepareWriteAsync(task, file);
+                if (prepare < 0) return prepare;
+            }
+            if (onlyExtend && (ulong)length <= inode.Size) return 0;
+            return inode.Truncate(length, context);
+        }
     }
 
     private async ValueTask<int> SysFallocate(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -304,7 +319,7 @@ public partial class SyscallManager
         if (endOffset <= (long)file.OpenedInode.Size)
             return 0;
 
-        return file.OpenedInode.Truncate(endOffset, CreateFileMutationContext(engine));
+        return await TruncateOpenFile(engine, file, file.OpenedInode, endOffset, true);
     }
 
     private async ValueTask<int> SysRmdir(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -1792,28 +1807,32 @@ LocResolvedUtimens64:
         return 0;
     }
 
-    private async ValueTask<int> SysFsync(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private ValueTask<int> SysFsync(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var file = GetIoFD((int)a1);
-        if (file == null) return -(int)Errno.EBADF;
-        var inode = file.OpenedInode;
-        if (inode == null) return -(int)Errno.EBADF;
+        if (file?.OpenedInode is not { } inode) return ValueTask.FromResult(-(int)Errno.EBADF);
         if (inode.Type is InodeType.Fifo or InodeType.Socket)
-            return -(int)Errno.EINVAL;
+            return ValueTask.FromResult(-(int)Errno.EINVAL);
         var task = engine.Owner as FiberTask;
+        var lease = new FileIoLease(file);
+        try { return lease.Complete(FsyncAsync(engine, file, inode, (int)a1, task), task); }
+        finally { lease.Dispose(); }
+    }
 
+    private async ValueTask<int> FsyncAsync(Engine engine, LinuxFile file, Inode inode, int fd, FiberTask? task)
+    {
         BlockingHostOperationDebug.Trace(
-            $"SysFsync begin fd={(int)a1} inode={inode.Ino} tid={task?.TID} thread={Environment.CurrentManagedThreadId}");
+            $"SysFsync begin fd={fd} inode={inode.Ino} tid={task?.TID} thread={Environment.CurrentManagedThreadId}");
         ProcessAddressSpaceSync.SyncMappedFile(Mem, engine, file);
         var writebackRc = inode.WritePages(file, new WritePagesRequest(0, long.MaxValue,
             PageWritebackMode.WritebackOnly));
         BlockingHostOperationDebug.Trace(
-            $"SysFsync after-writeback fd={(int)a1} inode={inode.Ino} tid={task?.TID} rc={writebackRc}");
+            $"SysFsync after-writeback fd={fd} inode={inode.Ino} tid={task?.TID} rc={writebackRc}");
         if (writebackRc < 0 && writebackRc != -(int)Errno.EOPNOTSUPP && writebackRc != -(int)Errno.EROFS)
             return writebackRc;
         var durableRc = await inode.FlushWritebackToDurableAsync(file, task);
         BlockingHostOperationDebug.Trace(
-            $"SysFsync after-durable fd={(int)a1} inode={inode.Ino} tid={task?.TID} rc={durableRc}");
+            $"SysFsync after-durable fd={fd} inode={inode.Ino} tid={task?.TID} rc={durableRc}");
         if (durableRc < 0 && durableRc != -(int)Errno.EOPNOTSUPP && durableRc != -(int)Errno.EROFS)
             return durableRc;
         return 0;

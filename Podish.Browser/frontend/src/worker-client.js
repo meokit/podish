@@ -87,9 +87,8 @@ function createPodishWorkerClient() {
     let pendingLogChunks = []
     let pendingLogBytes = 0
     const activeHttpStreams = new Map()
-    const openingHttpRequests = new Set()
-    let httpRpcKickInFlight = false
-    let httpRpcKickQueued = false
+    const openingHttpRequests = new Map()
+    const readingHttpRequests = new Set()
     let networkActivityCount = 0
     let onNetworkActivityChange = null
 
@@ -228,133 +227,118 @@ function createPodishWorkerClient() {
         }
     }
 
-    async function processHttpRpcKick() {
-        if (httpRpcKickInFlight) {
-            httpRpcKickQueued = true
-            return
+    async function openHttpStream(slotId, request) {
+        const controller = new AbortController()
+        openingHttpRequests.set(request.requestId, controller)
+        updateNetworkActivity(1)
+        let timeoutId = null
+        try {
+            const url = decoder.decode(request.urlBytes)
+            const rangeStart = (BigInt(request.rangeStartHigh) << 32n) | BigInt(request.rangeStartLow)
+            let headers
+            if (request.rangeMode === HTTP_RPC_RANGE_MODE_OPEN_ENDED) {
+                headers = {Range: 'bytes=' + rangeStart + '-'}
+            } else if (request.rangeMode === HTTP_RPC_RANGE_MODE_BOUNDED) {
+                const rangeEnd = rangeStart + BigInt(Math.max(0, request.rangeLength) - 1)
+                headers = {Range: 'bytes=' + rangeStart + '-' + rangeEnd}
+            }
+
+            if (request.timeoutMs >= 0)
+                timeoutId = globalThis.setTimeout(() => controller.abort(), request.timeoutMs)
+            const response = await fetch(url, {headers, signal: controller.signal})
+            if (!response.ok || !response.body) {
+                void response.body?.cancel().catch(() => {})
+                sabState.httpRpc.completeFailure(slotId, request.requestId, -response.status)
+                sabState.irq.signal(IRQ_HTTP_RPC)
+                return
+            }
+            if (sabState.httpRpc.findSlotByRequestId(request.requestId) < 0) {
+                void response.body.cancel().catch(() => {})
+                return
+            }
+
+            const skipBytesRemaining = request.rangeMode !== HTTP_RPC_RANGE_MODE_NONE && response.status === 200
+                ? rangeStart
+                : 0n
+            activeHttpStreams.set(request.requestId, {
+                reader: response.body.getReader(),
+                pendingChunk: null,
+                pendingOffset: 0,
+                skipBytesRemaining,
+                remainingBytes: request.rangeMode === HTTP_RPC_RANGE_MODE_BOUNDED ? request.rangeLength : -1,
+                timeoutMs: request.timeoutMs,
+            })
+            if (skipBytesRemaining > 0n)
+                console.warn('[http-rpc/worker] range-fallback requestId=%s url=%s skipBytes=%s',
+                    request.requestId, url, skipBytesRemaining.toString())
+            sabState.httpRpc.markStarted(slotId, request.requestId, response.status | 0)
+            sabState.irq.signal(IRQ_HTTP_RPC)
+        } catch (error) {
+            const result = error?.name === 'AbortError' || error?.message === 'timeout'
+                ? HTTP_RPC_RESULT_TIMEOUT
+                : HTTP_RPC_RESULT_NETWORK_ERROR
+            sabState.httpRpc.completeFailure(slotId, request.requestId, result)
+            sabState.irq.signal(IRQ_HTTP_RPC)
+        } finally {
+            if (timeoutId !== null)
+                globalThis.clearTimeout(timeoutId)
+            openingHttpRequests.delete(request.requestId)
+            updateNetworkActivity(-1)
+        }
+    }
+
+    async function serviceHttpRead(slotId, request, stream) {
+        readingHttpRequests.add(request.requestId)
+        try {
+            const payload = await readStreamChunk(stream, request.requestedLength)
+            if (payload === null) {
+                void disposeHttpStream(request.requestId)
+                sabState.httpRpc.markEof(slotId, request.requestId)
+            } else {
+                sabState.httpRpc.writeChunk(slotId, request.requestId, payload)
+            }
+        } catch (error) {
+            void disposeHttpStream(request.requestId)
+            const result = error?.name === 'AbortError' || error?.message === 'timeout'
+                ? HTTP_RPC_RESULT_TIMEOUT
+                : HTTP_RPC_RESULT_NETWORK_ERROR
+            sabState.httpRpc.completeFailure(slotId, request.requestId, result)
+        } finally {
+            readingHttpRequests.delete(request.requestId)
+            sabState.irq.signal(IRQ_HTTP_RPC)
+        }
+    }
+
+    function processHttpRpcKick() {
+        if (sabState.httpRpc.reclaimClosedRequests())
+            sabState.irq.signal(IRQ_HTTP_RPC)
+        for (const [requestId, controller] of openingHttpRequests) {
+            if (sabState.httpRpc.findSlotByRequestId(requestId) < 0)
+                controller.abort()
+        }
+        for (const requestId of activeHttpStreams.keys()) {
+            if (sabState.httpRpc.findSlotByRequestId(requestId) < 0)
+                void disposeHttpStream(requestId)
         }
 
-        httpRpcKickInFlight = true
-        try {
-            do {
-                httpRpcKickQueued = false
+        for (let slotId = 0; slotId < sabState.httpRpc.slotCount; slotId += 1) {
+            const opening = sabState.httpRpc.readBeginRequest(slotId)
+            if (opening && opening.opcode === HTTP_RPC_OPCODE_STREAM_GET
+                && !openingHttpRequests.has(opening.requestId) && !activeHttpStreams.has(opening.requestId)) {
+                void openHttpStream(slotId, opening)
+                continue
+            }
 
-                for (const requestId of Array.from(activeHttpStreams.keys())) {
-                    if (sabState.httpRpc.findSlotByRequestId(requestId) >= 0)
-                        continue
-                    await disposeHttpStream(requestId)
-                }
-
-                for (let slotId = 0; slotId < sabState.httpRpc.slotCount; slotId += 1) {
-                    const beginRequest = sabState.httpRpc.readBeginRequest(slotId)
-                    if (beginRequest && beginRequest.opcode === HTTP_RPC_OPCODE_STREAM_GET
-                        && !activeHttpStreams.has(beginRequest.requestId)
-                        && !openingHttpRequests.has(beginRequest.requestId)) {
-                        openingHttpRequests.add(beginRequest.requestId)
-                        updateNetworkActivity(1)
-                        try {
-                            const url = decoder.decode(beginRequest.urlBytes)
-                            const controller = new AbortController()
-                            const rangeStart = (BigInt(beginRequest.rangeStartHigh) << 32n) | BigInt(beginRequest.rangeStartLow)
-                            let headers = undefined
-                            if (beginRequest.rangeMode === HTTP_RPC_RANGE_MODE_OPEN_ENDED) {
-                                headers = {Range: `bytes=${rangeStart.toString()}-`}
-                            } else if (beginRequest.rangeMode === HTTP_RPC_RANGE_MODE_BOUNDED) {
-                                const rangeEnd = rangeStart + BigInt(Math.max(0, beginRequest.rangeLength) - 1)
-                                headers = {Range: `bytes=${rangeStart.toString()}-${rangeEnd.toString()}`}
-                            }
-                            let timeoutId = null
-                            let response
-                            try {
-                                if (beginRequest.timeoutMs >= 0) {
-                                    timeoutId = globalThis.setTimeout(() => controller.abort(), beginRequest.timeoutMs)
-                                }
-                                response = await fetch(url, {headers, signal: controller.signal})
-                            } finally {
-                                if (timeoutId !== null)
-                                    globalThis.clearTimeout(timeoutId)
-                            }
-
-                            if (!response.ok || !response.body) {
-                                sabState.httpRpc.completeFailure(slotId, beginRequest.requestId, -(response?.status || HTTP_RPC_RESULT_NETWORK_ERROR))
-                                sabState.irq.signal(IRQ_HTTP_RPC)
-                                continue
-                            }
-
-                            const skipBytesRemaining = beginRequest.rangeMode !== HTTP_RPC_RANGE_MODE_NONE && response.status === 200 && rangeStart > 0n
-                                ? rangeStart
-                                : 0n
-
-                            if (sabState.httpRpc.findSlotByRequestId(beginRequest.requestId) < 0) {
-                                try {
-                                    await response.body.cancel()
-                                } catch {
-                                }
-                                continue
-                            }
-
-                            activeHttpStreams.set(beginRequest.requestId, {
-                                requestId: beginRequest.requestId,
-                                reader: response.body.getReader(),
-                                pendingChunk: null,
-                                pendingOffset: 0,
-                                skipBytesRemaining,
-                                remainingBytes: beginRequest.rangeMode === HTTP_RPC_RANGE_MODE_BOUNDED ? beginRequest.rangeLength : -1,
-                                timeoutMs: beginRequest.timeoutMs,
-                            })
-                            if (skipBytesRemaining > 0n)
-                                console.warn(`[http-rpc/worker] range-fallback requestId=${beginRequest.requestId} url=${url} status=${response.status} skipBytes=${skipBytesRemaining} rangeMode=${beginRequest.rangeMode} rangeLength=${beginRequest.rangeLength}`)
-                            sabState.httpRpc.markStarted(slotId, beginRequest.requestId, response.status | 0)
-                            sabState.irq.signal(IRQ_HTTP_RPC)
-                        } catch (error) {
-                            const resultCode = error?.name === 'AbortError' || error?.message === 'timeout'
-                                ? HTTP_RPC_RESULT_TIMEOUT
-                                : HTTP_RPC_RESULT_NETWORK_ERROR
-                            sabState.httpRpc.completeFailure(slotId, beginRequest.requestId, resultCode)
-                            sabState.irq.signal(IRQ_HTTP_RPC)
-                        } finally {
-                            updateNetworkActivity(-1)
-                            openingHttpRequests.delete(beginRequest.requestId)
-                        }
-                        continue
-                    }
-
-                    const readRequest = sabState.httpRpc.readPendingChunkRequest(slotId)
-                    if (!readRequest)
-                        continue
-
-                    const streamState = activeHttpStreams.get(readRequest.requestId)
-                    if (!streamState) {
-                        if (openingHttpRequests.has(readRequest.requestId))
-                            continue
-                        sabState.httpRpc.completeFailure(slotId, readRequest.requestId, HTTP_RPC_RESULT_INVALID_REQUEST)
-                        sabState.irq.signal(IRQ_HTTP_RPC)
-                        continue
-                    }
-
-                    try {
-                        const payload = await readStreamChunk(streamState, readRequest.requestedLength)
-                        if (payload === null) {
-                            await disposeHttpStream(readRequest.requestId)
-                            sabState.httpRpc.markEof(slotId, readRequest.requestId)
-                            sabState.irq.signal(IRQ_HTTP_RPC)
-                            continue
-                        }
-
-                        sabState.httpRpc.writeChunk(slotId, readRequest.requestId, payload)
-                        sabState.irq.signal(IRQ_HTTP_RPC)
-                    } catch (error) {
-                        await disposeHttpStream(readRequest.requestId)
-                        const resultCode = error?.name === 'AbortError' || error?.message === 'timeout'
-                            ? HTTP_RPC_RESULT_TIMEOUT
-                            : HTTP_RPC_RESULT_NETWORK_ERROR
-                        sabState.httpRpc.completeFailure(slotId, readRequest.requestId, resultCode)
-                        sabState.irq.signal(IRQ_HTTP_RPC)
-                    }
-                }
-            } while (httpRpcKickQueued)
-        } finally {
-            httpRpcKickInFlight = false
+            const request = sabState.httpRpc.readPendingChunkRequest(slotId)
+            if (!request || openingHttpRequests.has(request.requestId) || readingHttpRequests.has(request.requestId))
+                continue
+            const stream = activeHttpStreams.get(request.requestId)
+            if (stream) {
+                void serviceHttpRead(slotId, request, stream)
+            } else {
+                sabState.httpRpc.completeFailure(slotId, request.requestId, HTTP_RPC_RESULT_INVALID_REQUEST)
+                sabState.irq.signal(IRQ_HTTP_RPC)
+            }
         }
     }
 
@@ -526,7 +510,7 @@ function createPodishWorkerClient() {
     worker.addEventListener('message', event => {
         const message = event.data
         if (message?.type === 'http-rpc-kick') {
-            void processHttpRpcKick()
+            processHttpRpcKick()
             return
         }
         if (message?.type !== 'response') return

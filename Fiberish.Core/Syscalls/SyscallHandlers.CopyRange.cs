@@ -147,24 +147,23 @@ public partial class SyscallManager
     ///     copy_file_range(2): copy a byte range between two files without a trip
     ///     through user space.
     /// </summary>
-    private async ValueTask<int> SysCopyFileRange(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private ValueTask<int> SysCopyFileRange(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
         uint a6)
     {
-        var task = engine.Owner as FiberTask;
-        if (task == null) return -(int)Errno.EPERM;
+        if (engine.Owner is not FiberTask task) return ValueTask.FromResult(-(int)Errno.EPERM);
+        if (a6 != 0) return ValueTask.FromResult(-(int)Errno.EINVAL);
+        var fileIn = GetFD((int)a1);
+        var fileOut = GetFD((int)a3);
+        if (fileIn?.OpenedInode == null || fileOut?.OpenedInode == null)
+            return ValueTask.FromResult(-(int)Errno.EBADF);
+        var lease = new FileIoLease(fileIn, fileOut);
+        try { return lease.Complete(CopyFileRangeAsync(engine, task, fileIn, fileOut, a2, a4, a5), task); }
+        finally { lease.Dispose(); }
+    }
 
-        var fdIn = (int)a1;
-        var offInPtr = a2;
-        var fdOut = (int)a3;
-        var offOutPtr = a4;
-        var len = a5;
-        var flags = a6;
-
-        if (flags != 0) return -(int)Errno.EINVAL;
-
-        var fileIn = GetFD(fdIn);
-        var fileOut = GetFD(fdOut);
-        if (fileIn?.OpenedInode == null || fileOut?.OpenedInode == null) return -(int)Errno.EBADF;
+    private static async ValueTask<int> CopyFileRangeAsync(Engine engine, FiberTask task, LinuxFile fileIn,
+        LinuxFile fileOut, uint offInPtr, uint offOutPtr, uint len)
+    {
         if (fileIn.IsPathOnly || fileOut.IsPathOnly) return -(int)Errno.EBADF;
 
         if ((fileIn.Flags & FileFlags.O_ACCMODE) == FileFlags.O_WRONLY) return -(int)Errno.EBADF;
@@ -195,13 +194,22 @@ public partial class SyscallManager
             writeOffset = fileOut.Position;
         }
 
-        if (readOffset < 0 || writeOffset < 0) return -(int)Errno.EINVAL;
+        bool OffsetsAreValid() => readOffset >= 0 && writeOffset >= 0 &&
+            (!ReferenceEquals(fileIn.OpenedInode, fileOut.OpenedInode) ||
+             Math.Abs(readOffset - writeOffset) >= len);
 
-        if (ReferenceEquals(fileIn.OpenedInode, fileOut.OpenedInode) &&
-            readOffset < writeOffset + (long)len && writeOffset < readOffset + (long)len)
-            return -(int)Errno.EINVAL;
+        if (!OffsetsAreValid()) return -(int)Errno.EINVAL;
 
-        var buffer = ArrayPool<byte>.Shared.Rent(32 * 1024);
+        if (len == 0) return 0;
+        var prepare = await fileOut.IoInode!.PrepareWriteAsync(task, fileOut);
+        if (prepare < 0) return prepare;
+        if (offInPtr == 0) readOffset = fileIn.Position;
+        if (offOutPtr == 0) writeOffset = fileOut.Position;
+        if (!OffsetsAreValid()) return -(int)Errno.EINVAL;
+
+        const int bufferSize = 32 * 1024;
+        var asyncRead = fileIn.IoInode!.SupportsAsyncRead;
+        var buffer = asyncRead ? new byte[bufferSize] : ArrayPool<byte>.Shared.Rent(bufferSize);
         try
         {
             var total = 0;
@@ -209,37 +217,51 @@ public partial class SyscallManager
             while (remaining > 0)
             {
                 var chunk = (int)Math.Min(remaining, buffer.Length);
-                var read = fileIn.OpenedInode.ReadToHost(task, fileIn, buffer.AsSpan(0, chunk), readOffset);
+                var read = await fileIn.IoInode!.ReadToHostAsync(task, fileIn, buffer.AsMemory(0, chunk), readOffset);
+                if (read < 0)
+                {
+                    if (total == 0) return read;
+                    break;
+                }
+                if ((offInPtr == 0 && readOffset != fileIn.Position) ||
+                    (offOutPtr == 0 && writeOffset != fileOut.Position))
+                {
+                    if (total > 0) break;
+                    if (offInPtr == 0) readOffset = fileIn.Position;
+                    if (offOutPtr == 0) writeOffset = fileOut.Position;
+                    if (!OffsetsAreValid()) return -(int)Errno.EINVAL;
+                    continue;
+                }
                 if (read == 0) break;
-                if (read < 0) return total > 0 ? total : read;
 
-                var written = fileOut.OpenedInode.WriteFromHost(task, fileOut, buffer.AsSpan(0, read),
+                var written = fileOut.IoInode!.WriteFromHost(task, fileOut, buffer.AsSpan(0, read),
                     writeOffset);
-                if (written < 0) return total > 0 ? total : written;
+                if (written < 0)
+                {
+                    if (total == 0) return written;
+                    break;
+                }
                 if (written == 0) break;
 
                 total += written;
                 readOffset += written;
                 writeOffset += written;
                 remaining -= written;
+                if (offInPtr == 0) fileIn.Position = readOffset;
+                if (offOutPtr == 0) fileOut.Position = writeOffset;
                 if (written < read) break;
             }
 
             if (offInPtr != 0)
                 engine.CopyToUser(offInPtr, BitConverter.GetBytes(readOffset));
-            else
-                fileIn.Position = readOffset;
-
             if (offOutPtr != 0)
                 engine.CopyToUser(offOutPtr, BitConverter.GetBytes(writeOffset));
-            else
-                fileOut.Position = writeOffset;
 
             return total;
         }
         finally
         {
-            ArrayPool<byte>.Shared.Return(buffer);
+            if (!asyncRead) ArrayPool<byte>.Shared.Return(buffer);
         }
     }
 

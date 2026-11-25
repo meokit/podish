@@ -3,6 +3,7 @@ using System.Runtime.InteropServices;
 using System.Text;
 using System.Runtime.Versioning;
 using Fiberish.Core;
+using Fiberish.Native;
 using Microsoft.Extensions.Logging;
 
 namespace Podish.Browser;
@@ -13,7 +14,8 @@ internal static class BrowserHttpRpc
     private const int StackUrlUtf8Threshold = 1024;
     private const int StreamChunkSize = BrowserSabInterop.HttpRpcResponseCapacity;
 
-    public static unsafe int BeginStreamGet(string url, long rangeStart = -1, int rangeLength = -1, int timeoutMs = -1)
+    public static unsafe int BeginStreamGet(string url, long rangeStart = -1, int rangeLength = -1, int timeoutMs = -1,
+        bool asynchronous = false)
     {
         ArgumentNullException.ThrowIfNull(url);
 
@@ -51,7 +53,8 @@ internal static class BrowserHttpRpc
                     rangeStartLow,
                     rangeStartHigh,
                     rangeLength,
-                    timeoutMs);
+                    timeoutMs,
+                    asynchronous);
             }
         }
         finally
@@ -120,6 +123,59 @@ internal static class BrowserHttpRpc
         finally
         {
             CloseRequest(requestId);
+        }
+    }
+
+    public static async ValueTask<int> ReadRangeAsync(string url, long rangeStart, Memory<byte> destination,
+        FiberTask task, int timeoutMs = -1)
+    {
+        if (destination.IsEmpty) return 0;
+        var started = Environment.TickCount64;
+        int requestId;
+        while ((requestId = BeginStreamGet(url, rangeStart, destination.Length, timeoutMs, asynchronous: true)) ==
+               BrowserSabInterop.HttpRpcResultNoFreeSlot)
+        {
+            var remaining = ComputeRemainingTimeout(started, timeoutMs);
+            if (remaining == 0) return BrowserSabInterop.HttpRpcResultTimeout;
+            var reason = await new BrowserSchedulerHostBridge.HttpRpcWait(task, remaining);
+            if (reason == WakeReason.Signal) return -(int)Errno.ERESTARTSYS;
+            if (reason == WakeReason.Timer) return BrowserSabInterop.HttpRpcResultTimeout;
+        }
+        if (requestId <= 0) return requestId == 0 ? BrowserSabInterop.HttpRpcResultNetworkError : requestId;
+
+        using var request = BrowserSchedulerHostBridge.TrackHttpRequest(task, new RequestLease(requestId));
+        var bytesRead = 0;
+        while (bytesRead < destination.Length)
+        {
+            var startedAt = Environment.TickCount64;
+            int result;
+            while ((result = TryReadStreamChunk(requestId, destination.Span[bytesRead..])) ==
+                   BrowserSabInterop.HttpRpcResultPending)
+            {
+                var remaining = ComputeRemainingTimeout(startedAt, timeoutMs);
+                if (remaining == 0) return BrowserSabInterop.HttpRpcResultTimeout;
+                var reason = await new BrowserSchedulerHostBridge.HttpRpcWait(task, remaining);
+                if (reason == WakeReason.Signal) return -(int)Errno.ERESTARTSYS;
+                if (reason == WakeReason.Timer) return BrowserSabInterop.HttpRpcResultTimeout;
+            }
+
+            if (result == 0) return bytesRead;
+            if (result < 0) return result;
+            bytesRead += result;
+        }
+
+        return bytesRead;
+    }
+
+    private sealed class RequestLease(int requestId) : IDisposable
+    {
+        private int _requestId = requestId;
+
+        public void Dispose()
+        {
+            var id = Interlocked.Exchange(ref _requestId, 0);
+            if (id > 0 && CloseRequest(id) > 0)
+                BrowserExports.SignalInterrupt(BrowserSabInterop.IrqHttpRpc);
         }
     }
 

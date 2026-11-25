@@ -925,6 +925,8 @@ public class KernelScheduler : IDisposable
                 // Advance timer to current physical time (in ms)
                 var nowMs = startTick + _sw.ElapsedMilliseconds;
                 _timerSystem.Advance(nowMs);
+                if (OperatingSystem.IsBrowser())
+                    BrowserSchedulerHostBridge.PollHttpRpc();
 
                 if (maxTicks > 0 && CurrentTick >= maxTicks)
                 {
