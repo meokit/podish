@@ -932,11 +932,18 @@ uint32_t TryBulkMovs(EmuState* state, uint32_t src, uint32_t dst, uint32_t limit
     const auto bytes = count * sizeof(T);
     // Directional overlap can feed earlier stores into later loads. Check
     // host addresses as separate guest mappings can alias the same page.
-    if (backwards ? from_address > to_address && from_address - to_address < bytes
-                  : to_address > from_address && to_address - from_address < bytes)
-        return 0;
-
-    std::memmove(to, from, bytes);
+    const bool directional_overlap = backwards ? from_address > to_address && from_address - to_address < bytes
+                                               : to_address > from_address && to_address - from_address < bytes;
+    if (directional_overlap) {
+        for (uint32_t i = 0; i < count; ++i) {
+            const auto offset = (backwards ? count - 1 - i : i) * sizeof(T);
+            T element;
+            std::memcpy(&element, from + offset, sizeof(T));
+            std::memcpy(to + offset, &element, sizeof(T));
+        }
+    } else {
+        std::memmove(to, from, bytes);
+    }
     return count;
 }
 

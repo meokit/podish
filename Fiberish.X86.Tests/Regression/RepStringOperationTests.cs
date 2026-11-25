@@ -62,6 +62,29 @@ public sealed class RepStringOperationTests
     }
 
     [Fact]
+    public void MovsbCopiesAcrossPagesWhoseTlbSlotsCollide()
+    {
+        using var cpu = new CpuSandbox();
+        const uint sourceBase = CpuSandbox.DataAddress;
+        const uint destinationBase = sourceBase + 0x200000;
+        cpu.MapMemory(sourceBase, 2 * CpuSandbox.PageSize);
+        cpu.MapMemory(destinationBase, 2 * CpuSandbox.PageSize);
+        var source = sourceBase + CpuSandbox.PageSize - 64;
+        var destination = destinationBase + CpuSandbox.PageSize - 32;
+        var data = Enumerable.Range(1, 128).Select(i => (byte)i).ToArray();
+        cpu.WriteCode([0xF3, 0xA4]);
+        cpu.WriteMemory(source, data);
+        cpu[Reg.ESI] = source;
+        cpu[Reg.EDI] = destination;
+        cpu[Reg.ECX] = (uint)data.Length;
+
+        cpu.Run(CpuSandbox.CodeAddress + 2);
+
+        Assert.Equal(0u, cpu[Reg.ECX]);
+        Assert.Equal(data, cpu.ReadMemory(destination, data.Length));
+    }
+
+    [Fact]
     public void RepneScasStopsOnMatchAfterResuming()
     {
         using var cpu = new CpuSandbox();

@@ -1753,15 +1753,32 @@ public:
     template <typename T>
     [[nodiscard]] FORCE_INLINE MemResult<void> write_no_utlb(GuestAddr addr, T val);
 
-    // Returns a page-local span backed by an already usable TLB entry.
+    // Returns a page-local span without running fault or memory hooks.
     // The caller must ensure its entire span stays inside this page.
     template <bool Write>
     [[nodiscard]] HostAddr try_bulk_page(GuestAddr address) {
         if (mem_hook) return nullptr;
         const auto index = (address >> PAGE_SHIFT) & TLB_INDEX_MASK;
         const auto& entry = Write ? tlb.write_tlb[index] : tlb.read_tlb[index];
-        if ((Write ? entry.WriteTag() : entry.ReadTag()) != (address & ~PAGE_MASK)) return nullptr;
-        return reinterpret_cast<HostAddr>(entry.addend + address);
+        if ((Write ? entry.WriteTag() : entry.ReadTag()) == (address & ~PAGE_MASK))
+            return reinterpret_cast<HostAddr>(entry.addend + address);
+
+        // Source and destination can occupy the same direct-mapped TLB
+        // slot. Inspect the current page table without filling either slot.
+        const auto* directory = current_page_directory();
+        if (!directory) return nullptr;
+        const auto& chunk = directory->l1_directory[address >> 22];
+        const auto page_index = (address >> PAGE_SHIFT) & 0x3ff;
+        if (!chunk || !chunk->pages[page_index]) return nullptr;
+        const auto permissions = chunk->permissions[page_index];
+        if constexpr (Write) {
+            if (!has_property(permissions, Property::Write | Property::Dirty) ||
+                has_property(permissions, Property::ForceWriteSlow))
+                return nullptr;
+        } else if (!has_property(permissions, Property::Read)) {
+            return nullptr;
+        }
+        return chunk->pages[page_index] + (address & PAGE_MASK);
     }
 
     template <typename T>
