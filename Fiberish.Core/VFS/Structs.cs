@@ -1465,10 +1465,9 @@ public abstract class Inode : IAddressSpaceOperations, IBackingPageHandleRelease
                     current = file.Position;
                 }
 
-                if (engine.GetPhysicalAddressSafe(address, true) == IntPtr.Zero &&
-                    (engine.PageFaultResolver?.Invoke(address, true) != true ||
-                     engine.GetPhysicalAddressSafe(address, true) == IntPtr.Zero))
-                    return total > 0 ? total : -(int)Errno.EFAULT;
+                var noWait = (flags & RwfNowait) != 0;
+                var (_, pageError) = await engine.ResolveUserIoPageAsync(address, true, noWait);
+                if (pageError != 0) return total > 0 ? total : pageError;
                 var length = (int)Math.Min(remaining,
                     (uint)LinuxConstants.PageSize - (address & LinuxConstants.PageOffsetMask));
                 buffer ??= new byte[LinuxConstants.PageSize];
@@ -1476,8 +1475,11 @@ public abstract class Inode : IAddressSpaceOperations, IBackingPageHandleRelease
                 if (usePosition && file.Position != current && count >= 0) continue;
                 if (count <= 0) return total > 0 ? total : count;
                 if ((uint)count > (uint)length) return total > 0 ? total : -(int)Errno.EIO;
-                if (!engine.CopyToUser(address, buffer.AsSpan(0, count)))
-                    return total > 0 ? total : -(int)Errno.EFAULT;
+                // The buffer page can be unmapped while the file read waits.
+                var (destination, copyError) = await engine.ResolveUserIoPageAsync(address, true, noWait);
+                if (copyError != 0) return total > 0 ? total : copyError;
+                if (usePosition && file.Position != current) continue;
+                unsafe { buffer.AsSpan(0, count).CopyTo(new Span<byte>((void*)destination, count)); }
 
                 total += count;
                 current += count;
@@ -1515,10 +1517,13 @@ public abstract class Inode : IAddressSpaceOperations, IBackingPageHandleRelease
                     // A blocked read may resume after munmap/mprotect/CoW or
                     // replacement of this guest page. Never carry a host pointer
                     // across WaitForRead; resolve it for each synchronous attempt.
-                    var ptr = engine.GetPhysicalAddressSafe(currAddr, true);
-                    if (ptr == IntPtr.Zero && engine.PageFaultResolver?.Invoke(currAddr, true) == true)
-                        ptr = engine.GetPhysicalAddressSafe(currAddr, true);
-                    if (ptr == IntPtr.Zero) return totalRead > 0 ? totalRead : -(int)Errno.EFAULT;
+                    var (ptr, pageError) = await engine.ResolveUserIoPageAsync(currAddr, true, (flags & 8) != 0);
+                    if (pageError != 0) return totalRead > 0 ? totalRead : pageError;
+                    if (updatePosition)
+                    {
+                        if (totalRead != 0 && file.Position != currentOffset) return totalRead;
+                        currentOffset = file.Position;
+                    }
                     int n;
                     unsafe
                     {
@@ -1531,19 +1536,16 @@ public abstract class Inode : IAddressSpaceOperations, IBackingPageHandleRelease
                         if (totalRead > 0 && this is PipeInode) return totalRead;
                         if ((file.Flags & FileFlags.O_NONBLOCK) != 0 || (flags & 0x00000008) != 0 /* RWF_NOWAIT */)
                         {
-                            if (updatePosition) file.Position = currentOffset;
                             return totalRead > 0 ? totalRead : -(int)Errno.EAGAIN;
                         }
 
                         if (task == null)
                         {
-                            if (updatePosition) file.Position = currentOffset;
                             return totalRead > 0 ? totalRead : -(int)Errno.EAGAIN;
                         }
 
                         if (await WaitForRead(file, task) == AwaitResult.Interrupted)
                         {
-                            if (updatePosition) file.Position = currentOffset;
                             return totalRead > 0 ? totalRead : -(int)Errno.ERESTARTSYS;
                         }
 
@@ -1554,24 +1556,19 @@ public abstract class Inode : IAddressSpaceOperations, IBackingPageHandleRelease
                     {
                         totalRead += n;
                         currentOffset += n;
+                        if (updatePosition) file.Position = currentOffset;
                         iovProcessed += (uint)n;
-                        if (n < chunkLen)
-                        {
-                            if (updatePosition) file.Position = currentOffset;
-                            return totalRead;
-                        }
+                        if (n < chunkLen) return totalRead;
 
                         break; // Processed this chunk
                     }
 
                     // EOF or real error (n <= 0)
-                    if (updatePosition) file.Position = currentOffset;
                     return totalRead > 0 ? totalRead : n;
                 }
             }
         }
 
-        if (updatePosition) file.Position = currentOffset;
         return totalRead;
     }
 
@@ -1593,7 +1590,6 @@ public abstract class Inode : IAddressSpaceOperations, IBackingPageHandleRelease
 
         int FinalizeWriteResult(int rc)
         {
-            if (updatePosition) file.Position = currentOffset;
             if (rc > 0)
                 ApplySuccessfulWriteSideEffects(task);
             return rc;
@@ -1609,34 +1605,36 @@ public abstract class Inode : IAddressSpaceOperations, IBackingPageHandleRelease
             while (iovProcessed < iov.Len)
             {
                 var currAddr = iov.BaseAddr + iovProcessed;
-                var ptr = engine.GetPhysicalAddressSafe(currAddr, false); // false = We are reading FROM guest memory
-                if (ptr == IntPtr.Zero)
-                    if (engine.PageFaultResolver != null && engine.PageFaultResolver(currAddr, false))
-                        ptr = engine.GetPhysicalAddressSafe(currAddr, false);
-
-                if (ptr == IntPtr.Zero)
-                    return FinalizeWriteResult(totalWritten > 0 ? totalWritten : -(int)Errno.EFAULT);
-
                 var pageOffset = currAddr & 0xFFF;
                 var chunkLen = Math.Min(iov.Len - iovProcessed, 4096 - pageOffset);
-                if (allowPipePartial && this is PipeInode pipe)
-                {
-                    var writable = pipe.GetWritableBytes();
-                    if (writable <= 0)
-                    {
-                        if ((file.Flags & FileFlags.O_NONBLOCK) != 0 ||
-                            (flags & 0x00000008) != 0 /* RWF_NOWAIT */ || task == null)
-                            return FinalizeWriteResult(totalWritten > 0 ? totalWritten : -(int)Errno.EAGAIN);
-                        if (await WaitForWrite(file, task, 1) == AwaitResult.Interrupted)
-                            return FinalizeWriteResult(totalWritten > 0 ? totalWritten : -(int)Errno.ERESTARTSYS);
-                        continue;
-                    }
-
-                    if ((uint)writable < chunkLen) chunkLen = (uint)writable;
-                }
-
                 while (true)
                 {
+                    var (ptr, pageError) = await engine.ResolveUserIoPageAsync(currAddr, false, (flags & 8) != 0);
+                    if (pageError != 0)
+                        return FinalizeWriteResult(totalWritten > 0 ? totalWritten : pageError);
+                    if (allowPipePartial && this is PipeInode pipe)
+                    {
+                        var writable = pipe.GetWritableBytes();
+                        if (writable <= 0)
+                        {
+                            if ((file.Flags & FileFlags.O_NONBLOCK) != 0 ||
+                                (flags & 0x00000008) != 0 /* RWF_NOWAIT */ || task == null)
+                                return FinalizeWriteResult(totalWritten > 0 ? totalWritten : -(int)Errno.EAGAIN);
+                            if (await WaitForWrite(file, task, 1) == AwaitResult.Interrupted)
+                                return FinalizeWriteResult(totalWritten > 0 ? totalWritten : -(int)Errno.ERESTARTSYS);
+                            continue;
+                        }
+
+                        if ((uint)writable < chunkLen) chunkLen = (uint)writable;
+                    }
+
+                    if (updatePosition)
+                    {
+                        var writeOffset = append ? (long)Size : file.Position;
+                        if (totalWritten != 0 && (file.Position != currentOffset || writeOffset != currentOffset))
+                            return FinalizeWriteResult(totalWritten);
+                        currentOffset = writeOffset;
+                    }
                     int n;
                     unsafe
                     {
@@ -1671,6 +1669,7 @@ public abstract class Inode : IAddressSpaceOperations, IBackingPageHandleRelease
                     {
                         totalWritten += n;
                         currentOffset += n;
+                        if (updatePosition) file.Position = currentOffset;
                         iovProcessed += (uint)n;
                         if (n < chunkLen) return FinalizeWriteResult(totalWritten);
                         break; // Processed this chunk
@@ -3425,6 +3424,8 @@ public abstract class MappingBackedInode : Inode
     {
         if (SupportsAsyncRead && task != null)
             return ReadVAsync(engine, file, task, iovs, offset, flags);
+        if (OperatingSystem.IsBrowser() && task != null)
+            return ReadVViaHostBuffer(engine, file, task, iovs, offset, flags);
         _ = task;
         _ = flags;
         if (offset < -1)
@@ -3446,6 +3447,8 @@ public abstract class MappingBackedInode : Inode
     public override ValueTask<int> WriteV(Engine engine, LinuxFile file, FiberTask? task,
         ArraySegment<Iovec> iovs, long offset, int flags)
     {
+        if (OperatingSystem.IsBrowser() && task != null)
+            return WriteVViaHostBuffer(engine, file, task, iovs, offset, flags);
         _ = task;
         _ = flags;
         if (offset < -1)

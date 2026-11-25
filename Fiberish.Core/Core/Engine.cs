@@ -640,6 +640,49 @@ public class Engine : IDisposable
         return true;
     }
 
+    internal async ValueTask<(IntPtr Pointer, int Error)> ResolveUserIoPageAsync(uint address, bool write,
+        bool noWait = false)
+    {
+        var ptr = GetPhysicalAddressSafe(address, write);
+        if (ptr != IntPtr.Zero) return (ptr, 0);
+
+        if (Owner is FiberTask task)
+        {
+            var memory = task.Process.Mem;
+            var result = await memory.PrepareFilePageAsync(task, address,
+                write ? NativeFaultAccess.Write : NativeFaultAccess.Read, noWait);
+            if (result < 0) return (IntPtr.Zero, result);
+            if (memory.HandleFaultDetailed(address, write, this) == FaultResult.Handled)
+                ptr = GetPhysicalAddressSafe(address, write);
+        }
+        else if (TryResolveUserAccessFault(address, write))
+        {
+            ptr = GetPhysicalAddressSafe(address, write);
+        }
+
+        return (ptr, ptr == IntPtr.Zero ? -(int)Errno.EFAULT : 0);
+    }
+
+    internal async ValueTask<int> CopyUserIoAsync(uint address, Memory<byte> buffer, bool write)
+    {
+        while (!buffer.IsEmpty)
+        {
+            var (pointer, error) = await ResolveUserIoPageAsync(address, write);
+            if (error != 0) return error;
+            var count = Math.Min(buffer.Length, LinuxConstants.PageSize - (int)(address & LinuxConstants.PageOffsetMask));
+            unsafe
+            {
+                if (write)
+                    buffer.Span[..count].CopyTo(new Span<byte>((void*)pointer, count));
+                else
+                    new ReadOnlySpan<byte>((void*)pointer, count).CopyTo(buffer.Span);
+            }
+            buffer = buffer[count..];
+            address += (uint)count;
+        }
+        return 0;
+    }
+
     private bool TryResolveUserAccessFault(uint addr, bool isWrite)
     {
         // While servicing a guest syscall, invalid user pointers must surface as

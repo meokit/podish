@@ -129,6 +129,71 @@ public class FsFdReviewRegressionTests
         Assert.Equal(4, file.Position);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task Readv_CanAwaitAFileMappedIovecAndRechecksItsMapping(bool unmapWhilePending)
+    {
+        using var env = new TestEnv();
+        const uint vectorAddress = 0x40000;
+        var provider = new DeferredLayerContent();
+        var index = new LayerIndex();
+        index.AddEntry(new LayerIndexEntry("/vector", InodeType.File, 0x1A4, Size: 8));
+        var fs = new LayerFileSystem(memoryContext: env.Sm.MemoryContext);
+        var superBlock = fs.ReadSuper(new FileSystemType { Name = "layerfs" }, 0, "review-vector",
+            new LayerMountOptions { Index = index, ContentProvider = provider });
+        var vector = superBlock.Root.Inode!.Lookup("vector")!;
+        var mappedFile = new LinuxFile(vector, FileFlags.O_RDONLY, env.Sm.RootMount);
+        env.Mem.Mmap(vectorAddress, 4096, Protection.Read, MapFlags.Fixed | MapFlags.Private,
+            mappedFile, 0, "[vector]", env.Engine);
+        var fd = env.AddFile("source", "DATA");
+
+        var pending = env.Call("SysReadV", (uint)fd, vectorAddress, 1);
+        Assert.False(pending.IsCompleted);
+        if (unmapWhilePending)
+            Assert.Equal(0, env.Mem.Munmap(vectorAddress, 4096, env.Engine));
+
+        var bytes = new byte[8];
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes, DataPtr);
+        BinaryPrimitives.WriteUInt32LittleEndian(bytes.AsSpan(4), 4);
+        provider.Complete(bytes);
+        var result = await pending;
+        Assert.Equal(0ul, env.Task.PendingSignals);
+        if (unmapWhilePending)
+        {
+            Assert.Equal(-(int)Errno.EFAULT, result);
+            Assert.Equal(0, env.Sm.GetFD(fd)!.Position);
+        }
+        else
+        {
+            Assert.Equal(4, result);
+            var data = new byte[4];
+            Assert.True(env.Engine.CopyFromUser(DataPtr, data));
+            Assert.Equal("DATA"u8.ToArray(), data);
+            Assert.Equal(4, env.Sm.GetFD(fd)!.Position);
+        }
+    }
+
+    private sealed class DeferredLayerContent : IAsyncLayerContentProvider
+    {
+        private readonly TaskCompletionSource<byte[]> _data = new();
+
+        public void Complete(byte[] bytes) => _data.SetResult(bytes);
+
+        public bool TryRead(LayerIndexEntry entry, long offset, Span<byte> buffer, out int bytesRead) =>
+            throw new InvalidOperationException("Mapped file used the synchronous read path.");
+
+        public async ValueTask<int> ReadAsync(LayerIndexEntry entry, long offset, Memory<byte> buffer,
+            FiberTask task, bool noWait)
+        {
+            if (noWait && !_data.Task.IsCompleted) return -(int)Errno.EAGAIN;
+            var bytes = await _data.Task;
+            var count = Math.Min(buffer.Length, bytes.Length - (int)offset);
+            bytes.AsMemory((int)offset, count).CopyTo(buffer);
+            return count;
+        }
+    }
+
     private sealed class DeferredReadInode : Inode
     {
         private readonly TaskCompletionSource<byte[]> _data = new();

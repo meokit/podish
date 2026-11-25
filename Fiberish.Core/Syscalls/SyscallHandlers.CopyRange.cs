@@ -47,7 +47,7 @@ public partial class SyscallManager
     private async ValueTask<int> DoVmsplice(Engine engine, FiberTask task, LinuxFile file, PipeInode pipe,
         uint iovPtr, long nrSegs, int flags)
     {
-        var iovs = ReadIovecs(this, engine, iovPtr, (int)nrSegs, out var iovErr);
+        var (iovs, iovErr) = await ReadFileIovecsAsync(engine, iovPtr, (int)nrSegs);
         if (iovs == null) return iovErr;
         var rentedIovs = new TaskIoBuffer<Iovec>(iovs);
 
@@ -73,8 +73,10 @@ public partial class SyscallManager
                         var chunk = (int)Math.Min(remaining, buffer.Length);
                         if (writesToPipe)
                         {
-                            if (!engine.CopyFromUser(baseAddr, buffer.AsSpan(0, chunk)))
-                                return total > 0 ? total : -(int)Errno.EFAULT;
+                            var copy = engine.CopyUserIoAsync(baseAddr, buffer.AsMemory(0, chunk), write: false);
+                            if (!copy.IsCompleted) rentedIovs.TrackPending(task);
+                            var copyError = await rented.Track(copy, task);
+                            if (copyError != 0) return total > 0 ? total : copyError;
 
                             var written = pipe.WriteFromHost(task, file, buffer.AsSpan(0, chunk), 0);
                             if (written == -(int)Errno.EAGAIN)
@@ -120,8 +122,11 @@ public partial class SyscallManager
 
                             if (read == 0) return total;
                             if (read < 0) return total > 0 ? total : read;
-                            if (!engine.CopyToUser(baseAddr, buffer.AsSpan(0, read)))
-                                return total > 0 ? total : -(int)Errno.EFAULT;
+                            var copy = engine.CopyUserIoAsync(baseAddr, buffer.AsMemory(0, read), write: true);
+                            if (!copy.IsCompleted) rentedIovs.TrackPending(task);
+                            var copyError = await rented.Track(copy, task);
+                            if (copyError != 0)
+                                return total > 0 ? total : copyError == -(int)Errno.ERESTARTSYS ? -(int)Errno.EFAULT : copyError;
                             total += read;
                             baseAddr += (uint)read;
                             remaining -= read;

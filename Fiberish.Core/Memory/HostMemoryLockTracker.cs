@@ -130,8 +130,10 @@ internal sealed partial class HostMemoryLockTracker : IDisposable
                 return false;
             }
 
+            // Linear-memory pages are pinned by the guest backing-page
+            // tracker. Wasm has no host OS page-lock API to call in addition.
             if (OperatingSystem.IsBrowser() || OperatingSystem.IsWasi())
-                return false;
+                return true;
 
             return mlock(addr, len) == 0;
         }

@@ -900,7 +900,8 @@ public partial class SyscallManager
         if (rc > 0 && f.OpenedInode is Inode inode)
         {
             InotifyEvents.RaiseChild(f.Dentry, inode, LinuxConstants.IN_MODIFY);
-            ProcessAddressSpaceSync.NotifyFileContentChanged(sm.Mem, engine, inode, writeStartOffset, rc);
+            var actualWriteOffset = offset == -1 && f.Position >= rc ? f.Position - rc : writeStartOffset;
+            ProcessAddressSpaceSync.NotifyFileContentChanged(sm.Mem, engine, inode, actualWriteOffset, rc);
 
             var sizeAfterWrite = (long)inode.Size;
             if (sizeAfterWrite < sizeBeforeWrite)
@@ -921,49 +922,48 @@ public partial class SyscallManager
         return 0;
     }
 
-    private static Iovec[]? ReadIovecs(SyscallManager sm, Engine engine, uint iovAddr, int iovCnt, out int error)
+    private static async ValueTask<(Iovec[]? Iovs, int Error)> ReadFileIovecsAsync(Engine engine, uint iovAddr,
+        int iovCnt)
     {
-        error = -(int)Errno.EINVAL;
-        if (iovCnt < 0 || iovCnt > 1024) return null;
-        var iovs = ArrayPool<Iovec>.Shared.Rent(iovCnt);
-        var iovecBytes = ArrayPool<byte>.Shared.Rent(iovCnt * 8);
-        var success = false;
+        if (iovCnt < 0 || iovCnt > 1024) return (null, -(int)Errno.EINVAL);
 
+        var iovecBytes = ArrayPool<byte>.Shared.Rent(iovCnt * 8);
+        var rented = new TaskIoBuffer<byte>(iovecBytes);
         try
         {
-            error = -(int)Errno.EFAULT;
-            if (!engine.CopyFromUser(iovAddr, iovecBytes.AsSpan(0, iovCnt * 8))) return null;
-
-            const uint MaxRwCount = 0x7FFFF000; // Linux's INT_MAX rounded down to a guest page.
-            uint total = 0;
-            for (var i = 0; i < iovCnt; i++)
-            {
-                var length = BinaryPrimitives.ReadUInt32LittleEndian(iovecBytes.AsSpan(i * 8 + 4, 4));
-                if (length > int.MaxValue)
-                {
-                    error = -(int)Errno.EINVAL;
-                    return null;
-                }
-                iovs[i] = new Iovec
-                {
-                    BaseAddr = BinaryPrimitives.ReadUInt32LittleEndian(iovecBytes.AsSpan(i * 8, 4)),
-                    Len = Math.Min(length, MaxRwCount - total)
-                };
-                total += iovs[i].Len;
-            }
-            error = 0;
-            success = true;
-            return iovs;
-        }
-        catch
-        {
-            return null;
+            var error = await rented.Track(
+                engine.CopyUserIoAsync(iovAddr, iovecBytes.AsMemory(0, iovCnt * 8), write: false),
+                engine.Owner as FiberTask);
+            if (error != 0) return (null, error);
+            return ParseFileIovecs(iovecBytes, iovCnt);
         }
         finally
         {
-            ArrayPool<byte>.Shared.Return(iovecBytes);
-            if (!success) ArrayPool<Iovec>.Shared.Return(iovs);
+            rented.Dispose();
         }
+    }
+
+    private static (Iovec[]? Iovs, int Error) ParseFileIovecs(byte[] iovecBytes, int iovCnt)
+    {
+        var iovs = ArrayPool<Iovec>.Shared.Rent(iovCnt);
+        const uint MaxRwCount = 0x7FFFF000; // Linux's INT_MAX rounded down to a guest page.
+        uint total = 0;
+        for (var i = 0; i < iovCnt; i++)
+        {
+            var length = BinaryPrimitives.ReadUInt32LittleEndian(iovecBytes.AsSpan(i * 8 + 4, 4));
+            if (length > int.MaxValue)
+            {
+                ArrayPool<Iovec>.Shared.Return(iovs);
+                return (null, -(int)Errno.EINVAL);
+            }
+            iovs[i] = new Iovec
+            {
+                BaseAddr = BinaryPrimitives.ReadUInt32LittleEndian(iovecBytes.AsSpan(i * 8, 4)),
+                Len = Math.Min(length, MaxRwCount - total)
+            };
+            total += iovs[i].Len;
+        }
+        return (iovs, 0);
     }
 
     internal async ValueTask<int> SysRead(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -1034,7 +1034,7 @@ public partial class SyscallManager
 
     private async ValueTask<int> SysReadV(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var iovs = ReadIovecs(this, engine, a2, (int)a3, out var error);
+        var (iovs, error) = await ReadFileIovecsAsync(engine, a2, (int)a3);
         if (iovs == null) return error;
         var rented = new TaskIoBuffer<Iovec>(iovs);
         try
@@ -1049,7 +1049,7 @@ public partial class SyscallManager
 
     private async ValueTask<int> SysWriteV(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var iovs = ReadIovecs(this, engine, a2, (int)a3, out var error);
+        var (iovs, error) = await ReadFileIovecsAsync(engine, a2, (int)a3);
         if (iovs == null) return error;
         var rented = new TaskIoBuffer<Iovec>(iovs);
         try
@@ -1067,7 +1067,7 @@ public partial class SyscallManager
         var offset = a4 | ((long)a5 << 32);
         var positionError = ValidatePositionedIo((int)a1, offset);
         if (positionError != 0) return positionError;
-        var iovs = ReadIovecs(this, engine, a2, (int)a3, out var error);
+        var (iovs, error) = await ReadFileIovecsAsync(engine, a2, (int)a3);
         if (iovs == null) return error;
         var rented = new TaskIoBuffer<Iovec>(iovs);
         try
@@ -1085,7 +1085,7 @@ public partial class SyscallManager
         var offset = a4 | ((long)a5 << 32);
         var positionError = ValidatePositionedIo((int)a1, offset);
         if (positionError != 0) return positionError;
-        var iovs = ReadIovecs(this, engine, a2, (int)a3, out var error);
+        var (iovs, error) = await ReadFileIovecsAsync(engine, a2, (int)a3);
         if (iovs == null) return error;
         var rented = new TaskIoBuffer<Iovec>(iovs);
         try
@@ -1106,7 +1106,7 @@ public partial class SyscallManager
         if ((flags & ~KnownRwfFlags) != 0) return -(int)Errno.EOPNOTSUPP;
         var positionError = ValidatePositionedIo((int)a1, offset, true);
         if (positionError != 0) return positionError;
-        var iovs = ReadIovecs(this, engine, a2, (int)a3, out var error);
+        var (iovs, error) = await ReadFileIovecsAsync(engine, a2, (int)a3);
         if (iovs == null) return error;
         var rented = new TaskIoBuffer<Iovec>(iovs);
         try
@@ -1127,7 +1127,7 @@ public partial class SyscallManager
         if ((flags & ~KnownRwfFlags) != 0) return -(int)Errno.EOPNOTSUPP;
         var positionError = ValidatePositionedIo((int)a1, offset, true);
         if (positionError != 0) return positionError;
-        var iovs = ReadIovecs(this, engine, a2, (int)a3, out var error);
+        var (iovs, error) = await ReadFileIovecsAsync(engine, a2, (int)a3);
         if (iovs == null) return error;
         var rented = new TaskIoBuffer<Iovec>(iovs);
         try

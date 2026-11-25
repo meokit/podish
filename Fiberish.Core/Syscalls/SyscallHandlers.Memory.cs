@@ -212,8 +212,13 @@ public partial class SyscallManager
                 }
                 else
                 {
-                    if (Mem.LockRange((uint)res, (uint)mapLen, false, engine) < 0 &&
-                        Mem.FindVmArea((uint)res) is { } mappedVma)
+                    var memory = Mem;
+                    var mappedVma = memory.FindVmArea((uint)res);
+                    var prepared = engine.Owner is FiberTask task
+                        ? await memory.PrepareLockRangeAsync(task, (uint)res, endAddr)
+                        : 0;
+                    if (mappedVma != null && ReferenceEquals(memory.FindVmArea((uint)res), mappedVma) &&
+                        (prepared < 0 || memory.LockRange((uint)res, (uint)mapLen, false, engine) < 0))
                     {
                         mappedVma.Flags &= ~MapFlags.Locked;
                         mappedVma.LockOnFault = false;
@@ -545,8 +550,16 @@ public partial class SyscallManager
             if ((ulong)totalLockedAfter > limit.Soft) return -(int)Errno.ENOMEM;
         }
 
+        var memory = Mem;
+        var onFault = (flags & MLOCK_ONFAULT) != 0;
+        if (!onFault && engine.Owner is FiberTask lockingTask)
+        {
+            var prepared = await memory.PrepareLockRangeAsync(lockingTask, start, (uint)end);
+            if (prepared < 0) return prepared == -(int)Errno.EFAULT ? -(int)Errno.ENOMEM : prepared;
+        }
+
         using var scope = ProcessAddressSpaceSync.EnterAddressSpaceScope(engine);
-        return Mem.LockRange(start, (uint)(end - start), (flags & MLOCK_ONFAULT) != 0, engine);
+        return memory.LockRange(start, (uint)(end - start), onFault, engine);
     }
 
     private async ValueTask<int> SysMunlock(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
@@ -584,8 +597,21 @@ public partial class SyscallManager
                 return -(int)Errno.ENOMEM;
         }
 
+        var memory = Mem;
+        var current = (flags & MCL_CURRENT) != 0;
+        var onFault = (flags & MCL_ONFAULT) != 0;
+        if (current && !onFault && engine.Owner is FiberTask lockTask)
+        {
+            var ranges = memory.VMAs.Where(vma => vma.IsFileBacked).Select(vma => (vma.Start, vma.End)).ToArray();
+            foreach (var (start, end) in ranges)
+            {
+                var prepared = await memory.PrepareLockRangeAsync(lockTask, start, end);
+                if (prepared < 0) return prepared == -(int)Errno.EFAULT ? -(int)Errno.ENOMEM : prepared;
+            }
+        }
+
         using var scope = ProcessAddressSpaceSync.EnterAddressSpaceScope(engine);
-        return Mem.MlockAll((flags & MCL_CURRENT) != 0, (flags & MCL_FUTURE) != 0, (flags & MCL_ONFAULT) != 0, engine);
+        return memory.MlockAll(current, (flags & MCL_FUTURE) != 0, onFault, engine);
     }
 
     private async ValueTask<int> SysMunlockall(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)

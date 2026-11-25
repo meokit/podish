@@ -3260,6 +3260,43 @@ public class VMAManager
         return true;
     }
 
+    // Prepare one cache page without retaining a guest mapping or pointer
+    // across the wait. The caller still resolves permissions and CoW.
+    internal async ValueTask<int> PrepareFilePageAsync(FiberTask task, uint address, NativeFaultAccess access,
+        bool noWait = false)
+    {
+        while (TryGetFilePageRead(address, access, out var request))
+        {
+            var data = new byte[request.Length];
+            var result = await request.Inode.ReadToHostAsync(task, null, data, request.Offset, noWait);
+            if (task.IsRetiring || task.Exited || !ReferenceEquals(task.Process.Mem, this))
+                return -(int)Errno.EFAULT;
+            if (result == -(int)Errno.ERESTARTSYS) return result;
+            if (!TryGetFilePageRead(address, access, out var current)) return 0;
+            if (current != request) continue;
+            if (result == -(int)Errno.EAGAIN) return result;
+            if (result != data.Length || !current.Inode.InstallReadMappingPage(current.PageIndex, data))
+                return -(int)Errno.EFAULT;
+            return 0;
+        }
+
+        return 0;
+    }
+
+    internal async ValueTask<int> PrepareLockRangeAsync(FiberTask task, uint start, uint end)
+    {
+        for (var address = start; address < end; address += LinuxConstants.PageSize)
+        {
+            var vma = FindVmArea(address);
+            if (vma == null) return -(int)Errno.ENOMEM;
+            var access = (vma.Perms & Protection.Read) != 0 ? NativeFaultAccess.Read :
+                (vma.Perms & Protection.Exec) != 0 ? NativeFaultAccess.Execute : NativeFaultAccess.Write;
+            var rc = await PrepareFilePageAsync(task, address, access);
+            if (rc < 0) return rc;
+        }
+        return 0;
+    }
+
     internal async ValueTask PopulateMappingAsync(FiberTask task, VmArea? mappedArea, uint start, uint end)
     {
         if (mappedArea == null) return;
