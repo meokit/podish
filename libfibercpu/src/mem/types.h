@@ -40,6 +40,9 @@ enum class Property : uint32_t {
     Exec = 1 << 2,
     Dirty = 1 << 3,
     ForceWriteSlow = 1 << 5,
+    // Private runtime allocation with a unique host virtual address. Raw
+    // host mappings and file views have no such aliasing guarantee.
+    StableBacking = 1 << 6,
     Valid = 1 << 11,
     // Combinations
     RW = Read | Write,

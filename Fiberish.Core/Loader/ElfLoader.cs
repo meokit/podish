@@ -1,5 +1,5 @@
 using System.Buffers.Binary;
-using Fiberish.Auth.Cred;
+using System.Numerics;
 using ExecIdentity = Fiberish.Auth.Cred.CredentialService.ExecIdentity;
 using Fiberish.Core;
 using Fiberish.Diagnostics;
@@ -46,17 +46,18 @@ public class ElfLoader
         return (file, new VfsStream(file, task));
     }
 
-    internal static async ValueTask<PreparedImage> ReadImageAsync(LinuxFile file, VfsStream stream, FiberTask task)
+    internal static async ValueTask<PreparedImage> ReadImageAsync(LinuxFile file, VfsStream stream, FiberTask task,
+        GuestArchitecture? expectedArchitecture = null)
     {
-        var elf = await Elf32Reader.ReadAsync(stream, task);
-        ValidateExecutableType(elf);
+        var elf = await ElfReader.ReadAsync(stream, task);
+        ValidateExecutable(elf, expectedArchitecture);
 
         byte[]? interpPath = null;
         foreach (var segment in elf.Segments)
         {
             if (segment.Type != ElfSegmentType.Interpreter) continue;
             var bytes = new byte[InterpreterPathSize(segment)];
-            stream.Position = segment.Position;
+            stream.Position = InterpreterPathOffset(segment, stream.Length, bytes.Length);
             await stream.ReadExactlyForTaskAsync(task, bytes);
             interpPath = ParseInterpreterPath(bytes);
         }
@@ -64,10 +65,24 @@ public class ElfLoader
         return new PreparedImage(file, elf, interpPath);
     }
 
-    private static void ValidateExecutableType(ElfFile elf)
+    private static void ValidateExecutable(ElfFile elf, GuestArchitecture? expectedArchitecture = null)
     {
         if (elf.FileType is not (ElfFileType.Executable or ElfFileType.Dynamic))
             throw new InvalidDataException("ELF is not an executable image.");
+        var supportedArchitecture = elf.Architecture switch
+        {
+#if FIBER_GUEST_I386
+            GuestArchitecture.I386 => true,
+#endif
+#if FIBER_GUEST_AARCH64
+            GuestArchitecture.AArch64 => true,
+#endif
+            _ => false
+        };
+        if (!supportedArchitecture || (expectedArchitecture.HasValue && elf.Architecture != expectedArchitecture.Value))
+            throw new NotSupportedException($"Unsupported guest architecture {elf.Architecture} for this ELF image.");
+        if (elf.Architecture == GuestArchitecture.AArch64 && elf.Segments.Length == 0)
+            throw new InvalidDataException("ELF64 executable has no program headers.");
     }
 
     internal static bool IsInvalidElfFormat(Exception ex) =>
@@ -99,13 +114,18 @@ public class ElfLoader
         var mm = sys.Mem;
         var engine = sys.CurrentSyscallEngine;
 
-        ElfLoadInfo LoadMain(ElfFile elf, LinuxFile file, Stream? stream) =>
-            LoadSegments(elf, elf.FileType == ElfFileType.Executable ? 0u : layout.PieBase,
-                mm, engine, guestPathRaw, file, stream);
+        ElfLoadInfo LoadMain(ElfFile elf, LinuxFile file, Stream? stream)
+        {
+            engine.SelectArchitecture(elf.Architecture);
+            sys.SetupVDSO();
+            return LoadSegments(elf, GetLoadBase(elf, layout.PieBase), mm, engine, guestPathRaw, file, stream);
+        }
 
         ElfLoadInfo mainInfo;
+        GuestArchitecture architecture;
         if (preparedMain != null)
         {
+            architecture = preparedMain.Elf.Architecture;
             mainInfo = LoadMain(preparedMain.Elf, preparedMain.File, null);
             mainInfo.InterpPathRaw = preparedMain.InterpPathRaw;
         }
@@ -113,8 +133,9 @@ public class ElfLoader
         {
             var file = new LinuxFile(dentry, FileFlags.O_RDONLY, mount);
             using var stream = new VfsStream(file);
-            var elf = Elf32Reader.Read(stream);
-            ValidateExecutableType(elf);
+            var elf = ElfReader.Read(stream);
+            ValidateExecutable(elf);
+            architecture = elf.Architecture;
             mainInfo = LoadMain(elf, file, stream);
         }
 
@@ -125,8 +146,7 @@ public class ElfLoader
         {
             uint LoadInterpreter(ElfFile elf, LinuxFile file, Stream? stream)
             {
-                if (elf.FileType == ElfFileType.Dynamic)
-                    interpBase = layout.InterpreterBaseHint;
+                interpBase = GetLoadBase(elf, layout.InterpreterBaseHint);
                 return LoadSegments(elf, interpBase, mm, engine, interpPath, file, stream).EntryPoint;
             }
 
@@ -143,8 +163,8 @@ public class ElfLoader
                 ElfFile elf;
                 try
                 {
-                    elf = Elf32Reader.Read(stream);
-                    ValidateExecutableType(elf);
+                    elf = ElfReader.Read(stream);
+                    ValidateExecutable(elf, architecture);
                 }
                 catch (Exception ex) when (IsInvalidElfFormat(ex))
                 {
@@ -156,38 +176,42 @@ public class ElfLoader
         }
 
         var randBytes = layout.AuxRandomBytes;
+        var isAArch64 = architecture == GuestArchitecture.AArch64;
+        var wordSize = isAArch64 ? sizeof(ulong) : sizeof(uint);
+        var platform = isAArch64 ? "aarch64"u8 : "i686"u8;
 
         const int AuxEntryCount = 19;
-        var totalWords = 1 + argsRaw.Length + 1 + envsRaw.Length + 1 + AuxEntryCount * 2;
-        var totalSize = totalWords * 4;
+        var totalSize = checked((argsRaw.Length + envsRaw.Length + 3 + AuxEntryCount * 2) * wordSize);
 
-        uint variableDataSize = 16;
-        long argumentBytes = ((long)argsRaw.Length + envsRaw.Length) * 4 + execFnPathRaw.Length + 1;
+        long argumentBytes = ((long)argsRaw.Length + envsRaw.Length) * wordSize + execFnPathRaw.Length + 1;
+        var variableDataSize = (long)randBytes.Length + platform.Length + 1 + execFnPathRaw.Length + 1;
         foreach (var arg in argsRaw)
         {
             if (arg.Length >= LinuxConstants.MaxArgStrlen)
                 throw new OverflowException("Exec argument exceeds MAX_ARG_STRLEN.");
-            variableDataSize += checked((uint)arg.Length + 1u);
+            variableDataSize += arg.Length + 1;
             argumentBytes += arg.Length + 1;
         }
         foreach (var env in envsRaw)
         {
             if (env.Length >= LinuxConstants.MaxArgStrlen)
                 throw new OverflowException("Exec environment exceeds MAX_ARG_STRLEN.");
-            variableDataSize += checked((uint)env.Length + 1u);
+            variableDataSize += env.Length + 1;
             argumentBytes += env.Length + 1;
         }
         // Recheck rewritten shebang vectors/public loader inputs in the same pass
         // used to size the stack. The syscall reader already shares its budget.
         if (argumentBytes > sys.GetExecArgMaxBytes(process))
             throw new OverflowException("Combined exec vector budget exceeded.");
-        variableDataSize += 5;
         // AT_EXECFN is the path passed to execve: for a script that is the script path,
         // not the resolved interpreter path used for EXECUTABLE_PATH/AT_PHDR.
-        variableDataSize += checked((uint)execFnPathRaw.Length + 1u);
-
-        var initialTargetSp = layout.InitialStackTop - variableDataSize - (uint)totalSize;
+        var initialTargetSp = checked(layout.InitialStackTop - (uint)(variableDataSize + totalSize));
         var finalSp = initialTargetSp & ~0xFu;
+        var stackMapStart = finalSp & LinuxConstants.PageMask;
+        if (stackMapStart < layout.StackLowerBound)
+            throw new InvalidOperationException(
+                $"Initial stack exceeds RLIMIT-derived range: start=0x{stackMapStart:x}, lower=0x{layout.StackLowerBound:x}");
+
         var stackData = new byte[layout.InitialStackTop - finalSp];
         var sp = layout.InitialStackTop;
 
@@ -208,27 +232,28 @@ public class ElfLoader
             return sp;
         }
 
-        void PushUint32(uint value)
+        void WriteWord(int offset, uint value)
         {
-            sp -= 4;
-            BinaryPrimitives.WriteUInt32LittleEndian(stackData.AsSpan((int)(sp - finalSp), 4), value);
+            if (isAArch64)
+                BinaryPrimitives.WriteUInt64LittleEndian(stackData.AsSpan(offset, wordSize), value);
+            else
+                BinaryPrimitives.WriteUInt32LittleEndian(stackData.AsSpan(offset, wordSize), value);
         }
 
-        // Write vector slots directly into the final stack buffer. No temporary
-        // uint[argc]/uint[envc] allocations, even for very large exec vectors.
+        // Write vector slots directly into the final stack buffer.
         for (var i = argsRaw.Length - 1; i >= 0; i--)
         {
             var ptr = PushCStringBytes(argsRaw[i]);
-            BinaryPrimitives.WriteUInt32LittleEndian(stackData.AsSpan(4 + i * 4, 4), ptr);
+            WriteWord((i + 1) * wordSize, ptr);
         }
-        var envpOffset = (argsRaw.Length + 2) * 4;
+        var envpOffset = (argsRaw.Length + 2) * wordSize;
         for (var i = envsRaw.Length - 1; i >= 0; i--)
         {
             var ptr = PushCStringBytes(envsRaw[i]);
-            BinaryPrimitives.WriteUInt32LittleEndian(stackData.AsSpan(envpOffset + i * 4, 4), ptr);
+            WriteWord(envpOffset + i * wordSize, ptr);
         }
 
-        var platPtr = PushCStringBytes("i686"u8);
+        var platPtr = PushCStringBytes(platform);
         var execFnPtr = PushCStringBytes(execFnPathRaw);
 
         var randPtr = PushBytes(randBytes);
@@ -253,7 +278,7 @@ public class ElfLoader
             LinuxConstants.AT_BASE, interpBase,
             LinuxConstants.AT_FLAGS, 0,
             LinuxConstants.AT_SECURE, identity.Secure ? 1u : 0u,
-            LinuxConstants.AT_HWCAP, 0x0fcbfbfd,
+            LinuxConstants.AT_HWCAP, isAArch64 ? 0u : 0x0fcbfbfd,
             LinuxConstants.AT_HWCAP2, 0,
             LinuxConstants.AT_CLKTCK, 100,
             LinuxConstants.AT_NULL, 0
@@ -262,25 +287,19 @@ public class ElfLoader
         if (auxv.Length != AuxEntryCount * 2)
             throw new InvalidOperationException($"Unexpected auxv size: {auxv.Length}.");
 
-        sp = finalSp + (uint)totalSize;
-
-        for (var i = auxv.Length - 1; i >= 0; i--) PushUint32(auxv[i]);
+        var auxvOffset = totalSize - auxv.Length * wordSize;
+        for (var i = 0; i < auxv.Length; i++)
+            WriteWord(auxvOffset + i * wordSize, auxv[i]);
 
         // Vector terminators are already zero in the freshly allocated buffer.
-        BinaryPrimitives.WriteUInt32LittleEndian(stackData, (uint)argsRaw.Length);
-        sp = finalSp;
-
-        var stackMapStart = finalSp & LinuxConstants.PageMask;
-        if (stackMapStart < layout.StackLowerBound)
-            throw new InvalidOperationException(
-                $"Initial stack exceeds RLIMIT-derived range: start=0x{stackMapStart:x}, lower=0x{layout.StackLowerBound:x}");
+        WriteWord(0, (uint)argsRaw.Length);
 
         var stackMapLen = layout.InitialStackTop - stackMapStart;
         ProcessAddressSpaceSync.Mmap(mm, engine, stackMapStart, stackMapLen, Protection.Read | Protection.Write,
             MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous | MapFlags.GrowDown | MapFlags.Stack,
             null, 0, "STACK");
 
-        var stackVma = mm.FindVmArea(sp);
+        var stackVma = mm.FindVmArea(finalSp);
         if (stackVma == null)
             throw new InvalidOperationException("Initial stack VMA missing after mmap.");
 
@@ -291,9 +310,8 @@ public class ElfLoader
         var res = new LoaderResult
         {
             Entry = mainInfo.InterpPathRaw != null ? interpEntry : mainInfo.EntryPoint,
-            SP = sp,
-            InitialStack = new ArraySegment<byte>(stackData, (int)(sp - finalSp),
-                stackData.Length - (int)(sp - finalSp)),
+            SP = finalSp,
+            InitialStack = new ArraySegment<byte>(stackData),
             BrkAddr = mainInfo.BrkAddr,
             Layout = layout
         };
@@ -321,9 +339,32 @@ public class ElfLoader
     private static byte[] ReadInterpreterPath(Stream stream, ElfSegment segment)
     {
         Span<byte> buffer = stackalloc byte[InterpreterPathSize(segment)];
-        stream.Position = segment.Position;
+        stream.Position = InterpreterPathOffset(segment, stream.Length, buffer.Length);
         stream.ReadExactly(buffer);
         return ParseInterpreterPath(buffer);
+    }
+
+    private static long InterpreterPathOffset(ElfSegment segment, long fileLength, int pathSize)
+    {
+        if (fileLength < pathSize || segment.Position > (ulong)(fileLength - pathSize))
+            throw new InvalidDataException("PT_INTERP extends past the end of the file.");
+        return (long)segment.Position;
+    }
+
+    private static uint GetLoadBase(ElfFile elf, uint hint)
+    {
+        if (elf.FileType == ElfFileType.Executable) return 0;
+        if (elf.Architecture == GuestArchitecture.I386) return hint;
+
+        ulong alignment = LinuxConstants.PageSize;
+        foreach (var segment in elf.Segments)
+            if (segment.Type == ElfSegmentType.Load && BitOperations.IsPow2(segment.Alignment))
+                alignment = Math.Max(alignment, segment.Alignment);
+
+        var loadBase = hint & ~(alignment - 1);
+        if (loadBase == 0)
+            throw new FatalExecException("ELF load alignment exceeds the guest address space.");
+        return (uint)loadBase;
     }
 
     private static ElfLoadInfo LoadSegments(ElfFile elf, uint loadBase, VMAManager mm, Engine engine,
@@ -345,31 +386,40 @@ public class ElfLoader
             }
         }
 
+        var taskSize = mm.Layout?.TaskSize ?? LinuxConstants.TaskSize32;
+        if (loadBase >= taskSize || elf.EntryPointAddress >= taskSize - loadBase)
+            throw new FatalExecException("ELF entry is outside the guest address space.");
+
         var info = new ElfLoadInfo
         {
             PhEnt = elf.ProgramHeaderEntrySize,
-            EntryPoint = elf.EntryPointAddress + loadBase
+            PhNum = (uint)elf.Segments.Length,
+            EntryPoint = (uint)elf.EntryPointAddress + loadBase
         };
 
-        uint firstLoadVaddr = 0;
-        var foundFirstLoad = false;
-
-        Span<byte> bssZeroPage = stackalloc byte[LinuxConstants.PageSize];
-        bssZeroPage.Clear();
+        uint? firstLoadVaddr = null;
+        uint? phdrInLoad = null;
+        var phdrSize = (ulong)info.PhEnt * info.PhNum;
 
         foreach (var segment in elf.Segments)
         {
             if (segment.Type == ElfSegmentType.Load)
             {
-                var taskSize = mm.Layout?.TaskSize ?? LinuxConstants.TaskSize32;
                 if (segment.Size > segment.SizeInMemory ||
-                    (ulong)segment.VirtualAddress + loadBase + segment.SizeInMemory > taskSize ||
+                    segment.VirtualAddress >= taskSize - loadBase ||
+                    segment.SizeInMemory > taskSize - loadBase - segment.VirtualAddress ||
+                    segment.Position > long.MaxValue ||
+                    segment.Size > long.MaxValue - segment.Position ||
                     ((segment.VirtualAddress ^ segment.Position) & LinuxConstants.PageOffsetMask) != 0)
                     throw new FatalExecException("Invalid ELF PT_LOAD after Linux's point of no return.");
-                if (!foundFirstLoad)
+
+                var vaddrRaw = (uint)segment.VirtualAddress + loadBase;
+                firstLoadVaddr ??= vaddrRaw;
+                if (segment.Position <= elf.ProgramHeaderOffset && phdrSize <= segment.Size)
                 {
-                    firstLoadVaddr = segment.VirtualAddress;
-                    foundFirstLoad = true;
+                    var offsetInSegment = elf.ProgramHeaderOffset - segment.Position;
+                    if (offsetInSegment <= segment.Size - phdrSize)
+                        phdrInLoad = vaddrRaw + (uint)offsetInSegment;
                 }
 
                 var perms = Protection.None;
@@ -377,18 +427,18 @@ public class ElfLoader
                 if ((segment.Flags & ElfSegmentFlags.Writable) != 0) perms |= Protection.Write;
                 if ((segment.Flags & ElfSegmentFlags.Readable) != 0) perms |= Protection.Read;
 
-                var vaddrRaw = segment.VirtualAddress + loadBase;
-                var offsetRaw = segment.Position;
-                var sizeRaw = segment.SizeInMemory;
+                var sizeRaw = (uint)segment.SizeInMemory;
 
                 var pageStart = vaddrRaw & LinuxConstants.PageMask;
-                var pageOffset = offsetRaw & LinuxConstants.PageMask;
+                var pageOffset = (long)(segment.Position & ~(ulong)LinuxConstants.PageOffsetMask);
                 if (sizeRaw > 0)
                 {
-                    var bssStart = vaddrRaw + segment.Size;
+                    var bssStart = vaddrRaw + (uint)segment.Size;
                     var bssEnd = vaddrRaw + sizeRaw;
 
-                    var fileMapEnd = (bssStart + LinuxConstants.PageOffsetMask) & LinuxConstants.PageMask;
+                    var fileMapEnd = segment.Size == 0
+                        ? pageStart
+                        : (bssStart + LinuxConstants.PageOffsetMask) & LinuxConstants.PageMask;
                     var fileMapLen = fileMapEnd - pageStart;
 
                     if (fileMapLen > 0)
@@ -415,24 +465,27 @@ public class ElfLoader
                     }
                 }
 
-                var end = segment.VirtualAddress + segment.SizeInMemory + loadBase;
+                var end = vaddrRaw + sizeRaw;
                 end = (end + LinuxConstants.PageOffsetMask) & LinuxConstants.PageMask;
                 if (end > info.BrkAddr) info.BrkAddr = end;
             }
 
             if (segment.Type == ElfSegmentType.ProgramHeader)
-                info.PhdrAddr = segment.VirtualAddress + loadBase;
+            {
+                if (segment.VirtualAddress >= taskSize - loadBase ||
+                    phdrSize > taskSize - loadBase - segment.VirtualAddress)
+                    throw new FatalExecException("ELF PT_PHDR is outside the guest address space.");
+                info.PhdrAddr = (uint)segment.VirtualAddress + loadBase;
+            }
 
             if (segment.Type == ElfSegmentType.Interpreter && elfStream != null)
                 info.InterpPathRaw = ReadInterpreterPath(elfStream, segment);
-
-            info.PhNum++;
         }
 
-        if (info.PhdrAddr == 0 && foundFirstLoad)
-            info.PhdrAddr = firstLoadVaddr + loadBase + elf.ElfHeaderSize;
-
-        info.FirstLoadVaddr = firstLoadVaddr + loadBase;
+        if (info.PhdrAddr == 0)
+            info.PhdrAddr = phdrInLoad ?? (elf.Architecture == GuestArchitecture.I386 && firstLoadVaddr.HasValue
+                ? firstLoadVaddr.Value + elf.ElfHeaderSize
+                : 0u);
 
         if (Logger.IsEnabled(LogLevel.Debug))
             Logger.LogDebug(
@@ -450,7 +503,6 @@ public class ElfLoader
         public uint PhEnt { get; set; }
         public uint EntryPoint { get; set; }
         public uint BrkAddr { get; set; }
-        public uint FirstLoadVaddr { get; set; }
         public byte[]? InterpPathRaw { get; set; }
     }
 }

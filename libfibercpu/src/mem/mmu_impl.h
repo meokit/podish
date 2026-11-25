@@ -593,4 +593,14 @@ template <typename T>
     return reinterpret_cast<const std::byte*>(res.value_or(nullptr));
 }
 
+[[nodiscard]] inline const std::byte* Mmu::try_executable_page(GuestAddr page) {
+    auto& entry = tlb.exec_tlb[(page >> PAGE_SHIFT) & TLB_INDEX_MASK];
+    if (entry.tag == page) [[likely]]
+        return reinterpret_cast<const std::byte*>(entry.addend + page);
+
+    const auto* bytes = resolve_safe_for_read(page, Property::Exec);
+    if (bytes && !mem_hook) entry = {page, Property::Exec, reinterpret_cast<std::uintptr_t>(bytes) - page};
+    return bytes;
+}
+
 }  // namespace fiberish::mem

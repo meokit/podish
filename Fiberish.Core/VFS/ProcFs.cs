@@ -148,7 +148,8 @@ file sealed class ProcRootInode : Inode, IContextualDirectoryInode
         else if (name.SequenceEqual("mountinfo"u8))
             created = new Dentry(childName, new ProcMountsFileInode(_sb, null, true), root, _sb);
         else if (name.SequenceEqual("cpuinfo"u8))
-            created = CreateFile(root, childName, 0x124, _ => ProcFsManager.GenerateCpuInfo());
+            created = CreateFile(root, childName, 0x124,
+                ctx => ProcFsManager.GenerateCpuInfo(ctx.Task?.CPU.IsAArch64 == true));
         else if (name.SequenceEqual("meminfo"u8))
             created = CreateFile(root, childName, 0x124, ctx => ProcFsManager.GenerateMemInfo(ctx.SyscallManager));
         else if (name.SequenceEqual("version"u8))

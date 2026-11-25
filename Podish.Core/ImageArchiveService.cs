@@ -117,7 +117,7 @@ public sealed class ImageArchiveService
                 }
 
                 var config = new OciImageConfig(
-                    "386",
+                    storedImage.Architecture ?? OciPullService.DefaultArchitecture,
                     "linux",
                     new OciRootFs("layers", diffIds),
                     diffIds.Select(_ => new OciHistory("fiberpod save")).ToList(),
@@ -199,9 +199,10 @@ public sealed class ImageArchiveService
             var manifest =
                 JsonSerializer.Deserialize(File.ReadAllText(manifestBlobPath), PodishJsonContext.Default.OciManifest)
                 ?? throw new InvalidOperationException($"invalid manifest blob {manifestDesc.Digest}");
-            var runtimeConfig = ReadRuntimeConfigFromBlob(extractedRoot, manifest.Config);
+            var (runtimeConfig, architecture) = ReadRuntimeConfigFromBlob(extractedRoot, manifest.Config);
 
-            var safeName = ToSafeImageName(refName);
+            var safeName = OciPullService.GetImageCacheName(refName,
+                architecture == OciPullService.DefaultArchitecture ? null : architecture);
             var storeDir = Path.Combine(_ociImagesDir, safeName);
             var blobsDir = Path.Combine(storeDir, "blobs");
             var indexesDir = Path.Combine(storeDir, "indexes");
@@ -264,7 +265,8 @@ public sealed class ImageArchiveService
                 runtimeConfig?.Entrypoint,
                 runtimeConfig?.Cmd,
                 runtimeConfig?.Env,
-                runtimeConfig?.WorkingDir);
+                runtimeConfig?.WorkingDir,
+                architecture);
             File.WriteAllText(Path.Combine(storeDir, "image.json"),
                 JsonSerializer.Serialize(stored, PodishJsonContext.Default.OciStoredImage));
             loaded.Add(refName);
@@ -273,28 +275,29 @@ public sealed class ImageArchiveService
         return loaded;
     }
 
-    private static OciStoredImageRuntimeConfig? ReadRuntimeConfigFromBlob(string extractedRoot, OciDescriptor configDescriptor)
+    private static (OciStoredImageRuntimeConfig? RuntimeConfig, string? Architecture) ReadRuntimeConfigFromBlob(
+        string extractedRoot, OciDescriptor configDescriptor)
     {
         var configPath = OciBlobPath(extractedRoot, configDescriptor.Digest);
         if (!File.Exists(configPath))
-            return null;
+            return default;
 
         try
         {
             var config = JsonSerializer.Deserialize(File.ReadAllText(configPath), PodishJsonContext.Default.OciImageConfig);
             if (config?.Config == null)
-                return null;
+                return (null, config?.Architecture);
 
-            return new OciStoredImageRuntimeConfig(
+            return (new OciStoredImageRuntimeConfig(
                 string.IsNullOrWhiteSpace(config.Config.User) ? null : config.Config.User,
                 config.Config.Entrypoint,
                 config.Config.Cmd,
                 config.Config.Env,
-                string.IsNullOrWhiteSpace(config.Config.WorkingDir) ? null : config.Config.WorkingDir);
+                string.IsNullOrWhiteSpace(config.Config.WorkingDir) ? null : config.Config.WorkingDir), config.Architecture);
         }
         catch
         {
-            return null;
+            return default;
         }
     }
 
@@ -303,7 +306,7 @@ public sealed class ImageArchiveService
         if (string.IsNullOrWhiteSpace(imageReference))
             imageReference = "localhost/fiberpod-import:latest";
 
-        var safeName = ToSafeImageName(imageReference);
+        var safeName = OciPullService.GetImageCacheName(imageReference);
         var storeDir = Path.Combine(_ociImagesDir, safeName);
         var blobsDir = Path.Combine(storeDir, "blobs");
         var indexesDir = Path.Combine(storeDir, "indexes");
@@ -646,12 +649,28 @@ public sealed class ImageArchiveService
                 return (imageReferenceOrPath, Path.GetFileName(imageReferenceOrPath));
         }
 
-        var safeName = ToSafeImageName(imageReferenceOrPath);
-        return (Path.Combine(_ociImagesDir, safeName), safeName);
+        var safeName = OciPullService.GetImageCacheName(imageReferenceOrPath);
+        var storeDir = Path.Combine(_ociImagesDir, safeName);
+        if (File.Exists(Path.Combine(storeDir, "image.json")))
+            return (storeDir, safeName);
+
+        foreach (var platform in new[] { "linux/386", "linux/arm64" })
+        {
+            if (!OciPullService.TryParsePlatform(platform, out _)) continue;
+            var platformName = OciPullService.GetImageCacheName(imageReferenceOrPath, platform);
+            var platformDir = Path.Combine(_ociImagesDir, platformName);
+            if (File.Exists(Path.Combine(platformDir, "image.json")))
+                return (platformDir, platformName);
+        }
+        return (storeDir, safeName);
     }
 
     private string? ResolveImageReferenceForContainer(string containerId)
     {
+        var metadata = PodishContainerMetadataStore.Resolve(Path.Combine(_fiberpodDir, "containers"), containerId);
+        if (metadata?.Spec is { ImagePlatform: not null, Image: not null } spec)
+            return ContainerLaunchSpecResolver.ResolveExistingRootfsPath(_ociImagesDir, spec);
+
         if (!File.Exists(_eventsPath))
             return null;
 
@@ -741,11 +760,6 @@ public sealed class ImageArchiveService
         if (total == size)
             return bytes;
         return bytes[..total];
-    }
-
-    private static string ToSafeImageName(string imageReference)
-    {
-        return imageReference.Replace("/", "_").Replace(":", "_");
     }
 
     private static string DigestHex(string digest)

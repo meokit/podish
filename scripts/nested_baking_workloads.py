@@ -108,7 +108,10 @@ def run_workloads(cfg, cli, cases, log, capture=None):
             "-e", "LANG=C", "-e", "TZ=UTC"]
     if capture is not None:
         capture.mkdir(parents=True, exist_ok=True)
-        argv.extend(["--guest-stats-dir", str(capture)])
+        if cfg.get("guest") == "aarch64":
+            argv.append(f"-XX:AArch64ProfilePath={capture / 'words.json'}")
+        else:
+            argv.extend(["--guest-stats-dir", str(capture)])
     argv.extend(["--", "/bin/sh", "-c", "\n".join(shell)])
     env = {key: value for key, value in os.environ.items()
            if not key.startswith(("FIBERCPU_", "PODISH_", "DYLD_", "DOTNET_STARTUP_HOOKS"))}

@@ -36,7 +36,7 @@ public enum Seg
 
 public unsafe partial class X86Native
 {
-    private const string LibName = "libfibercpu";
+    internal const string LibName = "libfibercpu";
 
     [Flags]
     public enum PageMappingFlags : byte

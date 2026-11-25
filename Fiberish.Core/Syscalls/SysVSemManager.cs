@@ -580,7 +580,9 @@ public class SysVSemManager
     {
         if (buf == 0) return -(int)Errno.EFAULT;
 
-        Span<byte> data = stackalloc byte[64];
+        var isAArch64 = engine.IsAArch64;
+        Span<byte> data = stackalloc byte[isAArch64 ? 88 : 64];
+        data.Clear();
         BinaryPrimitives.WriteInt32LittleEndian(data[..4], set.Key);
         BinaryPrimitives.WriteUInt32LittleEndian(data.Slice(4, 4), (uint)set.Uid);
         BinaryPrimitives.WriteUInt32LittleEndian(data.Slice(8, 4), (uint)set.Gid);
@@ -589,13 +591,20 @@ public class SysVSemManager
         BinaryPrimitives.WriteUInt32LittleEndian(data.Slice(20, 4), (uint)(set.Mode & 0x1FF));
         BinaryPrimitives.WriteUInt16LittleEndian(data.Slice(24, 2), (ushort)set.Semid);
 
-        var otimeSec = set.OTime == DateTime.UnixEpoch ? 0 : (int)(set.OTime - DateTime.UnixEpoch).TotalSeconds;
-        BinaryPrimitives.WriteInt32LittleEndian(data.Slice(36, 4), otimeSec);
-
-        var ctimeSec = set.CTime == DateTime.UnixEpoch ? 0 : (int)(set.CTime - DateTime.UnixEpoch).TotalSeconds;
-        BinaryPrimitives.WriteInt32LittleEndian(data.Slice(44, 4), ctimeSec);
-
-        BinaryPrimitives.WriteUInt32LittleEndian(data.Slice(52, 4), (uint)set.Values.Length);
+        var otimeSec = new DateTimeOffset(set.OTime).ToUnixTimeSeconds();
+        var ctimeSec = new DateTimeOffset(set.CTime).ToUnixTimeSeconds();
+        if (isAArch64)
+        {
+            BinaryPrimitives.WriteInt64LittleEndian(data[48..], otimeSec);
+            BinaryPrimitives.WriteInt64LittleEndian(data[56..], ctimeSec);
+            BinaryPrimitives.WriteUInt64LittleEndian(data[64..], (ulong)set.Values.Length);
+        }
+        else
+        {
+            BinaryPrimitives.WriteInt64LittleEndian(data[36..], otimeSec);
+            BinaryPrimitives.WriteInt64LittleEndian(data[44..], ctimeSec);
+            BinaryPrimitives.WriteUInt32LittleEndian(data[52..], (uint)set.Values.Length);
+        }
 
         if (!engine.CopyToUser(buf, data))
             return -(int)Errno.EFAULT;
@@ -607,7 +616,7 @@ public class SysVSemManager
     {
         if (buf == 0) return -(int)Errno.EFAULT;
 
-        Span<byte> data = stackalloc byte[36];
+        Span<byte> data = stackalloc byte[engine.IsAArch64 ? 48 : 36];
         if (!engine.CopyFromUser(buf, data))
             return -(int)Errno.EFAULT;
 

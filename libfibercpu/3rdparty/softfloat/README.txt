@@ -19,3 +19,11 @@ subdirectory:
 
 Other files in the package comprise the source code for SoftFloat.
 
+Podish vendors a subset of release 3e. The binary32-64 directory contains
+the sources needed by the AArch64 software floating-point path. Its NaN
+helpers come from source/8086-SSE in the same release.
+
+Upstream archive
+https://www.jhauser.us/arithmetic/SoftFloat-3e.zip
+SHA-256 21130ce885d35c1fe73fc1e1bf2244178167e05c6747cad5f450cc991714c746
+

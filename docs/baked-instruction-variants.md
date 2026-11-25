@@ -121,3 +121,16 @@ two-slot memory compare loaded its immediate from offset 24 and advanced 32
 bytes. Both selected the ModRM operation at compile time. The LLVM exact
 probe materialized `0x12345678` with `mov` and `movk`, inlined the instruction
 bodies and retained the MMU replay and block-link exits.
+
+## AArch64 plans
+
+The AArch64 interpreter records executed integer, branch and memory words using `-XX:AArch64ProfilePath=/absolute/path/to/words.json` on a Podish run. The profile contains word counts, adjacent pairs and straight-line sequences up to 24 instructions. Recording disables cached execution for that run so instruction counts also include normally fused constituents.
+
+`scripts/train_nested_presets.py` accepts the existing workload configuration with `"guest": "aarch64"` and optional `"aarch64_operand_budgets": [32, 128, 512]`. It verifies workload output, gives each workload equal weight, builds candidates, and measures them against the unbaked interpreter. It freezes the baseline when all valid candidates are slower. The CMake generator can also consume a single capture directly.
+
+```sh
+python3 scripts/train_nested_presets.py --config training.json --output /tmp/a64-training
+dotnet build Podish.Cli -c Release -p:AArch64OperandPlanFile=/tmp/a64-training/frozen/scalar.json
+```
+
+The stock AArch64 profile combines musl CoreMark and Alpine BusyBox shell, directory listing and SHA-256 workloads. It retains up to 512 ranked entries of each kind. The CMake default emits up to 128 of each plus up to 32 partial operand shapes. The partials specialize ADD/SUB immediate and unsigned-offset load/store words. They keep the register indices, operation, scale and width fixed and read the decoded immediate from the slot. Training ranks shapes by residual frequency after allocating the exact words, using all observed encodings before truncating the profile. The `partials` list in a frozen plan preserves this ranking. Use `--no-partial-operands` to train exact shapes alone. The CMake limits are `FIBERCPU_AARCH64_OPERAND_BUDGET`, `FIBERCPU_AARCH64_PARTIAL_BUDGET`, `FIBERCPU_AARCH64_PAIR_BUDGET`, and `FIBERCPU_AARCH64_SEQUENCE_BUDGET`. `FIBERCPU_AARCH64_OPERAND_PLAN_FILE` selects another plan. Unsupported keys fall back to the lowered handler. The optimization fingerprint includes the plan hash, all four budgets, the guest pin selection and the NZCV elimination setting.

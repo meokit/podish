@@ -13,6 +13,7 @@
         <NativeBuildDir Condition="'$(IsBrowserWasm)' != 'true' And '$(RuntimeIdentifier)' != ''">build_native/$(RuntimeIdentifier)</NativeBuildDir>
         <NativeBuildDir Condition="'$(IsBrowserWasm)' != 'true' And '$(RuntimeIdentifier)' == ''">build_native/host</NativeBuildDir>
         <NativeBuildDir Condition="'$(IsBrowserWasm)' != 'true' And '$(FibercpuIsolatedPreset)' == 'true'">$(NativeBuildDir)/$(FibercpuBakingPreset)</NativeBuildDir>
+        <NativeBuildDir Condition="'$(IsBrowserWasm)' != 'true'">$(NativeBuildDir)$(FibercpuGuestSuffix)</NativeBuildDir>
         <NativeBakingPreset>$(FibercpuBakingPreset)</NativeBakingPreset>
         <NativeBakingPreset Condition="'$(IsBrowserWasm)' == 'true'">$(FibercpuWasmBakingPreset)</NativeBakingPreset>
         <FusionStrategy Condition="'$(FusionStrategy)' == ''">AUTO</FusionStrategy>
@@ -25,6 +26,7 @@
         <LlvmBlockJit Condition="'$(LlvmBlockJit)' == ''">OFF</LlvmBlockJit>
         <GprPin Condition="'$(GprPin)' == '' And '$(IsBrowserWasm)' == 'true'">OFF</GprPin>
         <GprPin Condition="'$(GprPin)' == ''">AUTO</GprPin>
+        <AArch64PinRegister Condition="'$(AArch64PinRegister)' == ''">-1</AArch64PinRegister>
         <GprPinRegisters Condition="'$(GprPinRegisters)' == ''">EAX,ESP</GprPinRegisters>
         <GprWriteBack Condition="'$(GprWriteBack)' == ''">ON</GprWriteBack>
         <SuperOpcodeTop Condition="'$(SuperOpcodeTop)' == ''">128</SuperOpcodeTop>
@@ -82,6 +84,7 @@
         <NativeBuildInput Include="$(SuperOpcodeGenerationDir)/native-options.txt" />
         <NativeBuildInput Include="$(LibFibercpuSourceDir)/src/**/*" />
         <NativeBuildInput Include="$(LibFibercpuSourceDir)/3rdparty/**/*" />
+        <NativeBuildInput Include="$(AArch64OperandPlanFile)" Condition="'$(AArch64OperandPlanFile)' != ''" />
         <NativeBuildInput Include="$(OperandPlanFile)" Condition="'$(OperandPlanFile)' != ''" />
         <NativeBuildInput Include="$(DynamicOperandPlanFile)" Condition="'$(DynamicOperandPlanFile)' != ''" />
         <NativeBuildInput Include="$(SuperOpcodeSource)" Condition="'$(SuperOpcodeSource)' != ''" />
@@ -114,7 +117,7 @@
                Text="Unknown FibercpuBakingPreset '$(NativeBakingPreset)'. Choose custom, 1.75m, 3.5m or 10m." />
         <MakeDir Directories="$(SuperOpcodeGenerationDir)" />
         <WriteLinesToFile File="$(SuperOpcodeGenerationDir)/native-options.txt"
-            Lines="baking_preset=$(NativeBakingPreset);fusion=$(FusionStrategy);budget=$(OperandBudget);pin=$(GprPin);pins=$(GprPinRegisters);writeback=$(GprWriteBack);coverage=$(PinSpecialization);plan=$(OperandPlanFile);static=$(StaticInstructionSpecialization);dynamic=$(DynamicInstructionSpecialization);dynamic_plan=$(DynamicOperandPlanFile);llvm=$(LlvmBlockJit);llvm_dir=$(LlvmConfigDir);native_clang=$(NativeClangDir);super=$(EnableSuperOpcodes);source=$(SuperOpcodeSource);handler=$(EnableHandlerProfile);block=$(EnableBlockProfile);sequence=$(EnableSequenceProfile);wasm_hot_dispatch=$(WasmHotDispatchHandlers);wasm_hot_plan=$(WasmHotDispatchPlan)"
+            Lines="i386=$(FiberGuestI386);aarch64=$(FiberGuestAArch64);aarch64_plan=$(AArch64OperandPlanFile);aarch64_pin=$(AArch64PinRegister);baking_preset=$(NativeBakingPreset);fusion=$(FusionStrategy);budget=$(OperandBudget);pin=$(GprPin);pins=$(GprPinRegisters);writeback=$(GprWriteBack);coverage=$(PinSpecialization);plan=$(OperandPlanFile);static=$(StaticInstructionSpecialization);dynamic=$(DynamicInstructionSpecialization);dynamic_plan=$(DynamicOperandPlanFile);llvm=$(LlvmBlockJit);llvm_dir=$(LlvmConfigDir);native_clang=$(NativeClangDir);super=$(EnableSuperOpcodes);source=$(SuperOpcodeSource);handler=$(EnableHandlerProfile);block=$(EnableBlockProfile);sequence=$(EnableSequenceProfile);wasm_hot_dispatch=$(WasmHotDispatchHandlers);wasm_hot_plan=$(WasmHotDispatchPlan)"
             Overwrite="true" WriteOnlyWhenDifferent="true" />
     </Target>
 
@@ -153,6 +156,7 @@
             <CMakeSequenceProfile Condition="'$(EnableSequenceProfile)' == 'true'">ON</CMakeSequenceProfile>
             <CMakeSequenceProfile Condition="'$(CMakeSequenceProfile)' == ''">OFF</CMakeSequenceProfile>
             <CMakeArgs>$(CMakeArgs) -DFIBERCPU_ENABLE_SEQUENCE_PROFILE=$(CMakeSequenceProfile)</CMakeArgs>
+            <CMakeArgs>$(CMakeArgs) -DFIBERCPU_GUEST_I386=$(FiberGuestI386) -DFIBERCPU_GUEST_AARCH64=$(FiberGuestAArch64) -DFIBERCPU_AARCH64_PIN_REG=$(AArch64PinRegister) -DFIBERCPU_AARCH64_OPERAND_PLAN_FILE=&quot;$(AArch64OperandPlanFile)&quot;</CMakeArgs>
             <CMakeArgs>$(CMakeArgs) -DFIBERCPU_BAKING_PRESET=$(NativeBakingPreset)</CMakeArgs>
             <CMakeArgs>$(CMakeArgs) -DFIBERCPU_FUSION_STRATEGY=$(FusionStrategy) -DFIBERCPU_OPERAND_BUDGET=$(OperandBudget) -DFIBERCPU_GPR_PIN=$(GprPin) -DFIBERCPU_GPR_PIN_REGISTERS=&quot;$(GprPinRegisters)&quot; -DFIBERCPU_GPR_WRITE_BACK=$(GprWriteBack) -DFIBERCPU_PIN_SPECIALIZATION=$(PinSpecialization) -DFIBERCPU_OPERAND_PLAN_FILE=&quot;$(OperandPlanFile)&quot;</CMakeArgs>
             <CMakeArgs>$(CMakeArgs) -DFIBERCPU_GENERATED_SUPEROPCODES_FILE=&quot;$(SuperOpcodeSource)&quot;</CMakeArgs>

@@ -882,6 +882,8 @@ public partial class SyscallManager
         if (!loc.IsValid || loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
 
         RefreshHostfsProjectionForCaller(this, loc.Dentry.Inode);
+        if (engine.IsAArch64)
+            return WriteAArch64Stat(engine, statAddr, loc.Dentry.Inode) ? 0 : -(int)Errno.EFAULT;
         WriteStat64(engine, statAddr, loc.Dentry.Inode);
         return 0;
     }
@@ -2066,6 +2068,27 @@ LocResolvedUtimens64:
             silkInode.PersistMetadataImmediately();
     }
 
+    private static bool WriteAArch64Stat(Engine engine, uint addr, Inode inode)
+    {
+        Span<byte> buf = stackalloc byte[128];
+        buf.Clear();
+
+        BinaryPrimitives.WriteUInt64LittleEndian(buf, inode.Dev);
+        BinaryPrimitives.WriteUInt64LittleEndian(buf[8..], inode.Ino);
+        BinaryPrimitives.WriteUInt32LittleEndian(buf[16..], (uint)inode.Mode | (uint)inode.Type);
+        BinaryPrimitives.WriteUInt32LittleEndian(buf[20..], inode.GetLinkCountForStat());
+        BinaryPrimitives.WriteUInt32LittleEndian(buf[24..], (uint)inode.Uid);
+        BinaryPrimitives.WriteUInt32LittleEndian(buf[28..], (uint)inode.Gid);
+        BinaryPrimitives.WriteUInt64LittleEndian(buf[32..], inode.Rdev);
+        BinaryPrimitives.WriteUInt64LittleEndian(buf[48..], inode.Size);
+        BinaryPrimitives.WriteUInt32LittleEndian(buf[56..], LinuxConstants.PageSize);
+        BinaryPrimitives.WriteUInt64LittleEndian(buf[64..], (inode.Size + 511) / 512);
+        WriteStatxTime(buf, 72, inode.ATime);
+        WriteStatxTime(buf, 88, inode.MTime);
+        WriteStatxTime(buf, 104, inode.CTime);
+        return engine.CopyToUser(addr, buf);
+    }
+
     private static void WriteStat64(Engine engine, uint addr, Inode inode)
     {
         Span<byte> buf = stackalloc byte[96];
@@ -2203,6 +2226,26 @@ LocResolvedUtimens64:
         };
     }
 
+    private static bool WriteAArch64Statfs(Engine engine, uint addr, Dentry dentry)
+    {
+        const ulong blockSize = LinuxConstants.PageSize;
+        const ulong totalBlocks = 256 * 1024 * 1024 / blockSize;
+        Span<byte> buf = stackalloc byte[120];
+        buf.Clear();
+        BinaryPrimitives.WriteUInt64LittleEndian(buf, (uint)GetFsMagic(dentry));
+        BinaryPrimitives.WriteUInt64LittleEndian(buf[8..], blockSize);
+        BinaryPrimitives.WriteUInt64LittleEndian(buf[16..], totalBlocks);
+        BinaryPrimitives.WriteUInt64LittleEndian(buf[24..], totalBlocks / 2);
+        BinaryPrimitives.WriteUInt64LittleEndian(buf[32..], totalBlocks / 2);
+        BinaryPrimitives.WriteUInt64LittleEndian(buf[40..], 1_000_000);
+        BinaryPrimitives.WriteUInt64LittleEndian(buf[48..], 900_000);
+        BinaryPrimitives.WriteUInt32LittleEndian(buf[56..], 0x78656D75);
+        BinaryPrimitives.WriteUInt32LittleEndian(buf[60..], 0x46535031);
+        BinaryPrimitives.WriteUInt64LittleEndian(buf[64..], 255);
+        BinaryPrimitives.WriteUInt64LittleEndian(buf[72..], blockSize);
+        return engine.CopyToUser(addr, buf);
+    }
+
     private static void WriteStatfs32(Engine engine, uint addr, Dentry dentry)
     {
         const int blockSize = 4096;
@@ -2270,6 +2313,8 @@ LocResolvedUtimens64:
         var loc = PathWalker.PathWalk(path.UnsafeBuffer, path.Length, LookupFlags.FollowSymlink);
         if (!loc.IsValid || loc.Dentry?.Inode == null) return -(int)Errno.ENOENT;
 
+        if (engine.IsAArch64)
+            return WriteAArch64Statfs(engine, a2, loc.Dentry) ? 0 : -(int)Errno.EFAULT;
         WriteStatfs32(engine, a2, loc.Dentry);
         return 0;
     }
@@ -2280,6 +2325,8 @@ LocResolvedUtimens64:
         var file = GetFD(fd);
         if (file?.OpenedInode == null) return -(int)Errno.EBADF;
 
+        if (engine.IsAArch64)
+            return WriteAArch64Statfs(engine, a2, file.Dentry) ? 0 : -(int)Errno.EFAULT;
         WriteStatfs32(engine, a2, file.Dentry);
         return 0;
     }
@@ -2350,6 +2397,8 @@ LocResolvedUtimens64:
         if (f == null || f.OpenedInode == null) return -(int)Errno.EBADF;
 
         RefreshHostfsProjectionForCaller(this, f.OpenedInode);
+        if (engine.IsAArch64)
+            return WriteAArch64Stat(engine, a2, f.OpenedInode) ? 0 : -(int)Errno.EFAULT;
         WriteStat64(engine, a2, f.OpenedInode);
         return 0;
     }

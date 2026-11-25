@@ -3069,7 +3069,8 @@ public class VMAManager
         }
 
         // Replace the native translation while the old managed binding still retains its backing.
-        if (!engine.MemMapHostPage(pageStart, pagePtr, perms)) return FaultResult.Segv;
+        var stableBacking = engine.IsAArch64 && binding.Page?.HostPage.HasStableBacking == true;
+        if (!engine.MemMapHostPage(pageStart, pagePtr, perms, stableBacking)) return FaultResult.Segv;
         if (hasCurrent) PageMapping.Release(pageStart);
         if (PageMapping.AddBinding(pageStart, binding, out _)) return FaultResult.Handled;
 

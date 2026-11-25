@@ -5,6 +5,7 @@
 #include <charconv>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <iterator>
 #include <limits>
 #include <utility>
@@ -90,12 +91,14 @@ X86_RunContext* X86_CreateRun(const char* args, size_t size, char* error, size_t
         FoldOperands,
         ProfilePath,
         ProfileSamePage,
+        ArmProfilePath,
         Count
     };
     constexpr std::string_view names[] = {
         "BlockCacheSize",       "JitArenaSize",        "JitMode",
         "JitHotThreshold",      "JitWorkers",          "LlvmPipeline",
         "LlvmFoldOperandLoads", "WeightedProfilePath", "WeightedProfileSamePage",
+        "AArch64ProfilePath",
     };
     static_assert(std::size(names) == Count);
     std::optional<std::string_view> values[Count];
@@ -114,6 +117,18 @@ X86_RunContext* X86_CreateRun(const char* args, size_t size, char* error, size_t
 
     auto options = std::make_shared<CpuRunOptions>();
     auto run = std::make_unique<X86_RunContext>();
+    if (values[ArmProfilePath]) {
+#if FIBERCPU_GUEST_AARCH64
+        if (values[ArmProfilePath]->empty()) return fail("AArch64ProfilePath requires a filename");
+        std::error_code ec;
+        auto path = std::filesystem::absolute(*values[ArmProfilePath], ec);
+        if (ec) return fail(ec.message());
+        options->arm_profile = std::make_shared<ArmInstructionProfile>();
+        options->arm_profile->path = path.string();
+#else
+        return fail("AArch64ProfilePath requires an AArch64 guest build");
+#endif
+    }
     SharedJitOptions shared;
     if (values[BlockSize] && !ReadSize(*values[BlockSize], options->block_cache_bytes))
         return fail("BlockCacheSize requires a positive size in bytes, optionally suffixed with k, m or g");

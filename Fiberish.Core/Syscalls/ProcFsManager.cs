@@ -191,8 +191,13 @@ public static class ProcFsManager
         return sb.ToString();
     }
 
-    public static string GenerateCpuInfo()
+    public static string GenerateCpuInfo() => GenerateCpuInfo(false);
+
+    internal static string GenerateCpuInfo(bool isAArch64)
     {
+        if (isAArch64)
+            return "processor\t: 0\nmodel name\t: AArch64\nCPU architecture: 8\n\n";
+
         return
             "processor\t: 0\nvendor_id\t: GenuineIntel\ncpu family\t: 6\nmodel\t: 1\nmodel name\t: x86emu\nstepping\t: 1\nmicrocode\t: 0x1\ncpu MHz\t\t: 1000.000\ncache size\t: 16384 KB\nphysical id\t: 0\nsiblings\t: 1\ncore id\t\t: 0\ncpu cores\t: 1\napicid\t\t: 0\ninitial apicid\t: 0\nfpu\t\t: yes\nfpu_exception\t: yes\ncpuid level\t: 1\nwp\t\t: yes\nflags\t\t: fpu tsc cx8 cmov mmx fxsr sse sse2\n\n";
     }

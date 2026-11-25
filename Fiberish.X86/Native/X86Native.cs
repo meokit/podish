@@ -44,7 +44,7 @@ public unsafe partial class X86Native
         Dirty = 1 << 0
     }
 
-    private const string LibName =
+    internal const string LibName =
 #if FIBERISH_BROWSER_WASM
         "__Internal";
 #else

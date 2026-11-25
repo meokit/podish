@@ -19,4 +19,5 @@ public sealed record OciStoredImage(
     string[]? ConfigEntrypoint = null,
     string[]? ConfigCmd = null,
     string[]? ConfigEnv = null,
-    string? ConfigWorkingDir = null);
+    string? ConfigWorkingDir = null,
+    string? Architecture = null);

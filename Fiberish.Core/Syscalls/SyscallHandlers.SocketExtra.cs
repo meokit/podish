@@ -118,15 +118,15 @@ public partial class SyscallManager
 
         if (vlen <= 0) return 0;
 
-        // struct mmsghdr is 28+4 = 32 bytes on i386 (msghdr=28 + msg_len u32)
-        const int mmsgHdrSize = 32;
+        var msgHdrSize = MessageHeaderSize(engine);
+        var mmsgHdrSize = msgHdrSize + GuestWordSize(engine);
 
+        if ((ulong)msgvec + (ulong)vlen * (uint)mmsgHdrSize > (ulong)uint.MaxValue + 1)
+            return -(int)Errno.EFAULT;
         var sent = 0;
         for (var i = 0; i < vlen; i++)
         {
             var mmsgPtr = msgvec + (uint)(i * mmsgHdrSize);
-            // SysSendMsg reads a struct msghdr at msgPtr.
-            // We pass mmsgPtr directly — it starts with struct msghdr (28 bytes).
             var result = await SysSendMsg(engine, (uint)fd, mmsgPtr, (uint)flags, 0, 0, 0);
             if (result < 0)
             {
@@ -134,10 +134,9 @@ public partial class SyscallManager
                 break;
             }
 
-            // Write back msg_len (offset 28 in mmsghdr)
             var lenBuf = new byte[4];
             BinaryPrimitives.WriteUInt32LittleEndian(lenBuf, (uint)result);
-            task.CPU.CopyToUser(mmsgPtr + 28, lenBuf);
+            task.CPU.CopyToUser(mmsgPtr + (uint)msgHdrSize, lenBuf);
 
             sent++;
         }
@@ -165,8 +164,11 @@ public partial class SyscallManager
 
         if (vlen <= 0) return 0;
 
-        const int mmsgHdrSize = 32;
+        var msgHdrSize = MessageHeaderSize(engine);
+        var mmsgHdrSize = msgHdrSize + GuestWordSize(engine);
 
+        if ((ulong)msgvec + (ulong)vlen * (uint)mmsgHdrSize > (ulong)uint.MaxValue + 1)
+            return -(int)Errno.EFAULT;
         var received = 0;
         for (var i = 0; i < vlen; i++)
         {
@@ -181,10 +183,9 @@ public partial class SyscallManager
                 break;
             }
 
-            // Write msg_len at offset 28
             var lenBuf = new byte[4];
             BinaryPrimitives.WriteUInt32LittleEndian(lenBuf, (uint)result);
-            task.CPU.CopyToUser(mmsgPtr + 28, lenBuf);
+            task.CPU.CopyToUser(mmsgPtr + (uint)msgHdrSize, lenBuf);
 
             received++;
 

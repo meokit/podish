@@ -9,7 +9,7 @@ public sealed partial class DrmCardInode
     private const uint PrimeExport = 0xc00c642d, PrimeImport = 0xc00c642e;
     private const uint ImportGbmBo = 0xc01c64f2;
     private const uint SetCursor = 0xc01c64a3, GetProperty = 0xc04064aa, SetConnectorProperty = 0xc01064ab;
-    private const uint GetPlaneResources = 0xc00c64b5, GetPlane = 0xc02064b6;
+    private const uint GetPlaneResources = 0xc00c64b5, GetPlaneResourcesAArch64 = 0xc01064b5, GetPlane = 0xc02064b6;
     private const uint CreateLease = 0xc01864c6, ListLessees = 0xc01064c7;
     private const uint PrimaryPlane = 4, PlaneTypeProperty = 5, DpmsProperty = 6;
     private const uint PrimaryPlaneType = 1;
@@ -341,7 +341,7 @@ public sealed partial class DrmCardInode
 
         public override int Ioctl(LinuxFile file, FiberTask task, uint request, uint arg) => request switch
         {
-            Version or GetCap or PrimeImport or PrimeExport or GemClose or ImportGbmBo or
+            Version or VersionAArch64 or GetCap or PrimeImport or PrimeExport or GemClose or ImportGbmBo or
                 CreateDumb or MapDumb or DestroyDumb or QueryGpuBuffers or CreateGpuBo
                 => _card.Ioctl(file, task, request, arg),
             _ => -(int)Errno.EACCES

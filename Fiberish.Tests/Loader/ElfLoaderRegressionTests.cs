@@ -137,7 +137,7 @@ public class ElfLoaderRegressionTests
         using var harness = ElfTestHarness.LoadLinuxTestAsset("hello_static");
         using var stream = File.OpenRead(Path.Combine(ElfTestHarness.ResolveLinuxGuestRoot(), "hello_static"));
 
-        var elf = Elf32Reader.Read(stream);
+        var elf = ElfReader.Read(stream);
         var hasLoadSegment = false;
         foreach (var segment in elf.Segments)
             if (segment.Type == ElfSegmentType.Load)

@@ -14,9 +14,11 @@ internal sealed class SyscallTestEnv : IDisposable
 {
     private readonly MemoryRuntimeContext _context = new();
 
-    public SyscallTestEnv(Func<MemoryRuntimeContext, TmpfsSuperBlock>? createSuperBlock = null)
+    public SyscallTestEnv(Func<MemoryRuntimeContext, TmpfsSuperBlock>? createSuperBlock = null,
+        GuestArchitecture? architecture = null)
     {
         Engine = new Engine(_context);
+        if (architecture.HasValue) Engine.SelectArchitecture(architecture.Value);
         Mem = new VMAManager(_context);
         Sm = new SyscallManager(Engine, Mem, 0);
         Process = new GuestProcess(100, Mem, Sm);

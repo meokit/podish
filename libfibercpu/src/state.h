@@ -14,6 +14,9 @@
 
 namespace fiberish {
 
+namespace aarch64 {
+struct State;
+}
 struct EmuState;
 
 #ifdef FIBERCPU_ENABLE_SEQUENCE_PROFILE
@@ -188,6 +191,8 @@ struct EmuState {
     PendingMemOp mem_op_type = PendingMemOp::None;
     MemOpUnion mem_op;
     BasicBlock* llvm_hot_block = nullptr;
+    std::shared_ptr<aarch64::State> arm;
+    uint64_t arm_fault_address = 0;
 
     FORCE_INLINE void clear_pending_mem_op() { mem_op_type = PendingMemOp::None; }
 

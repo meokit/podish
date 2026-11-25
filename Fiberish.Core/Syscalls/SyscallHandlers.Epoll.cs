@@ -111,11 +111,12 @@ public partial class SyscallManager
         if (op != LinuxConstants.EPOLL_CTL_DEL)
         {
             if (eventPtr == 0) return -(int)Errno.EFAULT;
-            Span<byte> buf = stackalloc byte[EpollEventSize];
+            var size = engine.IsAArch64 ? 16 : EpollEventSize;
+            Span<byte> buf = stackalloc byte[size];
             if (!task.CPU.CopyFromUser(eventPtr, buf)) return -(int)Errno.EFAULT;
 
             events = BinaryPrimitives.ReadUInt32LittleEndian(buf.Slice(0, 4));
-            data = BinaryPrimitives.ReadUInt64LittleEndian(buf.Slice(4, 8));
+            data = BinaryPrimitives.ReadUInt64LittleEndian(buf[^8..]);
 
             var validateRc = ValidateAndNormalizeEpollCtlEvents(ref events);
             if (validateRc != 0) return validateRc;
@@ -183,13 +184,14 @@ public partial class SyscallManager
         var epfd = (int)epfdArg;
         var maxevents = (int)maxeventsArg;
         if (maxevents <= 0) return new ValueTask<int>(-(int)Errno.EINVAL);
-        if (maxevents > int.MaxValue / EpollEventSize) return new ValueTask<int>(-(int)Errno.EINVAL);
+        var eventSize = engine.IsAArch64 ? 16 : EpollEventSize;
+        if (maxevents > int.MaxValue / eventSize) return new ValueTask<int>(-(int)Errno.EINVAL);
 
         var epFile = sm.GetFD(epfd);
         if (epFile == null) return new ValueTask<int>(-(int)Errno.EBADF);
         if (epFile.OpenedInode is not EpollInode epollInode) return new ValueTask<int>(-(int)Errno.EINVAL);
 
-        var bytesNeeded = maxevents * EpollEventSize;
+        var bytesNeeded = maxevents * eventSize;
 
         var ready = TryHarvestEpollEvents(task, epollInode, eventsPtr, maxevents, bytesNeeded, out var fastPathError);
         if (fastPathError != 0)
@@ -211,7 +213,7 @@ public partial class SyscallManager
                 : (rented = ArrayPool<byte>.Shared.Rent(bytesNeeded)).AsSpan(0, bytesNeeded);
 
             var ready = epollInode.TryHarvestNow(fastBuffer, maxevents);
-            if (ready > 0 && !task.CPU.CopyToUser(eventsPtr, fastBuffer.Slice(0, ready * EpollEventSize)))
+            if (ready > 0 && !CopyEpollEvents(task.CPU, eventsPtr, fastBuffer, ready))
             {
                 error = -(int)Errno.EFAULT;
                 return 0;
@@ -234,7 +236,7 @@ public partial class SyscallManager
         try
         {
             var result = await epollInode.WaitAsync(task, rented, maxevents, timeoutMs, syscallNr);
-            if (result > 0 && !task.CPU.CopyToUser(eventsPtr, rented.AsSpan(0, result * EpollEventSize)))
+            if (result > 0 && !CopyEpollEvents(task.CPU, eventsPtr, rented, result))
                 return -(int)Errno.EFAULT;
 
             return result;
@@ -243,6 +245,25 @@ public partial class SyscallManager
         {
             ArrayPool<byte>.Shared.Return(rented, clearArray: false);
         }
+    }
+    private static bool CopyEpollEvents(Engine engine, uint destination, Span<byte> buffer, int count)
+    {
+        if (!engine.IsAArch64)
+            return engine.CopyToUser(destination, buffer[..(count * EpollEventSize)]);
+
+        // EpollInode emits packed events. Expand in place from the end so the
+        // source and destination can share a buffer.
+        for (var i = count - 1; i >= 0; i--)
+        {
+            var source = buffer.Slice(i * EpollEventSize, EpollEventSize);
+            var target = buffer.Slice(i * 16, 16);
+            var events = BinaryPrimitives.ReadUInt32LittleEndian(source);
+            var data = BinaryPrimitives.ReadUInt64LittleEndian(source[4..]);
+            target.Clear();
+            BinaryPrimitives.WriteUInt32LittleEndian(target, events);
+            BinaryPrimitives.WriteUInt64LittleEndian(target[8..], data);
+        }
+        return engine.CopyToUser(destination, buffer[..(count * 16)]);
     }
 #pragma warning restore CS1998
 }

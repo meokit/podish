@@ -1,5 +1,4 @@
 using System.Buffers;
-using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
 using System.Text;
 using Fiberish.Core;
@@ -206,7 +205,8 @@ public partial class SyscallManager
             return ([], -(int)Errno.EINVAL);
 
         List<byte[]>? result = null;
-        Span<byte> ptrBuf = stackalloc byte[4];
+        var wordSize = GuestWordSize(CurrentSyscallEngine);
+        Span<byte> ptrBuf = stackalloc byte[wordSize];
         var curr = vectorPtr;
 
         while (true)
@@ -214,23 +214,25 @@ public partial class SyscallManager
             if (!CurrentSyscallEngine.CopyFromUser(curr, ptrBuf))
                 return ([], -(int)Errno.EFAULT);
 
-            var strPtr = BinaryPrimitives.ReadUInt32LittleEndian(ptrBuf);
+            var strPtr = ReadGuestWord(ptrBuf, wordSize);
             if (strPtr == 0)
                 break;
 
-            if (remaining <= 4)
+            if (strPtr > uint.MaxValue)
+                return ([], -(int)Errno.EFAULT);
+            if (remaining <= wordSize)
                 return ([], -(int)Errno.E2BIG);
             // Bound the read before materializing a string that cannot fit.
-            var rc = ReadUserCStringBytes(strPtr, Math.Min(maxStringLength, remaining - 4), out var value);
+            var rc = ReadUserCStringBytes((uint)strPtr, Math.Min(maxStringLength, remaining - wordSize), out var value);
             if (rc != 0)
                 return ([], rc);
 
-            remaining -= value.Length + 1 + 4;
+            remaining -= value.Length + 1 + wordSize;
             (result ??= new List<byte[]>()).Add(value);
 
-            if (curr > uint.MaxValue - 4)
+            if ((ulong)curr + (uint)wordSize > uint.MaxValue)
                 return ([], -(int)Errno.EFAULT);
-            curr += 4;
+            curr += (uint)wordSize;
         }
 
         return (result?.ToArray() ?? [], 0);
@@ -348,6 +350,8 @@ public partial class SyscallManager
             }
 
             length += chunkLength;
+            if (length < destination.Length && (ulong)current + (uint)chunkLength > uint.MaxValue)
+                return false;
             current += (uint)chunkLength;
         }
 

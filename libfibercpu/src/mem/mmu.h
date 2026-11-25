@@ -716,6 +716,7 @@ struct MmuCore {
     bool execution_active = false;
     struct HostPageAliases {
         uint32_t exec_count = 0;
+        uint32_t stable_backing_count = 0;
         GuestPageSet guest_pages;
     };
     struct RuntimeTlbShootdownRing {
@@ -805,6 +806,8 @@ public:
         auto& guest_pages = it->second.guest_pages;
         guest_pages.erase(guest_page);
         if (has_property(perms, Property::Exec) && it->second.exec_count > 0) it->second.exec_count--;
+        if (has_property(perms, Property::StableBacking) && it->second.stable_backing_count > 0)
+            it->second.stable_backing_count--;
         if (guest_pages.empty()) core_->host_page_aliases.erase(it);
     }
 
@@ -814,6 +817,7 @@ public:
         auto& state = core_->host_page_aliases[reinterpret_cast<uintptr_t>(page)];
         state.guest_pages.push_unique(guest_page);
         if (has_property(perms, Property::Exec)) state.exec_count++;
+        if (has_property(perms, Property::StableBacking)) state.stable_backing_count++;
     }
 
     [[nodiscard]] bool host_page_has_live_blocks(HostAddr page) const {
@@ -983,6 +987,7 @@ private:
                 auto& state = core.host_page_aliases[reinterpret_cast<uintptr_t>(page)];
                 state.guest_pages.push_unique(guest_page);
                 if (has_property(perms, Property::Exec)) state.exec_count++;
+                if (has_property(perms, Property::StableBacking)) state.stable_backing_count++;
             }
         }
     }
@@ -1631,7 +1636,7 @@ public:
             auto* page = chunk->pages[slot];
             auto& entry_perms = chunk->permissions[slot];
             const auto old_perms = entry_perms;
-            const auto new_perms = perms | (old_perms & Property::Dirty);
+            const auto new_perms = perms | (old_perms & (Property::Dirty | Property::StableBacking));
 #if FIBERCPU_BLOCK_COMPILATION
             invalidate_code_before_permission_change(page, old_perms, new_perms);
 #endif
@@ -1646,7 +1651,7 @@ public:
         if ((addr & PAGE_MASK) || !host_page) return false;
         [[maybe_unused]] auto runtime_tlb_batch = scoped_runtime_tlb_publish_batch();
         auto* dir = current_page_directory();
-        auto perms = static_cast<Property>(perms_raw) & Property::RWX;
+        auto perms = static_cast<Property>(perms_raw) & (Property::RWX | Property::StableBacking);
         auto& chunk = dir->l1_directory[addr >> 22];
         const uint32_t slot = (addr >> 12) & 0x3FF;
         if (!chunk) chunk = std::make_unique<PageTableChunk>();
@@ -1781,6 +1786,35 @@ public:
         return chunk->pages[page_index] + (address & PAGE_MASK);
     }
 
+    [[nodiscard]] const MicroTLB* read_tlb_entries() const { return tlb.read_tlb.data(); }
+
+    [[nodiscard]] HostAddr try_cached_read_page(GuestAddr address) {
+        auto* source = try_bulk_page<false>(address);
+        if (source) {
+            const auto tag = address & ~PAGE_MASK;
+            const auto index = (address >> PAGE_SHIFT) & TLB_INDEX_MASK;
+            tlb.read_tlb[index] = {PackMicroTlbTags(tag, kInvalidMicroTlbTag),
+                                   reinterpret_cast<uintptr_t>(source) - address};
+        }
+        return source;
+    }
+
+    // AArch64 decodes blocks independently of the x86 code-cache liveness
+    // behind ForceWriteSlow. A writable alias of any executable backing page
+    // must still fall back and refetch the rest of the AArch64 block. Only
+    // private allocations can rule out executable aliases at a different
+    // host address, as can happen with separately mapped file views.
+    [[nodiscard]] HostAddr try_nonexecuting_write_page(GuestAddr address) {
+        auto* target = try_bulk_page<true>(address);
+        if (!target) return nullptr;
+        const auto base = reinterpret_cast<uintptr_t>(target) - (address & PAGE_MASK);
+        const auto alias = core_->host_page_aliases.find(base);
+        return alias != core_->host_page_aliases.end() && alias->second.stable_backing_count &&
+                       !alias->second.exec_count
+                   ? target
+                   : nullptr;
+    }
+
     template <typename T>
     [[nodiscard]] FORCE_INLINE MemResult<T> read_tlb_only(GuestAddr addr, MicroTLB* utlb);
 
@@ -1827,6 +1861,8 @@ public:
 
     // Fetch Instruction Pointer
     [[nodiscard]] inline const std::byte* translate_exec(EmuState* state, GuestAddr addr);
+    // The caller supplies a page-aligned address. A miss must not invoke fault callbacks.
+    [[nodiscard]] inline const std::byte* try_executable_page(GuestAddr page);
 
     // Read for Execution (Instruction Fetch)
     template <typename T>

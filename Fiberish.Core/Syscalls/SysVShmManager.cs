@@ -484,11 +484,27 @@ public class SysVShmManager
 
     private static int WriteShmidDs(SysVShmSegment segment, uint buf, Engine engine, bool ipc64)
     {
-        Span<byte> data = stackalloc byte[ipc64 ? Ipc64ShmidDsSize : LegacyShmidDsSize];
+        var isAArch64 = engine.IsAArch64;
+        Span<byte> data = stackalloc byte[isAArch64 ? 112 : ipc64 ? Ipc64ShmidDsSize : LegacyShmidDsSize];
         data.Clear();
         int mode = segment.Mode | (segment.MarkedForDelete ? 0x200 : 0); // SHM_DEST
         BinaryPrimitives.WriteInt32LittleEndian(data, segment.Key);
-        if (ipc64)
+        if (isAArch64)
+        {
+            BinaryPrimitives.WriteInt32LittleEndian(data[4..], segment.Uid);
+            BinaryPrimitives.WriteInt32LittleEndian(data[8..], segment.Gid);
+            BinaryPrimitives.WriteInt32LittleEndian(data[12..], segment.CUid);
+            BinaryPrimitives.WriteInt32LittleEndian(data[16..], segment.CGid);
+            BinaryPrimitives.WriteInt32LittleEndian(data[20..], mode);
+            BinaryPrimitives.WriteUInt64LittleEndian(data[48..], segment.Size);
+            BinaryPrimitives.WriteInt64LittleEndian(data[56..], ToUnixSeconds(segment.ATime));
+            BinaryPrimitives.WriteInt64LittleEndian(data[64..], ToUnixSeconds(segment.DTime));
+            BinaryPrimitives.WriteInt64LittleEndian(data[72..], ToUnixSeconds(segment.CTime));
+            BinaryPrimitives.WriteInt32LittleEndian(data[80..], segment.Cpid);
+            BinaryPrimitives.WriteInt32LittleEndian(data[84..], segment.Lpid);
+            BinaryPrimitives.WriteUInt64LittleEndian(data[88..], (ulong)segment.NAttch);
+        }
+        else if (ipc64)
         {
             BinaryPrimitives.WriteInt32LittleEndian(data[4..], segment.Uid);
             BinaryPrimitives.WriteInt32LittleEndian(data[8..], segment.Gid);
@@ -524,7 +540,8 @@ public class SysVShmManager
 
     private static int ReadShmidDsForSet(SysVShmSegment segment, uint buf, Engine engine, bool ipc64)
     {
-        Span<byte> data = stackalloc byte[ipc64 ? Ipc64ShmidDsSize : LegacyShmidDsSize];
+        var isAArch64 = engine.IsAArch64;
+        Span<byte> data = stackalloc byte[isAArch64 ? 112 : ipc64 ? Ipc64ShmidDsSize : LegacyShmidDsSize];
         if (buf == 0 || !engine.CopyFromUser(buf, data))
             return -(int)Errno.EFAULT;
 

@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <limits>
 #include <mutex>
 #include <utility>
@@ -40,6 +41,10 @@
 #include "runtime_options.h"
 #include "state.h"
 #include "superopcodes.h"
+#if FIBERCPU_GUEST_AARCH64
+#include "aarch64/aarch64.h"
+#include "aarch64_engine.h"
+#endif
 
 #if defined(__SSE__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 1)
 #include <xmmintrin.h>
@@ -109,6 +114,19 @@ private:
 // Guest execution and all its callbacks share one host thread. Do not let a
 // callback run another engine (or Step) while block pointers are borrowed.
 static thread_local bool g_native_execution_active = false;
+
+void BasicBlock::Invalidate() {
+    if (!is_valid()) return;
+#if FIBERCPU_LLVM_JIT
+    if (chain.jit_execution_profile) {
+        TraceLLVMJitRetirement(*this);
+        chain.jit_execution_profile = false;
+    }
+#endif
+    set_valid(false);
+    ++invalidation_revision;
+    // No unlinking needed because chained exits validate the cached block header on dispatch.
+}
 
 class ScopedNativeExecution {
 public:
@@ -219,6 +237,7 @@ static void InternalSmcBridge(void* opaque, uint32_t addr) {
     X86_InvalidateCodeCacheByPage(state, addr);
 }
 
+#if FIBERCPU_GUEST_I386
 static bool BlockCrossesPage(const BasicBlock* block) {
     if (!block || block->inst_count() == 0 || block->end_eip <= block->start_eip()) return false;
     return ((block->start_eip() ^ (block->end_eip - 1)) & 0xFFFFF000u) != 0;
@@ -423,6 +442,8 @@ static __attribute__((noinline, cold)) BasicBlock* ResolveBlockForRunSlow(EmuSta
     return CacheDecodedBlock(state, eip, concat_block);
 }
 
+#endif
+
 // Signal Handler for safety
 #if !defined(__EMSCRIPTEN__) && !defined(_WIN32)
 static void SignalHandler(int sig, siginfo_t* info, void* /*ucontext*/) {
@@ -505,6 +526,13 @@ EmuState* X86_Clone(EmuState* parent, int share_mem) {
 
     // 1. Copy Context (Registers, Segments, etc.)
     state->ctx = parent->ctx;
+#if FIBERCPU_GUEST_AARCH64
+    if (parent->arm) {
+        state->arm = std::make_shared<aarch64::State>(*parent->arm);
+        state->arm->active_run = nullptr;  // The invocation frame belongs to the parent's native stack.
+        state->arm->ClearExclusive();
+    }
+#endif
 
     // 2. Memory Handling
     if (share_mem) {
@@ -820,6 +848,7 @@ size_t X86_CollectMappedPages(EmuState* state, uint32_t addr, uint32_t size, X86
 // Unlike DecodeBlock(..., 1), this has no block-pool allocation. Keep the
 // caller's status, counters, and SMC policy intact (X86_Step resets those at
 // its public API boundary, so it cannot be called from inside X86_Run).
+#if FIBERCPU_GUEST_I386
 static bool ExecuteSingleInstructionOnStack(EmuState* state) {
 #ifdef FIBERCPU_ENABLE_SEQUENCE_PROFILE
     state->sequence_expected_op = nullptr;
@@ -1088,6 +1117,20 @@ int X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
     return 1;
 }
 
+#else
+int X86_Run(EmuState*, uint32_t, uint64_t) { return 0; }
+#endif
+
+#if FIBERCPU_GUEST_AARCH64
+int AArch64_Run(EmuState* state, uint64_t end_pc, uint64_t budget, int step) {
+    if (!state || g_native_execution_active || state->native_execution_active) return step ? -1 : 0;
+    state->mmu.flush_pending_code_cache_before_run();
+    ScopedNativeExecution execution(state);
+    if (!execution) return step ? -1 : 0;
+    return RunArmEngine(*state, end_pc, budget, step != 0);
+}
+#endif
+
 void X86_GetBlockStats(EmuState* state, X86_BlockStats* stats) {
     if (!state || !stats) return;
 
@@ -1272,6 +1315,7 @@ void X86_EmuYield(EmuState* state) {
     if (state) state->status = EmuStatus::Yield;
 }
 
+#if FIBERCPU_GUEST_I386
 int X86_Step(EmuState* state) {
 #if FIBERCPU_LLVM_JIT
     if (!state || g_native_execution_active || state->native_execution_active) return -1;
@@ -1308,6 +1352,10 @@ int X86_Step(EmuState* state) {
 
     return (int)state->status;
 }
+
+#else
+int X86_Step(EmuState*) { return -1; }
+#endif
 
 int X86_GetStatus(EmuState* state) { return (int)state->status; }
 
@@ -1530,6 +1578,7 @@ size_t X86_GetBlockList(EmuState* state, BasicBlock** buffer, size_t max_count) 
 }
 
 int X86_ReadBlockDump(const BasicBlock* block, X86_BlockDumpHeader* header, X86_BlockDumpOp* ops, uint32_t capacity) {
+#if FIBERCPU_GUEST_I386
     static_assert(sizeof(X86_BlockDumpHeader) == 24);
     static_assert(sizeof(X86_BlockDumpOp) == 32);
     if (!block || !header) return 0;
@@ -1550,8 +1599,12 @@ int X86_ReadBlockDump(const BasicBlock* block, X86_BlockDumpHeader* header, X86_
                   0};
     }
     return 1;
+#else
+    return 0;
+#endif
 }
 
+#if FIBERCPU_GUEST_I386
 int32_t X86_GetOpIdForHandler(void* handler) {
     auto fn = reinterpret_cast<HandlerFunc>(handler);
 #if FIBERCPU_DYNAMIC_OPERANDS
@@ -1576,6 +1629,20 @@ uint32_t X86_GetTrainingHandlerId(void* handler) {
 uint32_t X86_GetTrainingOperationIdAt(uint32_t index) { return TrainingOperationIdAt(index); }
 
 const char* X86_GetTrainingOperationName(uint32_t id) { return FindTrainingOperationName(id); }
+
+#else
+int32_t X86_GetOpIdForHandler(void*) { return -1; }
+uint32_t X86_GetTrainingHandlerId(void*) { return 0; }
+uint32_t X86_GetTrainingOperationIdAt(uint32_t) { return 0; }
+const char* X86_GetTrainingOperationName(uint32_t) { return nullptr; }
+int32_t X86_GetHandlerCount() { return 0; }
+int32_t X86_GetHandlerId(void*) { return -1; }
+void* X86_GetHandlerById(int32_t) { return nullptr; }
+const char* X86_GetHandlerSymbolById(int32_t) { return nullptr; }
+const char* X86_GetInstructionCatalogHash() { return nullptr; }
+int32_t X86_GetInstructionVariantCount() { return 0; }
+int32_t X86_GetInstructionVariant(int32_t, X86_InstructionVariant*) { return 0; }
+#endif
 
 uint64_t X86_GetLLVMJitBlockCount() {
 #if FIBERCPU_LLVM_JIT
@@ -1612,6 +1679,46 @@ uint64_t X86_GetLinkedPageRegionHitCount() {
 int X86_FinishRun(const X86_RunContext* run, char* error, size_t error_size) {
     if (error && error_size) error[0] = '\0';
     if (!run) return 0;
+#if FIBERCPU_GUEST_AARCH64
+    if (const auto& profile = run->options->arm_profile) {
+        if (g_native_execution_active) return 0;
+        std::lock_guard guard(profile->mutex);
+        std::ofstream output(profile->path);
+        output << R"({"version":1,"architecture":"aarch64","entries":[)";
+        bool first = true;
+        for (const auto& [word, count] : profile->words) {
+            if (!first) output << ',';
+            first = false;
+            output << R"({"word":)" << word << R"(,"count":)" << count << '}';
+        }
+        output << R"(],"pairs":[)";
+        first = true;
+        for (const auto& [key, count] : profile->pairs) {
+            if (!first) output << ',';
+            first = false;
+            output << R"({"first":)" << (key >> 32) << R"(,"second":)" << static_cast<uint32_t>(key) << R"(,"count":)"
+                   << count << '}';
+        }
+        output << R"(],"sequences":[)";
+        first = true;
+        for (const auto& [words, count] : profile->sequences) {
+            if (!first) output << ',';
+            first = false;
+            output << R"({"words":[)";
+            for (size_t i = 0; i < words.size(); ++i) {
+                if (i) output << ',';
+                output << words[i];
+            }
+            output << R"(],"count":)" << count << '}';
+        }
+        output << "]}\n";
+        output.close();
+        if (!output) {
+            if (error && error_size) std::snprintf(error, error_size, "Cannot write %s", profile->path.c_str());
+            return 0;
+        }
+    }
+#endif
 #if FIBERCPU_LLVM_JIT
     if (run->options->profile) {
         std::string diagnostic;

@@ -99,6 +99,7 @@ internal class Program
         var rootfsOption = new Option<string?>(
             new[] { "--rootfs" },
             "Use a local root filesystem path (Podman-compatible rootfs mode)");
+        var runPlatformOption = new Option<string?>("--platform", "Select the image platform (linux/386 or linux/arm64)");
         var fsBackendOption = new Option<string?>(
             new[] { "--fs-backend" },
             "Filesystem backend for image mode (tmpfs|silkfs|overlay-tmpfs|overlay-silkfs)");
@@ -190,6 +191,7 @@ internal class Program
         runCommand.AddOption(straceOption);
         runCommand.AddOption(initOption);
         runCommand.AddOption(rootfsOption);
+        runCommand.AddOption(runPlatformOption);
         runCommand.AddOption(fsBackendOption);
         runCommand.AddOption(memoryOption);
         runCommand.AddOption(cpuOptions);
@@ -257,6 +259,13 @@ internal class Program
 
             var runArgs = context.ParseResult.GetValueForArgument(runArgsArgument) ?? Array.Empty<string>();
             var useRootfs = !string.IsNullOrWhiteSpace(rootfs);
+            var platform = context.ParseResult.GetValueForOption(runPlatformOption);
+            if (!OciPullService.TryParsePlatform(platform, out _) || (useRootfs && platform != null))
+            {
+                Console.Error.WriteLine("[Podish.Cli] --platform requires an image and an architecture enabled in this build.");
+                context.ExitCode = 125;
+                return;
+            }
             if (!TryParseFileSystemBackend(fsBackendRaw, useRootfs, out var fsBackend, out var fsBackendError))
             {
                 Console.Error.WriteLine($"[Podish.Cli] invalid --fs-backend value: {fsBackendRaw}. {fsBackendError}");
@@ -406,8 +415,7 @@ internal class Program
 
             var imageRef = image ?? rootfs ?? "<unknown>";
             var rootfsPath = rootfs ?? image ?? string.Empty;
-            var safeImageName = imageRef.Replace("/", "_").Replace(":", "_");
-            var pulledDir = Path.Combine(imagesDir, safeImageName);
+            var safeImageName = OciPullService.GetImageCacheName(imageRef, platform);
             var ociStoreDir = Path.Combine(ociStoreImagesDir, safeImageName);
 
             if (!useRootfs)
@@ -430,7 +438,7 @@ internal class Program
                     var pullService = new OciPullService(Logger);
                     try
                     {
-                        await pullService.PullAndStoreImageAsync(image, ociStoreDir);
+                        await pullService.PullAndStoreImageAsync(image, ociStoreDir, platform);
                         rootfsPath = ociStoreDir;
                     }
                     catch (Exception ex)
@@ -458,6 +466,7 @@ internal class Program
                 AutoRemove = autoRemove,
                 NetworkMode = networkMode,
                 Image = image,
+                ImagePlatform = platform,
                 Rootfs = rootfs,
                 FileSystemBackend = ToCliValue(fsBackend),
                 Exe = exe,
@@ -656,6 +665,12 @@ internal class Program
 
             var spec = metadata.Spec;
             var useRootfs = !string.IsNullOrWhiteSpace(spec.Rootfs);
+            if (!OciPullService.TryParsePlatform(spec.ImagePlatform, out _))
+            {
+                Console.Error.WriteLine($"[Podish.Cli] unsupported stored platform: {spec.ImagePlatform}");
+                context.ExitCode = 125;
+                return;
+            }
             if (!TryParseFileSystemBackend(spec.FileSystemBackend, useRootfs, out var fsBackend, out var fsBackendError))
             {
                 Console.Error.WriteLine(
@@ -665,7 +680,7 @@ internal class Program
             }
             var imageRef = metadata.Image ?? spec.Image ?? spec.Rootfs ?? "<unknown>";
             var rootfsPath = spec.Rootfs ?? spec.Image ?? string.Empty;
-            var safeImageName = imageRef.Replace("/", "_").Replace(":", "_");
+            var safeImageName = OciPullService.GetImageCacheName(imageRef, spec.ImagePlatform);
             var ociStoreDir = Path.Combine(ociStoreImagesDir, safeImageName);
             var eventStore = new ContainerEventStore(Path.Combine(fiberpodDir, "events.jsonl"));
 
@@ -689,7 +704,7 @@ internal class Program
                     var pullService = new OciPullService(Logger);
                     try
                     {
-                        await pullService.PullAndStoreImageAsync(spec.Image, ociStoreDir);
+                        await pullService.PullAndStoreImageAsync(spec.Image, ociStoreDir, spec.ImagePlatform);
                         rootfsPath = ociStoreDir;
                     }
                     catch (Exception ex)
@@ -784,12 +799,21 @@ internal class Program
         var pullStoreOciOption = new Option<bool>(
             new[] { "--store-oci" },
             "Store image as OCI blobs + layer indexes (no host filesystem extraction)");
+        var pullPlatformOption = new Option<string?>("--platform", "Select the image platform (linux/386 or linux/arm64)");
         pullCommand.AddArgument(pullImageArgument);
         pullCommand.AddOption(pullStoreOciOption);
+        pullCommand.AddOption(pullPlatformOption);
         pullCommand.SetHandler(async context =>
         {
             var image = context.ParseResult.GetValueForArgument(pullImageArgument);
             var storeOci = context.ParseResult.GetValueForOption(pullStoreOciOption);
+            var platform = context.ParseResult.GetValueForOption(pullPlatformOption);
+            if (!OciPullService.TryParsePlatform(platform, out _))
+            {
+                Console.Error.WriteLine($"[Podish.Cli] unsupported platform: {platform}");
+                context.ExitCode = 125;
+                return;
+            }
             var logLevelRaw = context.ParseResult.GetValueForOption(logLevelOption) ?? "warn";
             var logFile = context.ParseResult.GetValueForOption(logFileOption);
 
@@ -815,7 +839,7 @@ internal class Program
             using var _logScope = Logging.BeginScope(ProgramLoggerFactory);
 
             var pullService = new OciPullService(Logger);
-            var safeImageName = image.Replace("/", "_").Replace(":", "_");
+            var safeImageName = OciPullService.GetImageCacheName(image, platform);
             var outputDir = Path.Combine(imagesDir, safeImageName);
 
             try
@@ -823,13 +847,13 @@ internal class Program
                 if (storeOci)
                 {
                     var storeDir = Path.Combine(ociStoreImagesDir, safeImageName);
-                    var stored = await pullService.PullAndStoreImageAsync(image, storeDir);
+                    var stored = await pullService.PullAndStoreImageAsync(image, storeDir, platform);
                     Console.WriteLine(
                         $"[Podish.Cli] Image {image} stored as OCI layers at {stored.StoreDirectory} ({stored.Layers.Count} layers)");
                 }
                 else
                 {
-                    await pullService.PullAndExtractImageAsync(image, outputDir);
+                    await pullService.PullAndExtractImageAsync(image, outputDir, platform);
                     Console.WriteLine($"[Podish.Cli] Image {image} pulled successfully to {outputDir}");
                 }
             }
@@ -1385,6 +1409,7 @@ internal class Program
             "--dns",
             "--log-driver",
             "--rootfs",
+            "--platform",
             "--name",
             "--hostname",
             "--network",

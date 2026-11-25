@@ -1,0 +1,294 @@
+#include "aarch64_engine.h"
+#include <algorithm>
+#include <cstring>
+#include <limits>
+#include "aarch64/aarch64.h"
+#include "aarch64/baked.h"
+#include "bindings.h"
+#include "mem/mmu_impl.h"
+#include "runtime_options.h"
+#include "state.h"
+
+namespace fiberish {
+namespace {
+using aarch64::Access;
+using aarch64::Vector128;
+
+bool Representable(uint64_t address, size_t size) {
+    return address <= UINT32_MAX && size <= (uint64_t{1} << 32) - address;
+}
+
+template <class T, bool Write>
+bool Transfer(EmuState& engine, uint32_t address, void* bytes) {
+    if constexpr (Write) {
+        T value;
+        std::memcpy(&value, bytes, sizeof value);
+        return engine.mmu.write_no_utlb<T>(address, value).has_value();
+    } else {
+        auto value = engine.mmu.read_no_utlb<T>(address);
+        if (!value) return false;
+        std::memcpy(bytes, &*value, sizeof(T));
+        return true;
+    }
+}
+
+template <bool Write>
+bool TransferBytes(EmuState& engine, uint64_t address, void* bytes, size_t size) {
+    if (!Representable(address, size)) return false;
+    const auto addr = static_cast<uint32_t>(address);
+    switch (size) {
+        case 1:
+            return Transfer<uint8_t, Write>(engine, addr, bytes);
+        case 2:
+            return Transfer<uint16_t, Write>(engine, addr, bytes);
+        case 4:
+            return Transfer<uint32_t, Write>(engine, addr, bytes);
+        case 8:
+            return Transfer<uint64_t, Write>(engine, addr, bytes);
+        case 16:
+            return Transfer<Vector128, Write>(engine, addr, bytes);
+        default: {
+            if (size == 0 || size > 64) return false;
+            // Validate every destination before a multi-register transfer can modify guest memory.
+            const auto last = addr + static_cast<uint32_t>(size - 1);
+            if ((addr ^ last) & ~mem::PAGE_MASK) {
+                constexpr auto perm = Write ? mem::Property::Write : mem::Property::Read;
+                if (!engine.mmu.resolve_ptr(addr, perm) || !engine.mmu.resolve_ptr(last, perm)) return false;
+            }
+            auto* data = static_cast<uint8_t*>(bytes);
+            uint32_t offset = 0;
+            for (; offset + 16 <= size; offset += 16)
+                if (!Transfer<Vector128, Write>(engine, addr + offset, data + offset)) return false;
+            for (; offset < size; ++offset)
+                if (!Transfer<uint8_t, Write>(engine, addr + offset, data + offset)) return false;
+            return true;
+        }
+    }
+}
+
+bool Read(void* opaque, uint64_t address, void* dest, size_t size, Access access) {
+    auto& engine = *static_cast<EmuState*>(opaque);
+    if (access != Access::Execute) return TransferBytes<false>(engine, address, dest, size);
+    if (!Representable(address, size) || size != 4 || (address & 3)) return false;
+    auto source = engine.mmu.translate_exec(&engine, static_cast<uint32_t>(address));
+    if (!source) return false;
+    std::memcpy(dest, source, 4);
+    return true;
+}
+
+inline void CopyFast(void* dest, const void* source, size_t size) {
+    switch (size) {
+        case 1:
+            std::memcpy(dest, source, 1);
+            break;
+        case 2:
+            std::memcpy(dest, source, 2);
+            break;
+        case 4:
+            std::memcpy(dest, source, 4);
+            break;
+        case 8:
+            std::memcpy(dest, source, 8);
+            break;
+        case 16:
+            std::memcpy(dest, source, 16);
+            break;
+        case 32:
+            std::memcpy(dest, source, 32);
+            break;
+        default:
+            std::memcpy(dest, source, size);
+            break;
+    }
+}
+
+bool IsFastSpan(uint64_t address, size_t size) {
+    return address <= UINT32_MAX && size && size <= 64 && size <= mem::PAGE_SIZE - (address & mem::PAGE_MASK);
+}
+
+bool ReadFast(void* opaque, uint64_t address, void* dest, size_t size) {
+    if (!IsFastSpan(address, size)) return false;
+    auto& engine = *static_cast<EmuState*>(opaque);
+    const auto* source = engine.mmu.try_cached_read_page(static_cast<uint32_t>(address));
+    if (!source) return false;
+    CopyFast(dest, source, size);
+    return true;
+}
+
+bool WriteFast(void* opaque, uint64_t address, const void* source, size_t size) {
+    if (!IsFastSpan(address, size)) return false;
+    auto& engine = *static_cast<EmuState*>(opaque);
+    auto* dest = engine.mmu.try_nonexecuting_write_page(static_cast<uint32_t>(address));
+    if (!dest) return false;
+    CopyFast(dest, source, size);
+    return true;
+}
+
+const uint8_t* ExecutablePage(void* opaque, uint64_t address) {
+    auto& engine = *static_cast<EmuState*>(opaque);
+    if (engine.mem_hook || address > UINT32_MAX || (address & mem::PAGE_MASK)) return nullptr;
+    return reinterpret_cast<const uint8_t*>(engine.mmu.try_executable_page(static_cast<uint32_t>(address)));
+}
+
+bool Write(void* opaque, uint64_t address, const void* source, size_t size) {
+    return TransferBytes<true>(*static_cast<EmuState*>(opaque), address, const_cast<void*>(source), size);
+}
+
+uint64_t* ArmSlot(aarch64::State& cpu, int index) {
+    if (index >= 0 && index < 31) return &cpu.x[index];
+    switch (index) {
+        case 31:
+            return &cpu.sp;
+        case 32:
+            return &cpu.pc;
+        case 33:
+            return &cpu.tpidr_el0;
+    }
+    if (index >= 64 && index < 128) {
+        auto& vec = cpu.v[(index - 64) / 2];
+        return (index & 1) ? &vec.hi : &vec.lo;
+    }
+    return nullptr;
+}
+}  // namespace
+
+#if FIBERCPU_AARCH64_BAKED
+aarch64::detail::HandlerBinding FindBakedArmHandler(const aarch64::DecodedInstruction&, bool omit_nzcv);
+aarch64::Handler FindBakedArmPair(uint32_t first, uint32_t second, uint32_t dead, aarch64::detail::ThreadHandler&);
+aarch64::Handler FindBakedArmSequence(const uint32_t* words, unsigned count, unsigned* matched, uint32_t dead,
+                                      aarch64::detail::ThreadHandler&);
+#endif
+
+int RunArmEngine(EmuState& engine, uint64_t end_pc, uint64_t budget, bool step) {
+    if (!engine.arm) AArch64_Reset(&engine);
+    auto& cpu = *engine.arm;
+    engine.status = EmuStatus::Running;
+    engine.fault_vector = 0xff;
+    engine.arm_fault_address = 0;
+    engine.mmu.sync_runtime_tlb_shootdowns();
+    auto publish = engine.mmu.scoped_runtime_tlb_publish_batch();
+    RestartableMemoryFaultScope restartable(&engine);
+    if (!step) cpu.ClearExclusive();
+    const aarch64::Memory memory{
+        &engine, Read, Write, ExecutablePage, ReadFast, WriteFast, engine.mmu.read_tlb_entries()};
+    aarch64::Profile profile{};
+#if FIBERCPU_AARCH64_BAKED
+    profile.resolve = FindBakedArmHandler;
+    profile.resolve_pair = FindBakedArmPair;
+    profile.resolve_sequence = FindBakedArmSequence;
+    profile.trusted_baking = true;
+#endif
+    const auto options = engine.mmu.code_cache().run_options;
+    struct Capture {
+        aarch64::State& cpu;
+        ArmInstructionProfile* counts = nullptr;
+        uint64_t next_pc = UINT64_MAX;
+        uint32_t first = 0;
+        uint64_t next_sequence_pc = UINT64_MAX;
+        std::vector<uint32_t> sequence{};
+        void FlushSequence() {
+            if (sequence.size() >= 3) ++counts->sequences[sequence];
+            sequence.clear();
+        }
+    } capture{cpu};
+    if (options && options->arm_profile) {
+        capture.counts = options->arm_profile.get();
+        profile.context = &capture;
+        profile.record = [](void* context, const aarch64::DecodedInstruction& op) {
+            auto& c = *static_cast<Capture*>(context);
+            std::lock_guard lock(c.counts->mutex);
+            if (c.cpu.pc != c.next_sequence_pc) c.FlushSequence();
+            if (aarch64::CanBake(op.word)) {
+                c.sequence.push_back(op.word);
+                ++c.counts->words[op.word];
+                if (c.cpu.pc == c.next_pc) ++c.counts->pairs[(uint64_t{c.first} << 32) | op.word];
+            }
+            c.next_sequence_pc = c.cpu.pc + 4;
+            if (!aarch64::CanFollowInBakedSequence(op.word) || c.sequence.size() == 24 ||
+                (c.next_sequence_pc & 4095) == 0)
+                c.FlushSequence();
+            c.next_pc =
+                op.kind >= aarch64::Kind::Address && op.kind <= aarch64::Kind::Multiply ? c.cpu.pc + 4 : UINT64_MAX;
+            c.first = op.word;
+        };
+    }
+    uint64_t remaining = budget ? budget : UINT64_MAX;
+    while (engine.status == EmuStatus::Running && remaining && (!end_pc || cpu.pc != end_pc)) {
+        const auto result = aarch64::Run(cpu, memory, end_pc ? 1 : remaining, profile);
+        remaining -= result.executed;
+        if (engine.status != EmuStatus::Running) break;
+        switch (result.reason) {
+            case aarch64::Stop::Syscall:
+                cpu.ClearExclusive();
+                if (!engine.hooks.on_interrupt(&engine, 0x80)) engine.status = EmuStatus::Fault;
+                break;
+            case aarch64::Stop::Budget:
+                break;
+            default:
+                engine.arm_fault_address = result.address;
+                engine.fault_addr = static_cast<uint32_t>(result.address);
+                engine.fault_vector = result.reason == aarch64::Stop::Fault        ? 14
+                                      : result.reason == aarch64::Stop::Alignment  ? 11
+                                      : result.reason == aarch64::Stop::Breakpoint ? 3
+                                                                                   : 6;
+                engine.status = EmuStatus::Fault;
+                break;
+        }
+    }
+    if (capture.counts) {
+        std::lock_guard guard(capture.counts->mutex);
+        capture.FlushSequence();
+    }
+    if (!step && engine.status == EmuStatus::Running) engine.status = EmuStatus::Stopped;
+    return step ? static_cast<int>(engine.status) : 1;
+}
+}  // namespace fiberish
+
+void AArch64_Reset(EmuState* state) {
+    if (!state->arm)
+        state->arm = std::make_shared<fiberish::aarch64::State>();
+    else {
+        auto* frame = state->arm->active_run;
+        *state->arm = {};
+        state->arm->active_run = frame;
+    }
+}
+
+uint32_t AArch64_ReadSyscall(EmuState* state, uint64_t* arguments) {
+    if (!state->arm) {
+        std::fill_n(arguments, 6, uint64_t{0});
+        return 0;
+    }
+    std::copy_n(state->arm->x.begin(), 6, arguments);
+    return static_cast<uint32_t>(state->arm->x[8]);
+}
+
+uint64_t AArch64_RegRead(EmuState* state, int index) {
+    if (index == 37) return state->arm_fault_address;
+    if (!state->arm) return 0;
+    auto& cpu = *state->arm;
+    if (auto slot = fiberish::ArmSlot(cpu, index)) return *slot;
+    switch (index) {
+        case 34:
+            return cpu.nzcv;
+        case 35:
+            return cpu.fpcr;
+        case 36:
+            return cpu.fpsr;
+        default:
+            return 0;
+    }
+}
+
+void AArch64_RegWrite(EmuState* state, int index, uint64_t value) {
+    if (!state->arm) AArch64_Reset(state);
+    auto& cpu = *state->arm;
+    if (auto slot = fiberish::ArmSlot(cpu, index))
+        *slot = value;
+    else if (index == 34)
+        cpu.nzcv = value & 0xf0000000;
+    else if (index == 35)
+        cpu.fpcr = static_cast<uint32_t>(value);
+    else if (index == 36)
+        cpu.fpsr = static_cast<uint32_t>(value);
+}

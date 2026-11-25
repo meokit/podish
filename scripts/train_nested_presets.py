@@ -13,6 +13,7 @@ import shutil
 from statistics import mean, median
 import subprocess
 
+from gen_operand_specializations import aarch64_imm12_shapes
 from nested_baking_candidates import PARTIAL_FIELDS, build_pools, modrm_key, write_plans
 from nested_baking_workloads import (
     benchmark_lock, digest, file_digest, read_json, run_workloads, stage_cli, write_json,
@@ -71,6 +72,14 @@ def build(cfg, build_dir, logs, jobs, plans=None, fusion_count=0, profile=False)
         f"-DFIBERCPU_ENABLE_SUPEROPCODES={'ON' if fusion_count else 'OFF'}",
         f"-DFIBERCPU_OPERAND_BUDGET={fusion_count}",
     ]
+    if cfg.get("guest") == "aarch64":
+        args.extend(["-DFIBERCPU_GUEST_AARCH64=ON", "-DFIBERCPU_GUEST_I386=OFF",
+                     "-DFIBERCPU_MODRM_PLAN_FILE=", "-DFIBERCPU_STATIC_OPERAND_PLAN_FILE=",
+                     f"-DFIBERCPU_AARCH64_OPERAND_PLAN_FILE={plans / 'scalar.json' if plans else ''}",
+                     "-DFIBERCPU_AARCH64_OPERAND_BUDGET=1024", "-DFIBERCPU_AARCH64_PAIR_BUDGET=1024",
+                     "-DFIBERCPU_AARCH64_SEQUENCE_BUDGET=1024", "-DFIBERCPU_AARCH64_PARTIAL_BUDGET=1024"])
+    else:
+        args.extend(["-DFIBERCPU_GUEST_I386=ON", "-DFIBERCPU_GUEST_AARCH64=OFF"])
     if fusion_count:
         recipes = plans / "recipes.json"
         source = logs / "fusion.cpp"
@@ -326,6 +335,75 @@ def freeze(root, reference, chain, provenance):
     return rows
 
 
+def aarch64_plan(profiles, budget, partial_budget=32):
+    # Give each workload equal weight, regardless of how long its capture ran.
+    plan = {"version": 1, "architecture": "aarch64"}
+    for group, fields in (("entries", ("word",)), ("pairs", ("first", "second")), ("sequences", ("words",))):
+        weights = defaultdict(int)
+        for profile in profiles:
+            rows = profile.get(group, [])
+            total = sum(row["count"] for row in rows)
+            for row in rows:
+                key = tuple(tuple(row[f]) if f == "words" else row[f] for f in fields)
+                weights[key] += max(1, round(row["count"] * 100_000_000 / total))
+        def priority(key):
+            saved = len(key[0]) - 1 if group == "sequences" else 1
+            return -weights[key] * saved, key
+        ranked = sorted(weights, key=priority)[:budget]
+        plan[group] = [dict(zip(fields, key), count=weights[key]) for key in ranked]
+        if group == "entries":
+            counts = {word: count for (word,), count in weights.items()}
+            plan["partials"] = aarch64_imm12_shapes(counts, {word for (word,) in ranked}, partial_budget)
+    return plan
+
+
+def train_aarch64(cfg, root, jobs, partial):
+    partial_budget = cfg.get("aarch64_partial_budget", 32) if partial else 0
+    if type(partial_budget) is not int or not 0 <= partial_budget <= 1024:
+        raise ValueError("aarch64_partial_budget must be an integer in 0..1024")
+    budgets = sorted(set(cfg.get("aarch64_operand_budgets", [32, 128, 512])))
+    if not budgets or any(type(n) is not int or not 1 <= n <= 1024 for n in budgets):
+        raise ValueError("aarch64_operand_budgets must contain integers in 1..1024")
+    reference = build(cfg, root / "baseline", root / "baseline-logs", jobs)
+    cli = stage_cli(cfg["managed_cli"], root / "baseline-cli", reference)
+    profiles = []
+    with benchmark_lock(cfg["benchmark_lock"]):
+        for case in cfg["workloads"]:
+            capture = root / "captures" / case["id"]
+            capture.mkdir(parents=True, exist_ok=True)
+            run_workloads(cfg, cli, [case], capture / "guest.log", capture)
+            profile = read_json(capture / "words.json")
+            if profile["architecture"] != "aarch64" or not profile["entries"]:
+                raise ValueError(f"no AArch64 instructions captured for {case['id']}")
+            profiles.append(profile)
+    candidates = []
+    for budget in budgets:
+        name = f"words-{budget}"
+        directory = root / name
+        directory.mkdir(exist_ok=True)
+        plan = aarch64_plan(profiles, budget, partial_budget)
+        write_json(directory / "scalar.json", plan)
+        library = build(cfg, root / "trial-build", directory, jobs, plans=directory)
+        archived = directory / library.name
+        shutil.copy2(library, archived)
+        candidates.append(dict(name=name, words=budget, library=str(archived), text_bytes=text_size(cfg, archived)))
+    measure(cfg, root / "measure", cli, candidates, cfg.get("final_repeats", 3))
+    write_json(root / "trials.json", candidates)
+    valid = [trial for trial in candidates if "score" in trial]
+    if not valid:
+        raise RuntimeError("all AArch64 benchmark candidates failed validation")
+    best = max(valid, key=lambda trial: trial["score"])
+    frozen = root / "frozen"
+    frozen.mkdir(exist_ok=True)
+    if best["score"] > 1:
+        shutil.copy2(root / best["name"] / "scalar.json", frozen)
+    else:
+        best = dict(name="baseline", words=0, score=1.0, library=str(reference))
+        write_json(frozen / "scalar.json", aarch64_plan([], 0))
+    shutil.copy2(best["library"], frozen)
+    write_json(frozen / "measurement.json", best)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True, type=Path)
@@ -342,6 +420,12 @@ def main():
     root.mkdir(exist_ok=True, parents=True)
     if (root / "frozen").exists():
         parser.error("output already contains frozen presets")
+    guest = cfg.get("guest", "i386")
+    if guest == "aarch64":
+        train_aarch64(cfg, root, args.jobs, args.partial_operands)
+        return
+    if guest != "i386":
+        parser.error(f"unknown guest {guest}")
     captures = capture_training(cfg, root, args.jobs)
     provenance = {"config_sha256": file_digest(args.config), "profiles": {
         case["id"]: file_digest(captures / case["id"] / "blocks.bin") for case in cfg["workloads"]}}

@@ -205,19 +205,25 @@ public partial class SyscallManager
         err = 0;
         if (sigArgPtr == 0) return true;
 
-        var argBuf = new byte[8];
+        var wordSize = GuestWordSize(engine);
+        Span<byte> argBuf = stackalloc byte[wordSize * 2];
         if (!engine.CopyFromUser(sigArgPtr, argBuf))
         {
             err = -(int)Errno.EFAULT;
             return false;
         }
 
-        var sigmaskPtr = BinaryPrimitives.ReadUInt32LittleEndian(argBuf.AsSpan(0, 4));
-        var sigsetsize = BinaryPrimitives.ReadUInt32LittleEndian(argBuf.AsSpan(4, 4));
-        return TryReadDirectSigmask(engine, sigmaskPtr, sigsetsize, out hasMask, out mask, out err);
+        var sigmaskPtr = ReadGuestWord(argBuf, wordSize);
+        var sigsetsize = ReadGuestWord(argBuf[wordSize..], wordSize);
+        if (sigmaskPtr > uint.MaxValue)
+        {
+            err = -(int)Errno.EFAULT;
+            return false;
+        }
+        return TryReadDirectSigmask(engine, (uint)sigmaskPtr, sigsetsize, out hasMask, out mask, out err);
     }
 
-    private static bool TryReadDirectSigmask(Engine engine, uint sigmaskPtr, uint sigsetsize, out bool hasMask,
+    private static bool TryReadDirectSigmask(Engine engine, uint sigmaskPtr, ulong sigsetsize, out bool hasMask,
         out ulong mask, out int err)
     {
         hasMask = false;
@@ -309,6 +315,13 @@ public partial class SyscallManager
         return true;
     }
 
+    private static int SelectIntCount(Engine engine, int fdCount)
+    {
+        var wordSize = engine.IsAArch64 ? 64 : 32;
+        var alignedFdCount = (fdCount + wordSize - 1) & ~(wordSize - 1);
+        return Math.Min(alignedFdCount, FD_SETSIZE) / NFDBITS;
+    }
+
     private static int ScanSelect(SyscallManager sm, Engine engine, int n, uint inp, uint outp, uint exp,
         FiberTask? task,
         out uint[] resIn, out uint[] resOut, out uint[] resEx)
@@ -320,8 +333,7 @@ public partial class SyscallManager
         FiberTask? task, out uint[] resIn, out uint[] resOut, out uint[] resEx)
     {
         var ready = 0;
-        var intCount = (n + NFDBITS - 1) / NFDBITS;
-        if (intCount > FD_SETSIZE / 32) intCount = FD_SETSIZE / 32;
+        var intCount = SelectIntCount(engine, n);
 
         resIn = new uint[intCount];
         resOut = new uint[intCount];
@@ -662,8 +674,7 @@ public partial class SyscallManager
         private void RegisterWaits()
         {
             if (_token == null) return;
-            var intCount = (_n + NFDBITS - 1) / NFDBITS;
-            if (intCount > FD_SETSIZE / 32) intCount = FD_SETSIZE / 32;
+            var intCount = SelectIntCount(_task.CPU, _n);
 
             var inSets = new uint[intCount];
             var outSets = new uint[intCount];

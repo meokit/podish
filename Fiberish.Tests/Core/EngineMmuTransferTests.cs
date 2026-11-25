@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using System.IO.MemoryMappedFiles;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using Fiberish.Core;
@@ -495,6 +496,357 @@ public class EngineMmuTransferTests : IDisposable
         Assert.Equal(CodeAddr + 2, engine.Eip);
         Assert.True(ReadCodeCacheStats(engine).CodeCacheGeneration > generationBefore);
     }
+
+#if FIBER_GUEST_AARCH64
+    [Fact]
+    public void AArch64_ExecutablePageCacheObservesAliasWritesAndPermissionChanges()
+    {
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        using var code = new UnmanagedPageFixture([
+            0x20, 0x00, 0x80, 0xd2, // mov x0, #1
+            0x00, 0x04, 0x00, 0x91  // add x0, x0, #1
+        ]);
+        const uint writeAlias = CodeAddr + LinuxConstants.PageSize;
+        MapHostPage(engine, CodeAddr, code.Pointer, Protection.Read | Protection.Exec);
+        MapHostPage(engine, writeAlias, code.Pointer, Protection.Read | Protection.Write);
+        engine.SelectArchitecture(GuestArchitecture.AArch64);
+        engine.InstructionPointer = CodeAddr;
+        engine.Run(maxInsts: 2);
+        Assert.Equal(2ul, engine.ReadArmRegister(0));
+
+        Assert.True(engine.CopyToUser(writeAlias, [0x60, 0x00, 0x80, 0xd2])); // mov x0, #3
+        engine.InstructionPointer = CodeAddr;
+        engine.Run(maxInsts: 2);
+        Assert.Equal(4ul, engine.ReadArmRegister(0));
+
+        engine.MemProtect(CodeAddr, LinuxConstants.PageSize, (byte)Protection.Read);
+        engine.InstructionPointer = CodeAddr;
+        engine.Run(maxInsts: 2);
+        Assert.Equal(EmuStatus.Fault, engine.Status);
+        Assert.Equal((ulong)CodeAddr, engine.InstructionPointer);
+        Assert.Equal(4ul, engine.ReadArmRegister(0));
+    }
+
+    [Fact]
+    public void AArch64_LinkedSuccessorChecksCurrentBytesAndBudget()
+    {
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        using var code = new UnmanagedPageFixture([
+            0x02, 0x00, 0x00, 0x14, // b +8
+            0x1f, 0x20, 0x03, 0xd5, // nop
+            0x00, 0x04, 0x00, 0x91, // add x0, x0, #1
+            0x00, 0x08, 0x00, 0x91, // add x0, x0, #2
+            0xfc, 0xff, 0xff, 0x17  // b -16
+        ]);
+        engine.SelectArchitecture(GuestArchitecture.AArch64);
+        MapHostPage(engine, CodeAddr, code.Pointer, Protection.Read | Protection.Exec);
+
+        engine.InstructionPointer = CodeAddr;
+        engine.Run(maxInsts: 6);
+        Assert.Equal(4ul, engine.ReadArmRegister(0));
+        Assert.Equal(CodeAddr + 12ul, engine.InstructionPointer);
+        Assert.Equal(EmuStatus.Stopped, engine.Status);
+
+        Marshal.WriteInt32(code.Pointer, 8, unchecked((int)0x91001c00)); // add x0, x0, #7
+        engine.InstructionPointer = CodeAddr;
+        engine.Run(maxInsts: 2);
+        Assert.Equal(11ul, engine.ReadArmRegister(0));
+        Assert.Equal(CodeAddr + 12ul, engine.InstructionPointer);
+        Assert.Equal(EmuStatus.Stopped, engine.Status);
+    }
+
+    [Fact]
+    public void AArch64_LoadFaultRefetchesCodeChangedByTheFaultHandler()
+    {
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        using var code = new UnmanagedPageFixture([
+            0x20, 0x00, 0x40, 0xb9, // ldr w0, [x1]
+            0x00, 0x04, 0x00, 0x11, // add w0, w0, #1
+            0x01, 0x00, 0x00, 0x14  // b +4
+        ]);
+        using var data = new UnmanagedPageFixture([40]);
+        const uint dataAddress = CodeAddr + LinuxConstants.PageSize;
+        MapHostPage(engine, CodeAddr, code.Pointer, Protection.Read | Protection.Exec);
+        engine.FaultHandler = (cpu, address, write) =>
+        {
+            if (address != dataAddress || write) return false;
+            Marshal.WriteInt32(code.Pointer, 4, 0x11000800); // add w0, w0, #2
+            return cpu.MemMapHostPage(dataAddress, data.Pointer, (byte)Protection.Read);
+        };
+        engine.SelectArchitecture(GuestArchitecture.AArch64);
+        engine.WriteArmRegister(1, dataAddress);
+        engine.InstructionPointer = CodeAddr;
+        engine.Run(maxInsts: 3);
+
+        Assert.Equal(EmuStatus.Stopped, engine.Status);
+        Assert.Equal(42ul, engine.ReadArmRegister(0));
+        Assert.Equal(CodeAddr + 12ul, engine.InstructionPointer);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AArch64_GuestStoreRefetchesModifiedExecutableCode(bool useAlias)
+    {
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        using var code = new UnmanagedPageFixture([
+            0x20, 0x00, 0x00, 0xb9, // str w0, [x1]
+            0x42, 0x04, 0x00, 0x91, // add x2, x2, #1
+            0x42, 0x08, 0x00, 0x91, // add x2, x2, #2
+            0x01, 0x00, 0x00, 0x14  // b +4
+        ]);
+        const Protection readExec = Protection.Read | Protection.Exec;
+        engine.SelectArchitecture(GuestArchitecture.AArch64);
+        var writableAddress = useAlias ? CodeAddr + LinuxConstants.PageSize : CodeAddr;
+        Assert.True(engine.MemMapHostPage(CodeAddr, code.Pointer,
+            (byte)(useAlias ? readExec : readExec | Protection.Write), stableBacking: true));
+        if (useAlias)
+            Assert.True(engine.MemMapHostPage(writableAddress, code.Pointer,
+                (byte)(Protection.Read | Protection.Write), stableBacking: true));
+
+        // Prime Dirty so the store can only be rejected by the executable-alias guard.
+        Assert.True(engine.CopyToUser(writableAddress + 64, [0]));
+        engine.InstructionPointer = CodeAddr;
+        engine.WriteArmRegister(0, 0x91001c42); // add x2, x2, #7
+        engine.WriteArmRegister(1, writableAddress + 4);
+        engine.Run(maxInsts: 4);
+
+        Assert.Equal(EmuStatus.Stopped, engine.Status);
+        Assert.Equal(0x91001c42u, (uint)Marshal.ReadInt32(code.Pointer, 4));
+        Assert.Equal(9ul, engine.ReadArmRegister(2));
+        Assert.Equal(CodeAddr + 16ul, engine.InstructionPointer);
+    }
+
+    [Fact]
+    public unsafe void AArch64_StoreThroughDistinctHostViewRefetchesExecutableBytes()
+    {
+        var path = Path.GetTempFileName();
+        try
+        {
+            using var file = new FileStream(path, FileMode.Open, FileAccess.ReadWrite, FileShare.ReadWrite);
+            file.SetLength(LinuxConstants.PageSize);
+            using var backing = MemoryMappedFile.CreateFromFile(file, null, LinuxConstants.PageSize,
+                MemoryMappedFileAccess.ReadWrite, HandleInheritability.None, leaveOpen: true);
+            using var code = backing.CreateViewAccessor(0, LinuxConstants.PageSize);
+            using var writer = backing.CreateViewAccessor(0, LinuxConstants.PageSize);
+            code.Write(0, 0xb9000020u); // str w0, [x1]
+            code.Write(4, 0x91000442u); // add x2, x2, #1
+            code.Write(8, 0x14000001u); // b +4
+            byte* codePointer = null;
+            byte* writerPointer = null;
+            code.SafeMemoryMappedViewHandle.AcquirePointer(ref codePointer);
+            writer.SafeMemoryMappedViewHandle.AcquirePointer(ref writerPointer);
+            try
+            {
+                Assert.NotEqual((nint)codePointer, (nint)writerPointer);
+                var runtime = new TestRuntimeFactory();
+                using var engine = runtime.CreateEngine();
+                const uint writeAlias = CodeAddr + LinuxConstants.PageSize;
+                MapHostPage(engine, CodeAddr, (nint)codePointer, Protection.Read | Protection.Exec);
+                MapHostPage(engine, writeAlias, (nint)writerPointer, Protection.Read | Protection.Write);
+                Assert.True(engine.CopyToUser(writeAlias + 64, [0])); // Dirty before the native store.
+                engine.SelectArchitecture(GuestArchitecture.AArch64);
+                engine.InstructionPointer = CodeAddr;
+                engine.WriteArmRegister(0, 0x91001c42); // add x2, x2, #7
+                engine.WriteArmRegister(1, writeAlias + 4);
+                engine.Run(maxInsts: 3);
+
+                Assert.Equal(EmuStatus.Stopped, engine.Status);
+                Assert.Equal(0x91001c42u, code.ReadUInt32(4));
+                Assert.Equal(7ul, engine.ReadArmRegister(2));
+                Assert.Equal(CodeAddr + 12ul, engine.InstructionPointer);
+            }
+            finally
+            {
+                writer.SafeMemoryMappedViewHandle.ReleasePointer();
+                code.SafeMemoryMappedViewHandle.ReleasePointer();
+            }
+        }
+        finally
+        {
+            File.Delete(path);
+        }
+    }
+
+    [Fact]
+    public void AArch64_StoreFaultRefetchesCodeAndCommitsPostIndexOnce()
+    {
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        using var code = new UnmanagedPageFixture([
+            0x20, 0x44, 0x00, 0xb8, // str w0, [x1], #4
+            0x42, 0x04, 0x00, 0x91, // add x2, x2, #1
+            0x01, 0x00, 0x00, 0x14  // b +4
+        ]);
+        using var data = new UnmanagedPageFixture([]);
+        const uint dataAddress = CodeAddr + LinuxConstants.PageSize;
+        MapHostPage(engine, CodeAddr, code.Pointer, Protection.Read | Protection.Exec);
+        var faultCount = 0;
+        engine.FaultHandler = (cpu, address, write) =>
+        {
+            if (address != dataAddress || !write) return false;
+            faultCount++;
+            Marshal.WriteInt32(code.Pointer, 4, unchecked((int)0x91001c42)); // add x2, x2, #7
+            return cpu.MemMapHostPage(dataAddress, data.Pointer, (byte)(Protection.Read | Protection.Write));
+        };
+        engine.SelectArchitecture(GuestArchitecture.AArch64);
+        engine.InstructionPointer = CodeAddr;
+        engine.WriteArmRegister(0, 123);
+        engine.WriteArmRegister(1, dataAddress);
+        engine.Run(maxInsts: 3);
+
+        Assert.Equal(1, faultCount);
+        Assert.Equal(123, Marshal.ReadInt32(data.Pointer));
+        Assert.Equal(dataAddress + 4ul, engine.ReadArmRegister(1));
+        Assert.Equal(7ul, engine.ReadArmRegister(2));
+        Assert.Equal(CodeAddr + 12ul, engine.InstructionPointer);
+        Assert.Equal(EmuStatus.Stopped, engine.Status);
+    }
+
+    [Fact]
+    public unsafe void AArch64_StoreToDirtyPageStillInvokesMemoryHook()
+    {
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        using var code = new UnmanagedPageFixture([0x20, 0x00, 0x00, 0xb9]); // str w0, [x1]
+        using var data = new UnmanagedPageFixture([]);
+        const uint dataAddress = CodeAddr + LinuxConstants.PageSize;
+        engine.SelectArchitecture(GuestArchitecture.AArch64);
+        MapHostPage(engine, CodeAddr, code.Pointer, Protection.Read | Protection.Exec);
+        Assert.True(engine.MemMapHostPage(dataAddress, data.Pointer,
+            (byte)(Protection.Read | Protection.Write), stableBacking: true));
+        Assert.True(engine.CopyToUser(dataAddress, [0, 0, 0, 0]));
+        engine.InstructionPointer = CodeAddr;
+        engine.WriteArmRegister(0, 123);
+        engine.WriteArmRegister(1, dataAddress);
+        var observation = stackalloc ulong[4];
+        observation[0] = 0;
+        X86Native.SetMemHook(engine.State, &ObserveMemoryStore, (nint)observation);
+        try
+        {
+            engine.Run(maxInsts: 1);
+        }
+        finally
+        {
+            X86Native.SetMemHook(engine.State, null, nint.Zero);
+        }
+
+        Assert.Equal(1ul, observation[0]);
+        Assert.Equal((ulong)dataAddress, observation[1]);
+        Assert.Equal(4ul, observation[2]);
+        Assert.Equal(123ul, observation[3]);
+        Assert.Equal(123, Marshal.ReadInt32(data.Pointer));
+        Assert.Equal(EmuStatus.Stopped, engine.Status);
+    }
+
+    [Fact]
+    public unsafe void AArch64_LoadWithWarmTranslationStillInvokesMemoryHook()
+    {
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        using var code = new UnmanagedPageFixture([
+            0x20, 0x00, 0x40, 0xb9, // ldr w0, [x1]
+            0x01, 0x00, 0x00, 0x14  // b +4
+        ]);
+        using var data = new UnmanagedPageFixture([123]);
+        const uint dataAddress = CodeAddr + LinuxConstants.PageSize;
+        engine.SelectArchitecture(GuestArchitecture.AArch64);
+        MapHostPage(engine, CodeAddr, code.Pointer, Protection.Read | Protection.Exec);
+        MapHostPage(engine, dataAddress, data.Pointer, Protection.Read);
+        engine.InstructionPointer = CodeAddr;
+        engine.WriteArmRegister(1, dataAddress);
+        engine.Run(maxInsts: 2);
+        Assert.Equal(123ul, engine.ReadArmRegister(0));
+
+        engine.InstructionPointer = CodeAddr;
+        var accessCount = 0;
+        X86Native.SetMemHook(engine.State, &CountMemoryLoad, (nint)(&accessCount));
+        try
+        {
+            engine.Run(maxInsts: 2);
+        }
+        finally
+        {
+            X86Native.SetMemHook(engine.State, null, nint.Zero);
+        }
+
+        Assert.Equal(1, accessCount);
+        Assert.Equal(123ul, engine.ReadArmRegister(0));
+        Assert.Equal(CodeAddr + 8ul, engine.InstructionPointer);
+        Assert.Equal(EmuStatus.Stopped, engine.Status);
+    }
+
+    [UnmanagedCallersOnly]
+    private static unsafe void CountMemoryLoad(nint state, uint address, uint size, int write, ulong value,
+        nint userData)
+    {
+        if (write == 0) (*(int*)userData)++;
+    }
+
+    [UnmanagedCallersOnly]
+    private static unsafe void ObserveMemoryStore(nint state, uint address, uint size, int write, ulong value,
+        nint userData)
+    {
+        if (write == 0) return;
+        var observation = (ulong*)userData;
+        observation[0]++;
+        observation[1] = address;
+        observation[2] = size;
+        observation[3] = value;
+    }
+
+    [Fact]
+    public void AArch64_CrossPageStoreFaultPreservesMappedBytesAndPostIndex()
+    {
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        using var code = new UnmanagedPageFixture([
+            0x20, 0x44, 0x00, 0xb8, // str w0, [x1], #4
+            0x01, 0x00, 0x00, 0x14  // b +4
+        ]);
+        using var data = new UnmanagedPageFixture([]);
+        const uint dataAddress = CodeAddr + LinuxConstants.PageSize;
+        const uint storeAddress = dataAddress + LinuxConstants.PageSize - 2;
+        MapHostPage(engine, CodeAddr, code.Pointer, Protection.Read | Protection.Exec);
+        MapHostPage(engine, dataAddress, data.Pointer, Protection.Read | Protection.Write);
+        Assert.True(engine.CopyToUser(storeAddress, [0xab, 0xcd]));
+        engine.SelectArchitecture(GuestArchitecture.AArch64);
+        engine.InstructionPointer = CodeAddr;
+        engine.WriteArmRegister(0, 0x12345678);
+        engine.WriteArmRegister(1, storeAddress);
+        engine.Run(maxInsts: 2);
+
+        Assert.Equal(EmuStatus.Fault, engine.Status);
+        Assert.Equal((ulong)CodeAddr, engine.InstructionPointer);
+        Assert.Equal((ulong)storeAddress, engine.ReadArmRegister(1));
+        Assert.Equal(0xcdab, (ushort)Marshal.ReadInt16(data.Pointer, LinuxConstants.PageSize - 2));
+    }
+
+    [Theory]
+    [InlineData(0x1_00402000ul)]
+    [InlineData(0xfffffffeul)]
+    public void AArch64_LoadOutsideGuestAddressRangeDoesNotUseTheMappedPrefix(ulong address)
+    {
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        using var code = new UnmanagedPageFixture([0x20, 0x00, 0x40, 0xb9]); // ldr w0, [x1]
+        MapHostPage(engine, CodeAddr, code.Pointer, Protection.Read | Protection.Exec);
+        AllocateTestPage(engine, unchecked((uint)address) & LinuxConstants.PageMask, (byte)Protection.Read);
+        engine.SelectArchitecture(GuestArchitecture.AArch64);
+        engine.WriteArmRegister(0, 42);
+        engine.WriteArmRegister(1, address);
+        engine.InstructionPointer = CodeAddr;
+        engine.Run(maxInsts: 1);
+
+        Assert.Equal(EmuStatus.Fault, engine.Status);
+        Assert.Equal(42ul, engine.ReadArmRegister(0));
+        Assert.Equal((ulong)CodeAddr, engine.InstructionPointer);
+    }
+#endif
 
     [Fact]
     public void ResetDuringFailedSpeculativeSuccessor_DoesNotCacheTheOldSource()

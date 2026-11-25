@@ -5,6 +5,7 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
 using Fiberish.Memory;
+using Fiberish.Cpu.Native;
 using Fiberish.Native;
 using Fiberish.Syscalls;
 using Fiberish.X86.Native;
@@ -27,7 +28,7 @@ public enum EngineCloneMemoryMode
     SkipMmu = 1
 }
 
-public class Engine : IDisposable
+public partial class Engine : IGuestCpu, IDisposable
 {
     internal const uint BlockDumpMagic = 0x324b4c42; // "BLK2"
     internal const int BlockDumpFormatVersion = 3;
@@ -334,6 +335,9 @@ public class Engine : IDisposable
 
         var newEngine = new Engine(newState, MemoryContext)
         {
+#if FIBER_GUEST_I386 && FIBER_GUEST_AARCH64
+            Architecture = Architecture,
+#endif
             FaultHandler = FaultHandler,
             InterruptHandler = InterruptHandler,
             PageFaultResolver = PageFaultResolver,
@@ -449,9 +453,15 @@ public class Engine : IDisposable
     }
 
     /// <summary>Map caller-owned backing. Keep it alive for the lifetime of all mappings and clones.</summary>
-    public unsafe bool MemMapHostPage(uint addr, IntPtr hostPage, byte perms)
+    public bool MemMapHostPage(uint addr, IntPtr hostPage, byte perms)
+        => MemMapHostPage(addr, hostPage, perms, stableBacking: false);
+
+    internal unsafe bool MemMapHostPage(uint addr, IntPtr hostPage, byte perms, bool stableBacking)
     {
-        return X86Native.MemMapHostPage(State, addr, (void*)hostPage, perms) != 0;
+        const byte stableBackingFlag = 1 << 6;
+        var mappingFlags = (byte)(perms & ~stableBackingFlag);
+        if (stableBacking && IsAArch64) mappingFlags |= stableBackingFlag;
+        return X86Native.MemMapHostPage(State, addr, (void*)hostPage, mappingFlags) != 0;
     }
 
     public unsafe IntPtr GetPhysicalAddressSafe(uint vaddr, bool isWrite)
@@ -584,6 +594,7 @@ public class Engine : IDisposable
 
     public unsafe bool CopyToUser(uint vaddr, ReadOnlySpan<byte> data)
     {
+        if ((ulong)vaddr + (uint)data.Length > 1UL << 32) return false;
         EnsureAddressSpaceSynchronized();
         var len = data.Length;
         var written = 0;
@@ -613,6 +624,7 @@ public class Engine : IDisposable
 
     public unsafe bool CopyFromUser(uint vaddr, Span<byte> data)
     {
+        if ((ulong)vaddr + (uint)data.Length > 1UL << 32) return false;
         EnsureAddressSpaceSynchronized();
         var len = data.Length;
         var read = 0;
@@ -665,6 +677,7 @@ public class Engine : IDisposable
 
     internal async ValueTask<int> CopyUserIoAsync(uint address, Memory<byte> buffer, bool write)
     {
+        if ((ulong)address + (uint)buffer.Length > 1UL << 32) return -(int)Errno.EFAULT;
         while (!buffer.IsEmpty)
         {
             var (pointer, error) = await ResolveUserIoPageAsync(address, write);
@@ -710,7 +723,7 @@ public class Engine : IDisposable
     public unsafe int CopyFromUserNoFault(uint vaddr, Span<byte> data)
     {
         EnsureAddressSpaceSynchronized();
-        var len = data.Length;
+        var len = (int)Math.Min((ulong)data.Length, (1UL << 32) - vaddr);
         var read = 0;
 
         fixed (byte* pData = data)
@@ -772,6 +785,7 @@ public class Engine : IDisposable
 
                 chunk.CopyTo(rented.AsSpan(length));
                 length += chunkLength;
+                if (length < limit && current > uint.MaxValue - (uint)chunkLength) return null;
                 current += (uint)chunkLength;
             }
 
@@ -810,7 +824,8 @@ public class Engine : IDisposable
     public virtual void Run(uint endEip = 0, ulong maxInsts = 0)
     {
         AssertNotDisposed();
-        if (X86Native.Run(State, endEip, maxInsts) == 0)
+        var entered = IsAArch64 ? AArch64Native.Run(State, endEip, maxInsts, 0) : X86Native.Run(State, endEip, maxInsts);
+        if (entered == 0)
             throw new InvalidOperationException("Native guest execution cannot be re-entered from a callback.");
     }
 
@@ -835,7 +850,7 @@ public class Engine : IDisposable
     public virtual int Step()
     {
         AssertNotDisposed();
-        var status = X86Native.Step(State);
+        var status = IsAArch64 ? AArch64Native.Run(State, 0, 1, 1) : X86Native.Step(State);
         if (status < 0)
             throw new InvalidOperationException("Native guest execution cannot be re-entered from a callback.");
         return status;
@@ -1148,6 +1163,8 @@ public class Engine : IDisposable
 
     public override string ToString()
     {
+        if (IsAArch64)
+            return $"PC=0x{InstructionPointer:x16} SP=0x{StackPointer:x16} X0=0x{ReturnValue:x16} LR=0x{ReadArmRegister(30):x16} NZCV=0x{ReadArmRegister(34):x8}";
         return
             $"EIP: 0x{Eip:x8} ESP: 0x{RegRead(Reg.ESP):x8} EAX: 0x{RegRead(Reg.EAX):x8} EBX: 0x{RegRead(Reg.EBX):x8} ECX: 0x{RegRead(Reg.ECX):x8} EDX: 0x{RegRead(Reg.EDX):x8} ESI: 0x{RegRead(Reg.ESI):x8} EDI: 0x{RegRead(Reg.EDI):x8} EBP: 0x{RegRead(Reg.EBP):x8} EFLAGS: 0x{Eflags:x8}";
     }

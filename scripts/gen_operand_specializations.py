@@ -3,6 +3,7 @@
 
 import argparse
 import json
+from itertools import groupby
 from pathlib import Path
 
 from gen_instruction_catalog import read_catalog, supports_exact_operands
@@ -144,17 +145,114 @@ unsigned BakedFusionWidth(HandlerFunc handler) {
     return "\n".join(code)
 
 
+def aarch64_imm12_family(word):
+    return (word & 0x1f800000) == 0x11000000 or (word & 0x3b000000) == 0x39000000
+
+
+def aarch64_imm12_shapes(counts, exact_words, budget):
+    # Both encoding families put the unsigned immediate in bits [21:10].
+    # Keep shift, transfer size, operation, and both register indices fixed.
+    imm_mask = 0xfff << 10
+    total = {}
+    distinct = {}
+    for word, count in counts.items():
+        if not aarch64_imm12_family(word):
+            continue
+        shape = word & ~imm_mask
+        distinct[shape] = distinct.get(shape, 0) + 1
+        if word not in exact_words:
+            total[shape] = total.get(shape, 0) + count
+    eligible = [shape for shape in total if distinct[shape] >= 2]
+    return sorted(eligible, key=lambda shape: (-total[shape], shape))[:budget]
+
+
+def generate_aarch64(plan, budget, pair_budget, sequence_budget, partial_budget=32):
+    if plan.get("architecture") != "aarch64" or plan.get("version") != 1:
+        raise ValueError("expected an AArch64 version 1 operand profile")
+    counts = {}
+    for row in plan["entries"]:
+        word, count = row["word"], row["count"]
+        if type(word) is not int or not 0 <= word < 2**32 or type(count) is not int or count <= 0:
+            raise ValueError(f"invalid AArch64 profile entry: {row!r}")
+        counts[word] = counts.get(word, 0) + count
+    words = sorted(counts, key=lambda word: (-counts[word], word))[:budget]
+    cases = [f"    case 0x{word:08x}u: return aarch64::BakedBinding<0x{word:08x}u>(omit_nzcv);"
+             for word in sorted(words)]
+    if "partials" in plan:
+        shapes = plan["partials"]
+        if not isinstance(shapes, list) or any(
+            type(shape) is not int or not 0 <= shape < 2**32 or shape & (0xfff << 10)
+            or not aarch64_imm12_family(shape) for shape in shapes
+        ) or len(set(shapes)) != len(shapes):
+            raise ValueError("expected unique AArch64 imm12 shapes in priority order")
+        partials = shapes[:partial_budget]
+    else:
+        partials = aarch64_imm12_shapes(counts, set(words), partial_budget)
+    partial_cases = [f"    case 0x{word:08x}u: return aarch64::BakedBinding<0x{word:08x}u, true>(omit_nzcv);"
+                     for word in sorted(partials)]
+    pairs = {}
+    for row in plan.get("pairs", []):
+        first, second, count = row["first"], row["second"], row["count"]
+        if any(type(w) is not int or not 0 <= w < 2**32 for w in (first, second)) or type(count) is not int or count <= 0:
+            raise ValueError(f"invalid AArch64 pair: {row!r}")
+        key = (first, second)
+        pairs[key] = pairs.get(key, 0) + count
+    ranked = sorted(pairs, key=lambda key: (-pairs[key], key))[:pair_budget]
+    pair_cases = [f"    case 0x{a:08x}{b:08x}ull: return aarch64::BindBakedRun<0x{a:08x}u, 0x{b:08x}u>(dead, threaded);"
+                  for a, b in sorted(ranked)]
+    sequences = {}
+    for row in plan.get("sequences", []):
+        words_in_row, count = tuple(row["words"]), row["count"]
+        if not 3 <= len(words_in_row) <= 24 or any(type(w) is not int or not 0 <= w < 2**32 for w in words_in_row):
+            raise ValueError(f"invalid AArch64 sequence: {row!r}")
+        if type(count) is not int or count < 1:
+            raise ValueError(f"invalid AArch64 sequence count: {count!r}")
+        sequences[words_in_row] = sequences.get(words_in_row, 0) + count
+    ranked_sequences = sorted(sequences, key=lambda seq: (-sequences[seq] * (len(seq) - 1), seq))[:sequence_budget]
+    sequence_cases = []
+    for first, group in groupby(sorted(ranked_sequences, key=lambda seq: (seq[0], -len(seq), seq)), lambda seq: seq[0]):
+        sequence_cases.append(f"    case 0x{first:08x}u:")
+        for seq in group:
+            literals = ", ".join(f"0x{word:08x}u" for word in seq)
+            sequence_cases.extend(["        {", f"            static constexpr std::array recipe{{{literals}}};",
+                f"            if (count >= {len(seq)} && std::equal(recipe.begin()+1, recipe.end(), words+1)) {{",
+                f"                *matched = {len(seq)};",
+                f"                return aarch64::BindBakedRun<{literals}>(dead, threaded);", "            }", "        }"])
+        sequence_cases.append("        break;")
+    return "\n".join(['#include <algorithm>', '#include "aarch64/baked.h"', 'namespace fiberish {',
+                      'aarch64::detail::HandlerBinding FindBakedArmHandler(const aarch64::DecodedInstruction& op, bool omit_nzcv) {',
+                      '    switch (op.word) {', *cases, '    }',
+                      '    switch (op.word & ~(0xfffu << 10)) {', *partial_cases, '    }', '    return {};', '}',
+                      'aarch64::Handler FindBakedArmPair(uint32_t a, uint32_t b, uint32_t dead, aarch64::detail::ThreadHandler& threaded) {',
+                      '    switch ((uint64_t{a} << 32) | b) {', *pair_cases,
+                      '    default: return nullptr;', '    }', '}',
+                      'aarch64::Handler FindBakedArmSequence(const uint32_t* words, unsigned count, unsigned* matched, uint32_t dead, aarch64::detail::ThreadHandler& threaded) {',
+                      '    switch (words[0]) {', *sequence_cases, '    }', '    return nullptr;', '}', '}', ''])
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for name in ("source", "plan", "catalog", "output"):
+    parser.add_argument("--sequence-budget", type=int, choices=range(1025), default=128, metavar="0..1024")
+    parser.add_argument("--partial-budget", type=int, choices=range(1025), default=32, metavar="0..1024")
+    parser.add_argument("--pair-budget", type=int, choices=range(1025), default=128, metavar="0..1024")
+    parser.add_argument("--guest", choices=("i386", "aarch64"), default="i386")
+    parser.add_argument("--source", type=Path)
+    parser.add_argument("--catalog", type=Path)
+    for name in ("plan", "output"):
         parser.add_argument(f"--{name}", type=Path, required=True)
     parser.add_argument("--budget", type=int, choices=range(1025), default=768, metavar="0..1024")
     parser.add_argument("--pin-specialization", type=int, choices=range(3), default=0)
     parser.add_argument("--pin-mask", type=int, default=0)
     args = parser.parse_args()
     try:
-        content = generate(args.source.read_text(), json.loads(args.plan.read_text()), read_catalog(args.catalog),
-                           args.budget, args.pin_specialization, args.pin_mask)
+        plan = json.loads(args.plan.read_text())
+        if args.guest == "aarch64":
+            content = generate_aarch64(plan, args.budget, args.pair_budget, args.sequence_budget, args.partial_budget)
+        else:
+            if not args.source or not args.catalog:
+                parser.error("i386 generation requires --source and --catalog")
+            content = generate(args.source.read_text(), plan, read_catalog(args.catalog),
+                               args.budget, args.pin_specialization, args.pin_mask)
         args.output.write_text(content)
     except (ValueError, OSError) as error:
         parser.error(str(error))

@@ -815,7 +815,7 @@ public partial class SyscallManager
         var head = a1;
         var len = a2;
 
-        if (len != 12) return -(int)Errno.EINVAL; // 32-bit robust_list_head is exactly 12 bytes
+        if (len != 3 * GuestWordSize(engine)) return -(int)Errno.EINVAL;
 
         task.RobustListHead = head;
         task.RobustListSize = len;
@@ -843,15 +843,22 @@ public partial class SyscallManager
 
         if (targetTask == null) return -(int)Errno.ESRCH;
 
-        Span<byte> headBuf = stackalloc byte[4];
-        BinaryPrimitives.WriteUInt32LittleEndian(headBuf, targetTask.RobustListHead);
-        if (!engine.CopyToUser(headPtr, headBuf)) return -(int)Errno.EFAULT;
-
-        if (lenPtr != 0)
+        var wordSize = GuestWordSize(engine);
+        Span<byte> output = stackalloc byte[wordSize];
+        if (engine.IsAArch64)
         {
-            Span<byte> lenBuf = stackalloc byte[4];
-            BinaryPrimitives.WriteUInt32LittleEndian(lenBuf, targetTask.RobustListSize);
-            if (!engine.CopyToUser(lenPtr, lenBuf)) return -(int)Errno.EFAULT;
+            // Linux writes sizeof(robust_list_head) before the head pointer.
+            WriteGuestWord(output, wordSize, 24);
+            if (!engine.CopyToUser(lenPtr, output)) return -(int)Errno.EFAULT;
+        }
+
+        WriteGuestWord(output, wordSize, targetTask.RobustListHead);
+        if (!engine.CopyToUser(headPtr, output)) return -(int)Errno.EFAULT;
+
+        if (!engine.IsAArch64 && lenPtr != 0)
+        {
+            WriteGuestWord(output, wordSize, targetTask.RobustListSize);
+            if (!engine.CopyToUser(lenPtr, output)) return -(int)Errno.EFAULT;
         }
 
         return 0;

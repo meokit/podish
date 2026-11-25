@@ -1,5 +1,11 @@
 <Project>
   <PropertyGroup>
+    <FiberGuestI386 Condition="'$(FiberGuestI386)' == ''">true</FiberGuestI386>
+    <FiberGuestAArch64 Condition="'$(FiberGuestAArch64)' == ''">true</FiberGuestAArch64>
+    <DefineConstants Condition="'$(FiberGuestI386)' == 'true'">$(DefineConstants);FIBER_GUEST_I386</DefineConstants>
+    <DefineConstants Condition="'$(FiberGuestAArch64)' == 'true'">$(DefineConstants);FIBER_GUEST_AARCH64</DefineConstants>
+    <FibercpuGuestSuffix Condition="'$(FiberGuestI386)' == 'true' And '$(FiberGuestAArch64)' != 'true'">/i386</FibercpuGuestSuffix>
+    <FibercpuGuestSuffix Condition="'$(FiberGuestAArch64)' == 'true' And '$(FiberGuestI386)' != 'true'">/aarch64</FibercpuGuestSuffix>
     <!-- Resolve the Wasm preset before applying the managed/native host default. -->
     <FibercpuWasmBakingPreset Condition="'$(FibercpuWasmBakingPreset)' == '' And '$(FibercpuBakingPreset)' != ''">$(FibercpuBakingPreset)</FibercpuWasmBakingPreset>
     <FibercpuWasmBakingPreset Condition="'$(FibercpuWasmBakingPreset)' == ''">1.75m</FibercpuWasmBakingPreset>
@@ -9,6 +15,7 @@
     <FibercpuWasmNativeBuildDir>build_native/browser-wasm/net11.0</FibercpuWasmNativeBuildDir>
     <FibercpuWasmNativeBuildDir Condition="'$(WasmHotDispatchHandlers)' != '0'">$(FibercpuWasmNativeBuildDir)/hot-dispatch</FibercpuWasmNativeBuildDir>
     <FibercpuWasmNativeBuildDir Condition="'$(FibercpuWasmBakingPreset)' == '1.75m' Or '$(FibercpuWasmBakingPreset)' == '10m'">$(FibercpuWasmNativeBuildDir)/$(FibercpuWasmBakingPreset)</FibercpuWasmNativeBuildDir>
+    <FibercpuWasmNativeBuildDir>$(FibercpuWasmNativeBuildDir)$(FibercpuGuestSuffix)</FibercpuWasmNativeBuildDir>
     <FibercpuBakingPreset Condition="'$(FibercpuBakingPreset)' == ''">3.5m</FibercpuBakingPreset>
     <FibercpuIsolatedPreset Condition="'$(FibercpuBakingPreset)' == '1.75m' Or '$(FibercpuBakingPreset)' == '10m'">true</FibercpuIsolatedPreset>
   </PropertyGroup>

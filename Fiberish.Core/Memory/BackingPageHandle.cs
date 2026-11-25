@@ -18,6 +18,7 @@ public struct BackingPageHandle
     private long _releaseToken;
 
     public readonly bool IsValid => Pointer != IntPtr.Zero;
+    internal readonly bool IsPooled => _releaseOwner is BackingPagePool;
 
     public static BackingPageHandle CreateOwned(IntPtr pointer, Inode releaseOwner, long releaseToken)
     {

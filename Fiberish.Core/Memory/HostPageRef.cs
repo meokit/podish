@@ -707,6 +707,9 @@ internal struct HostPageRef
         }
     }
 
+    internal bool HasStableBacking => TryGetLiveSlot(out var owner, out var slot) &&
+                                      owner.GetSlotRef(slot).Page.BackingHandle.IsPooled;
+
     public bool Dirty
     {
         get

@@ -13,6 +13,11 @@ namespace Podish.Core;
 
 public class OciPullService
 {
+#if FIBER_GUEST_I386
+    internal const string DefaultArchitecture = "386";
+#else
+    internal const string DefaultArchitecture = "arm64";
+#endif
     private static readonly JsonSerializerOptions JsonOptions = new() { WriteIndented = true };
     private static readonly HttpClient _httpClient = new();
     private const string PullProgressMarker = "PODISH_IMAGE_PULL ";
@@ -28,6 +33,46 @@ public class OciPullService
     {
         _logger = logger;
     }
+
+    public static bool TryParsePlatform(string? platform, out string? architecture)
+    {
+        architecture = platform switch
+        {
+            null => null,
+            "386" or "linux/386" => "386",
+            "arm64" or "linux/arm64" or "linux/arm64/v8" => "arm64",
+            _ => string.Empty
+        };
+        return architecture == null || SupportsArchitecture(architecture);
+    }
+
+    public static string GetImageCacheName(string imageReference, string? platform = null)
+    {
+        var architecture = ParsePlatform(platform);
+#if !FIBER_GUEST_I386
+        architecture ??= DefaultArchitecture;
+#endif
+        var safeName = ContainerLaunchSpecResolver.ToSafeImageName(imageReference);
+        return architecture == null ? safeName : $"{architecture}@{safeName}";
+    }
+
+    private static string? ParsePlatform(string? platform)
+    {
+        if (!TryParsePlatform(platform, out var architecture))
+            throw new NotSupportedException($"This guest build does not support platform '{platform}'.");
+        return architecture;
+    }
+
+    private static bool SupportsArchitecture(string architecture) => architecture switch
+    {
+#if FIBER_GUEST_I386
+        "386" => true,
+#endif
+#if FIBER_GUEST_AARCH64
+        "arm64" => true,
+#endif
+        _ => false
+    };
 
     private sealed class ProgressReportingReadStream : Stream
     {
@@ -163,8 +208,9 @@ public class OciPullService
         }
     }
 
-    public async Task PullAndExtractImageAsync(string imageReference, string outputDirectory)
+    public async Task PullAndExtractImageAsync(string imageReference, string outputDirectory, string? platform = null)
     {
+        var architecture = ParsePlatform(platform);
         await ExecuteWithInitialNetworkRetryAsync(imageReference, async () =>
         {
             // Parse image reference: registry/repository:tag
@@ -189,13 +235,13 @@ public class OciPullService
 
                 // 2. Get Manifest
                 var manifestStr = await GetManifestAsync(registry, repository, tag, token);
-                var manifestDoc = JsonDocument.Parse(manifestStr);
+                using var manifestDoc = JsonDocument.Parse(manifestStr);
 
                 var schemaVersion = manifestDoc.RootElement.GetProperty("schemaVersion").GetInt32();
                 if (schemaVersion != 2) throw new NotSupportedException($"Unsupported schema version: {schemaVersion}");
 
-                var (layers, _, _) = await ResolveImageLayersAsync(registry, repository, token, manifestDoc,
-                    manifestStr);
+                var (layers, _, _, _) = await ResolveImageLayersAsync(registry, repository, token, manifestDoc,
+                    manifestStr, architecture);
 
                 _logger.LogInformation("Found {Count} layers to download.", layers.Count);
 
@@ -225,8 +271,10 @@ public class OciPullService
         });
     }
 
-    public async Task<OciStoredImage> PullAndStoreImageAsync(string imageReference, string storeDirectory)
+    public async Task<OciStoredImage> PullAndStoreImageAsync(string imageReference, string storeDirectory,
+        string? platform = null)
     {
+        var architecture = ParsePlatform(platform);
         return await ExecuteWithInitialNetworkRetryAsync(imageReference, async () =>
         {
             var storeName =
@@ -258,8 +306,8 @@ public class OciPullService
                 var token = await GetAuthTokenAsync(registry, repository);
                 var manifestStr = await GetManifestAsync(registry, repository, tag, token);
                 using var manifestDoc = JsonDocument.Parse(manifestStr);
-                var (layers, manifestDigest, runtimeConfig) =
-                    await ResolveImageLayersAsync(registry, repository, token, manifestDoc, manifestStr);
+                var (layers, manifestDigest, runtimeConfig, resolvedArchitecture) =
+                    await ResolveImageLayersAsync(registry, repository, token, manifestDoc, manifestStr, architecture);
                 var overallTotalBytes = layers.Sum(layer => Math.Max(0, layer.Size));
                 var overallCompletedBytes = 0L;
                 EmitPullProgress(imageReference, "downloading",
@@ -353,7 +401,8 @@ public class OciPullService
                     runtimeConfig?.Entrypoint,
                     runtimeConfig?.Cmd,
                     runtimeConfig?.Env,
-                    runtimeConfig?.WorkingDir);
+                    runtimeConfig?.WorkingDir,
+                    resolvedArchitecture);
                 await File.WriteAllTextAsync(Path.Combine(storeDirectory, "image.json"),
                     JsonSerializer.Serialize(image, PodishJsonContext.Default.OciStoredImage));
 
@@ -486,8 +535,8 @@ public class OciPullService
         return await response.Content.ReadAsStringAsync();
     }
 
-    private async Task<OciStoredImageRuntimeConfig?> VerifyArchitectureAndReadRuntimeConfigAsync(string registry, string repository,
-        string digest, string? token)
+    private async Task<(OciStoredImageRuntimeConfig? RuntimeConfig, string? Architecture)> ReadImageConfigAsync(
+        string registry, string repository, string digest, string? token, string? expectedArchitecture)
     {
         var blobUrl = $"https://{registry}/v2/{repository}/blobs/{digest}";
         var request = new HttpRequestMessage(HttpMethod.Get, blobUrl);
@@ -501,19 +550,20 @@ public class OciPullService
         var config = JsonSerializer.Deserialize(configJson, PodishJsonContext.Default.OciImageConfig);
 
         var arch = config?.Architecture;
-        if (arch != null && arch != "386")
-            throw new NotSupportedException(
-                $"Image architecture is '{arch}', but Podish.Cli emulator requires '386' (32-bit x86).");
+        if ((config?.Os is { } os && os != "linux") || (arch != null && !SupportsArchitecture(arch)))
+            throw new NotSupportedException($"This guest build does not support image platform '{config?.Os}/{arch}'.");
+        if (expectedArchitecture != null && arch != expectedArchitecture)
+            throw new NotSupportedException($"Image architecture '{arch}' does not match '{expectedArchitecture}'.");
 
         if (config?.Config == null)
-            return null;
+            return (null, arch);
 
-        return new OciStoredImageRuntimeConfig(
+        return (new OciStoredImageRuntimeConfig(
             string.IsNullOrWhiteSpace(config.Config.User) ? null : config.Config.User,
             config.Config.Entrypoint,
             config.Config.Cmd,
             config.Config.Env,
-            string.IsNullOrWhiteSpace(config.Config.WorkingDir) ? null : config.Config.WorkingDir);
+            string.IsNullOrWhiteSpace(config.Config.WorkingDir) ? null : config.Config.WorkingDir), arch);
     }
 
     private async Task DownloadAndExtractLayerAsync(string registry, string repository, string digest, string? token,
@@ -641,12 +691,14 @@ public class OciPullService
             PullProgressMarker + JsonSerializer.Serialize(payload, PodishJsonContext.Default.ImagePullProgressMessage));
     }
 
-    private async Task<(List<LayerDescriptor> Layers, string ManifestDigest, OciStoredImageRuntimeConfig? RuntimeConfig)> ResolveImageLayersAsync(
+    private async Task<(List<LayerDescriptor> Layers, string ManifestDigest, OciStoredImageRuntimeConfig? RuntimeConfig,
+        string? Architecture)> ResolveImageLayersAsync(
         string registry,
         string repository,
         string? token,
         JsonDocument manifestDoc,
-        string manifestStr)
+        string manifestStr,
+        string? architecture)
     {
         if (manifestDoc.RootElement.GetProperty("schemaVersion").GetInt32() != 2)
             throw new NotSupportedException("Only OCI/Docker schema v2 is supported");
@@ -656,57 +708,68 @@ public class OciPullService
 
         if (manifest.TryGetProperty("manifests", out var manifestsArray))
         {
-            _logger.LogInformation("Received a manifest list. Looking for architecture '386'...");
-            string? targetDigest = null;
-            foreach (var m in manifestsArray.EnumerateArray())
-                if (m.TryGetProperty("platform", out var platform) &&
-                    platform.TryGetProperty("architecture", out var arch) &&
-                    arch.GetString() == "386")
-                {
-                    targetDigest = m.GetProperty("digest").GetString();
-                    break;
-                }
-
+            var (targetDigest, targetArchitecture) = SelectPlatformManifest(manifestsArray, architecture);
             if (targetDigest == null)
-                throw new NotSupportedException(
-                    "This image does not provide a 32-bit x86 (386) architecture manifest.");
+                throw new NotSupportedException(architecture == null
+                    ? "This image does not provide a Linux manifest supported by this guest build."
+                    : $"This image does not provide a linux/{architecture} manifest.");
 
-            _logger.LogInformation("Found 386 manifest at digest {Digest}. Fetching it...", targetDigest);
+            _logger.LogInformation("Found linux/{Architecture} manifest at digest {Digest}. Fetching it...",
+                targetArchitecture, targetDigest);
             var resolvedManifest = await GetManifestAsync(registry, repository, targetDigest, token);
             using var resolvedDoc = JsonDocument.Parse(resolvedManifest);
-            manifest = resolvedDoc.RootElement;
-            manifestDigest = targetDigest;
-            OciStoredImageRuntimeConfig? runtimeConfig = null;
-            var resolvedConfigDigest = manifest.GetProperty("config").GetProperty("digest").GetString();
-            if (!string.IsNullOrEmpty(resolvedConfigDigest))
-                runtimeConfig = await VerifyArchitectureAndReadRuntimeConfigAsync(registry, repository, resolvedConfigDigest,
-                    token);
-
-            var resolvedLayers = manifest
-                .GetProperty("layers")
-                .EnumerateArray()
-                .Select(x => new LayerDescriptor(
-                    x.GetProperty("digest").GetString()!,
-                    x.GetProperty("mediaType").GetString()!,
-                    x.GetProperty("size").GetInt64()))
-                .ToList();
-            return (resolvedLayers, manifestDigest, runtimeConfig);
+            return await ReadManifestAsync(resolvedDoc.RootElement, targetDigest, targetArchitecture);
         }
 
-        var configDigest = manifest.GetProperty("config").GetProperty("digest").GetString();
-        OciStoredImageRuntimeConfig? runtimeConfigFinal = null;
-        if (!string.IsNullOrEmpty(configDigest))
-            runtimeConfigFinal = await VerifyArchitectureAndReadRuntimeConfigAsync(registry, repository, configDigest, token);
+        return await ReadManifestAsync(manifest, manifestDigest, architecture);
 
-        var layers = manifest
-            .GetProperty("layers")
-            .EnumerateArray()
-            .Select(x => new LayerDescriptor(
-                x.GetProperty("digest").GetString()!,
-                x.GetProperty("mediaType").GetString()!,
-                x.GetProperty("size").GetInt64()))
-            .ToList();
-        return (layers, manifestDigest, runtimeConfigFinal);
+        async Task<(List<LayerDescriptor>, string, OciStoredImageRuntimeConfig?, string?)> ReadManifestAsync(
+            JsonElement image, string digest, string? expectedArchitecture)
+        {
+            var configDigest = image.GetProperty("config").GetProperty("digest").GetString();
+            if (string.IsNullOrEmpty(configDigest))
+                throw new InvalidDataException("Image has no configuration digest.");
+            var (runtimeConfig, configArchitecture) = await ReadImageConfigAsync(registry, repository, configDigest,
+                token, expectedArchitecture);
+
+            var layers = image.GetProperty("layers").EnumerateArray()
+                .Select(layer => new LayerDescriptor(
+                    layer.GetProperty("digest").GetString()!,
+                    layer.GetProperty("mediaType").GetString()!,
+                    layer.GetProperty("size").GetInt64()))
+                .ToList();
+            return (layers, digest, runtimeConfig, configArchitecture);
+        }
+    }
+
+    internal static (string? Digest, string? Architecture) SelectPlatformManifest(JsonElement manifests,
+        string? architecture)
+    {
+        (string? Digest, string? Architecture) fallback = default;
+        foreach (var descriptor in manifests.EnumerateArray())
+        {
+            if (!descriptor.TryGetProperty("platform", out var platform) || platform.ValueKind != JsonValueKind.Object ||
+                !platform.TryGetProperty("os", out var os) || os.GetString() != "linux" ||
+                !platform.TryGetProperty("architecture", out var value) ||
+                value.GetString() is not { } candidate || !SupportsArchitecture(candidate))
+                continue;
+            if (candidate == "arm64" && platform.TryGetProperty("variant", out var variant) &&
+                variant.GetString() is not (null or "" or "v8"))
+                continue;
+
+            var digest = descriptor.GetProperty("digest").GetString();
+            if (digest == null) continue;
+            if (architecture != null)
+            {
+                if (candidate == architecture) return (digest, candidate);
+            }
+            else
+            {
+                if (candidate == DefaultArchitecture) return (digest, candidate);
+                if (fallback.Digest == null) fallback = (digest, candidate);
+            }
+        }
+        return fallback;
     }
 
     private static (string Registry, string Repository, string Tag) ParseImageReference(string imageReference)

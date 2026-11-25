@@ -254,15 +254,17 @@ public sealed class FramebufferDevice
 
     private int GetFixedInfo(Engine cpu, uint arg)
     {
-        // IA-32 fb_fix_screeninfo, including its two-byte trailing alignment padding.
-        Span<byte> data = stackalloc byte[68];
+        // fb_fix_screeninfo contains two unsigned long addresses.
+        var isAArch64 = cpu.IsAArch64;
+        Span<byte> data = stackalloc byte[isAArch64 ? 80 : 68];
         data.Clear();
         "Podish fbdev"u8.CopyTo(data);
-        Put32(data, 20, _videoMemoryLength);
-        Put32(data, 32, _mode.Depth == 8 ? 3 : 2); // Pseudocolor / truecolor
-        BinaryPrimitives.WriteUInt16LittleEndian(data[36..], 1);
-        BinaryPrimitives.WriteUInt16LittleEndian(data[38..], 1);
-        Put32(data, 44, _mode.Stride);
+        var addressPadding = isAArch64 ? 4 : 0;
+        Put32(data, 20 + addressPadding, _videoMemoryLength);
+        Put32(data, 32 + addressPadding, _mode.Depth == 8 ? 3 : 2); // Pseudocolor / truecolor
+        BinaryPrimitives.WriteUInt16LittleEndian(data[(36 + addressPadding)..], 1);
+        BinaryPrimitives.WriteUInt16LittleEndian(data[(38 + addressPadding)..], 1);
+        Put32(data, 44 + addressPadding, _mode.Stride);
         return cpu.CopyToUser(arg, data) ? 0 : -(int)Errno.EFAULT;
     }
 
@@ -368,7 +370,8 @@ public sealed class FramebufferDevice
 
     private int TransferPalette(Engine cpu, uint arg, bool put)
     {
-        Span<byte> cmap = stackalloc byte[24];
+        var pointerSize = cpu.IsAArch64 ? 8 : 4;
+        Span<byte> cmap = stackalloc byte[8 + 4 * pointerSize];
         if (!cpu.CopyFromUser(arg, cmap)) return -(int)Errno.EFAULT;
         var start = Get32(cmap, 0);
         var length = Get32(cmap, 4);
@@ -377,29 +380,32 @@ public sealed class FramebufferDevice
         if (length == 0) return 0;
 
         Span<byte> channels = stackalloc byte[4 * 256 * sizeof(ushort)];
-        for (var channel = 0; channel < 4; channel++)
+        var channelCount = 0;
+        for (; channelCount < 4; channelCount++)
         {
-            var address = (uint)Get32(cmap, 8 + channel * 4);
-            if (channel == 3 && address == 0)
+            var pointer = cmap[(8 + channelCount * pointerSize)..];
+            var address = pointerSize == 8
+                ? BinaryPrimitives.ReadUInt64LittleEndian(pointer)
+                : BinaryPrimitives.ReadUInt32LittleEndian(pointer);
+            if (channelCount == 3 && address == 0)
                 break;
-            if (address == 0)
+            if (address == 0 || address > (1UL << 32) - (uint)(length * 2))
                 return -(int)Errno.EFAULT;
-            var bytes = channels.Slice(channel * length * 2, length * 2);
+            var bytes = channels.Slice(channelCount * length * 2, length * 2);
             if (put)
             {
-                if (!cpu.CopyFromUser(address, bytes)) return -(int)Errno.EFAULT;
+                if (!cpu.CopyFromUser((uint)address, bytes)) return -(int)Errno.EFAULT;
             }
             else
             {
                 for (var i = 0; i < length; i++)
-                    BinaryPrimitives.WriteUInt16LittleEndian(bytes[(i * 2)..], _palette[channel][start + i]);
-                if (!cpu.CopyToUser(address, bytes)) return -(int)Errno.EFAULT;
+                    BinaryPrimitives.WriteUInt16LittleEndian(bytes[(i * 2)..], _palette[channelCount][start + i]);
+                if (!cpu.CopyToUser((uint)address, bytes)) return -(int)Errno.EFAULT;
             }
         }
 
         if (put)
         {
-            var channelCount = Get32(cmap, 20) == 0 ? 3 : 4;
             for (var channel = 0; channel < channelCount; channel++)
                 for (var i = 0; i < length; i++)
                     _palette[channel][start + i] =

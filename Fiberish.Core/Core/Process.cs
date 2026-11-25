@@ -8,7 +8,6 @@ using Fiberish.Memory;
 using Fiberish.Native;
 using Fiberish.Syscalls;
 using Fiberish.VFS;
-using Fiberish.X86.Native;
 
 namespace Fiberish.Core;
 
@@ -488,7 +487,6 @@ public class Process
         var randBytes = Mem.MemoryContext.CreateExecRandomBytes(32, resolved.ExecutablePathRaw.AsSpan());
         var layout = GuestAddressSpaceLayout.CreateCompat32(stackLimit, randBytes);
         Syscalls.Mem.Layout = layout;
-        Syscalls.SetupVDSO();
 
         var res = ElfLoader.Load(resolved.Dentry, resolved.ExecutablePathRaw,
             execFnPathRaw ?? guestPathRaw, Syscalls, resolved.ArgvRaw, envsRaw,
@@ -496,24 +494,7 @@ public class Process
         Syscalls.BrkAddr = res.BrkAddr;
 
         var engine = Syscalls.CurrentSyscallEngine;
-        engine.Eip = res.Entry;
-        engine.RegWrite(Reg.ESP, res.SP);
-        // execve resets the general register file. This matters on i386:
-        // glibc's _start forwards the inherited %edx to __libc_start_main as
-        // rtld_fini. A stale value is registered as an exit handler and later
-        // demangles into a bogus pointer in __run_exit_handlers.
-        engine.RegWrite(Reg.EAX, 0);
-        engine.RegWrite(Reg.EBX, 0);
-        engine.RegWrite(Reg.ECX, 0);
-        engine.RegWrite(Reg.EDX, 0);
-        engine.RegWrite(Reg.ESI, 0);
-        engine.RegWrite(Reg.EDI, 0);
-        engine.RegWrite(Reg.EBP, 0);
-        // i386 start_thread() clears the FS/GS selectors; both bases therefore
-        // read as zero in the new image. Programs install their own TLS later.
-        engine.SetSegBase(Seg.FS, 0);
-        engine.SetSegBase(Seg.GS, 0);
-        engine.Eflags = 0x202;
+        engine.ResetForExec(engine.Architecture, res.Entry, res.SP);
 
         var spBase = res.SP;
         var stackData = res.InitialStack;
@@ -673,17 +654,6 @@ public class Process
             if (oldMem.GetSharedRefCount() == 1)
                 Syscalls.SysVShm.OnProcessExit(TGID, oldMem, oldEngine, this);
 
-            var stagedEip = stagedEngine.Eip;
-            var stagedEsp = stagedEngine.RegRead(Reg.ESP);
-            var stagedFlags = stagedEngine.Eflags;
-            var stagedEax = stagedEngine.RegRead(Reg.EAX);
-            var stagedEbx = stagedEngine.RegRead(Reg.EBX);
-            var stagedEcx = stagedEngine.RegRead(Reg.ECX);
-            var stagedEdx = stagedEngine.RegRead(Reg.EDX);
-            var stagedEsi = stagedEngine.RegRead(Reg.ESI);
-            var stagedEdi = stagedEngine.RegRead(Reg.EDI);
-            var stagedEbp = stagedEngine.RegRead(Reg.EBP);
-
             ExecCommitFaultForTesting?.Invoke(ExecCommitCheckpoint.BeforeAddressSpaceSwitch);
             ProcessAddressSpaceSync.RebindEngineAddressSpace(oldMem, stagedMem, oldEngine);
             oldMem.ReleaseSharedRef(oldEngine);
@@ -695,18 +665,7 @@ public class Process
             installed = true;
             ExecCommitFaultForTesting?.Invoke(ExecCommitCheckpoint.AfterAddressSpaceSwitch);
 
-            oldEngine.Eip = stagedEip;
-            oldEngine.RegWrite(Reg.ESP, stagedEsp);
-            oldEngine.RegWrite(Reg.EAX, stagedEax);
-            oldEngine.RegWrite(Reg.EBX, stagedEbx);
-            oldEngine.RegWrite(Reg.ECX, stagedEcx);
-            oldEngine.RegWrite(Reg.EDX, stagedEdx);
-            oldEngine.RegWrite(Reg.ESI, stagedEsi);
-            oldEngine.RegWrite(Reg.EDI, stagedEdi);
-            oldEngine.RegWrite(Reg.EBP, stagedEbp);
-            oldEngine.SetSegBase(Seg.FS, 0);
-            oldEngine.SetSegBase(Seg.GS, 0);
-            oldEngine.Eflags = stagedFlags;
+            oldEngine.ResetForExec(stagedEngine.Architecture, stagedEngine.InstructionPointer, stagedEngine.StackPointer);
         }
         catch (Exception ex)
         {

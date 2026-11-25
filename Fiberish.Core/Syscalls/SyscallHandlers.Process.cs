@@ -56,17 +56,13 @@ public partial class SyscallManager
         return 0;
     }
 
-    private async ValueTask<int> SysClone(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private ValueTask<int> SysClone(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+        => CloneTask(engine, a1, a2, a3, a4, a5);
+
+    private async ValueTask<int> CloneTask(Engine engine, uint flags, uint stackPtr, uint ptidPtr, ulong tls,
+        uint ctidPtr)
     {
         if (engine.Owner is not FiberTask current) return -(int)Errno.EPERM;
-
-        var flags = a1;
-        var stackPtr = a2;
-        var ptidPtr = a3;
-        // x86 clone(2) raw syscall argument order:
-        // clone(flags, child_stack, ptid, tls, ctid)
-        var tlsPtr = a4;
-        var ctidPtr = a5;
 
         var flagError = ValidateCloneFlags(current, flags);
         if (flagError != 0) return flagError;
@@ -74,7 +70,7 @@ public partial class SyscallManager
         FiberTask child;
         try
         {
-            child = await current.Clone((int)flags, stackPtr, ptidPtr, tlsPtr, ctidPtr);
+            child = await current.Clone((int)flags, stackPtr, ptidPtr, tls, ctidPtr);
         }
         catch (OutOfMemoryException)
         {
@@ -228,7 +224,7 @@ public partial class SyscallManager
                             if (!engine.CopyToUser(statusPtr, stBuf)) return -(int)Errno.EFAULT;
                         }
 
-                        if (rusagePtr != 0 && !WriteRusage32(engine, rusagePtr, childProc.GetSelfCpuTimeSnapshot()))
+                        if (rusagePtr != 0 && !WriteRusage(engine, rusagePtr, childProc.GetSelfCpuTimeSnapshot()))
                             return -(int)Errno.EFAULT;
 
                         // Reap only if WNOWAIT is not set
@@ -356,7 +352,7 @@ public partial class SyscallManager
                             if (!WriteSigInfo(engine, infop, info)) return -(int)Errno.EFAULT;
                         }
 
-                        if (rusagePtr != 0 && !WriteRusage32(engine, rusagePtr, childProc.GetSelfCpuTimeSnapshot()))
+                        if (rusagePtr != 0 && !WriteRusage(engine, rusagePtr, childProc.GetSelfCpuTimeSnapshot()))
                             return -(int)Errno.EFAULT;
 
                         if (!wnowait)
@@ -504,6 +500,13 @@ public partial class SyscallManager
 
     private static bool WriteSigInfo(Engine engine, uint addr, SigInfo info)
     {
+        if (engine.IsAArch64)
+        {
+            Span<byte> arm64Info = stackalloc byte[128];
+            FiberTask.WriteAArch64SigInfo(arm64Info, info);
+            return engine.CopyToUser(addr, arm64Info);
+        }
+
         var buf = new byte[128];
         BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(0, 4), info.Signo);
         BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(4, 4), info.Errno);
@@ -670,7 +673,7 @@ public partial class SyscallManager
                 {
                     try
                     {
-                        interpImage = await ElfLoader.ReadImageAsync(interpFile!, interpStream, task);
+                        interpImage = await ElfLoader.ReadImageAsync(interpFile!, interpStream, task, main.Elf.Architecture);
                     }
                     catch (Exception ex) when (ElfLoader.IsInvalidElfFormat(ex))
                     {
@@ -861,7 +864,10 @@ public partial class SyscallManager
     private async ValueTask<int> SysSetRlimit(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
-        if (!TryReadRlimit32(engine, a2, out var newLimit)) return -(int)Errno.EFAULT;
+        var read = engine.IsAArch64
+            ? TryReadRlimit64(engine, a2, out var newLimit)
+            : TryReadRlimit32(engine, a2, out newLimit);
+        if (!read) return -(int)Errno.EFAULT;
         return ApplyResourceLimit(task.Process, (int)a1, newLimit);
     }
 
@@ -876,7 +882,8 @@ public partial class SyscallManager
     {
         if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
         if (!task.Process.TryGetResourceLimit((int)a1, out var limit)) return -(int)Errno.EINVAL;
-        return WriteRlimit32(engine, a2, limit) ? 0 : -(int)Errno.EFAULT;
+        var written = engine.IsAArch64 ? WriteRlimit64(engine, a2, limit) : WriteRlimit32(engine, a2, limit);
+        return written ? 0 : -(int)Errno.EFAULT;
     }
 
     private async ValueTask<int> SysPrlimit64(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)

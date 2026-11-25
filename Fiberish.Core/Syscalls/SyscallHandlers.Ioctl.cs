@@ -85,9 +85,10 @@ public partial class SyscallManager
             case F_SETFD:
                 return SetFdFlags(this, targetFd, arg);
             case F_GETFL:
-                return (int)(file.Flags & ~FileFlags.O_CLOEXEC);
+                var flags = (uint)(file.Flags & ~FileFlags.O_CLOEXEC);
+                return (int)(engine.IsAArch64 ? TranslateAArch64OpenFlags(flags) : flags);
             case F_SETFL:
-                return SetStatusFlags(file, arg);
+                return SetStatusFlags(file, engine.IsAArch64 ? TranslateAArch64OpenFlags(arg) : arg);
             case F_SETOWN:
                 return SetOwn(file, unchecked((int)arg));
             case F_GETOWN:
@@ -246,11 +247,13 @@ public partial class SyscallManager
                 return -(int)Errno.EBADF;
 
             var isOfd = lockCmd is F_OFD_GETLK or F_OFD_SETLK or F_OFD_SETLKW;
-            var is64 = isOfd || lockCmd is F_GETLK64 or F_SETLK64 or F_SETLKW64;
+            var isAArch64 = eng.IsAArch64;
+            var is64 = isAArch64 || isOfd || lockCmd is F_GETLK64 or F_SETLK64 or F_SETLKW64;
             var isGet = lockCmd is F_GETLK or F_GETLK64 or F_OFD_GETLK;
             var isBlocking = lockCmd is F_SETLKW or F_SETLKW64 or F_OFD_SETLKW;
 
-            Span<byte> raw = stackalloc byte[is64 ? 24 : 16];
+            var longStart = isAArch64 ? 8 : 4;
+            Span<byte> raw = stackalloc byte[isAArch64 ? 32 : is64 ? 24 : 16];
             if (!eng.CopyFromUser(lockArg, raw))
                 return -(int)Errno.EFAULT;
 
@@ -261,9 +264,9 @@ public partial class SyscallManager
             int lPid;
             if (is64)
             {
-                lStart = BinaryPrimitives.ReadInt64LittleEndian(raw.Slice(4, 8));
-                lLen = BinaryPrimitives.ReadInt64LittleEndian(raw.Slice(12, 8));
-                lPid = BinaryPrimitives.ReadInt32LittleEndian(raw.Slice(20, 4));
+                lStart = BinaryPrimitives.ReadInt64LittleEndian(raw.Slice(longStart, 8));
+                lLen = BinaryPrimitives.ReadInt64LittleEndian(raw.Slice(longStart + 8, 8));
+                lPid = BinaryPrimitives.ReadInt32LittleEndian(raw.Slice(longStart + 16, 4));
             }
             else
             {
@@ -361,9 +364,9 @@ public partial class SyscallManager
                     BinaryPrimitives.WriteInt16LittleEndian(raw.Slice(2, 2), 0); // SEEK_SET
                     if (is64)
                     {
-                        BinaryPrimitives.WriteInt64LittleEndian(raw.Slice(4, 8), query.Start);
-                        BinaryPrimitives.WriteInt64LittleEndian(raw.Slice(12, 8), query.Length);
-                        BinaryPrimitives.WriteInt32LittleEndian(raw.Slice(20, 4), query.Pid);
+                        BinaryPrimitives.WriteInt64LittleEndian(raw.Slice(longStart, 8), query.Start);
+                        BinaryPrimitives.WriteInt64LittleEndian(raw.Slice(longStart + 8, 8), query.Length);
+                        BinaryPrimitives.WriteInt32LittleEndian(raw.Slice(longStart + 16, 4), query.Pid);
                     }
                     else
                     {

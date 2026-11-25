@@ -53,6 +53,9 @@ SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 #define THREAD_LOCAL __declspec(thread)
 #elif defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 201112L)
 #define THREAD_LOCAL _Thread_local
+#elif defined(__cpp_constinit)
+// This state is constant-initialized in C. Do not emit C++ TLS initializer calls.
+#define THREAD_LOCAL constinit thread_local
 #elif defined(__cplusplus) && (__cplusplus >= 201103L)
 #define THREAD_LOCAL thread_local
 #else

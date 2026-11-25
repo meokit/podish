@@ -88,15 +88,11 @@ public partial class SyscallManager
         return (int)BrkAddr;
     }
 
-    private async ValueTask<int> SysMmap2(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
-    {
-        var addr = a1;
-        var len = a2;
-        var prot = (int)a3;
-        var flags = (int)a4;
-        var fd = (int)a5;
-        var offset = (long)a6 * 4096;
+    private ValueTask<int> SysMmap2(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+        => Mmap(engine, a1, a2, (int)a3, (int)a4, (int)a5, (long)a6 * LinuxConstants.PageSize);
 
+    private async ValueTask<int> Mmap(Engine engine, uint addr, uint len, int prot, int flags, int fd, long offset)
+    {
         var isAnon = (flags & (int)MapFlags.Anonymous) != 0;
         LinuxFile? f = null;
         LinuxFile? mmapFile = null;
@@ -107,6 +103,7 @@ public partial class SyscallManager
             f = GetFD(fd);
             const FileFlags O_PATH = (FileFlags)0x200000;
             if (f == null || (f.Flags & O_PATH) != 0) return -(int)Errno.EBADF;
+            if (offset < 0) return -(int)Errno.EOVERFLOW;
         }
         if (len == 0) return -(int)Errno.EINVAL;
         if (len > uint.MaxValue - LinuxConstants.PageOffsetMask) return -(int)Errno.ENOMEM;
