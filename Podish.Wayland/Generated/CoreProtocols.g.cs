@@ -11,6 +11,7 @@
 // Source protocol: fractional_scale_v1 (spec/wayland/fractional-scale-v1.xml)
 // Source protocol: viewporter (spec/wayland/viewporter.xml)
 // Source protocol: xdg_output_unstable_v1 (spec/wayland/xdg-output-unstable-v1.xml)
+// Source protocol: zwp_linux_explicit_synchronization_unstable_v1 (spec/wayland/linux-explicit-synchronization-unstable-v1.xml)
 #nullable enable
 namespace Podish.Wayland;
 
@@ -607,6 +608,21 @@ public enum WpViewportError : uint
     BadSize = 1,
     OutOfBuffer = 2,
     NoSurface = 3,
+}
+
+public enum ZwpLinuxExplicitSynchronizationV1Error : uint
+{
+    SynchronizationExists = 0,
+}
+
+public enum ZwpLinuxSurfaceSynchronizationV1Error : uint
+{
+    InvalidFence = 0,
+    DuplicateFence = 1,
+    DuplicateRelease = 2,
+    NoSurface = 3,
+    UnsupportedBuffer = 4,
+    NoBuffer = 5,
 }
 
 public static class WlDisplayProtocol
@@ -3474,6 +3490,98 @@ public static class ZxdgOutputV1EventWriter
         {
             writer.WriteString(description);
         });
+    }
+
+}
+
+public static class ZwpLinuxExplicitSynchronizationV1Protocol
+{
+    public const string InterfaceName = "zwp_linux_explicit_synchronization_v1";
+    public const uint Version = 1;
+
+    public static readonly ReadOnlyCollection<WaylandMessageMetadata> Requests = new([
+        new WaylandMessageMetadata(InterfaceName, "destroy", 0, 1, []),
+        new WaylandMessageMetadata(InterfaceName, "get_synchronization", 1, 1, [
+            new WaylandArgumentMetadata("id", WaylandArgKind.NewId, "zwp_linux_surface_synchronization_v1"),
+            new WaylandArgumentMetadata("surface", WaylandArgKind.Object, "wl_surface")
+        ])
+    ]);
+
+    public static ZwpLinuxExplicitSynchronizationV1GetSynchronizationRequest DecodeGetSynchronization(byte[] body, IReadOnlyList<LinuxFile> fds)
+    {
+        var reader = new WaylandWireReader(body, fds);
+        uint arg0 = reader.ReadNewId();
+        uint arg1 = reader.ReadObjectId();
+        var request = new ZwpLinuxExplicitSynchronizationV1GetSynchronizationRequest(arg0, arg1);
+        reader.EnsureExhausted();
+        return request;
+    }
+
+}
+
+public readonly record struct ZwpLinuxExplicitSynchronizationV1GetSynchronizationRequest(uint Id, uint Surface);
+
+public static class ZwpLinuxSurfaceSynchronizationV1Protocol
+{
+    public const string InterfaceName = "zwp_linux_surface_synchronization_v1";
+    public const uint Version = 1;
+
+    public static readonly ReadOnlyCollection<WaylandMessageMetadata> Requests = new([
+        new WaylandMessageMetadata(InterfaceName, "destroy", 0, 1, []),
+        new WaylandMessageMetadata(InterfaceName, "set_acquire_fence", 1, 1, [
+            new WaylandArgumentMetadata("fd", WaylandArgKind.Fd)
+        ]),
+        new WaylandMessageMetadata(InterfaceName, "get_release", 2, 1, [
+            new WaylandArgumentMetadata("release", WaylandArgKind.NewId, "zwp_linux_buffer_release_v1")
+        ])
+    ]);
+
+    public static ZwpLinuxSurfaceSynchronizationV1SetAcquireFenceRequest DecodeSetAcquireFence(byte[] body, IReadOnlyList<LinuxFile> fds)
+    {
+        var reader = new WaylandWireReader(body, fds);
+        LinuxFile arg0 = reader.ReadFd();
+        var request = new ZwpLinuxSurfaceSynchronizationV1SetAcquireFenceRequest(arg0);
+        reader.EnsureExhausted();
+        return request;
+    }
+
+    public static ZwpLinuxSurfaceSynchronizationV1GetReleaseRequest DecodeGetRelease(byte[] body, IReadOnlyList<LinuxFile> fds)
+    {
+        var reader = new WaylandWireReader(body, fds);
+        uint arg0 = reader.ReadNewId();
+        var request = new ZwpLinuxSurfaceSynchronizationV1GetReleaseRequest(arg0);
+        reader.EnsureExhausted();
+        return request;
+    }
+
+}
+
+public readonly record struct ZwpLinuxSurfaceSynchronizationV1SetAcquireFenceRequest(LinuxFile Fd);
+public readonly record struct ZwpLinuxSurfaceSynchronizationV1GetReleaseRequest(uint Release);
+
+public static class ZwpLinuxBufferReleaseV1Protocol
+{
+    public const string InterfaceName = "zwp_linux_buffer_release_v1";
+    public const uint Version = 1;
+
+    public static readonly ReadOnlyCollection<WaylandMessageMetadata> Requests = new([
+    ]);
+
+}
+
+public static class ZwpLinuxBufferReleaseV1EventWriter
+{
+    public static ValueTask FencedReleaseAsync(WaylandClient client, uint objectId, LinuxFile fence)
+    {
+        return client.SendEventAsync(objectId, 0, writer =>
+        {
+            writer.WriteFd(fence);
+        });
+    }
+
+    public static ValueTask ImmediateReleaseAsync(WaylandClient client, uint objectId)
+    {
+        return client.SendEventAsync(objectId, 1, static _ => { });
     }
 
 }
