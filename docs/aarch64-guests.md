@@ -89,11 +89,11 @@ For a reproducible guest-to-guest benchmark, compile both CoreMark binaries from
 python3 benchmark/compare_guest_coremark.py --coremark /path/to/coremark --cli Podish.Cli/bin/Release/net11.0/Podish.Cli.dll --iterations 60000 --repetitions 3
 ```
 
-On an Apple M5 Max with macOS 27.2.1, the dual-guest Release CLI used the stock 3.5m preset, LTO, and no AArch64 GPR pin. Zig 0.15.2 compiled both musl guest binaries at `-O2` from EEMBC CoreMark commit `1f483d5b8316753a742cbf5590caf5bd0a4e4777`. At 60,000 iterations, the three alternating measurements produced the following results.
+On an Apple M5 Max with macOS 27.2.1, the dual-guest Release CLI built from commit `27d317aa` used the stock 3.5m preset, LTO, and no AArch64 GPR pin. Zig 0.15.2 compiled both musl guest binaries at `-O2` from EEMBC CoreMark commit `1f483d5b8316753a742cbf5590caf5bd0a4e4777`. At 60,000 iterations, the three alternating measurements produced the following results.
 
 | Guest | Iterations per second | Median |
 | --- | --- | ---: |
-| i386 | 3643.9, 3634.6, 3275.3 | 3634.6 |
-| AArch64 | 3577.6, 3582.3, 3550.7 | 3577.6 |
+| i386 | 3556.2, 3542.5, 3557.7 | 3556.2 |
+| AArch64 | 3515.1, 3560.0, 3522.4 | 3522.4 |
 
-AArch64 reached 98.4% of i386 throughput in this workload. All six runs passed CoreMark's time check and matched the four CRCs (`e714`, `1fd7`, `8e3a`, `bd59`). CoreMark is also one of the inputs to the stock AArch64 training profile.
+AArch64 reached 99.0% of i386 throughput in this workload. All six runs passed CoreMark's time check and matched the four CRCs (`e714`, `1fd7`, `8e3a`, `bd59`). CoreMark is also one of the inputs to the stock AArch64 training profile.
