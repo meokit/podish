@@ -515,6 +515,31 @@ public partial class SyscallManager
         if (ensureMountPoint) EnsureDirectory(Root, FsName.FromString("tmp"));
     }
 
+    public void MountStandardRun(int uid = 0, int gid = 0, int mode = 0x41FF)
+    {
+        var tmpFsType = FileSystemRegistry.Get("tmpfs");
+        if (tmpFsType == null)
+        {
+            Logger.LogWarning("tmpfs filesystem type is not registered; skipping /run mount.");
+            return;
+        }
+
+        var runSb = tmpFsType.CreateFileSystem(DeviceNumbers, MemoryContext).ReadSuper(tmpFsType, 0, "run", null);
+        if (runSb.Root?.Inode != null)
+        {
+            runSb.Root.Inode.Uid = uid;
+            runSb.Root.Inode.Gid = gid;
+            runSb.Root.Inode.Mode = mode;
+        }
+
+        var runLoc = EnsureDirectory(Root, FsName.FromString("run"));
+        var runMount = CreateDetachedMount(runSb, "tmpfs", "tmpfs",
+            LinuxConstants.MS_NOSUID | LinuxConstants.MS_NODEV);
+        var attachRc = AttachDetachedMount(runMount, runLoc);
+        if (attachRc != 0)
+            Logger.LogWarning("Failed to mount tmpfs at /run: rc={Rc}", attachRc);
+    }
+
     internal void SetupVDSO()
     {
         if (SigReturnAddr != 0)

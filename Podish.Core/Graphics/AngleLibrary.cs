@@ -13,11 +13,23 @@ internal sealed unsafe class AngleLibrary
     private readonly nint _gles;
     private readonly nint _nativeDisplay;
     private readonly int _nativePlatform;
+    private readonly Lock _displayGate = new();
 
     internal readonly nint Display;
     internal readonly nint Config;
     internal readonly bool SupportsEs3;
     internal readonly bool UsesVulkan;
+    internal readonly bool UsesMetal;
+
+    internal DisplayLockScope EnterDisplayLock() =>
+        UsesMetal ? new DisplayLockScope(_displayGate) : default;
+
+    internal readonly struct DisplayLockScope : IDisposable
+    {
+        private readonly Lock? _gate;
+        internal DisplayLockScope(Lock gate) { _gate = gate; _gate.Enter(); }
+        public void Dispose() => _gate?.Exit();
+    }
     internal const int Es2Bit = 0x0004, Es3Bit = 0x0040;
     internal readonly nint[] Gl;
     internal readonly nint MapBufferRange;
@@ -58,19 +70,49 @@ internal sealed unsafe class AngleLibrary
         }
     }
 
+    private static nint LoadAngleModule(string directory, string baseName)
+    {
+        if (OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
+        {
+            string[] candidates =
+            [
+                Path.Combine(directory, $"{baseName}.framework", baseName),
+                Path.Combine(directory, $"{baseName}.framework", "Versions", "A", baseName),
+                Path.Combine(directory, $"{baseName}.dylib"),
+                $"@rpath/{baseName}.framework/{baseName}",
+                $"@rpath/{baseName}.dylib"
+            ];
+            Exception? lastError = null;
+            foreach (var candidate in candidates)
+            {
+                if (NativeLibrary.TryLoad(candidate, out var handle))
+                    return handle;
+            }
+            try
+            {
+                return NativeLibrary.Load(candidates[0]);
+            }
+            catch (Exception ex)
+            {
+                lastError = ex;
+                throw new DllNotFoundException(
+                    $"Could not load ANGLE library '{baseName}' from '{directory}'. {lastError.Message}", lastError);
+            }
+        }
+
+        var fileName = OperatingSystem.IsWindows() ? $"{baseName}.dll" : $"{baseName}.so";
+        return NativeLibrary.Load(Path.Combine(directory, fileName));
+    }
+
     private AngleLibrary(string directory, KmsEglWindow? window, bool hardwareCompositor)
     {
         _directory = directory;
         _nativeDisplay = window?.Display ?? 0;
         _nativePlatform = window?.Platform ?? 0;
-        var eglName = OperatingSystem.IsMacOS() ? "libEGL.dylib" :
-            OperatingSystem.IsWindows() ? "libEGL.dll" : "libEGL.so";
-        var glesName = OperatingSystem.IsMacOS() ? "libGLESv2.dylib" :
-            OperatingSystem.IsWindows() ? "libGLESv2.dll" : "libGLESv2.so";
         try
         {
-            _egl = NativeLibrary.Load(Path.Combine(directory, eglName));
-            _gles = NativeLibrary.Load(Path.Combine(directory, glesName));
+            _egl = LoadAngleModule(directory, "libEGL");
+            _gles = LoadAngleModule(directory, "libGLESv2");
             CreateContext = (delegate* unmanaged[Cdecl]<nint, nint, nint, int*, nint>)Egl("eglCreateContext");
             DestroyContext = (delegate* unmanaged[Cdecl]<nint, nint, uint>)Egl("eglDestroyContext");
             CreatePbufferSurface = (delegate* unmanaged[Cdecl]<nint, nint, int*, nint>)Egl("eglCreatePbufferSurface");
@@ -103,10 +145,11 @@ internal sealed unsafe class AngleLibrary
                 // Keep guest EGL and native window output on the same backend.
                 int* attribs = stackalloc int[7];
                 var i = 0;
-                if (OperatingSystem.IsMacOS())
+                if (OperatingSystem.IsMacOS() || OperatingSystem.IsIOS())
                 {
                     attribs[i++] = 0x3203; // EGL_PLATFORM_ANGLE_TYPE_ANGLE
                     attribs[i++] = 0x3489; // Metal
+                    UsesMetal = true;
                 }
                 else if (OperatingSystem.IsWindows() || OperatingSystem.IsLinux())
                 {
@@ -114,7 +157,7 @@ internal sealed unsafe class AngleLibrary
                     attribs[i++] = 0x3450; // Vulkan
                     UsesVulkan = true;
                 }
-                if (hardwareCompositor)
+                if (hardwareCompositor && !OperatingSystem.IsIOS())
                 {
                     attribs[i++] = 0x3209; // EGL_PLATFORM_ANGLE_DEVICE_TYPE_ANGLE
                     attribs[i++] = 0x320A; // EGL_PLATFORM_ANGLE_DEVICE_TYPE_HARDWARE_ANGLE

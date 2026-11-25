@@ -68,6 +68,13 @@ public sealed class ContainerRunRequest
     public VirtualConsoleInput? KmsInput { get; init; }
     public VirtualDrmScanout? CompositorScanout { get; init; }
     internal KmsEglOutput? CompositorTextures { get; init; }
+    public string? AngleLibraryDirectory { get; init; }
+    public string? GlesGuestLibraryDirectory { get; init; }
+    internal VenusRenderer? GuestVulkan { get; init; }
+    public bool MountRunTmpfs { get; init; }
+    public int RunTmpfsUid { get; init; }
+    public int RunTmpfsGid { get; init; }
+    public int RunTmpfsMode { get; init; } = 0x41FF;
     public ushort? TerminalRows { get; init; }
     public ushort? TerminalCols { get; init; }
     public Action<KernelRuntime, KernelScheduler, UTSNamespace?, int>? ConfigureVirtualDaemons { get; init; }
@@ -402,12 +409,17 @@ public sealed class ContainerRuntimeService
                 runtime.Syscalls.MountHostfs(hostPath, guestPath, readOnly);
             }
 
-            if (request.EnableGles || request.EnableKmsDrm || request.CompositorScanout != null)
+            if (request.MountRunTmpfs)
+                runtime.Syscalls.MountStandardRun(request.RunTmpfsUid, request.RunTmpfsGid, request.RunTmpfsMode);
+
+            var venus = request.GuestVulkan;
+            if (request.EnableGles || request.EnableKmsDrm || request.CompositorScanout != null || venus != null)
             {
                 startupPhase = "mount-graphics";
                 gles = ContainerGraphics.Mount(runtime.Syscalls, scheduler, request.Framebuffer, request.KmsInput,
                     request.EnableGles, request.EnableKmsDrm, request.KmsWindow, request.CompositorScanout,
-                    request.CompositorTextures, _logger);
+                    request.CompositorTextures, _logger, request.AngleLibraryDirectory, request.GlesGuestLibraryDirectory,
+                    venus);
             }
 
             try
@@ -501,6 +513,8 @@ public sealed class ContainerRuntimeService
                 autoEnvs.Add(prefix + ContainerGraphics.GuestPath +
                              (previous?.Length > prefix.Length ? ":" + previous[prefix.Length..] : ""));
             }
+
+            if (venus != null) autoEnvs.Add("PODISH_VULKAN=1");
 
             var finalEnvs = ContainerLaunchSpecResolver.MergeEnvironmentEntries(baseEnvs, request.GuestEnvs, autoEnvs);
 

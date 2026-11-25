@@ -13,6 +13,8 @@ Sources:
   - Upstream: `https://github.com/swaywm/wlr-protocols/blob/master/unstable/wlr-foreign-toplevel-management-unstable-v1.xml`
 - `linux-dmabuf-v1.xml`
   - Upstream: `https://gitlab.freedesktop.org/wayland/wayland-protocols/-/blob/main/stable/linux-dmabuf/linux-dmabuf-v1.xml`
+- `linux-explicit-synchronization-unstable-v1.xml`
+  - Upstream: `https://gitlab.freedesktop.org/wayland/wayland-protocols/-/blob/main/unstable/linux-explicit-synchronization/linux-explicit-synchronization-unstable-v1.xml`
 - `fractional-scale-v1.xml`
   - Upstream: `https://gitlab.freedesktop.org/wayland/wayland-protocols/-/blob/main/staging/fractional-scale/fractional-scale-v1.xml`
 - `viewporter.xml`

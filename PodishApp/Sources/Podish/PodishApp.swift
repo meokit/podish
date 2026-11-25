@@ -1,62 +1,5 @@
+import Darwin
 import SwiftUI
-
-enum PodishSeedImageConfig {
-    static let bundleDirectoryName = "PodishSeedImages"
-    static let imageReferenceInfoKey = "PodishSeedImageReference"
-    static let fallbackImageReference = "docker.io/i386/alpine:3.23"
-
-    static var imageReference: String {
-        let info = Bundle.main.infoDictionary ?? [:]
-        let rawValue = info[imageReferenceInfoKey] as? String
-        let trimmedValue = rawValue?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return trimmedValue.isEmpty ? fallbackImageReference : trimmedValue
-    }
-
-    static var safeDirectoryName: String {
-        imageReference
-            .replacingOccurrences(of: "/", with: "_")
-            .replacingOccurrences(of: ":", with: "_")
-    }
-
-    static func workDirectoryURL() -> URL {
-        let fm = FileManager.default
-        let base = (try? fm.url(
-            for: .applicationSupportDirectory,
-            in: .userDomainMask,
-            appropriateFor: nil,
-            create: true
-        )) ?? URL(fileURLWithPath: fm.currentDirectoryPath)
-        let dir = base.appendingPathComponent("Podish", isDirectory: true)
-        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
-    }
-
-    static func installedStoreURL() -> URL {
-        workDirectoryURL()
-            .appendingPathComponent(".fiberpod", isDirectory: true)
-            .appendingPathComponent("oci", isDirectory: true)
-            .appendingPathComponent("images", isDirectory: true)
-            .appendingPathComponent(safeDirectoryName, isDirectory: true)
-    }
-}
-
-private enum PodishRuntimeDiagnostics {
-    static func logLinkedNativeArtifacts() {
-        let info = Bundle.main.infoDictionary ?? [:]
-        let sliceName = info["PodishCoreSliceName"] as? String ?? "unknown"
-        let staticLibPath = info["PodishCoreStaticLibPath"] as? String ?? "missing"
-        let bootstrapperPath = info["PodishCoreBootstrapperPath"] as? String ?? "missing"
-        PodishLog.appInfo(
-            "Native artifacts slice=\(sliceName) staticLib=\(staticLibPath) bootstrapper=\(bootstrapperPath)"
-        )
-    }
-
-    static func logSeedImageConfiguration() {
-        PodishLog.appInfo(
-            "Seed image ref=\(PodishSeedImageConfig.imageReference) bundleDir=\(PodishSeedImageConfig.bundleDirectoryName) installDir=\(PodishSeedImageConfig.installedStoreURL().path)"
-        )
-    }
-}
 
 #if os(macOS)
 import AppKit
@@ -68,6 +11,10 @@ final class PodishApplicationDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         _ = NSApplication.shared.setActivationPolicy(.regular)
         NSApplication.shared.activate(ignoringOtherApps: true)
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        true
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
@@ -92,23 +39,94 @@ struct PodishApp: App {
     @NSApplicationDelegateAdaptor(PodishApplicationDelegate.self) private var appDelegate
     #endif
 
+    @StateObject private var desktopSession = PodishDesktopSession()
+    @Environment(\.scenePhase) private var scenePhase
+
     init() {
-        PodishRuntimeDiagnostics.logLinkedNativeArtifacts()
-        PodishRuntimeDiagnostics.logSeedImageConfiguration()
+        Self.raiseOpenFileLimit()
+    }
+
+    private static func raiseOpenFileLimit() {
+        var limit = rlimit()
+        guard getrlimit(RLIMIT_NOFILE, &limit) == 0 else {
+            let error = errno
+            PodishLog.appError("getrlimit(RLIMIT_NOFILE) failed: \(String(cString: strerror(error)))")
+            return
+        }
+
+        let target = min(rlim_t(OPEN_MAX), limit.rlim_max)
+        guard limit.rlim_cur < target else {
+            PodishLog.appInfo("RLIMIT_NOFILE soft limit \(limit.rlim_cur)")
+            return
+        }
+
+        let previous = limit.rlim_cur
+        limit.rlim_cur = target
+        guard setrlimit(RLIMIT_NOFILE, &limit) == 0 else {
+            let error = errno
+            PodishLog.appError("Could not raise RLIMIT_NOFILE from \(previous) to \(target): \(String(cString: strerror(error)))")
+            return
+        }
+        PodishLog.appInfo("Raised RLIMIT_NOFILE from \(previous) to \(target)")
     }
 
     var body: some Scene {
-        WindowGroup("Podish") {
-            #if os(macOS)
-            PodishRootView(onSessionReady: { session in
-                appDelegate.onBeforeTerminate = { completion in
-                    session.stopForAppTermination(completion: completion)
+        WindowGroup("Podish Desktop") {
+            DesktopRootView(session: desktopSession)
+                .modifier(ScenePhaseObserver(scenePhase: scenePhase) { phase in
+                    switch phase {
+                    case .active:
+                        desktopSession.setVisible(true)
+                    case .background:
+                        desktopSession.setVisible(false)
+                    default:
+                        break
+                    }
+                })
+                #if os(macOS)
+                .frame(minWidth: 640, minHeight: 480)
+                .onAppear {
+                    appDelegate.onBeforeTerminate = { completion in
+                        desktopSession.stopForAppTermination(completion: completion)
+                    }
                 }
-            })
-                .frame(minWidth: 1200, minHeight: 760)
-            #else
-            PodishRootView()
-            #endif
+                #endif
+        }
+        #if os(macOS)
+        .defaultSize(width: 1280, height: 800)
+        .commands {
+            CommandMenu("Desktop") {
+                Button("Show Launcher") {
+                    desktopSession.focusLauncher()
+                }
+                .keyboardShortcut("l", modifiers: [.command])
+
+                Divider()
+
+                Button("Restart Desktop Session") {
+                    desktopSession.restart()
+                }
+
+                Button("Reset User Data (Clear SilkFS Overlay)") {
+                    desktopSession.resetUserDataAndRestart()
+                }
+            }
+        }
+        #endif
+    }
+}
+
+private struct ScenePhaseObserver: ViewModifier {
+    let scenePhase: ScenePhase
+    let onChange: (ScenePhase) -> Void
+
+    func body(content: Content) -> some View {
+        if #available(iOS 17.0, macOS 14.0, *) {
+            content.onChange(of: scenePhase) { _, newPhase in
+                onChange(newPhase)
+            }
+        } else {
+            content.onChange(of: scenePhase, perform: onChange)
         }
     }
 }

@@ -1,0 +1,7 @@
+option('apple_platform', type: 'combo', choices: ['macosx', 'iphoneos'])
+option('vulkan_headers', type: 'string')
+option('kosmickrisp_library', type: 'string')
+option('diligent_source', type: 'string', value: '')
+option('diligent_archive', type: 'string', value: '')
+option('host_zink', type: 'boolean', value: false,
+  description: 'Enable the VirGL bridge to a bundled native Zink driver')

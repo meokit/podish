@@ -264,11 +264,14 @@ internal sealed unsafe partial class KmsEglOutput : IDisposable
 
     public void Dispose()
     {
-        // The context has its own share group and owns the pipeline objects.
-        _angle.MakeCurrent(_angle.Display, 0, 0, 0);
-        if (_textureContext != 0) _angle.DestroyContext(_angle.Display, _textureContext);
-        if (_context != 0) _angle.DestroyContext(_angle.Display, _context);
-        if (_surface != 0) _angle.DestroySurface(_angle.Display, _surface);
-        _textureContext = _context = _surface = 0;
+        using (_angle.EnterDisplayLock())
+        {
+            // The context has its own share group and owns the pipeline objects.
+            _angle.MakeCurrent(_angle.Display, 0, 0, 0);
+            if (_textureContext != 0) _angle.DestroyContext(_angle.Display, _textureContext);
+            if (_context != 0) _angle.DestroyContext(_angle.Display, _context);
+            if (_surface != 0) _angle.DestroySurface(_angle.Display, _surface);
+            _textureContext = _context = _surface = 0;
+        }
     }
 }

@@ -145,32 +145,35 @@ internal sealed unsafe partial class AngleDevice : IDisposable
             var op = wire[0];
             var args = wire[1..];
             int value;
-            if (op >= GlFirst && op - GlFirst < GlNames.Length)
+            using (_angle.EnterDisplayLock())
             {
-                if (!session.Bindings.TryGetValue(task, out var current) || !Bind(session, current))
-                    return -(int)Errno.ENXIO;
-                var context = session.Contexts[current.Context];
-                try
+                if (op >= GlFirst && op - GlFirst < GlNames.Length)
                 {
-                    if (op == GlGetError && context.Error != 0)
+                    if (!session.Bindings.TryGetValue(task, out var current) || !Bind(session, current))
+                        return -(int)Errno.ENXIO;
+                    var context = session.Contexts[current.Context];
+                    try
                     {
-                        value = (int)context.Error;
-                        context.Error = 0;
+                        if (op == GlGetError && context.Error != 0)
+                        {
+                            value = (int)context.Error;
+                            context.Error = 0;
+                        }
+                        else if (op >= GlEs3First && (!extended || context.Version < 3))
+                            value = UnsupportedGl(context, op);
+                        else
+                            value = context.Managed != null && DispatchManagedGl(context, op, args, guest, out var managed)
+                                ? managed : DispatchGl(context, op, args, guest);
                     }
-                    else if (op >= GlEs3First && (!extended || context.Version < 3))
-                        value = UnsupportedGl(context, op);
-                    else
-                        value = context.Managed != null && DispatchManagedGl(context, op, args, guest, out var managed)
-                            ? managed : DispatchGl(context, op, args, guest);
+                    catch (GuestTransferException ex) when (ex.Errno != Errno.EFAULT)
+                    {
+                        Flag(context, ex.Errno == Errno.E2BIG ? 0x0505u : InvalidValue);
+                        value = 0;
+                    }
                 }
-                catch (GuestTransferException ex) when (ex.Errno != Errno.EFAULT)
-                {
-                    Flag(context, ex.Errno == Errno.E2BIG ? 0x0505u : InvalidValue);
-                    value = 0;
-                }
+                else
+                    value = DispatchEgl(session, task, op, args, guest);
             }
-            else
-                value = DispatchEgl(session, task, op, args, guest);
 
             guest.Write(address + sizeof(uint), MemoryMarshal.AsBytes(new ReadOnlySpan<int>(in value)));
             return 0;
@@ -566,27 +569,33 @@ internal sealed unsafe partial class AngleDevice : IDisposable
 
     private void Close(Session session)
     {
-        if (!_sessions.Remove(session)) return;
-        if (_hostSession == session) Unbind();
-        foreach (var id in session.Contexts.Keys.ToArray())
-            FreeContext(session, id);
-        foreach (var image in session.Images.Values)
-            image.Release();
-        session.Images.Clear();
-        foreach (var id in session.Surfaces.Keys.ToArray())
-            FreeSurface(session, id);
-        session.Contexts.Clear();
-        session.Surfaces.Clear();
-        session.Bindings.Clear();
+        using (_angle.EnterDisplayLock())
+        {
+            if (!_sessions.Remove(session)) return;
+            if (_hostSession == session) Unbind();
+            foreach (var id in session.Contexts.Keys.ToArray())
+                FreeContext(session, id);
+            foreach (var image in session.Images.Values)
+                image.Release();
+            session.Images.Clear();
+            foreach (var id in session.Surfaces.Keys.ToArray())
+                FreeSurface(session, id);
+            session.Contexts.Clear();
+            session.Surfaces.Clear();
+            session.Bindings.Clear();
+        }
     }
 
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
-        foreach (var session in _sessions.ToArray())
-            Close(session);
-        if (HasKmsOutput) _kms?.Dispose();
+        using (_angle.EnterDisplayLock())
+        {
+            foreach (var session in _sessions.ToArray())
+                Close(session);
+            if (HasKmsOutput) _kms?.Dispose();
+        }
         _angle.Release();
     }
 }

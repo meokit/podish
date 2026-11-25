@@ -266,6 +266,213 @@ public sealed class WaylandShellTests
         await server.ShutdownAsync();
     }
 
+    [Fact]
+    public async Task MobileModeSendsConfigureBoundsAndAutoMaximizesAboveNavBar()
+    {
+        using var memory = new MemoryRuntimeContext();
+        SuperBlock shm = CreateSharedMemory(memory);
+        var scene = new TestScenePresenter();
+        var server = new WaylandServer(scene, new(674, 1460, 2) { Scale120 = 210, ClientDpi = 168 })
+        {
+            MobileMode = true,
+            ReservedBottomInset = 94
+        };
+        var events = new List<WaylandOutgoingMessage>();
+        WaylandClient app = CreateClient(server, events);
+        await BindAsync(app, WlCompositorProtocol.InterfaceName, 4, 3);
+        await BindAsync(app, WlShmProtocol.InterfaceName, 1, 4);
+        await BindAsync(app, XdgWmBaseProtocol.InterfaceName, 4, 5);
+        await CreateWindowAsync(shm, app, events, 3, 4, 5, 6);
+
+        // xdg_toplevel v4 configure_bounds (opcode 2) constrains the app to WorkArea above the navbar
+        WaylandWireReader boundsEvent = LatestEvent(events, 8, 2);
+        Assert.Equal(674, boundsEvent.ReadInt());
+        Assert.Equal(1460 - 94, boundsEvent.ReadInt());
+
+        // Mobile auto-maximize configures the window directly to WorkArea
+        WaylandWireReader configure = LatestEvent(events, 8, 0);
+        Assert.Equal(674, configure.ReadInt());
+        Assert.Equal(1460 - 94, configure.ReadInt());
+
+        // Launcher hides SSD titlebar in MobileMode
+        await SendRequestAsync(app, 8, 3, writer => writer.WriteString("podish-launcher"));
+        Assert.False(scene.GetDecoration(SceneId(app, 6)).Visible);
+        await server.ShutdownAsync();
+    }
+
+    [Fact]
+    public async Task IndependentClientDpiReconfiguresOutputPhysicalMmAndFractionalScale()
+    {
+        using var memory = new MemoryRuntimeContext();
+        var scene = new TestScenePresenter();
+        var server = new WaylandServer(scene, new(674, 1460, 2) { Scale120 = 210, ClientDpi = 168 });
+        var events = new List<WaylandOutgoingMessage>();
+        WaylandClient client = CreateClient(server, events);
+
+        await BindAsync(client, WlOutputProtocol.InterfaceName, 4, 3);
+        WaylandWireReader geom1 = LatestEvent(events, 3, 0);
+        _ = geom1.ReadInt(); // x
+        _ = geom1.ReadInt(); // y
+        int initialPhysW = geom1.ReadInt();
+        int initialPhysH = geom1.ReadInt();
+        Assert.Equal(server.Output.PhysicalWidthMm, initialPhysW);
+        Assert.Equal(server.Output.PhysicalHeightMm, initialPhysH);
+
+        await BindAsync(client, WlCompositorProtocol.InterfaceName, 4, 4);
+        await BindAsync(client, WpFractionalScaleManagerV1Protocol.InterfaceName, 1, 5);
+        await SendRequestAsync(client, 4, 0, writer => writer.WriteNewId(6));
+        await SendRequestAsync(client, 5, 1, writer => { writer.WriteNewId(7); writer.WriteObjectId(6); });
+        Assert.Equal(210u, LatestEvent(events, 7, 0).ReadUInt());
+
+        // Switch client DPI independently (e.g., compact 1.4x / 134 DPI)
+        await server.ReconfigureOutputAsync(842, 1826, 168, 134);
+        Assert.Equal(168u, LatestEvent(events, 7, 0).ReadUInt());
+
+        WaylandWireReader geom2 = LatestEvent(events, 3, 0);
+        _ = geom2.ReadInt();
+        _ = geom2.ReadInt();
+        int updatedPhysW = geom2.ReadInt();
+        int updatedPhysH = geom2.ReadInt();
+        Assert.Equal(server.Output.PhysicalWidthMm, updatedPhysW);
+        Assert.Equal(server.Output.PhysicalHeightMm, updatedPhysH);
+        Assert.NotEqual(initialPhysW, updatedPhysW);
+        await server.ShutdownAsync();
+    }
+
+    [Fact]
+    public async Task HomeMinimizesAppsKeepingRecentsSnapshotsAndCloseSendsToplevelClose()
+    {
+        using var memory = new MemoryRuntimeContext();
+        SuperBlock shm = CreateSharedMemory(memory);
+        var scene = new TestScenePresenter();
+        var server = new WaylandServer(scene, new(674, 1460, 2))
+        {
+            MobileMode = true,
+            ReservedBottomInset = 94
+        };
+
+        var launcherEvents = new List<WaylandOutgoingMessage>();
+        WaylandClient launcher = CreateClient(server, launcherEvents);
+        await BindAsync(launcher, WlCompositorProtocol.InterfaceName, 4, 3);
+        await BindAsync(launcher, WlShmProtocol.InterfaceName, 1, 4);
+        await BindAsync(launcher, XdgWmBaseProtocol.InterfaceName, 4, 5);
+        await CreateWindowAsync(shm, launcher, launcherEvents, 3, 4, 5, 6);
+        await SendRequestAsync(launcher, 8, 3, writer => writer.WriteString("podish-launcher"));
+
+        var appEvents = new List<WaylandOutgoingMessage>();
+        WaylandClient app = CreateClient(server, appEvents);
+        await BindAsync(app, WlCompositorProtocol.InterfaceName, 4, 3);
+        await BindAsync(app, WlShmProtocol.InterfaceName, 1, 4);
+        await BindAsync(app, XdgWmBaseProtocol.InterfaceName, 4, 5);
+        await CreateWindowAsync(shm, app, appEvents, 3, 4, 5, 6);
+        await SendRequestAsync(app, 8, 2, writer => writer.WriteString("FeatherPad"));
+        await SendRequestAsync(app, 8, 3, writer => writer.WriteString("featherpad"));
+
+        ulong appSceneId = SceneId(app, 6);
+
+        // Press Home: minimizes app (retaining it for Recents) and focuses launcher
+        await server.ShowHomeLauncherAsync("podish-launcher");
+        var snapshots = server.SnapshotOpenAppToplevels("podish-launcher");
+        var snap = Assert.Single(snapshots);
+        Assert.Equal(appSceneId, snap.SceneSurfaceId);
+        Assert.Equal("FeatherPad", snap.Title);
+        Assert.True(snap.Minimized);
+
+        // Activate from Recents restores app
+        Assert.True(await server.ActivateToplevelAsync(appSceneId));
+        var restored = Assert.Single(server.SnapshotOpenAppToplevels("podish-launcher"));
+        Assert.False(restored.Minimized);
+        Assert.True(restored.Active);
+
+        // Close from Recents emits xdg_toplevel.close (opcode 1)
+        Assert.True(await server.CloseToplevelAsync(appSceneId));
+        Assert.Contains(appEvents, message => IsEvent(message, 8, 1));
+        await server.ShutdownAsync();
+    }
+
+    [Fact]
+    public async Task PerClientDpiWhitelistsLauncherAndSettingsWhileScalingGuestAppsAndInputs()
+    {
+        using var memory = new MemoryRuntimeContext();
+        SuperBlock shm = CreateSharedMemory(memory);
+        var scene = new TestScenePresenter();
+        var canvasOutput = new WaylandServer.OutputInfo(393, 852, 3) { Scale120 = 360, ClientDpi = 288 };
+        var guestGlobal = new WaylandServer.OutputInfo(786, 1704, 2) { Scale120 = 180, ClientDpi = 144 };
+        var appSpecific = new WaylandServer.OutputInfo(1179, 2556, 1) { Scale120 = 120, ClientDpi = 96 };
+
+        var server = new WaylandServer(scene, canvasOutput)
+        {
+            MobileMode = true,
+            ReservedBottomInset = 54,
+            ClientOutputResolver = client =>
+            {
+                if (client.IsWhitelistedLauncher)
+                    return canvasOutput;
+                if (string.Equals(client.AppIdHint, "custom-compact", StringComparison.OrdinalIgnoreCase))
+                    return appSpecific;
+                return guestGlobal;
+            }
+        };
+
+        // 1. Whitelisted Launcher process gets native canvas scale from initial bind & hides home SSD
+        var launcherEvents = new List<WaylandOutgoingMessage>();
+        WaylandClient launcher = CreateClient(server, launcherEvents);
+        launcher.PeerExecutableName = "podish-launcher";
+        await BindAsync(launcher, WlCompositorProtocol.InterfaceName, 4, 3);
+        await BindAsync(launcher, WlShmProtocol.InterfaceName, 1, 4);
+        await BindAsync(launcher, XdgWmBaseProtocol.InterfaceName, 4, 5);
+        await BindAsync(launcher, WlOutputProtocol.InterfaceName, 4, 20);
+        await BindAsync(launcher, WpFractionalScaleManagerV1Protocol.InterfaceName, 1, 21);
+        await BindAsync(launcher, ZxdgDecorationManagerV1Protocol.InterfaceName, 1, 23);
+        await CreateWindowAsync(shm, launcher, launcherEvents, 3, 4, 5, 6);
+        await SendRequestAsync(launcher, 23, 1, writer => { writer.WriteNewId(24); writer.WriteObjectId(8); });
+        await SendRequestAsync(launcher, 21, 1, writer => { writer.WriteNewId(22); writer.WriteObjectId(6); });
+        Assert.Equal(360u, LatestEvent(launcherEvents, 22, 0).ReadUInt());
+        await SendRequestAsync(launcher, 8, 3, writer => writer.WriteString("podish-launcher"));
+        Assert.False(scene.GetDecoration(SceneId(launcher, 6)).Visible);
+
+        // Settings window owned by Launcher stays whitelisted (native 360) AND acts like a normal decorated window
+        await CreateWindowAsync(shm, launcher, launcherEvents, 3, 4, 5, 30);
+        await SendRequestAsync(launcher, 23, 1, writer => { writer.WriteNewId(35); writer.WriteObjectId(32); });
+        await SendRequestAsync(launcher, 32, 2, writer => writer.WriteString("Podish Settings"));
+        await SendRequestAsync(launcher, 32, 3, writer => writer.WriteString("podish-launcher"));
+        Assert.True(scene.GetDecoration(SceneId(launcher, 30)).Visible);
+        Assert.Single(server.SnapshotOpenAppToplevels("podish-launcher"));
+
+        // 2. Guest App gets per-app DPI (`96 DPI / 120`) and scales pointer input & surface bounds cleanly
+        var guestEvents = new List<WaylandOutgoingMessage>();
+        WaylandClient guest = CreateClient(server, guestEvents);
+        await BindAsync(guest, WlCompositorProtocol.InterfaceName, 4, 3);
+        await BindAsync(guest, WlShmProtocol.InterfaceName, 1, 4);
+        await BindAsync(guest, XdgWmBaseProtocol.InterfaceName, 4, 5);
+        await BindAsync(guest, WlSeatProtocol.InterfaceName, 7, 25);
+        await SendRequestAsync(guest, 25, 0, writer => writer.WriteNewId(26));
+        await BindAsync(guest, WpFractionalScaleManagerV1Protocol.InterfaceName, 1, 27);
+        await CreateWindowAsync(shm, guest, guestEvents, 3, 4, 5, 6);
+        await SendRequestAsync(guest, 27, 1, writer => { writer.WriteNewId(28); writer.WriteObjectId(6); });
+        Assert.Equal(180u, LatestEvent(guestEvents, 28, 0).ReadUInt());
+
+        await SendRequestAsync(guest, 8, 3, writer => writer.WriteString("custom-compact"));
+        Assert.Equal(120u, LatestEvent(guestEvents, 28, 0).ReadUInt());
+
+        // Commit full-bounds buffer in appSpecific space (1179 x 2394) -> maps to canvas work area (393 x 798)
+        scene.SetSurfaceBounds(SceneId(guest, 6), new WaylandSurfaceBounds(0, 0, 393, 798));
+        await AttachBufferAsync(shm, guest, 4, 6, 40, 1179, 2394);
+        Assert.True(scene.TryGetSurfaceBounds(SceneId(guest, 6), out var canvasBounds));
+        Assert.Equal(393, canvasBounds.Width);
+        Assert.Equal(798, canvasBounds.Height);
+
+        // Pointer at canvas (100, 100) reaches client surface as (300, 300) (1179 / 393 = 3x)
+        scene.SetSurfaceHidden(SceneId(launcher, 6), true);
+        scene.SetSurfaceHidden(SceneId(launcher, 30), true);
+        await server.HandlePointerMotionAsync(100, 100, 50);
+        WaylandWireReader motion = LatestEvent(guestEvents, 26, 2);
+        _ = motion.ReadUInt(); // time
+        Assert.Equal(300 * 256, motion.ReadInt());
+        Assert.Equal(300 * 256, motion.ReadInt());
+        await server.ShutdownAsync();
+    }
+
     private static WaylandClient CreateClient(WaylandServer server, List<WaylandOutgoingMessage> events)
     {
         return server.CreateClient(message =>

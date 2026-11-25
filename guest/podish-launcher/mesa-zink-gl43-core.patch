@@ -1,0 +1,429 @@
+diff --git a/src/gallium/drivers/zink/zink_screen.c b/src/gallium/drivers/zink/zink_screen.c
+index bc0cc58..563b7e3 100644
+--- a/src/gallium/drivers/zink/zink_screen.c
++++ b/src/gallium/drivers/zink/zink_screen.c
+@@ -764,6 +764,13 @@ zink_init_screen_caps(struct zink_screen *screen)
+
+    u_init_pipe_screen_caps(&screen->base, screen->is_cpu ? 0 : 1);
+
++   caps->podish_gl43_core = zink_driverid(screen) == VK_DRIVER_ID_MESA_VENUS &&
++                           debug_get_bool_option("PODISH_GUEST_GL43", false);
++   caps->podish_no_non_solid_fill = !screen->info.feats.features.fillModeNonSolid;
++   caps->podish_no_custom_border_color =
++      !screen->info.have_EXT_custom_border_color ||
++      !screen->info.border_color_feats.customBorderColorWithoutFormat;
++
+    caps->null_textures = screen->info.rb_image_feats.robustImageAccess;
+    /* support OVR_multiview and OVR_multiview2 */
+    caps->multiview = screen->info.have_vulkan13 ? 2 * screen->info.feats11.multiview : 0;
+diff --git a/src/gallium/frontends/dri/dri_context.c b/src/gallium/frontends/dri/dri_context.c
+index fe32d5c..7e7e119 100644
+--- a/src/gallium/frontends/dri/dri_context.c
++++ b/src/gallium/frontends/dri/dri_context.c
+@@ -176,6 +176,10 @@ dri_create_context(struct dri_screen *screen,
+ #endif
+          attribs.flags |= ST_CONTEXT_FLAG_NO_ERROR;
+
++   /* Unsupported operations must report GL errors in the Podish profile. */
++   if (api == API_OPENGL_CORE && screen->base.screen->caps.podish_gl43_core)
++      attribs.flags &= ~ST_CONTEXT_FLAG_NO_ERROR;
++
+    attribs.options = screen->options;
+    dri_fill_st_visual(&attribs.visual, screen, visual);
+    ctx->st = st_api_create_context(&screen->base, &attribs, &ctx_err,
+diff --git a/src/gallium/include/pipe/p_defines.h b/src/gallium/include/pipe/p_defines.h
+index b737514..8c0f795 100644
+--- a/src/gallium/include/pipe/p_defines.h
++++ b/src/gallium/include/pipe/p_defines.h
+@@ -816,6 +816,9 @@ enum pipe_compute_cap
+ };
+
+ struct pipe_caps {
++   bool podish_gl43_core;
++   bool podish_no_non_solid_fill;
++   bool podish_no_custom_border_color;
+    bool graphics;
+    bool npot_textures;
+    bool anisotropic_filter;
+diff --git a/src/mesa/main/consts_exts.h b/src/mesa/main/consts_exts.h
+index 38a15ab..78e5685 100644
+--- a/src/mesa/main/consts_exts.h
++++ b/src/mesa/main/consts_exts.h
+@@ -449,6 +449,10 @@ struct gl_program_constants
+  */
+ struct gl_constants
+ {
++   bool PodishGL43Core;
++   bool PodishNoNonSolidFill;
++   bool PodishNoCustomBorderColor;
++
+    /**
+     * Bitmask of valid primitive types supported by the driver,
+     */
+diff --git a/src/mesa/main/context.h b/src/mesa/main/context.h
+index 6d68b06..7e9b344 100644
+--- a/src/mesa/main/context.h
++++ b/src/mesa/main/context.h
+@@ -445,6 +445,10 @@ _mesa_has_texture_type_2_10_10_10_REV(const struct gl_context *ctx)
+ static inline bool
+ _mesa_has_geometry_shaders(const struct gl_context *ctx)
+ {
++   if (ctx->Const.PodishGL43Core &&
++       !ctx->Const.Program[MESA_SHADER_GEOMETRY].MaxInstructions)
++      return false;
++
+    return _mesa_has_OES_geometry_shader(ctx) ||
+           (_mesa_is_desktop_gl(ctx) && ctx->Version >= 32);
+ }
+diff --git a/src/mesa/main/draw.c b/src/mesa/main/draw.c
+index 485ae07..394feec 100644
+--- a/src/mesa/main/draw.c
++++ b/src/mesa/main/draw.c
+@@ -2273,6 +2273,12 @@ _mesa_DrawTransformFeedbackStreamInstanced(GLenum mode, GLuint name,
+                                            GLsizei primcount)
+ {
+    GET_CURRENT_CONTEXT(ctx);
++   if (ctx->Const.PodishGL43Core && !ctx->Const.MaxTransformFeedbackBuffers) {
++      _mesa_error(ctx, GL_INVALID_OPERATION,
++                  "glDrawTransformFeedback(transform feedback is unavailable)");
++      return;
++   }
++
+    struct gl_transform_feedback_object *obj =
+       _mesa_lookup_transform_feedback_object(ctx, name);
+
+diff --git a/src/mesa/main/polygon.c b/src/mesa/main/polygon.c
+index d5a6879..465d8bc 100644
+--- a/src/mesa/main/polygon.c
++++ b/src/mesa/main/polygon.c
+@@ -157,6 +157,11 @@ _mesa_FrontFace(GLenum mode)
+ static ALWAYS_INLINE void
+ polygon_mode(struct gl_context *ctx, GLenum face, GLenum mode, bool no_error)
+ {
++   if (ctx->Const.PodishNoNonSolidFill && (mode == GL_LINE || mode == GL_POINT)) {
++      _mesa_error(ctx, GL_INVALID_OPERATION, "glPolygonMode(non-solid fill is unavailable)");
++      return;
++   }
++
+    bool old_mode_has_fill_rectangle =
+       ctx->Polygon.FrontMode == GL_FILL_RECTANGLE_NV ||
+       ctx->Polygon.BackMode == GL_FILL_RECTANGLE_NV;
+diff --git a/src/mesa/main/samplerobj.c b/src/mesa/main/samplerobj.c
+index 87bab4a..8d5d44c 100644
+--- a/src/mesa/main/samplerobj.c
++++ b/src/mesa/main/samplerobj.c
+@@ -658,11 +658,30 @@ set_sampler_lod_bias(struct gl_context *ctx, struct gl_sampler_object *samp,
+ }
+
+
++bool
++_mesa_validate_border_color(struct gl_context *ctx, double r, double g,
++                            double b, double a)
++{
++   if (!ctx->Const.PodishNoCustomBorderColor)
++      return true;
++
++   /* Vulkan's built-in transparent black, opaque black, and opaque white. */
++   if (r == g && r == b &&
++       ((r == 0 && (a == 0 || a == 1)) || (r == 1 && a == 1)))
++      return true;
++
++   _mesa_error(ctx, GL_INVALID_OPERATION, "custom texture border colors are unavailable");
++   return false;
++}
++
+ static GLuint
+ set_sampler_border_colorf(struct gl_context *ctx,
+                           struct gl_sampler_object *samp,
+                           const GLfloat params[4])
+ {
++   if (!_mesa_validate_border_color(ctx, params[0], params[1], params[2], params[3]))
++      return GL_FALSE;
++
+    flush(ctx);
+    memcpy(samp->Attrib.state.border_color.f, params, 4 * sizeof(float));
+    _mesa_update_is_border_color_nonzero(samp);
+@@ -675,6 +694,9 @@ set_sampler_border_colori(struct gl_context *ctx,
+                           struct gl_sampler_object *samp,
+                           const GLint params[4])
+ {
++   if (!_mesa_validate_border_color(ctx, params[0], params[1], params[2], params[3]))
++      return GL_FALSE;
++
+    flush(ctx);
+    memcpy(samp->Attrib.state.border_color.i, params, 4 * sizeof(float));
+    _mesa_update_is_border_color_nonzero(samp);
+@@ -687,6 +709,9 @@ set_sampler_border_colorui(struct gl_context *ctx,
+                            struct gl_sampler_object *samp,
+                            const GLuint params[4])
+ {
++   if (!_mesa_validate_border_color(ctx, params[0], params[1], params[2], params[3]))
++      return GL_FALSE;
++
+    flush(ctx);
+    memcpy(samp->Attrib.state.border_color.ui, params, 4 * sizeof(float));
+    _mesa_update_is_border_color_nonzero(samp);
+diff --git a/src/mesa/main/samplerobj.h b/src/mesa/main/samplerobj.h
+index eccde38..3cf0b63 100644
+--- a/src/mesa/main/samplerobj.h
++++ b/src/mesa/main/samplerobj.h
+@@ -145,6 +145,10 @@ func_to_gallium(GLenum func)
+    return (enum pipe_compare_func)(func - GL_NEVER);
+ }
+
++bool
++_mesa_validate_border_color(struct gl_context *ctx, double r, double g,
++                            double b, double a);
++
+ static inline void
+ _mesa_update_is_border_color_nonzero(struct gl_sampler_object *samp)
+ {
+diff --git a/src/mesa/main/texparam.c b/src/mesa/main/texparam.c
+index 2984df1..95cbf0e 100644
+--- a/src/mesa/main/texparam.c
++++ b/src/mesa/main/texparam.c
+@@ -876,6 +876,9 @@ set_tex_parameterf(struct gl_context *ctx,
+       if (!_mesa_target_allows_setting_sampler_parameters(texObj->Target))
+          goto invalid_enum;
+
++      if (!_mesa_validate_border_color(ctx, params[0], params[1], params[2], params[3]))
++         return GL_FALSE;
++
+       flush(ctx);
+       /* ARB_texture_float disables clamping */
+       if (ctx->Extensions.ARB_texture_float) {
+@@ -1194,6 +1197,9 @@ _mesa_texture_parameterIiv(struct gl_context *ctx,
+          _mesa_error(ctx, dsa ? GL_INVALID_OPERATION : GL_INVALID_ENUM, "glTextureParameterIiv(texture)");
+          return;
+       }
++      if (!_mesa_validate_border_color(ctx, params[0], params[1], params[2], params[3]))
++         return;
++
+       FLUSH_VERTICES(ctx, _NEW_TEXTURE_OBJECT, GL_TEXTURE_BIT);
+       /* set the integer-valued border color */
+       COPY_4V(texObj->Sampler.Attrib.state.border_color.i, params);
+@@ -1223,6 +1229,9 @@ _mesa_texture_parameterIuiv(struct gl_context *ctx,
+          _mesa_error(ctx, dsa ? GL_INVALID_OPERATION : GL_INVALID_ENUM, "glTextureParameterIuiv(texture)");
+          return;
+       }
++      if (!_mesa_validate_border_color(ctx, params[0], params[1], params[2], params[3]))
++         return;
++
+       FLUSH_VERTICES(ctx, _NEW_TEXTURE_OBJECT, GL_TEXTURE_BIT);
+       /* set the unsigned integer-valued border color */
+       COPY_4V(texObj->Sampler.Attrib.state.border_color.ui, params);
+diff --git a/src/mesa/main/transformfeedback.c b/src/mesa/main/transformfeedback.c
+index ecb6168..fc976e2 100644
+--- a/src/mesa/main/transformfeedback.c
++++ b/src/mesa/main/transformfeedback.c
+@@ -309,6 +309,16 @@ _mesa_compute_max_transform_feedback_vertices(struct gl_context *ctx,
+  **/
+
+
++static bool
++validate_transform_feedback(struct gl_context *ctx, const char *func)
++{
++   if (!ctx->Const.PodishGL43Core || ctx->Const.MaxTransformFeedbackBuffers)
++      return true;
++
++   _mesa_error(ctx, GL_INVALID_OPERATION, "%s(transform feedback is unavailable)", func);
++   return false;
++}
++
+ /**
+  * Figure out which stage of the pipeline is the source of transform feedback
+  * data given the current context state, and return its gl_program.
+@@ -477,6 +487,9 @@ void GLAPIENTRY
+ _mesa_BeginTransformFeedback(GLenum mode)
+ {
+    GET_CURRENT_CONTEXT(ctx);
++
++   if (!validate_transform_feedback(ctx, "glBeginTransformFeedback"))
++      return;
+    begin_transform_feedback(ctx, mode, false);
+ }
+
+@@ -532,6 +545,9 @@ _mesa_EndTransformFeedback(void)
+    struct gl_transform_feedback_object *obj;
+    GET_CURRENT_CONTEXT(ctx);
+
++   if (!validate_transform_feedback(ctx, "glEndTransformFeedback"))
++      return;
++
+    obj = ctx->TransformFeedback.CurrentObject;
+
+    if (!obj->Active) {
+@@ -736,6 +752,9 @@ void GLAPIENTRY
+ _mesa_TransformFeedbackBufferBase(GLuint xfb, GLuint index, GLuint buffer)
+ {
+    GET_CURRENT_CONTEXT(ctx);
++
++   if (!validate_transform_feedback(ctx, "glTransformFeedbackBufferBase"))
++      return;
+    struct gl_transform_feedback_object *obj;
+    struct gl_buffer_object *bufObj;
+
+@@ -761,6 +780,9 @@ _mesa_TransformFeedbackBufferRange(GLuint xfb, GLuint index, GLuint buffer,
+                                    GLintptr offset, GLsizeiptr size)
+ {
+    GET_CURRENT_CONTEXT(ctx);
++
++   if (!validate_transform_feedback(ctx, "glTransformFeedbackBufferRange"))
++      return;
+    struct gl_transform_feedback_object *obj;
+    struct gl_buffer_object *bufObj;
+
+@@ -921,6 +943,9 @@ _mesa_TransformFeedbackVaryings(GLuint program, GLsizei count,
+    GLint i;
+    GET_CURRENT_CONTEXT(ctx);
+
++   if (!validate_transform_feedback(ctx, "glTransformFeedbackVaryings"))
++      return;
++
+    /* From the ARB_transform_feedback2 specification:
+     * "The error INVALID_OPERATION is generated by TransformFeedbackVaryings
+     *  if the current transform feedback object is active, even if paused."
+@@ -1004,6 +1029,9 @@ _mesa_GetTransformFeedbackVarying(GLuint program, GLuint index,
+    struct gl_program_resource *res;
+    GET_CURRENT_CONTEXT(ctx);
+
++   if (!validate_transform_feedback(ctx, "glGetTransformFeedbackVarying"))
++      return;
++
+    shProg = _mesa_lookup_shader_program_err(ctx, program,
+                                             "glGetTransformFeedbackVarying");
+    if (!shProg)
+@@ -1100,6 +1128,9 @@ _mesa_GenTransformFeedbacks(GLsizei n, GLuint *names)
+ {
+    GET_CURRENT_CONTEXT(ctx);
+
++   if (!validate_transform_feedback(ctx, "glGenTransformFeedbacks"))
++      return;
++
+    /* GenTransformFeedbacks should just reserve the object names that a
+     * subsequent call to BindTransformFeedback should actively create. For
+     * the sake of simplicity, we reserve the names and create the objects
+@@ -1120,6 +1151,9 @@ _mesa_CreateTransformFeedbacks(GLsizei n, GLuint *names)
+ {
+    GET_CURRENT_CONTEXT(ctx);
+
++   if (!validate_transform_feedback(ctx, "glCreateTransformFeedbacks"))
++      return;
++
+    create_transform_feedbacks(ctx, n, names, true);
+ }
+
+@@ -1134,6 +1168,9 @@ _mesa_IsTransformFeedback(GLuint name)
+    struct gl_transform_feedback_object *obj;
+    GET_CURRENT_CONTEXT(ctx);
+
++   if (!validate_transform_feedback(ctx, "glIsTransformFeedback"))
++      return GL_FALSE;
++
+    ASSERT_OUTSIDE_BEGIN_END_WITH_RETVAL(ctx, GL_FALSE);
+
+    if (name == 0)
+@@ -1181,6 +1218,9 @@ _mesa_BindTransformFeedback(GLenum target, GLuint name)
+ {
+    GET_CURRENT_CONTEXT(ctx);
+
++   if (!validate_transform_feedback(ctx, "glBindTransformFeedback"))
++      return;
++
+    if (target != GL_TRANSFORM_FEEDBACK) {
+       _mesa_error(ctx, GL_INVALID_ENUM, "glBindTransformFeedback(target)");
+       return;
+@@ -1206,6 +1246,9 @@ _mesa_DeleteTransformFeedbacks(GLsizei n, const GLuint *names)
+    GLint i;
+    GET_CURRENT_CONTEXT(ctx);
+
++   if (!validate_transform_feedback(ctx, "glDeleteTransformFeedbacks"))
++      return;
++
+    if (n < 0) {
+       _mesa_error(ctx, GL_INVALID_VALUE, "glDeleteTransformFeedbacks(n < 0)");
+       return;
+@@ -1270,6 +1313,9 @@ _mesa_PauseTransformFeedback(void)
+    struct gl_transform_feedback_object *obj;
+    GET_CURRENT_CONTEXT(ctx);
+
++   if (!validate_transform_feedback(ctx, "glPauseTransformFeedback"))
++      return;
++
+    obj = ctx->TransformFeedback.CurrentObject;
+
+    if (!_mesa_is_xfb_active_and_unpaused(ctx)) {
+@@ -1321,6 +1367,9 @@ _mesa_ResumeTransformFeedback(void)
+    struct gl_transform_feedback_object *obj;
+    GET_CURRENT_CONTEXT(ctx);
+
++   if (!validate_transform_feedback(ctx, "glResumeTransformFeedback"))
++      return;
++
+    obj = ctx->TransformFeedback.CurrentObject;
+
+    if (!obj->Active || !obj->Paused) {
+@@ -1349,6 +1398,9 @@ _mesa_GetTransformFeedbackiv(GLuint xfb, GLenum pname, GLint *param)
+     struct gl_transform_feedback_object *obj;
+     GET_CURRENT_CONTEXT(ctx);
+
++   if (!validate_transform_feedback(ctx, "glGetTransformFeedbackiv"))
++      return;
++
+     obj = lookup_transform_feedback_object_err(ctx, xfb,
+                                                "glGetTransformFeedbackiv");
+     if (!obj) {
+@@ -1375,6 +1427,9 @@ _mesa_GetTransformFeedbacki_v(GLuint xfb, GLenum pname, GLuint index,
+    struct gl_transform_feedback_object *obj;
+    GET_CURRENT_CONTEXT(ctx);
+
++   if (!validate_transform_feedback(ctx, "glGetTransformFeedbacki_v"))
++      return;
++
+    obj = lookup_transform_feedback_object_err(ctx, xfb,
+                                               "glGetTransformFeedbacki_v");
+    if (!obj) {
+@@ -1404,6 +1459,9 @@ _mesa_GetTransformFeedbacki64_v(GLuint xfb, GLenum pname, GLuint index,
+    struct gl_transform_feedback_object *obj;
+    GET_CURRENT_CONTEXT(ctx);
+
++   if (!validate_transform_feedback(ctx, "glGetTransformFeedbacki64_v"))
++      return;
++
+    obj = lookup_transform_feedback_object_err(ctx, xfb,
+                                               "glGetTransformFeedbacki64_v");
+    if (!obj) {
+diff --git a/src/mesa/main/version.c b/src/mesa/main/version.c
+index c3809bc..8f97790 100644
+--- a/src/mesa/main/version.c
++++ b/src/mesa/main/version.c
+@@ -577,8 +577,10 @@ _mesa_get_version(const struct gl_extensions *extensions,
+          consts->GLSLVersion = consts->GLSLVersionCompat;
+       }
+       FALLTHROUGH;
+-   case API_OPENGL_CORE:
+-      return compute_version(extensions, consts, api);
++   case API_OPENGL_CORE: {
++      GLuint version = compute_version(extensions, consts, api);
++      return consts->PodishGL43Core ? MAX2(version, 43) : version;
++   }
+    case API_OPENGLES:
+       return 11;
+    case API_OPENGLES2:
+diff --git a/src/mesa/state_tracker/st_extensions.c b/src/mesa/state_tracker/st_extensions.c
+index f78ba3b..10a1fb9 100644
+--- a/src/mesa/state_tracker/st_extensions.c
++++ b/src/mesa/state_tracker/st_extensions.c
+@@ -111,6 +111,12 @@ void st_init_limits(struct pipe_screen *screen,
+                     struct gl_constants *c, struct gl_extensions *extensions,
+                     gl_api api)
+ {
++   c->PodishGL43Core = api == API_OPENGL_CORE && screen->caps.podish_gl43_core;
++   c->PodishNoNonSolidFill = c->PodishGL43Core &&
++                             screen->caps.podish_no_non_solid_fill;
++   c->PodishNoCustomBorderColor = c->PodishGL43Core &&
++                                  screen->caps.podish_no_custom_border_color;
++
+    unsigned sh;
+    bool can_ubo = true;
+    int temp;

@@ -1,0 +1,198 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 826353c..bd31dc1 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -209,7 +209,7 @@ elseif(PLATFORM_LINUX)
+     target_compile_definitions(Diligent-PublicBuildSettings INTERFACE PLATFORM_LINUX=1)
+ elseif(PLATFORM_MACOS)
+     set(GL_SUPPORTED       TRUE CACHE INTERNAL "OpenGL is supported on macOS platform")
+-    set(VULKAN_SUPPORTED   TRUE CACHE INTERNAL "Vulkan is enabled through MoltenVK on macOS platform")
++    set(VULKAN_SUPPORTED   TRUE CACHE INTERNAL "Vulkan is supported on macOS platform")
+     set(WEBGPU_SUPPORTED   TRUE CACHE INTERNAL "WebGPU is supported on macOS platform via Dawn")
+     set(ARCHIVER_SUPPORTED TRUE CACHE INTERNAL "Archiver is supported on macOS platform")
+     target_compile_definitions(Diligent-PublicBuildSettings INTERFACE PLATFORM_MACOS=1 PLATFORM_APPLE=1)
+@@ -231,44 +231,7 @@ else()
+ endif()
+ 
+ if(PLATFORM_IOS OR PLATFORM_TVOS)
+-    if(VULKAN_SDK OR MOLTENVK_LIBRARY)
+-        if(NOT MOLTENVK_LIBRARY)
+-            set(MoltenVK_FRAMEWORK "${VULKAN_SDK}/macOS/lib/MoltenVK.xcframework")
+-            if(NOT EXISTS "${MoltenVK_FRAMEWORK}")
+-                set(MoltenVK_FRAMEWORK "${VULKAN_SDK}/MoltenVK/MoltenVK.xcframework")
+-            endif()
+-            if(EXISTS "${MoltenVK_FRAMEWORK}")
+-                if(PLATFORM_IOS)
+-                    if(CMAKE_OSX_SYSROOT STREQUAL "iphonesimulator" OR PLATFORM_IOS_SIMULATOR)
+-                        set(MOLTENVK_LIBRARY "${MoltenVK_FRAMEWORK}/ios-arm64_x86_64-simulator/libMoltenVK.a")
+-                    else()
+-                        set(MOLTENVK_LIBRARY "${MoltenVK_FRAMEWORK}/ios-arm64/libMoltenVK.a")
+-                    endif()
+-                elseif(PLATFORM_TVOS)
+-                    if(CMAKE_OSX_SYSROOT STREQUAL "appletvsimulator" OR PLATFORM_TVOS_SIMULATOR)
+-                        set(MOLTENVK_LIBRARY "${MoltenVK_FRAMEWORK}/tvos-arm64_x86_64-simulator/libMoltenVK.a")
+-                    else()
+-                        set(MOLTENVK_LIBRARY "${MoltenVK_FRAMEWORK}/tvos-arm64_arm64e/libMoltenVK.a")
+-                    endif()
+-                else()
+-                    message(FATAL_ERROR "Unexpected platform")
+-                endif()
+-            else()
+-                message(WARNING "Unable to find MoltenVK.xcframework at ${VULKAN_SDK}/macOS/lib or ${VULKAN_SDK}/MoltenVK")
+-            endif()
+-        endif()
+-
+-        if(EXISTS ${MOLTENVK_LIBRARY})
+-            message("Using MoltenVK library ${MOLTENVK_LIBRARY}")
+-            set(VULKAN_SUPPORTED TRUE CACHE INTERNAL "Vulkan is enabled through MoltenVK on ${CMAKE_SYSTEM_NAME} platform")
+-            set(MOLTENVK_LIBRARY ${MOLTENVK_LIBRARY} CACHE FILEPATH "MoltenVK library")
+-        else()
+-            message(WARNING "${MOLTENVK_LIBRARY} does not exist. Vulkan backend will be disabled.")
+-            unset(MOLTENVK_LIBRARY CACHE)
+-        endif()
+-    else()
+-        message("Neither VULKAN_SDK nor MOLTENVK_LIBRARY is defined. Vulkan backend will be disabled.")
+-    endif()
++    set(VULKAN_SUPPORTED TRUE CACHE INTERNAL "Vulkan uses Podish's embedded driver")
+ endif()
+ 
+ if(PLATFORM_APPLE)
+diff --git a/Graphics/GraphicsEngineVulkan/CMakeLists.txt b/Graphics/GraphicsEngineVulkan/CMakeLists.txt
+index 353157c..106c16a 100644
+--- a/Graphics/GraphicsEngineVulkan/CMakeLists.txt
++++ b/Graphics/GraphicsEngineVulkan/CMakeLists.txt
+@@ -270,8 +270,7 @@ elseif(PLATFORM_IOS OR PLATFORM_TVOS)
+     find_library(QUARTZ_CORE QuartzCore)
+     find_library(UI_KIT UIKit)
+     find_library(IO_SURFACE IOSurface)
+-    # Note that volk may be defined by external CMake, but we don't use it on iOS/tvOS
+-    list(APPEND PRIVATE_DEPENDENCIES ${MOLTENVK_LIBRARY} ${CORE_GRAPHICS} ${METAL_LIBRARY} ${QUARTZ_CORE} ${UI_KIT} ${IO_SURFACE})
++    list(APPEND PRIVATE_DEPENDENCIES volk::volk ${CORE_GRAPHICS} ${METAL_LIBRARY} ${QUARTZ_CORE} ${UI_KIT} ${IO_SURFACE})
+ elseif(PLATFORM_LINUX)
+     list(APPEND PRIVATE_DEPENDENCIES volk::volk)
+ elseif(PLATFORM_ANDROID)
+@@ -316,9 +315,8 @@ if(PLATFORM_WIN32)
+     set(PRIVATE_COMPILE_DEFINITIONS NOMINMAX DILIGENT_USE_VOLK=1)
+ elseif(PLATFORM_LINUX)
+     set(PRIVATE_COMPILE_DEFINITIONS DILIGENT_USE_VOLK=1)
+-elseif(PLATFORM_MACOS)
++elseif(PLATFORM_APPLE)
+     set(PRIVATE_COMPILE_DEFINITIONS DILIGENT_USE_VOLK=1)
+-elseif(PLATFORM_IOS OR PLATFORM_TVOS)
+ elseif(PLATFORM_ANDROID)
+     set(PRIVATE_COMPILE_DEFINITIONS DILIGENT_USE_VOLK=1)
+ else()
+diff --git a/Graphics/GraphicsEngineVulkan/src/VulkanUtilities/Instance.cpp b/Graphics/GraphicsEngineVulkan/src/VulkanUtilities/Instance.cpp
+index 4534337..1d62cbc 100644
+--- a/Graphics/GraphicsEngineVulkan/src/VulkanUtilities/Instance.cpp
++++ b/Graphics/GraphicsEngineVulkan/src/VulkanUtilities/Instance.cpp
+@@ -51,6 +51,10 @@
+ 
+ #include "PlatformDefinitions.h"
+ 
++#if PLATFORM_APPLE
++extern "C" VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL podish_diligent_get_instance_proc_addr(VkInstance Instance, const char* Name);
++#endif
++
+ namespace VulkanUtilities
+ {
+ 
+@@ -253,11 +257,14 @@ std::shared_ptr<Instance> Instance::Create(const CreateInfo& CI)
+ #if DILIGENT_USE_VOLK
+ static bool LoadVulkan()
+ {
+-    static bool VulkanLoaded = false;
+-    if (VulkanLoaded)
+-        return true;
+-
+-    VulkanLoaded = (volkInitialize() == VK_SUCCESS);
++#if PLATFORM_APPLE
++    static const bool VulkanLoaded = [] {
++        volkInitializeCustom(podish_diligent_get_instance_proc_addr);
++        return vkCreateInstance != nullptr;
++    }();
++#else
++    static const bool VulkanLoaded = (volkInitialize() == VK_SUCCESS);
++#endif
+     return VulkanLoaded;
+ }
+ #endif
+@@ -405,13 +412,9 @@ Instance::Instance(const CreateInfo& CI) :
+ #endif
+     };
+ 
+-#if PLATFORM_MACOS
+-    // Beginning with the 1.3.216 Vulkan SDK, the Vulkan Loader is strictly
+-    // enforcing the new VK_KHR_PORTABILITY_subset extension.
+-    constexpr bool UsePortabilityEnumeartion = true;
+-#else
+-    constexpr bool UsePortabilityEnumeartion = false;
+-#endif
++    // Enable portability enumeration only if the provider advertises it.
++    const bool UsePortabilityEnumeartion =
++        IsExtensionAvailable(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+ 
+     if (UsePortabilityEnumeartion)
+         InstanceExtensions.push_back(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+diff --git a/Platforms/Apple/interface/MacOSNativeWindow.h b/Platforms/Apple/interface/MacOSNativeWindow.h
+index fbbddb5..f69c571 100644
+--- a/Platforms/Apple/interface/MacOSNativeWindow.h
++++ b/Platforms/Apple/interface/MacOSNativeWindow.h
+@@ -35,6 +35,7 @@ DILIGENT_BEGIN_NAMESPACE(Diligent)
+ struct MacOSNativeWindow
+ {
+     void* pNSView DEFAULT_INITIALIZER(nullptr);
++    void* pCALayer DEFAULT_INITIALIZER(nullptr);
+ 
+ #if DILIGENT_CPP_INTERFACE
+     MacOSNativeWindow() noexcept
+diff --git a/Platforms/Apple/src/MacOSNativeWindow.mm b/Platforms/Apple/src/MacOSNativeWindow.mm
+index 688ccbc..721b08b 100644
+--- a/Platforms/Apple/src/MacOSNativeWindow.mm
++++ b/Platforms/Apple/src/MacOSNativeWindow.mm
+@@ -26,17 +26,27 @@
+ 
+ #import <AppKit/AppKit.h>
+ 
++#import <QuartzCore/CAMetalLayer.h>
++
+ namespace Diligent 
+ {
+ 
+ void* MacOSNativeWindow::GetLayer() const
+ {
++    if (pCALayer != nullptr)
++        return pCALayer;
+     return pNSView ? (__bridge void*)((__bridge NSView*)pNSView).layer : nullptr;
+ }
+ 
+ void MacOSNativeWindow::GetBackingSize(Uint32& Width, Uint32& Height) const
+ {
+-    if (pNSView)
++    if (pCALayer != nullptr)
++    {
++        const CGSize Size = ((__bridge CAMetalLayer*)pCALayer).drawableSize;
++        Width = static_cast<Uint32>(Size.width);
++        Height = static_cast<Uint32>(Size.height);
++    }
++    else if (pNSView)
+     {
+         NSView* const pView          = (__bridge NSView*)pNSView;
+         const NSRect  ViewRectPixels = [pView convertRectToBacking:[pView bounds]];
+diff --git a/ThirdParty/CMakeLists.txt b/ThirdParty/CMakeLists.txt
+index 7954a7a..ca03a5d 100644
+--- a/ThirdParty/CMakeLists.txt
++++ b/ThirdParty/CMakeLists.txt
+@@ -147,8 +147,11 @@ else()
+     set(DILIGENT_USE_SPIRV_TOOLCHAIN FALSE CACHE INTERNAL "")
+ endif()
+ 
+-if (VULKAN_SUPPORTED AND (PLATFORM_WIN32 OR PLATFORM_LINUX OR PLATFORM_MACOS OR PLATFORM_ANDROID) AND (NOT TARGET volk::volk))
++if (VULKAN_SUPPORTED AND (PLATFORM_WIN32 OR PLATFORM_LINUX OR PLATFORM_APPLE OR PLATFORM_ANDROID) AND (NOT TARGET volk::volk))
+     include(../BuildTools/CMake/VulkanUtils.cmake)
++    if(PLATFORM_APPLE)
++        set(VOLK_NAMESPACE ON)
++    endif()
+     set(VOLK_PULL_IN_VULKAN OFF)
+     set(VOLK_INSTALL OFF)
+     set(VOLK_HEADERS_ONLY OFF)

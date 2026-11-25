@@ -72,7 +72,10 @@ internal sealed partial class WaylandFocusManager
                 desktopY - grabbedBounds.Y);
             UpdateDecorationPointer(default);
             await SetCompositorCursorOverrideAsync(null);
-            await DispatchPointerMotionAsync(grabbedSurface, desktopX - grabbedBounds.X, desktopY - grabbedBounds.Y, time);
+            (int clientX, int clientY) = grabbedSurface.Client.ToClientPoint(
+                desktopX - grabbedBounds.X,
+                desktopY - grabbedBounds.Y);
+            await DispatchPointerMotionAsync(grabbedSurface, clientX, clientY, time);
             return;
         }
 
@@ -96,7 +99,8 @@ internal sealed partial class WaylandFocusManager
         if (hit.Kind == WaylandSceneHitKind.Surface)
         {
             await SetCompositorCursorOverrideAsync(null);
-            await DispatchPointerMotionAsync(surface, hit.SurfaceX, hit.SurfaceY, time);
+            (int clientX, int clientY) = surface.Client.ToClientPoint(hit.SurfaceX, hit.SurfaceY);
+            await DispatchPointerMotionAsync(surface, clientX, clientY, time);
             return;
         }
 
@@ -186,6 +190,18 @@ internal sealed partial class WaylandFocusManager
         {
             foreach (WlPointerResource pointer in client.Objects.All.OfType<WlPointerResource>())
                 await pointer.HandleButtonAsync(button, pressed, time);
+        }
+    }
+
+    public async ValueTask HandlePointerAxisAsync(int deltaX, int deltaY, uint time)
+    {
+        if (_focusedSceneHit.Kind != WaylandSceneHitKind.Surface || _focusedPointerSceneSurfaceId == null)
+            return;
+
+        foreach (WaylandClient client in _server.Clients)
+        {
+            foreach (WlPointerResource pointer in client.Objects.All.OfType<WlPointerResource>())
+                await pointer.HandleAxisAsync(deltaX, deltaY, time);
         }
     }
 
@@ -571,7 +587,10 @@ internal sealed partial class WaylandFocusManager
             _server.FramePresenter is IWaylandSceneView sceneView &&
             sceneView.TryGetSurfaceBounds(grabbedSceneSurfaceId, out WaylandSurfaceBounds contentBounds))
         {
-            await toplevel.SendConfigureAsync(contentBounds.Width, contentBounds.Height, resizing: true);
+            await toplevel.SendConfigureAsync(
+                surface.Client.ToClientWidth(contentBounds.Width),
+                surface.Client.ToClientHeight(contentBounds.Height),
+                resizing: true);
         }
     }
 }

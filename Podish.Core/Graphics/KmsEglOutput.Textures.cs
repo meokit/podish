@@ -80,6 +80,7 @@ internal sealed unsafe partial class KmsEglOutput
 
     internal TextureBo? AllocateTexture(uint width, uint height, uint format)
     {
+        using (_angle.EnterDisplayLock())
         lock (_textureGate)
             return AllocateTextureCore(width, height, format);
     }
@@ -87,8 +88,8 @@ internal sealed unsafe partial class KmsEglOutput
     private TextureBo? AllocateTextureCore(uint width, uint height, uint format)
     {
         if (_textureContext == 0 || width is 0 or > FramebufferDevice.DimensionLimit ||
-            height is 0 or > FramebufferDevice.DimensionLimit || _textures.Count >= 32 ||
-            _texturePixels + (long)width * height > 16 * 1024 * 1024)
+            height is 0 or > FramebufferDevice.DimensionLimit || _textures.Count >= 64 ||
+            _texturePixels + (long)width * height > 64 * 1024 * 1024)
             return null;
 
         using var binding = BindTextureContext(0);
@@ -270,6 +271,12 @@ internal sealed unsafe partial class KmsEglOutput
             return true;
         }
 
+        internal bool WaitForProducer()
+        {
+            lock (_producerGate)
+                return Ready && owner.WaitForFence(ProducerFence);
+        }
+
         // The caller has its own EGL share group and retains the BO during import.
         internal nint ImportForCompositor()
         {
@@ -323,6 +330,7 @@ internal sealed unsafe partial class KmsEglOutput
 
         protected override void Destroy()
         {
+            using (owner._angle.EnterDisplayLock())
             lock (owner._textureGate)
             {
                 owner._textures.Remove(texture);

@@ -1,0 +1,8 @@
+_podish_zink_initialize
+_podish_zink_shutdown
+_podish_zink_create_context
+_podish_zink_destroy_context
+_podish_zink_make_current
+_podish_zink_get_proc_address
+_podish_zink_get_egl_display
+_podish_zink_export_texture

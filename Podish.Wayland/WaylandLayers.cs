@@ -196,8 +196,10 @@ internal sealed class LayerSurfaceResource : WaylandResource
         int right = (_current.Anchor & Right) != 0 ? _current.RightMargin : 0;
         int top = (_current.Anchor & Top) != 0 ? _current.TopMargin : 0;
         int bottom = (_current.Anchor & Bottom) != 0 ? _current.BottomMargin : 0;
-        int width = _current.Width > 0 ? _current.Width : Saturate((long)available.Width - left - right, 1);
-        int height = _current.Height > 0 ? _current.Height : Saturate((long)available.Height - top - bottom, 1);
+        int availW = Client.ToClientWidth(available.Width);
+        int availH = Client.ToClientHeight(available.Height);
+        int width = _current.Width > 0 ? _current.Width : Saturate((long)availW - left - right, 1);
+        int height = _current.Height > 0 ? _current.Height : Saturate((long)availH - top - bottom, 1);
 
         if (_configuredSize != (width, height))
         {
@@ -209,10 +211,10 @@ internal sealed class LayerSurfaceResource : WaylandResource
 
         if (Surface.CurrentBuffer == null || Client.Server.FramePresenter is not IWaylandDesktopSceneController scene)
             return;
-        int surfaceWidth = Surface.LogicalWidth;
-        int surfaceHeight = Surface.LogicalHeight;
-        int x = PlaceAxis(available.X, available.Width, surfaceWidth, left, right, _current.Anchor & Horizontal, Left, Right);
-        int y = PlaceAxis(available.Y, available.Height, surfaceHeight, top, bottom, _current.Anchor & Vertical, Top, Bottom);
+        int surfaceWidth = Client.ToCanvasWidth(Surface.LogicalWidth);
+        int surfaceHeight = Client.ToCanvasHeight(Surface.LogicalHeight);
+        int x = PlaceAxis(available.X, available.Width, surfaceWidth, Client.ToCanvasWidth(left), Client.ToCanvasWidth(right), _current.Anchor & Horizontal, Left, Right);
+        int y = PlaceAxis(available.Y, available.Height, surfaceHeight, Client.ToCanvasHeight(top), Client.ToCanvasHeight(bottom), _current.Anchor & Vertical, Top, Bottom);
         scene.SetSurfaceLayer(Surface.SceneSurfaceId, SceneLayer);
         scene.SetSurfaceBounds(Surface.SceneSurfaceId, new WaylandSurfaceBounds(x, y, surfaceWidth, surfaceHeight));
         Surface.UpdateChildSubsurfacePlacements();

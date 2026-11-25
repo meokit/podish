@@ -1,0 +1,244 @@
+diff --git a/src/egl/drivers/dri2/egl_dri2.h b/src/egl/drivers/dri2/egl_dri2.h
+index 4278ff9..8dca43b 100644
+--- a/src/egl/drivers/dri2/egl_dri2.h
++++ b/src/egl/drivers/dri2/egl_dri2.h
+@@ -295,6 +295,8 @@ struct dri2_egl_display {
+    struct wl_shm *wl_shm;
+    struct wl_event_queue *wl_queue;
+    struct zwp_linux_dmabuf_v1 *wl_dmabuf;
++   struct zwp_linux_explicit_synchronization_v1 *wl_podish_sync;
++   bool podish_virgl;
+    struct dri2_wl_formats formats;
+    struct zwp_linux_dmabuf_feedback_v1 *wl_dmabuf_feedback;
+    struct dmabuf_feedback_format_table format_table;
+@@ -341,6 +343,7 @@ struct dri2_egl_surface {
+    struct wl_surface *wl_surface_wrapper;
+    struct wl_display *wl_dpy_wrapper;
+    struct wl_drm *wl_drm_wrapper;
++   struct zwp_linux_surface_synchronization_v1 *wl_podish_sync_surface;
+    struct wl_callback *throttle_callback;
+    struct zwp_linux_dmabuf_feedback_v1 *wl_dmabuf_feedback;
+    struct dmabuf_feedback dmabuf_feedback, pending_dmabuf_feedback;
+diff --git a/src/egl/drivers/dri2/platform_wayland.c b/src/egl/drivers/dri2/platform_wayland.c
+index eff0db9..c312a4c 100644
+--- a/src/egl/drivers/dri2/platform_wayland.c
++++ b/src/egl/drivers/dri2/platform_wayland.c
+@@ -40,6 +40,7 @@
+ #include <sys/mman.h>
+ #include <vulkan/vulkan_core.h>
+ #include <vulkan/vulkan_wayland.h>
++#include "linux-explicit-synchronization-unstable-v1-client-protocol.h"
+
+ #include "util/anon_file.h"
+ #include "util/u_debug.h"
+@@ -792,6 +793,14 @@ dri2_wl_create_window_surface(_EGLDisplay *disp, _EGLConfig *conf,
+          goto cleanup_dmabuf_feedback;
+    }
+
++   if (dri2_dpy->wl_podish_sync) {
++      dri2_surf->wl_podish_sync_surface =
++         zwp_linux_explicit_synchronization_v1_get_synchronization(
++            dri2_dpy->wl_podish_sync, dri2_surf->wl_surface_wrapper);
++      if (!dri2_surf->wl_podish_sync_surface)
++         goto cleanup_dmabuf_feedback;
++   }
++
+    dri2_surf->wl_win = window;
+    dri2_surf->wl_win->driver_private = dri2_surf;
+    dri2_surf->wl_win->destroy_window_callback = destroy_window_callback;
+@@ -806,6 +815,8 @@ dri2_wl_create_window_surface(_EGLDisplay *disp, _EGLConfig *conf,
+    return &dri2_surf->base;
+
+ cleanup_dmabuf_feedback:
++   if (dri2_surf->wl_podish_sync_surface)
++      zwp_linux_surface_synchronization_v1_destroy(dri2_surf->wl_podish_sync_surface);
+    if (dri2_surf->wl_dmabuf_feedback) {
+       zwp_linux_dmabuf_feedback_v1_destroy(dri2_surf->wl_dmabuf_feedback);
+       dmabuf_feedback_fini(&dri2_surf->dmabuf_feedback);
+@@ -865,6 +876,8 @@ dri2_wl_destroy_surface(_EGLDisplay *disp, _EGLSurface *surf)
+
+    if (dri2_surf->throttle_callback)
+       wl_callback_destroy(dri2_surf->throttle_callback);
++   if (dri2_surf->wl_podish_sync_surface)
++      zwp_linux_surface_synchronization_v1_destroy(dri2_surf->wl_podish_sync_surface);
+
+    if (dri2_surf->wl_win) {
+       dri2_surf->wl_win->driver_private = NULL;
+@@ -1329,7 +1342,16 @@ get_back_bo(struct dri2_egl_surface *dri2_surf)
+          return -1;
+    }
+
+-   if (dri2_surf->back->dri_image == NULL) {
++   if (dri2_surf->back->dri_image == NULL && dri2_surf->wl_podish_sync_surface) {
++      /* Ask VirGL for an exportable scanout resource. Podish imports the
++       * virtual PRIME handle as the host's GPU texture. */
++      dri2_surf->back->dri_image = dri_create_image_with_modifiers(
++         dri2_dpy->dri_screen_render_gpu, dri2_surf->base.Width,
++         dri2_surf->base.Height, pipe_format,
++         use_flags | __DRI_IMAGE_USE_LINEAR | __DRI_IMAGE_USE_SCANOUT,
++         NULL, 0, NULL);
++      dri2_surf->back->age = 0;
++   } else if (dri2_surf->back->dri_image == NULL) {
+       int modifiers_count = 0;
+       uint64_t *modifiers =
+          get_surface_specific_modifiers(dri2_surf, &modifiers_count);
+@@ -1526,6 +1548,14 @@ create_wl_buffer(struct dri2_egl_display *dri2_dpy,
+       modifier = combine_u32_into_u64(mod_hi, mod_lo);
+    }
+
++   if (dri2_surf && dri2_surf->wl_podish_sync_surface) {
++      if (num_planes != 1)
++         return NULL;
++      /* Use Podish's single-plane virtual PRIME import. VirGL's DRM
++       * winsys does not attach a modifier to the exported handle. */
++      modifier = DRM_FORMAT_MOD_LINEAR;
++   }
++
+    bool supported_modifier = false;
+    bool mod_invalid_supported = false;
+    int visual_idx = dri2_wl_visual_idx_from_fourcc(fourcc);
+@@ -1689,6 +1719,21 @@ dri2_wl_swap_buffers_with_damage(_EGLDisplay *disp, _EGLSurface *draw,
+    if (update_buffers_if_needed(dri2_surf) < 0)
+       return _eglError(EGL_BAD_ALLOC, "dri2_swap_buffers");
+
++   int acquire_fd = -1;
++   if (dri2_surf->wl_podish_sync_surface) {
++      _EGLContext *ctx = _eglGetCurrentContext();
++      if (ctx == NULL || ctx->Resource.Display != disp)
++         return _eglError(EGL_BAD_CONTEXT, "VirGL present needs a current context");
++      struct dri_screen *screen = dri2_dpy->dri_screen_render_gpu;
++      void *fence = dri_create_fence_fd(dri2_egl_context(ctx)->dri_context, -1);
++      if (fence) {
++         acquire_fd = dri_get_fence_fd(screen, fence);
++         dri_destroy_fence(screen, fence);
++      }
++      if (acquire_fd < 0)
++         return _eglError(EGL_BAD_ACCESS, "VirGL present could not export its acquire fence");
++   }
++
+    if (draw->SwapInterval > 0) {
+       dri2_surf->throttle_callback =
+          wl_surface_frame(dri2_surf->wl_surface_wrapper);
+@@ -1711,8 +1756,11 @@ dri2_wl_swap_buffers_with_damage(_EGLDisplay *disp, _EGLSurface *draw,
+       dri2_surf->current->wl_buffer =
+          create_wl_buffer(dri2_dpy, dri2_surf, image);
+
+-      if (dri2_surf->current->wl_buffer == NULL)
++      if (dri2_surf->current->wl_buffer == NULL) {
++         if (acquire_fd >= 0)
++            close(acquire_fd);
+          return _eglError(EGL_BAD_ALLOC, "dri2_swap_buffers");
++      }
+
+       dri2_surf->current->wl_release = false;
+
+@@ -1749,6 +1797,11 @@ dri2_wl_swap_buffers_with_damage(_EGLDisplay *disp, _EGLSurface *draw,
+       dri_flush_drawable(dri_drawable);
+    }
+
++   if (acquire_fd >= 0) {
++      zwp_linux_surface_synchronization_v1_set_acquire_fence(
++         dri2_surf->wl_podish_sync_surface, acquire_fd);
++      close(acquire_fd);
++   }
+    wl_surface_commit(dri2_surf->wl_surface_wrapper);
+
+    /* If we're not waiting for a frame callback then we'll at least throttle
+@@ -2095,9 +2148,14 @@ registry_handle_global_drm(void *data, struct wl_registry *registry,
+               version >= 3) {
+       dri2_dpy->wl_dmabuf = wl_registry_bind(
+          registry, name, &zwp_linux_dmabuf_v1_interface,
+-         MIN2(version, ZWP_LINUX_DMABUF_V1_GET_DEFAULT_FEEDBACK_SINCE_VERSION));
++         dri2_dpy->podish_virgl ? 3 :
++            MIN2(version, ZWP_LINUX_DMABUF_V1_GET_DEFAULT_FEEDBACK_SINCE_VERSION));
+       zwp_linux_dmabuf_v1_add_listener(dri2_dpy->wl_dmabuf, &dmabuf_listener,
+                                        dri2_dpy);
++   } else if (dri2_dpy->podish_virgl &&
++              strcmp(interface, zwp_linux_explicit_synchronization_v1_interface.name) == 0) {
++      dri2_dpy->wl_podish_sync = wl_registry_bind(
++         registry, name, &zwp_linux_explicit_synchronization_v1_interface, 1);
+    }
+ }
+
+@@ -2249,6 +2307,7 @@ dri2_initialize_wayland_drm(_EGLDisplay *disp)
+       return EGL_FALSE;
+
+    disp->DriverData = (void *)dri2_dpy;
++   dri2_dpy->podish_virgl = debug_get_bool_option("PODISH_VIRGL_EXPLICIT_SYNC", false);
+
+    if (dri2_wl_formats_init(&dri2_dpy->formats) < 0)
+       goto cleanup;
+@@ -2282,11 +2341,24 @@ dri2_initialize_wayland_drm(_EGLDisplay *disp)
+    if (roundtrip(dri2_dpy) < 0)
+       goto cleanup;
+
+-   if (!dri2_initialize_wayland_drm_extensions(dri2_dpy))
+-      goto cleanup;
+-
+-   loader_get_user_preferred_fd(&dri2_dpy->fd_render_gpu,
+-                                &dri2_dpy->fd_display_gpu);
++   if (dri2_dpy->podish_virgl) {
++      const char *path = getenv("PODISH_WAYLAND_RENDER_NODE");
++      if (!path || !dri2_dpy->wl_dmabuf || !dri2_dpy->wl_podish_sync ||
++          roundtrip(dri2_dpy) < 0)
++         goto cleanup;
++      dri2_dpy->fd_render_gpu = loader_open_device(path);
++      if (dri2_dpy->fd_render_gpu < 0)
++         goto cleanup;
++      dri2_dpy->fd_display_gpu = dri2_dpy->fd_render_gpu;
++      dri2_dpy->device_name = strdup(path);
++      if (!dri2_dpy->device_name)
++         goto cleanup;
++   } else {
++      if (!dri2_initialize_wayland_drm_extensions(dri2_dpy))
++         goto cleanup;
++      loader_get_user_preferred_fd(&dri2_dpy->fd_render_gpu,
++                                   &dri2_dpy->fd_display_gpu);
++   }
+
+    if (dri2_dpy->fd_render_gpu != dri2_dpy->fd_display_gpu) {
+       free(dri2_dpy->device_name);
+@@ -2327,6 +2399,11 @@ dri2_initialize_wayland_drm(_EGLDisplay *disp)
+    }
+
+    dri2_setup_screen(disp);
++   if (dri2_dpy->podish_virgl &&
++       !dri2_dpy->dri_screen_render_gpu->base.screen->caps.native_fence_fd) {
++      _eglError(EGL_NOT_INITIALIZED, "VirGL requires native fence support");
++      goto cleanup;
++   }
+
+    dri2_wl_setup_swap_interval(disp);
+
+@@ -3128,6 +3205,10 @@ cleanup:
+ EGLBoolean
+ dri2_initialize_wayland(_EGLDisplay *disp)
+ {
++   if (disp->Options.ForceSoftware &&
++       debug_get_bool_option("PODISH_VIRGL_EXPLICIT_SYNC", false))
++      return EGL_FALSE;
++
+    if (disp->Options.ForceSoftware || disp->Options.Zink)
+       return dri2_initialize_wayland_swrast(disp);
+    else
+@@ -3142,6 +3223,8 @@ dri2_teardown_wayland(struct dri2_egl_display *dri2_dpy)
+       wl_drm_destroy(dri2_dpy->wl_drm);
+    if (dri2_dpy->wl_dmabuf)
+       zwp_linux_dmabuf_v1_destroy(dri2_dpy->wl_dmabuf);
++   if (dri2_dpy->wl_podish_sync)
++      zwp_linux_explicit_synchronization_v1_destroy(dri2_dpy->wl_podish_sync);
+    if (dri2_dpy->wl_shm)
+       wl_shm_destroy(dri2_dpy->wl_shm);
+    if (dri2_dpy->wl_registry)
+diff --git a/src/egl/meson.build b/src/egl/meson.build
+index b6c803a..c7dd4ec 100644
+--- a/src/egl/meson.build
++++ b/src/egl/meson.build
+@@ -116,6 +116,7 @@ if with_dri
+     link_for_egl += [libwayland_drm, libloader_wayland_helper]
+     files_egl += files('drivers/dri2/platform_wayland.c')
+     files_egl += wp_files['linux-dmabuf-unstable-v1']
++    files_egl += wp_files['linux-explicit-synchronization-unstable-v1']
+     files_egl += [wayland_drm_client_protocol_h]
+     incs_for_egl += include_directories('wayland/wayland-drm')
+   endif

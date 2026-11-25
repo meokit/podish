@@ -459,14 +459,30 @@ public sealed partial class WaylandServer
         string Description = "Podish Virtual Output", string Make = "Podish", string Model = "Virtual Display")
     {
         public uint Scale120 { get; init; } = (uint)Math.Max(1, Scale) * 120;
+        /// <summary>
+        /// Independent DPI reported to Wayland clients via wl_output.geometry physical dimensions.
+        /// 0 leaves physical size unspecified (0x0 mm).
+        /// </summary>
+        public int ClientDpi { get; init; }
         public int PixelWidth => ScaleToPixels(Width);
         public int PixelHeight => ScaleToPixels(Height);
+        public int PhysicalWidthMm => ClientDpi > 0 ? Math.Max(1, (int)Math.Round(PixelWidth * 25.4 / ClientDpi)) : 0;
+        public int PhysicalHeightMm => ClientDpi > 0 ? Math.Max(1, (int)Math.Round(PixelHeight * 25.4 / ClientDpi)) : 0;
         private int ScaleToPixels(int size) => (int)((size * (long)Scale120 + 60) / 120);
     }
+
+    public readonly record struct ToplevelSnapshot(
+        ulong SceneSurfaceId,
+        string Title,
+        string AppId,
+        bool Active,
+        bool Minimized,
+        WaylandApplicationIcon? Icon);
 
     private readonly List<WaylandClient> _clients = [];
     private readonly List<(WlCallbackResource Callback, ulong FrameSequence)> _pendingFrameCallbacks = [];
     private readonly Dictionary<ulong, WlSurfaceResource> _sceneSurfaces = [];
+    private readonly Dictionary<ulong, LinuxBufferReleaseResource> _explicitBufferReleases = [];
     private readonly WaylandKeyboardKeymap _keyboardKeymap = new();
     private readonly ILogger? _logger;
     private WlDataSourceResource? _selectionSource;
@@ -477,7 +493,8 @@ public sealed partial class WaylandServer
     private long _nextSceneSurfaceId;
 
     public WaylandServer(IWaylandFramePresenter? framePresenter = null, OutputInfo? output = null, ILogger? logger = null,
-        Func<string, WaylandApplicationIcon?>? resolveApplicationIcon = null, bool enableGpuBuffers = false)
+        Func<string, WaylandApplicationIcon?>? resolveApplicationIcon = null, bool enableGpuBuffers = false,
+        bool enableExplicitSync = false, bool enableVenusPrime = false, bool enableVirglPrime = false)
     {
         FramePresenter = framePresenter;
         Output = output ?? new OutputInfo();
@@ -487,23 +504,50 @@ public sealed partial class WaylandServer
         Focus = new WaylandFocusManager(this);
         RegisterCoreGlobals();
         RegisterScalingGlobals();
-        if (enableGpuBuffers && framePresenter is IWaylandGpuFramePresenter)
+        ExplicitSyncEnabled = enableExplicitSync && framePresenter != null;
+        GpuBuffersEnabled = enableGpuBuffers && framePresenter is IWaylandGpuFramePresenter;
+        VenusPrimeEnabled = enableVenusPrime && ExplicitSyncEnabled && framePresenter is IWaylandGpuFramePresenter;
+        VirglPrimeEnabled = enableVirglPrime && ExplicitSyncEnabled && framePresenter is IWaylandGpuFramePresenter;
+        if (ExplicitSyncEnabled)
+            Globals.Add(ZwpLinuxExplicitSynchronizationV1Protocol.InterfaceName,
+                ZwpLinuxExplicitSynchronizationV1Protocol.Version,
+                static (client, id, version) => client.Register(new LinuxExplicitSyncResource(client, id, version)));
+        if (GpuBuffersEnabled || VenusPrimeEnabled || VirglPrimeEnabled)
             Globals.Add(ZwpLinuxDmabufV1Protocol.InterfaceName, ZwpLinuxDmabufV1Protocol.Version,
                 static (client, id, version) => client.Register(new LinuxDmabufResource(client, id, version)));
     }
 
     public IWaylandFramePresenter? FramePresenter { get; private set; }
     public OutputInfo Output { get; private set; }
+    public Func<WaylandClient, OutputInfo>? ClientOutputResolver { get; set; }
+    public bool MobileMode { get; set; }
+    public int ReservedBottomInset { get; set; }
+    public Action<ToplevelSnapshot[]>? OnToplevelsChanged { get; set; }
     public WaylandGlobalRegistry Globals { get; }
+    internal bool ExplicitSyncEnabled { get; }
+    internal bool GpuBuffersEnabled { get; }
+    internal bool VenusPrimeEnabled { get; }
+    internal bool VirglPrimeEnabled { get; }
     internal ILogger? Logger => _logger;
     internal Func<string, WaylandApplicationIcon?>? ResolveApplicationIcon { get; }
     internal WaylandKeyboardKeymap KeyboardKeymap => _keyboardKeymap;
     internal WaylandFocusManager Focus { get; }
     internal IReadOnlyList<WaylandClient> Clients => _clients;
 
-    public WaylandClient CreateClient(Func<WaylandOutgoingMessage, ValueTask<int>> sendAsync)
+    public OutputInfo ResolveClientOutput(WaylandClient client) =>
+        ClientOutputResolver?.Invoke(client) ?? Output;
+
+    public async ValueTask RefreshAllClientOutputsAsync()
     {
-        var client = new WaylandClient(this, sendAsync);
+        foreach (WaylandClient client in _clients.ToArray())
+            await client.RefreshEffectiveOutputAsync();
+        foreach (WlSurfaceResource surface in _sceneSurfaces.Values.ToArray())
+            surface.UpdateChildSubsurfacePlacements();
+    }
+
+    public WaylandClient CreateClient(Func<WaylandOutgoingMessage, ValueTask<int>> sendAsync, FiberTask? connectionTask = null)
+    {
+        var client = new WaylandClient(this, sendAsync) { ConnectionTask = connectionTask };
         _clients.Add(client);
         return client;
     }
@@ -513,7 +557,10 @@ public sealed partial class WaylandServer
         if (!_clients.Remove(client))
             return;
 
+        client.BeginDisconnect();
         _pendingFrameCallbacks.RemoveAll(entry => ReferenceEquals(entry.Callback.Client, client));
+        foreach (var lease in _explicitBufferReleases.Where(entry => entry.Value.Client == client).ToArray())
+            _explicitBufferReleases.Remove(lease.Key);
         Focus.ForgetClientPopups(client);
 
         var surfaces = client.Objects.All.OfType<WlSurfaceResource>().ToArray();
@@ -539,7 +586,8 @@ public sealed partial class WaylandServer
                 surface.ReleaseBuffers();
 
             foreach (WaylandResource resource in client.Objects.All
-                         .Where(static resource => resource is WlBufferResource or WlShmPoolResource or LinuxBufferParamsResource).ToArray())
+                         .Where(static resource => resource is WlBufferResource or WlShmPoolResource or LinuxBufferParamsResource
+                             or LinuxSurfaceSyncResource or LinuxBufferReleaseResource).ToArray())
                 resource.Destroy();
 
             client.HandleClosed();
@@ -596,6 +644,103 @@ public sealed partial class WaylandServer
     public async ValueTask HandlePointerButtonAsync(uint button, bool pressed, uint time)
     {
         await Focus.HandlePointerButtonAsync(button, pressed, time);
+    }
+
+    public async ValueTask HandlePointerAxisAsync(int deltaX, int deltaY, uint time)
+    {
+        await Focus.HandlePointerAxisAsync(deltaX, deltaY, time);
+    }
+
+    internal static bool IsHomeLauncherWindow(XdgToplevelResource toplevel, string launcherAppId = "podish-launcher") =>
+        (string.Equals(toplevel.AppId, launcherAppId, StringComparison.OrdinalIgnoreCase) ||
+         toplevel.AppId.EndsWith("." + launcherAppId, StringComparison.OrdinalIgnoreCase)) &&
+        !toplevel.Title.Contains("Settings", StringComparison.OrdinalIgnoreCase);
+
+    public async ValueTask<bool> FocusToplevelByAppIdAsync(string appId)
+    {
+        if (string.IsNullOrWhiteSpace(appId))
+            return false;
+
+        foreach (XdgToplevelResource toplevel in MappedToplevels)
+        {
+            if (IsHomeLauncherWindow(toplevel, appId))
+            {
+                if (toplevel.IsMinimized)
+                    await toplevel.SetMinimizedAsync(false);
+                await Focus.FocusKeyboardSurfaceAsync(toplevel.Surface.Surface.SceneSurfaceId);
+                NotifyToplevelsChanged();
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    public async ValueTask ShowHomeLauncherAsync(string launcherAppId = "podish-launcher")
+    {
+        foreach (XdgToplevelResource toplevel in MappedToplevels)
+        {
+            if (!IsHomeLauncherWindow(toplevel, launcherAppId) && !toplevel.IsMinimized)
+                await toplevel.SetMinimizedAsync(true);
+        }
+
+        await FocusToplevelByAppIdAsync(launcherAppId);
+        NotifyToplevelsChanged();
+    }
+
+    public async ValueTask<bool> ActivateToplevelAsync(ulong sceneSurfaceId)
+    {
+        foreach (XdgToplevelResource toplevel in MappedToplevels)
+        {
+            if (toplevel.Surface.Surface.SceneSurfaceId != sceneSurfaceId)
+                continue;
+            if (toplevel.IsMinimized)
+                await toplevel.SetMinimizedAsync(false);
+            await Focus.FocusKeyboardSurfaceAsync(sceneSurfaceId);
+            NotifyToplevelsChanged();
+            return true;
+        }
+
+        return false;
+    }
+
+    public async ValueTask<bool> CloseToplevelAsync(ulong sceneSurfaceId)
+    {
+        foreach (XdgToplevelResource toplevel in MappedToplevels)
+        {
+            if (toplevel.Surface.Surface.SceneSurfaceId != sceneSurfaceId)
+                continue;
+            await toplevel.SendCloseAsync();
+            return true;
+        }
+
+        return false;
+    }
+
+    public async ValueTask SendBackKeyAsync(uint time)
+    {
+        // Send Escape (evdev 1) to the currently focused client window.
+        await HandleKeyboardKeyAsync(1, true, time, handledByIme: false);
+        await HandleKeyboardKeyAsync(1, false, time + 10, handledByIme: false);
+    }
+
+    public ToplevelSnapshot[] SnapshotOpenAppToplevels(string launcherAppId = "podish-launcher")
+    {
+        return MappedToplevels
+            .Where(t => !IsHomeLauncherWindow(t, launcherAppId))
+            .Select(t => new ToplevelSnapshot(
+                t.Surface.Surface.SceneSurfaceId,
+                string.IsNullOrWhiteSpace(t.Title) ? t.AppId : t.Title,
+                t.AppId,
+                t.Activated,
+                t.IsMinimized,
+                t.ApplicationIcon))
+            .ToArray();
+    }
+
+    internal void NotifyToplevelsChanged()
+    {
+        OnToplevelsChanged?.Invoke(SnapshotOpenAppToplevels());
     }
 
     public async ValueTask ClearPointerFocusAsync()
@@ -727,7 +872,10 @@ public sealed partial class WaylandServer
 
         if (restart)
             await textInputPresenter.UpdateTextInputAsync(0, null);
-        await textInputPresenter.UpdateTextInputAsync(surface.SceneSurfaceId, textInput.CursorRectangle);
+        WaylandRect? canvasRect = textInput.CursorRectangle is { } r
+            ? surface.Client.ToCanvasRect(r)
+            : null;
+        await textInputPresenter.UpdateTextInputAsync(surface.SceneSurfaceId, canvasRect);
     }
 
     internal void HandleClipboardSourceDestroyed(WlDataSourceResource source)
@@ -893,8 +1041,13 @@ public sealed partial class WaylandServer
         }
     }
 
+    internal void TrackExplicitBufferRelease(ulong leaseToken, LinuxBufferReleaseResource release) =>
+        _explicitBufferReleases.Add(leaseToken, release);
+
     public async ValueTask HandleBufferConsumedAsync(ulong leaseToken)
     {
+        if (_explicitBufferReleases.Remove(leaseToken, out var release))
+            await release.CompleteAsync();
         foreach (WaylandClient client in _clients)
         {
             foreach (WlBufferResource buffer in client.Objects.All.OfType<WlBufferResource>())
@@ -912,10 +1065,12 @@ public sealed partial class WaylandServer
 public sealed class WaylandClient
 {
     private readonly Func<WaylandOutgoingMessage, ValueTask<int>> _sendAsync;
+    internal FiberTask? ConnectionTask { get; init; }
     private readonly WaylandDispatcher _dispatcher;
     private uint _nextSerial = 1;
     private readonly Queue<uint> _recentInputSerials = new();
     private uint _nextServerObjectId = 0xfeffffff;
+    private WaylandServer.OutputInfo? _effectiveOutput;
 
     public WaylandClient(WaylandServer server, Func<WaylandOutgoingMessage, ValueTask<int>> sendAsync)
     {
@@ -928,7 +1083,132 @@ public sealed class WaylandClient
 
     public WaylandServer Server { get; }
     public WaylandObjectTable Objects { get; }
+    public string? PeerExecutableName { get; set; }
+    public string? AppIdHint { get; set; }
+    public WaylandServer.OutputInfo EffectiveOutput => _effectiveOutput ??= Server.ResolveClientOutput(this);
+    internal bool IsDisconnecting { get; private set; }
+    internal event Action? Disconnecting;
     public event Action? OnClosed;
+
+    public static bool IsLauncherIdentifier(string? id)
+    {
+        if (string.IsNullOrWhiteSpace(id)) return false;
+        string trimmed = id.Trim();
+        if (trimmed.EndsWith(".desktop", StringComparison.OrdinalIgnoreCase))
+            trimmed = trimmed[..^8];
+        return string.Equals(trimmed, "podish-launcher", StringComparison.OrdinalIgnoreCase) ||
+               trimmed.EndsWith(".podish-launcher", StringComparison.OrdinalIgnoreCase) ||
+               trimmed.StartsWith("podish-launcher", StringComparison.OrdinalIgnoreCase) ||
+               string.Equals(trimmed, "podish-settings", StringComparison.OrdinalIgnoreCase);
+    }
+
+    public bool IsWhitelistedLauncher => IsLauncherIdentifier(AppIdHint) || IsLauncherIdentifier(PeerExecutableName);
+
+    public int ToCanvasWidth(int clientW)
+    {
+        var eff = EffectiveOutput;
+        var canvas = Server.Output;
+        if (eff.Width == canvas.Width || eff.Width <= 0) return clientW;
+        return (int)Math.Round(clientW * (double)canvas.Width / eff.Width);
+    }
+
+    public int ToCanvasHeight(int clientH)
+    {
+        var eff = EffectiveOutput;
+        var canvas = Server.Output;
+        if (eff.Height == canvas.Height || eff.Height <= 0) return clientH;
+        return (int)Math.Round(clientH * (double)canvas.Height / eff.Height);
+    }
+
+    public int ToClientWidth(int canvasW)
+    {
+        var eff = EffectiveOutput;
+        var canvas = Server.Output;
+        if (eff.Width == canvas.Width || canvas.Width <= 0) return canvasW;
+        return (int)Math.Round(canvasW * (double)eff.Width / canvas.Width);
+    }
+
+    public int ToClientHeight(int canvasH)
+    {
+        var eff = EffectiveOutput;
+        var canvas = Server.Output;
+        if (eff.Height == canvas.Height || canvas.Height <= 0) return canvasH;
+        return (int)Math.Round(canvasH * (double)eff.Height / canvas.Height);
+    }
+
+    public (int X, int Y) ToClientPoint(int canvasX, int canvasY) =>
+        (ToClientWidth(canvasX), ToClientHeight(canvasY));
+
+    public WaylandRect ToCanvasRect(WaylandRect r) => new(
+        ToCanvasWidth(r.X),
+        ToCanvasHeight(r.Y),
+        Math.Max(1, ToCanvasWidth(r.Width)),
+        Math.Max(1, ToCanvasHeight(r.Height)));
+
+    public WaylandSurfaceBounds ToCanvasBounds(WaylandSurfaceBounds b) => new(
+        ToCanvasWidth(b.X),
+        ToCanvasHeight(b.Y),
+        Math.Max(1, ToCanvasWidth(b.Width)),
+        Math.Max(1, ToCanvasHeight(b.Height)));
+
+    public WaylandSurfaceBounds ToClientBounds(WaylandSurfaceBounds b) => new(
+        ToClientWidth(b.X),
+        ToClientHeight(b.Y),
+        Math.Max(1, ToClientWidth(b.Width)),
+        Math.Max(1, ToClientHeight(b.Height)));
+
+    internal WaylandSurfaceBounds GetClientOutputBounds()
+    {
+        var eff = EffectiveOutput;
+        return new WaylandSurfaceBounds(0, 0, Math.Max(1, eff.Width), Math.Max(1, eff.Height));
+    }
+
+    internal WaylandSurfaceBounds GetClientWorkArea()
+    {
+        var eff = EffectiveOutput;
+        var canvasWork = Server.WorkArea;
+        if (eff.Width == Server.Output.Width && eff.Height == Server.Output.Height)
+            return canvasWork;
+        int x = ToClientWidth(canvasWork.X);
+        int y = ToClientHeight(canvasWork.Y);
+        int w = Math.Max(1, ToClientWidth(canvasWork.Width));
+        int h = Math.Max(1, ToClientHeight(canvasWork.Height));
+        return new WaylandSurfaceBounds(x, y, w, h);
+    }
+
+    public async ValueTask RefreshEffectiveOutputAsync()
+    {
+        var previous = _effectiveOutput;
+        var next = Server.ResolveClientOutput(this);
+        _effectiveOutput = next;
+        if (previous != null && previous == next)
+            return;
+
+        foreach (WlOutputResource output in Objects.All.OfType<WlOutputResource>().ToArray())
+            await output.AdvertiseAsync();
+        foreach (FractionalScaleResource fs in Objects.All.OfType<FractionalScaleResource>().ToArray())
+            await WpFractionalScaleV1EventWriter.PreferredScaleAsync(this, fs.ObjectId, next.Scale120);
+
+        foreach (XdgToplevelResource toplevel in Objects.All.OfType<XdgToplevelResource>().ToArray())
+        {
+            if (toplevel.Destroyed) continue;
+            if (toplevel.IsFullscreen || toplevel.IsMaximized)
+                await toplevel.UpdateMaximizedBoundsAsync();
+            else if (toplevel.IsMapped)
+                await toplevel.SendConfigureAsync(0, 0);
+        }
+
+        foreach (XdgPopupResource popup in Objects.All.OfType<XdgPopupResource>().ToArray())
+            await popup.ReconfigureReactiveAsync();
+        foreach (WlSurfaceResource surface in Objects.All.OfType<WlSurfaceResource>().ToArray())
+            surface.UpdateChildSubsurfacePlacements();
+    }
+
+    internal void BeginDisconnect()
+    {
+        IsDisconnecting = true;
+        Disconnecting?.Invoke();
+    }
 
     internal void HandleClosed() => OnClosed?.Invoke();
 

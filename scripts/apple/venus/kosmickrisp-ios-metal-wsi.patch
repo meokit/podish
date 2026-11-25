@@ -1,0 +1,75 @@
+diff --git a/src/vulkan/wsi/wsi_common_metal.c b/src/vulkan/wsi/wsi_common_metal.c
+--- a/src/vulkan/wsi/wsi_common_metal.c
++++ b/src/vulkan/wsi/wsi_common_metal.c
+@@ -17,6 +17,7 @@
+ #include "vulkan/vulkan_core.h"
+ 
+ #include <assert.h>
++#include <TargetConditionals.h>
+ 
+ struct wsi_metal {
+    struct wsi_interface base;
+@@ -39,7 +40,9 @@
+ }
+ 
+ static const VkPresentModeKHR present_modes[] = {
++#if TARGET_OS_OSX
+    VK_PRESENT_MODE_IMMEDIATE_KHR,
++#endif
+    VK_PRESENT_MODE_FIFO_KHR,
+ };
+ 
+diff --git a/src/vulkan/wsi/wsi_common_metal_layer.m b/src/vulkan/wsi/wsi_common_metal_layer.m
+--- a/src/vulkan/wsi/wsi_common_metal_layer.m
++++ b/src/vulkan/wsi/wsi_common_metal_layer.m
+@@ -8,6 +8,7 @@
+ 
+ #import <QuartzCore/CAMetalLayer.h>
+ #import <Metal/Metal.h>
++#include <TargetConditionals.h>
+ 
+ void
+ wsi_metal_layer_size(const CAMetalLayer *metal_layer,
+@@ -137,7 +138,12 @@
+ wsi_metal_layer_set_immediate(const CAMetalLayer *metal_layer,
+                               bool enable_immediate)
+ {
++#if TARGET_OS_OSX
+    metal_layer.displaySyncEnabled = !enable_immediate;
++#else
++   (void)metal_layer;
++   (void)enable_immediate;
++#endif
+ }
+ 
+ VkResult
+@@ -169,7 +175,7 @@
+       metal_layer.maximumDrawableCount = image_count;
+       metal_layer.drawableSize = (CGSize){.width = width, .height = height};
+       metal_layer.opaque = enable_opaque;
+-      metal_layer.displaySyncEnabled = !enable_immediate;
++      wsi_metal_layer_set_immediate(metal_layer, enable_immediate);
+       metal_layer.pixelFormat = metal_format;
+ 
+       metal_layer.colorspace = cg_color_space;
+diff --git a/src/kosmickrisp/vulkan/meson.build b/src/kosmickrisp/vulkan/meson.build
+--- a/src/kosmickrisp/vulkan/meson.build
++++ b/src/kosmickrisp/vulkan/meson.build
+@@ -155,11 +155,17 @@
+   gnu_symbol_visibility : 'hidden',
+ )
+ 
++kk_platform_deps = []
++if host_machine.system() == 'darwin'
++  kk_platform_deps += dependency('appleframeworks', modules : ['CoreFoundation', 'CoreGraphics', 'Foundation'])
++endif
++
+ # Happens with macOS ld linker:
+ # "-Wl,-undefined,dynamic_lookup" required, otherwise, linker will complain about undefined symbols
+ libvulkan_kosmickrisp = shared_library(
+   'vulkan_kosmickrisp',
+   link_whole: [libkk],
++  dependencies : kk_platform_deps,
+   link_args: [ld_args_build_id, '-Wl,-undefined,dynamic_lookup'],
+   gnu_symbol_visibility : 'hidden',
+   install : true,

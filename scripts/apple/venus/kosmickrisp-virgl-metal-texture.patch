@@ -1,0 +1,212 @@
+diff --git a/src/kosmickrisp/bridge/mtl_texture.h b/src/kosmickrisp/bridge/mtl_texture.h
+index b32170b..786fd8b 100644
+--- a/src/kosmickrisp/bridge/mtl_texture.h
++++ b/src/kosmickrisp/bridge/mtl_texture.h
+@@ -17,6 +17,10 @@ struct kk_view_layout;
+ /* Utils*/
+ uint64_t mtl_texture_get_gpu_resource_id(mtl_texture *texture);
+
++mtl_heap *mtl_get_shared_texture_heap(mtl_texture *texture, mtl_device *device,
++                                      uint32_t width, uint32_t height,
++                                      uint32_t *vk_format);
++
+ /* Texture view creation */
+ mtl_texture *mtl_new_texture_view_with(mtl_texture *texture,
+                                        const struct kk_view_layout *layout);
+diff --git a/src/kosmickrisp/bridge/mtl_texture.m b/src/kosmickrisp/bridge/mtl_texture.m
+index 496ce14..47a6c49 100644
+--- a/src/kosmickrisp/bridge/mtl_texture.m
++++ b/src/kosmickrisp/bridge/mtl_texture.m
+@@ -14,6 +14,33 @@
+
+ #include <Metal/MTLTexture.h>
+
++mtl_heap *
++mtl_get_shared_texture_heap(mtl_texture *texture, mtl_device *device,
++                            uint32_t width, uint32_t height,
++                            uint32_t *vk_format)
++{
++   id<MTLTexture> tex = (id<MTLTexture>)texture;
++   if (tex.device != (id<MTLDevice>)device || tex.width != width ||
++       tex.height != height || tex.arrayLength != 1 || tex.sampleCount != 1 ||
++       !(tex.usage & MTLTextureUsageShaderRead) ||
++       (tex.textureType != MTLTextureType2D &&
++        tex.textureType != MTLTextureType2DArray))
++      return NULL;
++
++   switch (tex.pixelFormat) {
++   case MTLPixelFormatBGRA8Unorm:
++      *vk_format = VK_FORMAT_B8G8R8A8_UNORM;
++      break;
++   case MTLPixelFormatRGBA8Unorm:
++      *vk_format = VK_FORMAT_R8G8B8A8_UNORM;
++      break;
++   default:
++      return NULL;
++   }
++
++   return (mtl_heap *)tex.heap;
++}
++
+ uint64_t
+ mtl_texture_get_gpu_resource_id(mtl_texture *texture)
+ {
+diff --git a/src/kosmickrisp/bridge/stubs/mtl_texture.c b/src/kosmickrisp/bridge/stubs/mtl_texture.c
+index f71db0c..d676864 100644
+--- a/src/kosmickrisp/bridge/stubs/mtl_texture.c
++++ b/src/kosmickrisp/bridge/stubs/mtl_texture.c
+@@ -13,6 +13,14 @@ mtl_texture_get_gpu_resource_id(mtl_texture *texture)
+    return 0u;
+ }
+
++mtl_heap *
++mtl_get_shared_texture_heap(mtl_texture *texture, mtl_device *device,
++                            uint32_t width, uint32_t height,
++                            uint32_t *vk_format)
++{
++   return NULL;
++}
++
+ /* Texture view creation */
+ mtl_texture *
+ mtl_new_texture_view_with(mtl_texture *texture,
+diff --git a/src/kosmickrisp/vulkan/kk_device.c b/src/kosmickrisp/vulkan/kk_device.c
+index 216faed..8acabd3 100644
+--- a/src/kosmickrisp/vulkan/kk_device.c
++++ b/src/kosmickrisp/vulkan/kk_device.c
+@@ -9,6 +9,7 @@
+
+ #include "kk_cmd_buffer.h"
+ #include "kk_entrypoints.h"
++#include "kk_image.h"
+ #include "kk_instance.h"
+ #include "kk_physical_device.h"
+ #include "kk_shader.h"
+@@ -427,6 +428,14 @@ VKAPI_ATTR PFN_vkVoidFunction VKAPI_CALL
+ kk_GetDeviceProcAddr(VkDevice _device, const char *pName)
+ {
+    VK_FROM_HANDLE(kk_device, device, _device);
++   /* Private entry points shared by the Podish host renderer and compositor. */
++   if (device && pName) {
++      if (strcmp(pName, "vkPodishGetMetalTexture") == 0)
++         return (PFN_vkVoidFunction)kk_podish_get_metal_texture;
++      if (strcmp(pName, "vkPodishImportMetalTexture") == 0)
++         return (PFN_vkVoidFunction)kk_podish_import_metal_texture;
++   }
++
+    return kk_device_get_proc_addr(device, pName);
+ }
+
+diff --git a/src/kosmickrisp/vulkan/kk_image.c b/src/kosmickrisp/vulkan/kk_image.c
+index 04d817b..5e13a07 100644
+--- a/src/kosmickrisp/vulkan/kk_image.c
++++ b/src/kosmickrisp/vulkan/kk_image.c
+@@ -605,6 +605,12 @@ kk_image_finish(struct kk_device *dev, struct kk_image *image,
+                             pAllocator);
+    }
+
++   if (image->imported_residency) {
++      mtl_command_queue_remove_residency_set(dev->queue.mtl_handle,
++                                             image->imported_residency);
++      mtl_release(image->imported_residency);
++   }
++
+    vk_image_finish(&image->vk);
+ }
+
+@@ -651,6 +657,69 @@ kk_DestroyImage(VkDevice device, VkImage _image,
+    vk_free2(&dev->vk.alloc, pAllocator, image);
+ }
+
++VKAPI_ATTR void *VKAPI_CALL
++kk_podish_get_metal_texture(VkImage handle)
++{
++   VK_FROM_HANDLE(kk_image, image, handle);
++   if (!image || image->plane_count != 1 ||
++       image->vk.image_type != VK_IMAGE_TYPE_2D ||
++       image->vk.samples != VK_SAMPLE_COUNT_1_BIT ||
++       !(image->vk.usage & VK_IMAGE_USAGE_SAMPLED_BIT))
++      return NULL;
++
++   /* The caller keeps the producer image alive until the consumer retains it. */
++   return image->planes[0].mtl_handle;
++}
++
++VKAPI_ATTR VkResult VKAPI_CALL
++kk_podish_import_metal_texture(VkDevice device, void *texture, uint32_t width,
++                              uint32_t height, VkImage *handle, VkFormat *format)
++{
++   VK_FROM_HANDLE(kk_device, dev, device);
++   if (!texture || !width || !height || !dev->has_queue)
++      return vk_error(dev, VK_ERROR_INVALID_EXTERNAL_HANDLE);
++
++   uint32_t vk_format = VK_FORMAT_UNDEFINED;
++   mtl_heap *heap = mtl_get_shared_texture_heap(texture, dev->mtl_handle, width,
++                                               height, &vk_format);
++   if (!heap)
++      return vk_error(dev, VK_ERROR_INVALID_EXTERNAL_HANDLE);
++
++   const VkImageCreateInfo info = {
++      .sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO,
++      .imageType = VK_IMAGE_TYPE_2D,
++      .format = vk_format,
++      .extent = {width, height, 1},
++      .mipLevels = 1,
++      .arrayLayers = 1,
++      .samples = VK_SAMPLE_COUNT_1_BIT,
++      .tiling = VK_IMAGE_TILING_OPTIMAL,
++      .usage = VK_IMAGE_USAGE_SAMPLED_BIT,
++      .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
++      .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
++   };
++   VkResult result = kk_CreateImage(device, &info, NULL, handle);
++   if (result != VK_SUCCESS)
++      return result;
++
++   VK_FROM_HANDLE(kk_image, image, *handle);
++   mtl_residency_set *residency = mtl_new_residency_set(dev->mtl_handle);
++   if (!residency) {
++      kk_DestroyImage(device, *handle, NULL);
++      *handle = VK_NULL_HANDLE;
++      return vk_error(dev, VK_ERROR_OUT_OF_DEVICE_MEMORY);
++   }
++
++   mtl_residency_set_add_allocation(residency, (mtl_allocation *)heap);
++   mtl_residency_set_commit(residency);
++   mtl_command_queue_add_residency_set(dev->queue.mtl_handle, residency);
++   image->imported_residency = residency;
++   image->planes[0].mtl_handle = mtl_retain(texture);
++   image->planes[0].addr = mtl_texture_get_gpu_resource_id(texture);
++   *format = vk_format;
++   return VK_SUCCESS;
++}
++
+ static void
+ kk_image_plane_add_req(struct kk_device *dev, const struct kk_image *image,
+                        const struct kk_image_plane *plane, uint64_t *size_B,
+diff --git a/src/kosmickrisp/vulkan/kk_image.h b/src/kosmickrisp/vulkan/kk_image.h
+index 33afaa6..a47083a 100644
+--- a/src/kosmickrisp/vulkan/kk_image.h
++++ b/src/kosmickrisp/vulkan/kk_image.h
+@@ -50,6 +50,9 @@ struct kk_image {
+     */
+    bool disjoint;
+
++   /* Residency on the consumer queue for a Podish imported Metal texture. */
++   mtl_residency_set *imported_residency;
++
+    uint8_t plane_count;
+    struct kk_image_plane planes[3];
+ };
+@@ -135,4 +138,11 @@ mtl_texture *kk_image_plane_create_texture(struct kk_image_plane *plane,
+                                            struct kk_image_layout *layout,
+                                            uint64_t offset_B);
+
++VKAPI_ATTR void *VKAPI_CALL
++kk_podish_get_metal_texture(VkImage image);
++
++VKAPI_ATTR VkResult VKAPI_CALL
++kk_podish_import_metal_texture(VkDevice device, void *texture, uint32_t width,
++                              uint32_t height, VkImage *image, VkFormat *format);
++
+ #endif

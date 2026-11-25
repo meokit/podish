@@ -1,0 +1,41 @@
+diff --git a/meson.build b/meson.build
+index e1d8d8b..334303c 100644
+--- a/meson.build
++++ b/meson.build
+@@ -200,7 +200,7 @@ if host_system == 'windows'
+ endif
+ 
+ # Generates the dispatch tables
+-gen_dispatch_py = find_program('src/gen_dispatch.py')
++gen_dispatch_py = [import('python').find_installation('python3'), files('src/gen_dispatch.py')]
+ 
+ gl_registry = files('registry/gl.xml')
+ egl_registry = files('registry/egl.xml')
+diff --git a/src/dispatch_common.c b/src/dispatch_common.c
+index 153eb7c..369f65e 100644
+--- a/src/dispatch_common.c
++++ b/src/dispatch_common.c
+@@ -694,9 +694,23 @@ epoxy_load_gl(void)
+ #endif
+ }
+ 
++/* The embedded renderer installs its Mesa GL resolver before creating any
++ * contexts. This prevents Darwin from finding Apple's OpenGL framework. */
++static void *(*podish_resolve_gl)(const char *);
++
++void podish_epoxy_set_gl_resolver(void *(*resolve)(const char *));
++void
++podish_epoxy_set_gl_resolver(void *(*resolve)(const char *))
++{
++    podish_resolve_gl = resolve;
++}
++
+ void *
+ epoxy_gl_dlsym(const char *name)
+ {
++    if (podish_resolve_gl)
++        return podish_resolve_gl(name);
++
+     epoxy_load_gl();
+ 
+     return do_dlsym(&api.gl_handle, name, true);

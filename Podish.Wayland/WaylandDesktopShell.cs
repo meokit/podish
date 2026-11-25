@@ -5,34 +5,39 @@ public sealed partial class WaylandServer
     private WaylandSurfaceBounds? _workArea;
 
     internal WaylandSurfaceBounds OutputBounds => new(0, 0, Output.Width, Output.Height);
-    internal WaylandSurfaceBounds WorkArea => _workArea ?? OutputBounds;
+    internal WaylandSurfaceBounds DefaultWorkArea => new(0, 0, Output.Width, Math.Max(1, Output.Height - Math.Max(0, ReservedBottomInset)));
+    internal WaylandSurfaceBounds WorkArea => _workArea ?? DefaultWorkArea;
     internal XdgToplevelResource[] MappedToplevels => _sceneSurfaces.Values
         .Select(static surface => surface.XdgSurface?.Toplevel)
         .OfType<XdgToplevelResource>()
         .Where(static toplevel => toplevel.IsMapped).ToArray();
 
-    public async ValueTask ResizeOutputAsync(int width, int height)
+    public ValueTask ResizeOutputAsync(int width, int height) =>
+        ReconfigureOutputAsync(width, height, Output.Scale120, Output.ClientDpi);
+
+    public async ValueTask ReconfigureOutputAsync(int width, int height, uint scale120, int clientDpi)
     {
-        if (width <= 0 || height <= 0 || (width == Output.Width && height == Output.Height))
+        scale120 = Math.Clamp(scale120 == 0 ? 120u : scale120, 60u, 480u);
+        clientDpi = Math.Max(0, clientDpi);
+        if (width <= 0 || height <= 0)
             return;
-        Output = Output with { Width = width, Height = height };
+        if (width == Output.Width && height == Output.Height && scale120 == Output.Scale120 && clientDpi == Output.ClientDpi)
+            return;
+
+        int intScale = Math.Max(1, (int)((scale120 + 119) / 120));
+        Output = Output with
+        {
+            Width = width,
+            Height = height,
+            Scale = intScale,
+            Scale120 = scale120,
+            ClientDpi = clientDpi
+        };
         if (FramePresenter is IWaylandDesktopSceneController scene)
             scene.ResizeDesktop(width, height);
 
-        foreach (WaylandClient client in _clients.ToArray())
-        {
-            foreach (WlOutputResource output in client.Objects.All.OfType<WlOutputResource>().ToArray())
-                await output.AdvertiseAsync();
-        }
-
         await ArrangeLayersAsync();
-        foreach (XdgToplevelResource toplevel in MappedToplevels)
-        {
-            if (toplevel.IsFullscreen)
-                await toplevel.UpdateMaximizedBoundsAsync();
-        }
-        foreach (WlSurfaceResource surface in _sceneSurfaces.Values.ToArray())
-            surface.UpdateChildSubsurfacePlacements();
+        await RefreshAllClientOutputsAsync();
     }
 
     internal async ValueTask ArrangeLayersAsync()
@@ -43,7 +48,7 @@ public sealed partial class WaylandServer
             .Where(static layer => !layer.Destroyed && layer.HasCommitted)
             .OrderByDescending(static layer => layer.SceneLayer)
             .ToArray();
-        WaylandSurfaceBounds available = OutputBounds;
+        WaylandSurfaceBounds available = DefaultWorkArea;
         foreach (LayerSurfaceResource layer in layers)
         {
             if (layer.ExclusiveZone <= 0)
@@ -106,12 +111,14 @@ public sealed partial class WaylandServer
 
         foreach (ForeignToplevelManagerResource manager in SnapshotForeignManagers())
             await manager.UpdateAsync(toplevel);
+        NotifyToplevelsChanged();
     }
 
     internal async ValueTask CloseForeignToplevelAsync(XdgToplevelResource toplevel)
     {
         foreach (ForeignToplevelManagerResource manager in SnapshotForeignManagers())
             await manager.CloseToplevelAsync(toplevel);
+        NotifyToplevelsChanged();
     }
 
     private ForeignToplevelManagerResource[] SnapshotForeignManagers() => _clients

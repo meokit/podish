@@ -1,0 +1,70 @@
+diff --git a/src/kosmickrisp/bridge/mtl_device.h b/src/kosmickrisp/bridge/mtl_device.h
+--- a/src/kosmickrisp/bridge/mtl_device.h
++++ b/src/kosmickrisp/bridge/mtl_device.h
+@@ -30,6 +30,7 @@
+ uint32_t mtl_device_get_gpu_apple_family(mtl_device *dev);
+ uint64_t mtl_device_get_registry_id(mtl_device *dev);
+ bool mtl_device_supports_sample_count(mtl_device *dev, uint32_t sample_count);
++bool mtl_device_supports_bc(mtl_device *dev);
+ struct mtl_size mtl_device_max_threads_per_threadgroup(mtl_device *dev);
+ uint32_t mtl_device_max_threadgroup_memory_length(mtl_device *dev);
+ uint64_t mtl_device_max_buffer_length(mtl_device *dev);
+diff --git a/src/kosmickrisp/bridge/mtl_device.m b/src/kosmickrisp/bridge/mtl_device.m
+--- a/src/kosmickrisp/bridge/mtl_device.m
++++ b/src/kosmickrisp/bridge/mtl_device.m
+@@ -88,6 +88,12 @@
+       id<MTLDevice> device = (id<MTLDevice>)dev;
+       [device.architecture.name getCString:buffer maxLength:(sizeof(char) * 256) encoding:NSUTF8StringEncoding];
+    }
++}
++
++bool
++mtl_device_supports_bc(mtl_device *dev)
++{
++   return [(id<MTLDevice>)dev supportsBCTextureCompression];
+ }
+ 
+ uint32_t
+diff --git a/src/kosmickrisp/bridge/stubs/mtl_device.c b/src/kosmickrisp/bridge/stubs/mtl_device.c
+--- a/src/kosmickrisp/bridge/stubs/mtl_device.c
++++ b/src/kosmickrisp/bridge/stubs/mtl_device.c
+@@ -33,6 +33,13 @@
+ void
+ mtl_device_get_architecture_name(mtl_device *dev, char buffer[256])
+ {
++}
++
++bool
++mtl_device_supports_bc(mtl_device *dev)
++{
++   (void)dev;
++   return false;
+ }
+ 
+ uint32_t
+diff --git a/src/kosmickrisp/vulkan/kk_physical_device.c b/src/kosmickrisp/vulkan/kk_physical_device.c
+--- a/src/kosmickrisp/vulkan/kk_physical_device.c
++++ b/src/kosmickrisp/vulkan/kk_physical_device.c
+@@ -1064,6 +1064,7 @@
+ 
+    struct vk_features supported_features;
+    kk_get_device_features(&supported_extensions, &supported_features);
++   supported_features.textureCompressionBC = mtl_device_supports_bc(pdev->mtl_dev_handle);
+ 
+    struct vk_properties properties;
+    kk_get_device_properties(pdev, instance, &properties);
+diff --git a/src/kosmickrisp/vulkan/kk_image.c b/src/kosmickrisp/vulkan/kk_image.c
+--- a/src/kosmickrisp/vulkan/kk_image.c
++++ b/src/kosmickrisp/vulkan/kk_image.c
+@@ -27,6 +27,11 @@
+                                    uint64_t drm_format_mod)
+ {
+    VkFormatFeatureFlags2 features = 0;
++
++   if (vk_format >= VK_FORMAT_BC1_RGB_UNORM_BLOCK &&
++       vk_format <= VK_FORMAT_BC7_SRGB_BLOCK &&
++       !pdev->vk.supported_features.textureCompressionBC)
++      return 0;
+ 
+    /* Metal does not support linear tiling for compressed formats */
+    if (tiling == VK_IMAGE_TILING_LINEAR && vk_format_is_compressed(vk_format))

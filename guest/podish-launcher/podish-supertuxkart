@@ -1,0 +1,32 @@
+#!/bin/sh
+# Wrapper so Debian's desktop-OpenGL SuperTuxKart runs hardware-accelerated
+# through gl4es -> /run/podish-gles -> ANGLE Metal on both macOS and iOS.
+set -eu
+
+if [ "$(cat /usr/local/libexec/podish-graphics-backend)" = vulkan ]; then
+    . /usr/local/libexec/podish-vulkan-env
+    for arg do
+        case "$arg" in
+            --render-driver=*) exec /usr/games/supertuxkart "$@" ;;
+        esac
+    done
+    exec /usr/games/supertuxkart --render-driver=vulkan "$@"
+fi
+
+gl4es_dir=/usr/lib/i386-linux-gnu/gl4es
+if [ -r /run/podish-gles/libEGL.so.1 ] && [ -r "$gl4es_dir/libGL.so.1" ]; then
+    export LD_LIBRARY_PATH="$gl4es_dir${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+    export SDL_VIDEO_GL_DRIVER="$gl4es_dir/libGL.so.1"
+    # Keep GL entry points alive through game shutdown after SDL closes its GL handle.
+    export LD_PRELOAD="$SDL_VIDEO_GL_DRIVER${LD_PRELOAD:+:$LD_PRELOAD}"
+    if [ -r /usr/local/lib/podish-gl4es-sdl-shim.so ]; then
+        export LD_PRELOAD="/usr/local/lib/podish-gl4es-sdl-shim.so${LD_PRELOAD:+:$LD_PRELOAD}"
+    fi
+    export LIBGL_ES="${LIBGL_ES:-2}"
+    export LIBGL_GL="${LIBGL_GL:-21}"
+    export LIBGL_EGL="${LIBGL_EGL:-/run/podish-gles/libEGL.so.1}"
+    export LIBGL_GLES="${LIBGL_GLES:-/run/podish-gles/libGLESv2.so.2}"
+    export LIBGL_SILENTSTUB="${LIBGL_SILENTSTUB:-1}"
+fi
+
+exec /usr/games/supertuxkart "$@"
