@@ -1,4 +1,5 @@
 using Fiberish.VFS;
+using Podish.Core.Graphics;
 
 namespace Podish.Wayland;
 
@@ -6,6 +7,7 @@ internal sealed class LinuxDmabufResource(WaylandClient client, uint objectId, u
     : WaylandResource(client, objectId, version, ZwpLinuxDmabufV1Protocol.InterfaceName)
 {
     internal const uint Xrgb8888 = 0x34325258, Argb8888 = 0x34325241;
+    internal const ulong LinearModifier = 0;
     internal const ulong ImplicitModifier = 0x00ff_ffff_ffff_ffff;
 
     public override IReadOnlyList<WaylandMessageMetadata> Requests => ZwpLinuxDmabufV1Protocol.Requests;
@@ -15,9 +17,14 @@ internal sealed class LinuxDmabufResource(WaylandClient client, uint objectId, u
         foreach (uint format in new[] { Xrgb8888, Argb8888 })
         {
             if (Version >= 3)
-                await ZwpLinuxDmabufV1EventWriter.ModifierAsync(Client, ObjectId, format,
-                    (uint)(ImplicitModifier >> 32), unchecked((uint)ImplicitModifier));
-            else
+            {
+                if (Client.Server.GpuBuffersEnabled)
+                    await ZwpLinuxDmabufV1EventWriter.ModifierAsync(Client, ObjectId, format,
+                        (uint)(ImplicitModifier >> 32), unchecked((uint)ImplicitModifier));
+                if (Client.Server.VenusPrimeEnabled || Client.Server.VirglPrimeEnabled)
+                    await ZwpLinuxDmabufV1EventWriter.ModifierAsync(Client, ObjectId, format, 0, 0);
+            }
+            else if (Client.Server.GpuBuffersEnabled)
                 await ZwpLinuxDmabufV1EventWriter.FormatAsync(Client, ObjectId, format);
         }
     }
@@ -92,6 +99,7 @@ internal sealed class LinuxBufferParamsResource(WaylandClient client, uint objec
         _used = true;
         var file = _file;
         _file = null;
+        DrmScanoutBuffer? explicitPrime = null;
         try
         {
             if (file == null)
@@ -101,12 +109,38 @@ internal sealed class LinuxBufferParamsResource(WaylandClient client, uint objec
             if (format is not (LinuxDmabufResource.Xrgb8888 or LinuxDmabufResource.Argb8888) ||
                 (flags & ~ZwpLinuxBufferParamsV1Flags.YInvert) != 0)
                 throw Error(ZwpLinuxBufferParamsV1Error.InvalidFormat, "Unsupported PRIME format or flags.");
-            if (_offset != 0 || _stride < (ulong)width * 4 ||
-                (ulong)_stride * (uint)height > (file.OpenedInode?.Size ?? 0))
-                throw Error(ZwpLinuxBufferParamsV1Error.OutOfBounds, "Plane bounds do not match the descriptor.");
+            DrmScanoutBuffer? buffer = null;
+            if (_modifier == LinuxDmabufResource.LinearModifier && Client.Server.VenusPrimeEnabled &&
+                VirtioGpuNode.IsVenusPrimeFile(file) && flags == 0)
+            {
+                ulong bytes = (ulong)_stride * (uint)(height - 1) + (ulong)width * 4;
+                if (_offset % 4 != 0 || _stride % 4 != 0 || _offset > int.MaxValue || _stride > int.MaxValue ||
+                    _stride < (ulong)width * 4 ||
+                    bytes > int.MaxValue || bytes + _offset > (file.OpenedInode?.Size ?? 0))
+                    throw Error(ZwpLinuxBufferParamsV1Error.OutOfBounds, "Linear plane bounds do not match the descriptor.");
 
-            var buffer = DrmCardInode.GetGpuPrimeBuffer(file, (uint)width, (uint)height, _stride, format);
-            if (_modifier != LinuxDmabufResource.ImplicitModifier || buffer == null ||
+                buffer = explicitPrime = VirtioGpuNode.GetLinearPrimeBuffer(file, (uint)width, (uint)height,
+                    _stride, _offset, format);
+            }
+            else if (_modifier == LinuxDmabufResource.LinearModifier && Client.Server.VirglPrimeEnabled &&
+                     VirtioGpuNode.IsVirglPrimeFile(file))
+            {
+                if (_offset != 0 || _stride > int.MaxValue || _stride < (ulong)width * 4 || _stride % 4 != 0)
+                    throw Error(ZwpLinuxBufferParamsV1Error.OutOfBounds, "VirGL PRIME requires a complete texture plane.");
+
+                buffer = explicitPrime = VirtioGpuNode.GetVirglPrimeBuffer(file, (uint)width, (uint)height,
+                    _stride, _offset, format);
+            }
+            else if (_modifier == LinuxDmabufResource.ImplicitModifier && Client.Server.GpuBuffersEnabled)
+            {
+                if (_offset != 0 || _stride < (ulong)width * 4 ||
+                    (ulong)_stride * (uint)height > (file.OpenedInode?.Size ?? 0))
+                    throw Error(ZwpLinuxBufferParamsV1Error.OutOfBounds, "Plane bounds do not match the descriptor.");
+
+                buffer = DrmCardInode.GetGpuPrimeBuffer(file, (uint)width, (uint)height, _stride, format);
+            }
+
+            if (buffer == null ||
                 Client.Server.FramePresenter is not IWaylandGpuFramePresenter presenter || !presenter.CanImportGpuBuffer(buffer))
             {
                 if (requestedId.HasValue)
@@ -117,12 +151,14 @@ internal sealed class LinuxBufferParamsResource(WaylandClient client, uint objec
 
             uint id = requestedId ?? Client.AllocateServerObjectId();
             Client.Register(new WlBufferResource(Client, id, file, buffer, (flags & ZwpLinuxBufferParamsV1Flags.YInvert) != 0));
+            explicitPrime = null; // The registered wl_buffer owns the backing reference.
             file.Get();
             if (!requestedId.HasValue)
                 await ZwpLinuxBufferParamsV1EventWriter.CreatedAsync(Client, ObjectId, id);
         }
         finally
         {
+            explicitPrime?.Release();
             file?.Close();
         }
     }

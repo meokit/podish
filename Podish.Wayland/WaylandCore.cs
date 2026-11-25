@@ -482,6 +482,7 @@ public sealed partial class WaylandServer
     private readonly List<WaylandClient> _clients = [];
     private readonly List<(WlCallbackResource Callback, ulong FrameSequence)> _pendingFrameCallbacks = [];
     private readonly Dictionary<ulong, WlSurfaceResource> _sceneSurfaces = [];
+    private readonly Dictionary<ulong, LinuxBufferReleaseResource> _explicitBufferReleases = [];
     private readonly WaylandKeyboardKeymap _keyboardKeymap = new();
     private readonly ILogger? _logger;
     private WlDataSourceResource? _selectionSource;
@@ -492,7 +493,8 @@ public sealed partial class WaylandServer
     private long _nextSceneSurfaceId;
 
     public WaylandServer(IWaylandFramePresenter? framePresenter = null, OutputInfo? output = null, ILogger? logger = null,
-        Func<string, WaylandApplicationIcon?>? resolveApplicationIcon = null, bool enableGpuBuffers = false)
+        Func<string, WaylandApplicationIcon?>? resolveApplicationIcon = null, bool enableGpuBuffers = false,
+        bool enableExplicitSync = false, bool enableVenusPrime = false, bool enableVirglPrime = false)
     {
         FramePresenter = framePresenter;
         Output = output ?? new OutputInfo();
@@ -502,7 +504,15 @@ public sealed partial class WaylandServer
         Focus = new WaylandFocusManager(this);
         RegisterCoreGlobals();
         RegisterScalingGlobals();
-        if (enableGpuBuffers && framePresenter is IWaylandGpuFramePresenter)
+        ExplicitSyncEnabled = enableExplicitSync && framePresenter != null;
+        GpuBuffersEnabled = enableGpuBuffers && framePresenter is IWaylandGpuFramePresenter;
+        VenusPrimeEnabled = enableVenusPrime && ExplicitSyncEnabled && framePresenter is IWaylandGpuFramePresenter;
+        VirglPrimeEnabled = enableVirglPrime && ExplicitSyncEnabled && framePresenter is IWaylandGpuFramePresenter;
+        if (ExplicitSyncEnabled)
+            Globals.Add(ZwpLinuxExplicitSynchronizationV1Protocol.InterfaceName,
+                ZwpLinuxExplicitSynchronizationV1Protocol.Version,
+                static (client, id, version) => client.Register(new LinuxExplicitSyncResource(client, id, version)));
+        if (GpuBuffersEnabled || VenusPrimeEnabled || VirglPrimeEnabled)
             Globals.Add(ZwpLinuxDmabufV1Protocol.InterfaceName, ZwpLinuxDmabufV1Protocol.Version,
                 static (client, id, version) => client.Register(new LinuxDmabufResource(client, id, version)));
     }
@@ -514,6 +524,10 @@ public sealed partial class WaylandServer
     public int ReservedBottomInset { get; set; }
     public Action<ToplevelSnapshot[]>? OnToplevelsChanged { get; set; }
     public WaylandGlobalRegistry Globals { get; }
+    internal bool ExplicitSyncEnabled { get; }
+    internal bool GpuBuffersEnabled { get; }
+    internal bool VenusPrimeEnabled { get; }
+    internal bool VirglPrimeEnabled { get; }
     internal ILogger? Logger => _logger;
     internal Func<string, WaylandApplicationIcon?>? ResolveApplicationIcon { get; }
     internal WaylandKeyboardKeymap KeyboardKeymap => _keyboardKeymap;
@@ -531,9 +545,9 @@ public sealed partial class WaylandServer
             surface.UpdateChildSubsurfacePlacements();
     }
 
-    public WaylandClient CreateClient(Func<WaylandOutgoingMessage, ValueTask<int>> sendAsync)
+    public WaylandClient CreateClient(Func<WaylandOutgoingMessage, ValueTask<int>> sendAsync, FiberTask? connectionTask = null)
     {
-        var client = new WaylandClient(this, sendAsync);
+        var client = new WaylandClient(this, sendAsync) { ConnectionTask = connectionTask };
         _clients.Add(client);
         return client;
     }
@@ -543,7 +557,10 @@ public sealed partial class WaylandServer
         if (!_clients.Remove(client))
             return;
 
+        client.BeginDisconnect();
         _pendingFrameCallbacks.RemoveAll(entry => ReferenceEquals(entry.Callback.Client, client));
+        foreach (var lease in _explicitBufferReleases.Where(entry => entry.Value.Client == client).ToArray())
+            _explicitBufferReleases.Remove(lease.Key);
         Focus.ForgetClientPopups(client);
 
         var surfaces = client.Objects.All.OfType<WlSurfaceResource>().ToArray();
@@ -569,7 +586,8 @@ public sealed partial class WaylandServer
                 surface.ReleaseBuffers();
 
             foreach (WaylandResource resource in client.Objects.All
-                         .Where(static resource => resource is WlBufferResource or WlShmPoolResource or LinuxBufferParamsResource).ToArray())
+                         .Where(static resource => resource is WlBufferResource or WlShmPoolResource or LinuxBufferParamsResource
+                             or LinuxSurfaceSyncResource or LinuxBufferReleaseResource).ToArray())
                 resource.Destroy();
 
             client.HandleClosed();
@@ -1023,8 +1041,13 @@ public sealed partial class WaylandServer
         }
     }
 
+    internal void TrackExplicitBufferRelease(ulong leaseToken, LinuxBufferReleaseResource release) =>
+        _explicitBufferReleases.Add(leaseToken, release);
+
     public async ValueTask HandleBufferConsumedAsync(ulong leaseToken)
     {
+        if (_explicitBufferReleases.Remove(leaseToken, out var release))
+            await release.CompleteAsync();
         foreach (WaylandClient client in _clients)
         {
             foreach (WlBufferResource buffer in client.Objects.All.OfType<WlBufferResource>())
@@ -1042,6 +1065,7 @@ public sealed partial class WaylandServer
 public sealed class WaylandClient
 {
     private readonly Func<WaylandOutgoingMessage, ValueTask<int>> _sendAsync;
+    internal FiberTask? ConnectionTask { get; init; }
     private readonly WaylandDispatcher _dispatcher;
     private uint _nextSerial = 1;
     private readonly Queue<uint> _recentInputSerials = new();
@@ -1062,6 +1086,8 @@ public sealed class WaylandClient
     public string? PeerExecutableName { get; set; }
     public string? AppIdHint { get; set; }
     public WaylandServer.OutputInfo EffectiveOutput => _effectiveOutput ??= Server.ResolveClientOutput(this);
+    internal bool IsDisconnecting { get; private set; }
+    internal event Action? Disconnecting;
     public event Action? OnClosed;
 
     public static bool IsLauncherIdentifier(string? id)
@@ -1176,6 +1202,12 @@ public sealed class WaylandClient
             await popup.ReconfigureReactiveAsync();
         foreach (WlSurfaceResource surface in Objects.All.OfType<WlSurfaceResource>().ToArray())
             surface.UpdateChildSubsurfacePlacements();
+    }
+
+    internal void BeginDisconnect()
+    {
+        IsDisconnecting = true;
+        Disconnecting?.Invoke();
     }
 
     internal void HandleClosed() => OnClosed?.Invoke();

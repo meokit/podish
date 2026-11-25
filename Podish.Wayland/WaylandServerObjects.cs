@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Logging;
+using Podish.Core.Graphics;
 
 namespace Podish.Wayland;
 
@@ -191,6 +192,8 @@ internal sealed class WlSurfaceResource : WaylandResource
     private int _cursorHotspotY;
     private WlSubsurfaceResource? _subsurfaceRole;
     private bool _pendingAttachment;
+    internal LinuxSurfaceSyncResource? ExplicitSync { get; set; }
+    internal LinuxBufferReleaseResource? PendingExplicitRelease { get; set; }
     private WaylandSurfaceMapping? _mapping;
 
     public WlSurfaceResource(WaylandClient client, uint objectId, uint version)
@@ -312,6 +315,8 @@ internal sealed class WlSurfaceResource : WaylandResource
         switch (message.Header.Opcode)
         {
             case 0:
+                if (PendingExplicitRelease is { } release)
+                    await release.CompleteAsync();
                 Destroy();
                 break;
             case 1:
@@ -375,6 +380,16 @@ internal sealed class WlSurfaceResource : WaylandResource
 
     private async ValueTask CommitAsync()
     {
+        var attachedBuffer = _pendingAttachment ? _pending.Buffer : null;
+        if (attachedBuffer is { RequiresAcquireFence: true, Destroyed: true })
+            throw new WaylandProtocolException(ObjectId, 0, "The attached PRIME buffer was destroyed before commit.");
+        var release = PendingExplicitRelease;
+        if (ExplicitSync is { } sync)
+            await sync.WaitForAcquireAsync(attachedBuffer, attachedBuffer?.RequiresAcquireFence == true);
+        else if (attachedBuffer?.RequiresAcquireFence == true || (release != null && attachedBuffer == null))
+            throw new WaylandProtocolException(ObjectId, 0, "This commit requires a synchronized buffer attachment.");
+        PendingExplicitRelease = null;
+
         if (XdgSurface != null && _pending.Buffer != null && !XdgSurface.IsConfigured)
             throw new WaylandProtocolException(ObjectId, 0, "xdg_surface must ack_configure before first buffer commit.");
 
@@ -391,6 +406,7 @@ internal sealed class WlSurfaceResource : WaylandResource
 
         bool wasMapped = _current.Buffer != null;
         bool attached = _pendingAttachment;
+        bool presentedGpuAttachment = false;
         _pendingAttachment = false;
         _current.Buffer = _pending.Buffer;
         _mapping = mapping;
@@ -407,8 +423,6 @@ internal sealed class WlSurfaceResource : WaylandResource
         {
             if (_cursorOwner != null)
                 await _cursorOwner.RefreshCursorAsync();
-            if (attached && _current.Buffer is { Gpu: not null } unusedCursor)
-                await unusedCursor.CompleteDisplayLeaseAsync(unusedCursor.ToGpuFrame().LeaseToken);
         }
         else if (Client.Server.FramePresenter != null && (wasMapped || _current.Buffer != null) &&
                  (XdgSurface?.Toplevel is not { Destroyed: true }) &&
@@ -427,7 +441,12 @@ internal sealed class WlSurfaceResource : WaylandResource
                         }
                         : (WaylandSurfaceMapping?)null;
                     if (attached)
-                        await presenter.PresentGpuSurfaceAsync(SceneSurfaceId, gpuBuffer.ToGpuFrame() with { Mapping = canvasMapping });
+                    {
+                        var frame = gpuBuffer.ToGpuFrame() with { Mapping = canvasMapping };
+                        TrackRelease(frame.LeaseToken);
+                        await presenter.PresentGpuSurfaceAsync(SceneSurfaceId, frame);
+                        presentedGpuAttachment = true;
+                    }
                     else if (mappingChanged && canvasMapping is { } newMapping)
                         presenter.UpdateGpuSurfaceMapping(SceneSurfaceId, newMapping);
                 }
@@ -443,10 +462,16 @@ internal sealed class WlSurfaceResource : WaylandResource
                     : (WaylandSurfaceMapping?)null;
                 WaylandRect? damageBounds = ComputeBufferDamageBounds();
                 WaylandShmFrame? frame = _current.Buffer == null ? null :
-                    _current.Buffer.ToFrame(SceneSurfaceId) with { Mapping = canvasMapping, DamageBounds = damageBounds };
+                    _current.Buffer.ToFrame(SceneSurfaceId, ExplicitSync != null || release != null) with
+                    { Mapping = canvasMapping, DamageBounds = damageBounds };
+                if (frame is { } used)
+                    TrackRelease(used.LeaseToken);
                 await Client.Server.FramePresenter.PresentSurfaceAsync(SceneSurfaceId, frame);
             }
         }
+
+        if (attached && !presentedGpuAttachment && _current.Buffer is { Gpu: not null } unusedGpuBuffer)
+            await unusedGpuBuffer.ReleaseIfNotInUseAsync();
 
         if (XdgSurface?.Toplevel is { } toplevel)
         {
@@ -478,6 +503,17 @@ internal sealed class WlSurfaceResource : WaylandResource
         List<WlCallbackResource> callbacks = [.. _pending.FrameCallbacks];
         _pending.FrameCallbacks.Clear();
         Client.Server.EnqueueFrameCallbacks(callbacks);
+
+        if (release != null)
+            await release.CompleteAsync();
+
+        void TrackRelease(ulong leaseToken)
+        {
+            if (release == null)
+                return;
+            Client.Server.TrackExplicitBufferRelease(leaseToken, release);
+            release = null;
+        }
     }
 
     private WaylandRect? ComputeBufferDamageBounds()
@@ -574,6 +610,8 @@ internal sealed class WlSurfaceResource : WaylandResource
     {
         _pending.Buffer = null;
         _current.Buffer = null;
+        PendingExplicitRelease?.Destroy();
+        PendingExplicitRelease = null;
     }
 }
 
@@ -1585,6 +1623,7 @@ internal sealed class WlShmPoolResource : WaylandResource
 internal sealed class WlBufferResource : WaylandResource
 {
     private readonly HashSet<ulong> _displayLeaseTokens = [];
+    private bool _synchronizedShm;
 
     public WlBufferResource(WaylandClient client, uint objectId, uint version, WlShmPoolResource pool, int offset,
         int width, int height, int stride, WlShmFormat format)
@@ -1611,6 +1650,7 @@ internal sealed class WlBufferResource : WaylandResource
 
     public LinuxFile File { get; }
     public DrmScanoutBuffer? Gpu { get; }
+    public bool RequiresAcquireFence => Gpu is VenusScanoutBuffer or VirglScanoutBuffer;
     private bool YInverted { get; }
     public int Offset { get; }
     public int Width { get; }
@@ -1620,8 +1660,9 @@ internal sealed class WlBufferResource : WaylandResource
 
     public override IReadOnlyList<WaylandMessageMetadata> Requests => WlBufferProtocol.Requests;
 
-    public WaylandShmFrame ToFrame(ulong sceneSurfaceId)
+    public WaylandShmFrame ToFrame(ulong sceneSurfaceId, bool synchronized = false)
     {
+        _synchronizedShm |= synchronized;
         ulong leaseToken = Client.Server.AllocateDisplayLeaseToken();
         _displayLeaseTokens.Add(leaseToken);
         Client.Server.Logger?.LogDebug(
@@ -1652,6 +1693,10 @@ internal sealed class WlBufferResource : WaylandResource
         return WlBufferEventWriter.ReleaseAsync(Client, ObjectId);
     }
 
+    public ValueTask ReleaseIfNotInUseAsync() => _displayLeaseTokens.Count == 0
+        ? SendReleaseAsync()
+        : ValueTask.CompletedTask;
+
     public bool HasDisplayLease(ulong leaseToken)
     {
         return _displayLeaseTokens.Contains(leaseToken);
@@ -1662,7 +1707,7 @@ internal sealed class WlBufferResource : WaylandResource
         if (!_displayLeaseTokens.Remove(leaseToken))
             return;
 
-        if (Gpu == null || _displayLeaseTokens.Count == 0)
+        if ((Gpu == null && !_synchronizedShm) || _displayLeaseTokens.Count == 0)
             await SendReleaseAsync();
     }
 
@@ -1679,6 +1724,8 @@ internal sealed class WlBufferResource : WaylandResource
 
         base.Destroy();
         File.Close();
+        if (RequiresAcquireFence)
+            Gpu!.Release();
     }
 }
 
