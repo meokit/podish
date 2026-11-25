@@ -83,6 +83,59 @@ public sealed class DeferredWriteTlbMissTests
         }
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public unsafe void RestartableCrossPageStore_CanYieldBeforeEitherPageIsWritten(bool immediate)
+    {
+        using var cpu = new CpuSandbox(mapDefaults: false);
+        cpu.MapMemory(CpuSandbox.CodeAddress, CpuSandbox.PageSize, 7);
+        cpu.MapMemory(CpuSandbox.DataAddress, CpuSandbox.PageSize);
+        cpu.MapMemory(CpuSandbox.DataAddress + CpuSandbox.PageSize, CpuSandbox.PageSize);
+        var address = CpuSandbox.DataAddress + CpuSandbox.PageSize - 2;
+        const uint oldValue = 0x11223344;
+        const uint newValue = 0x89ABCDEF;
+        cpu.WriteMemory(address, BitConverter.GetBytes(oldValue));
+        cpu.ProtectMemory(CpuSandbox.DataAddress + CpuSandbox.PageSize, CpuSandbox.PageSize, 1);
+        byte[] store = immediate
+            ? [0xC7, 0x07, 0xEF, 0xCD, 0xAB, 0x89] // mov dword [edi], 0x89ABCDEF
+            : [0x89, 0x07]; // mov [edi], eax
+        cpu.WriteCode(store);
+        cpu[Reg.EAX] = newValue;
+        cpu[Reg.EDI] = address;
+
+        var access = 0;
+        var root = GCHandle.Alloc((Action<int>)(flags => access = flags));
+        try
+        {
+            X86Native.SetExtendedFaultCallback(cpu.State, &YieldOnPageFault, GCHandle.ToIntPtr(root));
+            var end = CpuSandbox.CodeAddress + (uint)store.Length;
+            cpu.Run(end);
+            Assert.Equal(5, access); // write | restartable
+            Assert.Equal(EmuStatus.Yield, cpu.Status);
+            Assert.Equal(CpuSandbox.CodeAddress, cpu.Eip);
+            Assert.Equal(oldValue, BitConverter.ToUInt32(cpu.ReadMemory(address, 4)));
+
+            cpu.ProtectMemory(CpuSandbox.DataAddress + CpuSandbox.PageSize, CpuSandbox.PageSize, 3);
+            cpu.Run(end);
+            Assert.Equal(EmuStatus.Stopped, cpu.Status);
+            Assert.Equal(newValue, BitConverter.ToUInt32(cpu.ReadMemory(address, 4)));
+        }
+        finally
+        {
+            X86Native.SetFaultCallback(cpu.State, null, IntPtr.Zero);
+            root.Free();
+        }
+    }
+
+    [UnmanagedCallersOnly]
+    private static int YieldOnPageFault(IntPtr state, uint address, int access, IntPtr userdata)
+    {
+        ((Action<int>)GCHandle.FromIntPtr(userdata).Target!)(access);
+        X86Native.EmuYield(state);
+        return 1;
+    }
+
     [UnmanagedCallersOnly]
     private static int OnWriteFault(IntPtr state, uint address, int isWrite, IntPtr userdata)
     {

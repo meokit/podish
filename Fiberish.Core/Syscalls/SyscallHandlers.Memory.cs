@@ -222,8 +222,12 @@ public partial class SyscallManager
             }
             else if ((flags & MAP_POPULATE) != 0)
             {
-                for (var p = (uint)res; p < endAddr; p += LinuxConstants.PageSize)
-                    Mem.HandleFault(p, false, engine);
+                var memory = Mem;
+                if (engine.Owner is FiberTask task)
+                    await memory.PopulateMappingAsync(task, memory.FindVmArea((uint)res), (uint)res, endAddr);
+                else
+                    for (var p = (uint)res; p < endAddr; p += LinuxConstants.PageSize)
+                        memory.HandleFault(p, false, engine);
             }
 
             return (int)res;

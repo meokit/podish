@@ -59,6 +59,7 @@ struct alignas(16) MemWriteOperation {
     uint32_t addr;
     uint8_t size;
     bool done;
+    bool can_restart;
 };
 
 static_assert(sizeof(MemReadOperation) == 32);
@@ -120,6 +121,10 @@ struct EmuState {
 
     // Callback Storage
     FaultHandler fault_handler = nullptr;
+    bool extended_fault_callback = false;
+    // A deferred fault exits X86_Run, discarding the temporary memory op.
+    // Only paths that can restart at the saved EIP may set this.
+    bool can_restart_memory_fault = false;
     void* fault_userdata = nullptr;
 
     MemHook mem_hook = nullptr;
@@ -229,13 +234,14 @@ struct EmuState {
         op.addr = addr;
         op.size = sizeof(T);
         op.done = false;
+        op.can_restart = false;
         op.instruction = instruction;
         std::memcpy(op.data.data(), &value, sizeof(T));
 
         return std::unexpected(mem::FaultCode::PageFault);
     }
 
-    template <typename T>
+    template <typename T, bool can_restart = false>
     FORCE_INLINE mem::MemResult<void> request_write_only(uint32_t addr, const T& value, const DecodedOp* instruction) {
         static_assert(sizeof(T) <= 16);
 
@@ -246,6 +252,7 @@ struct EmuState {
         op.addr = addr;
         op.size = sizeof(T);
         op.done = false;
+        op.can_restart = can_restart;
         op.instruction = instruction;
         std::memcpy(op.data.data(), &value, sizeof(T));
 

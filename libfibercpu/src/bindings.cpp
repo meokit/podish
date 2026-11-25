@@ -166,17 +166,25 @@ static bool FatalSignalHandlerEnabled() {
     return enabled;
 }
 
-static int InternalFaultBridge(void* opaque, uint32_t addr, int is_write) {
+static int InternalFaultBridge(void* opaque, uint32_t addr, int requested) {
     auto* state = static_cast<EmuState*>(opaque);
     const uint8_t previous_vector = state->fault_vector;
     const uint32_t previous_address = state->fault_addr;
     state->fault_vector = 14;  // #PF
     state->fault_addr = addr;
+    const auto property = static_cast<mem::Property>(requested);
+    const bool write = mem::has_property(property, mem::Property::Write);
     if (FaultTraceEnabled()) {
-        fprintf(stderr, "[Bridge] Fault addr=0x%x write=%d\n", addr, is_write);
+        fprintf(stderr, "[Bridge] Fault addr=0x%x write=%d\n", addr, write);
     }
     if (state->fault_handler) {
-        int res = state->fault_handler(state, addr, is_write, state->fault_userdata);
+        int access = write ? 1 : 0;
+        if (state->extended_fault_callback) {
+            const bool exec = mem::has_property(property, mem::Property::Exec);
+            if (exec) access |= 2;
+            if (exec || state->can_restart_memory_fault) access |= 4;
+        }
+        int res = state->fault_handler(state, addr, access, state->fault_userdata);
         if (res && state->status != EmuStatus::Fault) {
             state->fault_vector = previous_vector;
             state->fault_addr = previous_address;
@@ -1283,6 +1291,12 @@ int X86_GetStatus(EmuState* state) { return (int)state->status; }
 void X86_SetFaultCallback(EmuState* state, fiberish::FaultHandler handler, void* userdata) {
     state->fault_handler = handler;
     state->fault_userdata = userdata;
+    state->extended_fault_callback = false;
+}
+
+void X86_SetExtendedFaultCallback(EmuState* state, fiberish::FaultHandler handler, void* userdata) {
+    X86_SetFaultCallback(state, handler, userdata);
+    state->extended_fault_callback = true;
 }
 
 void X86_SetMemHook(EmuState* state, MemHook hook, void* userdata) {

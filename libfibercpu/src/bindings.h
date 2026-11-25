@@ -135,6 +135,8 @@ typedef void (*MemHook)(EmuState* state, uint32_t addr, uint32_t size, int is_wr
 typedef int (*InterruptHandler)(EmuState* state, uint32_t vector, void* userdata);
 
 void X86_SetFaultCallback(EmuState* state, FaultHandler handler, void* userdata);
+// The callback's third argument is a bitmask: 1=write, 2=execute, 4=restartable.
+void X86_SetExtendedFaultCallback(EmuState* state, FaultHandler handler, void* userdata);
 void X86_SetMemHook(EmuState* state, MemHook hook, void* userdata);
 void X86_SetInterruptHook(EmuState* state, uint8_t vector, InterruptHandler hook, void* userdata);
 

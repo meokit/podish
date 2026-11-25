@@ -3229,6 +3229,66 @@ public class VMAManager
             true);
     }
 
+    internal readonly record struct FilePageRead(LayerInode Inode, uint PageIndex, long Offset, int Length);
+
+    internal bool TryGetFilePageRead(uint addr, NativeFaultAccess access, out FilePageRead read)
+    {
+        read = default;
+        var vma = FindVmArea(addr);
+        if (vma is not { IsFileBacked: true } ||
+            ResolveCurrentFileMappingBacking(vma.FileMapping) is not LayerInode { SupportsAsyncRead: true } inode ||
+            WantsWritableMappedFilePage(vma))
+            return false;
+
+        var required = (access & NativeFaultAccess.Execute) != 0 ? Protection.Exec :
+            (access & NativeFaultAccess.Write) != 0 ? Protection.Write : Protection.Read;
+        if ((vma.Perms & required) == 0 ||
+            IsPageResident(vma, addr & LinuxConstants.PageMask))
+            return false;
+
+        var pageIndex = GetVmaPageIndex(vma, addr & LinuxConstants.PageMask);
+        if (inode.HasResidentMappingPage(pageIndex))
+            return false;
+
+        var relativeOffset = vma.GetRelativeOffsetForPageIndex(pageIndex);
+        var bytesLeft = vma.GetFileBackingLength() - relativeOffset;
+        if (bytesLeft <= 0)
+            return false;
+
+        read = new FilePageRead(inode, pageIndex, vma.GetAbsoluteFileOffsetForPageIndex(pageIndex),
+            (int)Math.Min(LinuxConstants.PageSize, bytesLeft));
+        return true;
+    }
+
+    internal async ValueTask PopulateMappingAsync(FiberTask task, VmArea? mappedArea, uint start, uint end)
+    {
+        if (mappedArea == null) return;
+        var access = (mappedArea.Perms & Protection.Read) != 0 ? NativeFaultAccess.Read :
+            (mappedArea.Perms & Protection.Exec) != 0 ? NativeFaultAccess.Execute : NativeFaultAccess.Write;
+
+        for (var address = start; address < end; address += LinuxConstants.PageSize)
+        {
+            if (task.IsRetiring || task.Exited || !ReferenceEquals(FindVmArea(address), mappedArea))
+                return;
+
+            if (TryGetFilePageRead(address, access, out var read))
+            {
+                var bytes = new byte[read.Length];
+                var count = await read.Inode.ReadToHostAsync(task, null, bytes, read.Offset);
+                if (task.IsRetiring || task.Exited || !ReferenceEquals(FindVmArea(address), mappedArea))
+                    return;
+                if (count == -(int)Errno.ERESTARTSYS)
+                    return;
+
+                if (TryGetFilePageRead(address, access, out var current) &&
+                    (current != read || count != bytes.Length || !current.Inode.InstallReadMappingPage(current.PageIndex, bytes)))
+                    continue;
+            }
+
+            HandleFault(address, false, task.CPU);
+        }
+    }
+
     public FaultResult HandleFaultDetailed(uint addr, bool isWrite, Engine engine)
     {
         return HandleFaultDetailedCore(addr, isWrite, engine, autoLock: true);

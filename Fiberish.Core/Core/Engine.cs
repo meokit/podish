@@ -12,6 +12,15 @@ using X86Native = Fiberish.X86.Native.X86Native;
 
 namespace Fiberish.Core;
 
+[Flags]
+internal enum NativeFaultAccess
+{
+    Read = 0,
+    Write = 1,
+    Execute = 2,
+    Restartable = 4
+}
+
 public enum EngineCloneMemoryMode
 {
     InlineClone = 0,
@@ -40,7 +49,7 @@ public class Engine : IDisposable
         _gcHandle = GCHandle.Alloc(this);
 
         // Register callbacks
-        X86Native.SetFaultCallback(State, &OnNativeFault, GCHandle.ToIntPtr(_gcHandle));
+        X86Native.SetExtendedFaultCallback(State, &OnNativeFault, GCHandle.ToIntPtr(_gcHandle));
         X86Native.SetInterruptHook(State, 0x80, &OnNativeInterrupt, GCHandle.ToIntPtr(_gcHandle));
         X86Native.SetInterruptHook(State, 3, &OnNativeInterrupt, GCHandle.ToIntPtr(_gcHandle));
         X86Native.SetInterruptHook(State, 6, &OnNativeInterrupt, GCHandle.ToIntPtr(_gcHandle));
@@ -62,7 +71,7 @@ public class Engine : IDisposable
         MemoryContext = memoryContext;
         State = state;
         _gcHandle = GCHandle.Alloc(this);
-        X86Native.SetFaultCallback(State, &OnNativeFault, GCHandle.ToIntPtr(_gcHandle));
+        X86Native.SetExtendedFaultCallback(State, &OnNativeFault, GCHandle.ToIntPtr(_gcHandle));
         X86Native.SetInterruptHook(State, 0x80, &OnNativeInterrupt, GCHandle.ToIntPtr(_gcHandle));
         X86Native.SetInterruptHook(State, 3, &OnNativeInterrupt, GCHandle.ToIntPtr(_gcHandle));
         X86Native.SetInterruptHook(State, 6, &OnNativeInterrupt, GCHandle.ToIntPtr(_gcHandle));
@@ -80,6 +89,7 @@ public class Engine : IDisposable
 
     // Callbacks
     public Func<Engine, uint, bool, bool>? FaultHandler { get; set; }
+    internal Func<Engine, uint, NativeFaultAccess, bool>? ExtendedFaultHandler { get; set; }
     public Func<Engine, uint, bool>? InterruptHandler { get; set; }
 
     public Action<Engine, int, string>? LogHandler { get; set; }
@@ -257,14 +267,19 @@ public class Engine : IDisposable
     }
 
     [UnmanagedCallersOnly]
-    private static int OnNativeFault(IntPtr state, uint addr, int isWrite, IntPtr userdata)
+    private static int OnNativeFault(IntPtr state, uint addr, int accessFlags, IntPtr userdata)
     {
         try
         {
             if (userdata == IntPtr.Zero) return 0;
             var handle = GCHandle.FromIntPtr(userdata);
             if (handle.Target is Engine engine)
-                return engine.FaultHandler?.Invoke(engine, addr, isWrite != 0) ?? false ? 1 : 0;
+            {
+                var access = (NativeFaultAccess)accessFlags;
+                var handled = engine.ExtendedFaultHandler?.Invoke(engine, addr, access) ??
+                              engine.FaultHandler?.Invoke(engine, addr, (access & NativeFaultAccess.Write) != 0);
+                return handled == true ? 1 : 0;
+            }
         }
         catch (Exception ex)
         {

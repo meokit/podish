@@ -145,7 +145,8 @@ FORCE_INLINE LogicFlow OpMov_EvGv_Mem_Internal(LogicFuncParams) {
 
     uint32_t addr = ComputeLinearAddressSpecialized<IndexSpec, BaseRegSpec, SegmentSpec>(state, gpr, op);
     // Restart on TLB Miss
-    if (!WriteMem<uint32_t, OpOnTLBMiss::Retry>(state, gpr, addr, val, utlb, op)) return LogicFlow::RetryMemoryOp;
+    if (!WriteMem<uint32_t, OpOnTLBMiss::RetryRestartable>(state, gpr, addr, val, utlb, op))
+        return LogicFlow::RetryMemoryOp;
     return LogicFlow::Continue;
 }
 
@@ -211,7 +212,8 @@ FORCE_INLINE LogicFlow OpMov_OaMa_Internal(LogicFuncParams) {
     uint32_t addr = ComputeLinearAddress(state, gpr, op);
     uint32_t val = gpr.GetReg(state, EAX);
     // Restart on TLB Miss
-    if (!WriteMem<uint32_t, OpOnTLBMiss::Retry>(state, gpr, addr, val, utlb, op)) return LogicFlow::RetryMemoryOp;
+    if (!WriteMem<uint32_t, OpOnTLBMiss::RetryRestartable>(state, gpr, addr, val, utlb, op))
+        return LogicFlow::RetryMemoryOp;
     return LogicFlow::Continue;
 }
 
@@ -267,7 +269,7 @@ FORCE_INLINE LogicFlow OpMovModRM(LogicFuncParams) {
     const unsigned reg = MovRegister<Register>((operand_modrm >> 3) & 7);
     if constexpr (Direction == MovDirection::ToRm) {
         const auto value = ReadRegGeneric<T>(state, gpr, reg);
-        if (!WriteModRM<T, OpOnTLBMiss::Retry, 1, Form>(state, gpr, op, operand_modrm, value, utlb))
+        if (!WriteModRM<T, OpOnTLBMiss::RetryRestartable, 1, Form>(state, gpr, op, operand_modrm, value, utlb))
             return LogicFlow::RetryMemoryOp;
     } else {
         const auto value = ReadModRM<T, OpOnTLBMiss::Restart, 1, Form>(state, gpr, op, operand_modrm, utlb);
@@ -367,7 +369,8 @@ FORCE_INLINE LogicFlow OpMov_GbEb(LogicFuncParams) {
 
 template <typename T, AddrModeSpec Form = AddrModeSpec::Dynamic>
 FORCE_INLINE LogicFlow OpMovImmediateModRM(LogicFuncParams) {
-    if (!WriteModRM<T, OpOnTLBMiss::Retry, 1, Form>(state, gpr, op, operand_modrm, static_cast<T>(imm), utlb))
+    if (!WriteModRM<T, OpOnTLBMiss::RetryRestartable, 1, Form>(state, gpr, op, operand_modrm, static_cast<T>(imm),
+                                                               utlb))
         return LogicFlow::RetryMemoryOp;
     return LogicFlow::Continue;
 }
@@ -379,10 +382,10 @@ template <AddrIndexSpec IndexSpec = AddrIndexSpec::Dynamic, AddrBaseRegSpec Base
 FORCE_INLINE LogicFlow OpMov_EvIz_Mem_Internal(LogicFuncParams) {
     const uint32_t addr = ComputeLinearAddressSpecialized<IndexSpec, BaseRegSpec, SegmentSpec>(state, gpr, op);
     if (GetPrefixes(op).flags.opsize) {
-        if (!WriteMem<uint16_t, OpOnTLBMiss::Retry>(state, gpr, addr, (uint16_t)imm, utlb, op))
+        if (!WriteMem<uint16_t, OpOnTLBMiss::RetryRestartable>(state, gpr, addr, (uint16_t)imm, utlb, op))
             return LogicFlow::RetryMemoryOp;
     } else {
-        if (!WriteMem<uint32_t, OpOnTLBMiss::Retry>(state, gpr, addr, (uint32_t)imm, utlb, op))
+        if (!WriteMem<uint32_t, OpOnTLBMiss::RetryRestartable>(state, gpr, addr, (uint32_t)imm, utlb, op))
             return LogicFlow::RetryMemoryOp;
     }
     return LogicFlow::Continue;
@@ -434,7 +437,8 @@ FORCE_INLINE LogicFlow OpMovMoffs(LogicFuncParams, const Operands& operands = {}
     const uint32_t linear = imm + GetSegmentBase(state, op, operands);
     if constexpr (Direction == MovDirection::ToRm) {
         const T value = ReadRegGeneric<T>(state, gpr, EAX);
-        if (!WriteMem<T, OpOnTLBMiss::Retry>(state, gpr, linear, value, utlb, op)) return LogicFlow::RetryMemoryOp;
+        if (!WriteMem<T, OpOnTLBMiss::RetryRestartable>(state, gpr, linear, value, utlb, op))
+            return LogicFlow::RetryMemoryOp;
     } else {
         const auto value = ReadMem<T, OpOnTLBMiss::Restart>(state, gpr, linear, utlb, op);
         if (!value) return LogicFlow::RestartMemoryOp;
@@ -470,9 +474,9 @@ template <AddrModeSpec Form = AddrModeSpec::Dynamic>
 FORCE_INLINE LogicFlow OpMov_Rm_Sreg_Internal(LogicFuncParams) {
     // The memory destination is always 16 bits; only a register destination is zero-extended.
     if (OperandIsReg<Form>(operand_modrm)) {
-        if (!WriteModRM<uint32_t, OpOnTLBMiss::Retry, 1, Form>(state, gpr, op, operand_modrm, 0, utlb))
+        if (!WriteModRM<uint32_t, OpOnTLBMiss::RetryRestartable, 1, Form>(state, gpr, op, operand_modrm, 0, utlb))
             return LogicFlow::RetryMemoryOp;
-    } else if (!WriteModRM<uint16_t, OpOnTLBMiss::Retry, 1, Form>(state, gpr, op, operand_modrm, 0, utlb)) {
+    } else if (!WriteModRM<uint16_t, OpOnTLBMiss::RetryRestartable, 1, Form>(state, gpr, op, operand_modrm, 0, utlb)) {
         return LogicFlow::RetryMemoryOp;
     }
     return LogicFlow::Continue;

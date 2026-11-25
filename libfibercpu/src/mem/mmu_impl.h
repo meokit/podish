@@ -68,13 +68,13 @@ inline void* Mmu::try_allocate_block_bytes(size_t size, uint32_t guest_eip) {
 }
 
 // Signal Fault
-[[nodiscard]] FORCE_INLINE EmuStatus Mmu::signal_fault(uint32_t addr, int is_write) {
+[[nodiscard]] FORCE_INLINE EmuStatus Mmu::signal_fault(uint32_t addr, Property access) {
     // Always Trigger Precise Fault mechanism to stop current block execution
     // and allow retry (if handled) or stop (if not).
 
     bool handled = false;
     if (fault_handler) {
-        handled = (bool)fault_handler(fault_opaque, addr, is_write);
+        handled = (bool)fault_handler(fault_opaque, addr, static_cast<int>(access));
     }
 
     if (!handled) {
@@ -106,8 +106,7 @@ FORCE_INLINE void Mmu::sync_dirty(GuestAddr vaddr) {
     const uint32_t offset = addr & PAGE_MASK;
     auto* chunk = dir->l1_directory[l1_idx].get();
     if (!chunk || !chunk->pages[l2_idx] || !has_property(chunk->permissions[l2_idx], req_perm)) {
-        if (signal_fault(addr, has_property(req_perm, Property::Write)) != EmuStatus::Running)
-            return std::unexpected(FaultCode::PageFault);
+        if (signal_fault(addr, req_perm) != EmuStatus::Running) return std::unexpected(FaultCode::PageFault);
 
         // A fault callback may replace the mapping or its entire MMU.
         dir = current_page_directory();

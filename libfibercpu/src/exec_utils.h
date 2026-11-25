@@ -479,7 +479,11 @@ enum class OpOnTLBMiss {
     // Return failure logic flow to retry the operation from the next instruction boundary.
     // Does NOT check for pending operation on re-entry (fire and forget).
     // Corresponds to legacy fail_on_tlb_miss = true, request_retry = true (WRITE ONLY).
-    Retry
+    Retry,
+
+    // Same in-slice replay as Retry, but a guest yield before the store
+    // may re-execute the instruction from its saved EIP.
+    RetryRestartable
 };
 
 /**
@@ -556,8 +560,7 @@ FORCE_INLINE MemResult<void> WriteModRM(EmuState* state, GprCache& gpr, DecodedO
                 if constexpr (Strategy == OpOnTLBMiss::Restart) {
                     result = state->request_write_and_check_pending<T>(addr, val, op);
                 } else {
-                    // Retry
-                    result = state->request_write_only<T>(addr, val, op);
+                    result = state->request_write_only<T, Strategy == OpOnTLBMiss::RetryRestartable>(addr, val, op);
                 }
             }
             return result;
@@ -596,8 +599,7 @@ FORCE_INLINE MemResult<void> WriteMem(EmuState* state, GprCache& gpr, uint32_t a
             if constexpr (Strategy == OpOnTLBMiss::Restart) {
                 result = state->request_write_and_check_pending<T>(addr, val, op);
             } else {
-                // Retry
-                result = state->request_write_only<T>(addr, val, op);
+                result = state->request_write_only<T, Strategy == OpOnTLBMiss::RetryRestartable>(addr, val, op);
             }
         }
         return result;

@@ -2867,7 +2867,7 @@ public abstract class MappingBackedInode : Inode
     }
 
     private InodePageRecord CreateAllocatedMappingPage(LinuxFile? linuxFile, uint pageIndex, long fileOffset,
-        int prefillLength, out int error)
+        int prefillLength, out int error, ReadOnlySpan<byte> contents = default)
     {
         error = -(int)Errno.ENOMEM;
         if (!SuperBlock.MemoryContext.BackingPagePool.TryAllocatePoolBackedPageStrict(out var pageHandle) ||
@@ -2880,7 +2880,12 @@ public abstract class MappingBackedInode : Inode
             unsafe
             {
                 var target = new Span<byte>((void*)ptr, LinuxConstants.PageSize);
-                if (!TryPopulateMappingPage(linuxFile, pageIndex, fileOffset, prefillLength, target, out error))
+                if (!contents.IsEmpty)
+                {
+                    contents.CopyTo(target);
+                    target[contents.Length..].Clear();
+                }
+                else if (!TryPopulateMappingPage(linuxFile, pageIndex, fileOffset, prefillLength, target, out error))
                 {
                     BackingPageHandle.Release(ref pageHandle);
                     return null!;
@@ -3014,6 +3019,20 @@ public abstract class MappingBackedInode : Inode
         }
 
         return RegisterAndInstallMappingPage(mapping, pageIndex, record);
+    }
+
+    internal bool HasResidentMappingPage(uint pageIndex) =>
+        Mapping is { } mapping && mapping.PeekPage(pageIndex) != IntPtr.Zero ||
+        TryGetMappingPageRecord(pageIndex, out _);
+
+    internal bool InstallReadMappingPage(uint pageIndex, ReadOnlySpan<byte> contents)
+    {
+        var mapping = EnsureMapping();
+        if (mapping.PeekPage(pageIndex) != IntPtr.Zero || TryGetMappingPageRecord(pageIndex, out _))
+            return true;
+
+        var record = CreateAllocatedMappingPage(null, pageIndex, 0, 0, out _, contents);
+        return record != null && RegisterAndInstallMappingPage(mapping, pageIndex, record) != IntPtr.Zero;
     }
 
     internal IntPtr RegisterAndInstallMappingPage(AddressSpace mapping, uint pageIndex, InodePageRecord record)

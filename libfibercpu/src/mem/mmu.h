@@ -895,7 +895,7 @@ private:
     [[nodiscard]] bool owning_engine_is_executing();
 
     // Updated signal_fault to take context
-    [[nodiscard]] EmuStatus signal_fault(uint32_t addr, int is_write);
+    [[nodiscard]] EmuStatus signal_fault(uint32_t addr, Property access);
     void sync_dirty(GuestAddr vaddr);
 
     static size_t block_lookup_cache_slot(uintptr_t host_page_base, uint32_t guest_eip) {

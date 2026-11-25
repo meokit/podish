@@ -84,7 +84,9 @@ ATTR_PRESERVE_NONE int64_t MemoryOpGeneric(EmuState* RESTRICT state, DecodedOp* 
     if (state->mem_op_type != PendingMemOp::None) state->sync_eip_to_op_start(op);
     if (state->mem_op_type == PendingMemOp::Read) {
         auto& mem_op = state->mem_op.read;
+        state->can_restart_memory_fault = restart;
         const bool fault = PerformMemOp(state, utlb, mem_op.addr, mem_op.size, mem_op.data.data(), false);
+        state->can_restart_memory_fault = false;
         if (!fault) {
             mem_op.done = true;
         } else {
@@ -97,7 +99,9 @@ ATTR_PRESERVE_NONE int64_t MemoryOpGeneric(EmuState* RESTRICT state, DecodedOp* 
         }
     } else if (state->mem_op_type == PendingMemOp::Write) {
         auto& mem_op = state->mem_op.write;
+        state->can_restart_memory_fault = mem_op.can_restart;
         const bool fault = PerformMemOp(state, utlb, mem_op.addr, mem_op.size, mem_op.data.data(), true);
+        state->can_restart_memory_fault = false;
         if (!fault) {
             mem_op.done = true;
         } else {
@@ -196,17 +200,17 @@ ATTR_PRESERVE_NONE int64_t ResolveBranchTargetSlowLink(EmuState* RESTRICT state,
                                                        mem::MicroTlbAbiWord utlb_addend, uint32_t branch,
                                                        uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
     FIBERCPU_PIN_ASSUME;
-    ATTR_MUSTTAIL return ResolveBranchTargetSlowImpl<0>(state, op, instr_limit, utlb_tags, utlb_addend,
-                                                                    branch, flags_cache FIBERCPU_PIN_RELOAD);
+    ATTR_MUSTTAIL return ResolveBranchTargetSlowImpl<0>(state, op, instr_limit, utlb_tags, utlb_addend, branch,
+                                                        flags_cache FIBERCPU_PIN_RELOAD);
 }
 
 ATTR_PRESERVE_NONE int64_t ResolveBranchTargetSlowDoubleSlot(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                              int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags,
-                                                              mem::MicroTlbAbiWord utlb_addend, uint32_t branch,
-                                                              uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+                                                             int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags,
+                                                             mem::MicroTlbAbiWord utlb_addend, uint32_t branch,
+                                                             uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
     FIBERCPU_PIN_ASSUME;
-    ATTR_MUSTTAIL return ResolveBranchTargetSlowImpl<1>(
-        state, op, instr_limit, utlb_tags, utlb_addend, branch, flags_cache FIBERCPU_PIN_RELOAD);
+    ATTR_MUSTTAIL return ResolveBranchTargetSlowImpl<1>(state, op, instr_limit, utlb_tags, utlb_addend, branch,
+                                                        flags_cache FIBERCPU_PIN_RELOAD);
 }
 
 // Scalar handlers use physical next-slot dispatch. The data slot only forwards the

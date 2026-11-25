@@ -32,6 +32,7 @@ public enum TaskExecutionMode
     RunningGuest,
     HostService,
     WaitingAsyncSyscall,
+    WaitingFilePage,
     WaitingContinuation,
     Stopped,
     Terminated
@@ -112,7 +113,7 @@ public partial class FiberTask
         CPU.PageFaultResolver = HandlePageFault;
 
         CPU.InterruptHandler = HandleInterrupt;
-        CPU.FaultHandler = HandleNativeFault;
+        CPU.ExtendedFaultHandler = HandleNativeFault;
     }
 
     public int TID { get; }
@@ -310,6 +311,8 @@ public partial class FiberTask
     internal void CancelAsyncSyscallForRetirement()
     {
         PendingSyscall = null;
+        _pendingFilePage = null;
+        _failedFilePage = null;
         InterruptingSignal = null;
         Continuation = null;
         _hasPendingAsyncSyscallCompletion = false;
@@ -559,7 +562,15 @@ public partial class FiberTask
         Logger.Log((LogLevel)level, "[Native] {Message}", msg);
     }
 
-    private bool HandlePageFault(uint addr, bool isWrite)
+    private sealed record FilePageFault(VMAManager Memory, uint Address, NativeFaultAccess Access,
+        VMAManager.FilePageRead Read);
+
+    private FilePageFault? _pendingFilePage;
+    private (FilePageFault Fault, FaultResult Result)? _failedFilePage;
+
+    private bool HandlePageFault(uint addr, bool isWrite) => HandlePageFaultCore(addr, isWrite, null);
+
+    private bool HandlePageFaultCore(uint addr, bool isWrite, FaultResult? resolved)
     {
         var depth = Interlocked.Increment(ref _pageFaultDepth);
         try
@@ -577,7 +588,7 @@ public partial class FiberTask
                 return true;
             }
 
-            var faultResult = Process.Mem.HandleFaultDetailed(addr, isWrite, CPU);
+            var faultResult = resolved ?? Process.Mem.HandleFaultDetailed(addr, isWrite, CPU);
             if (faultResult == FaultResult.Handled)
                 return true;
             if (faultResult == FaultResult.Oom)
@@ -642,9 +653,57 @@ public partial class FiberTask
         return false;
     }
 
-    private bool HandleNativeFault(Engine engine, uint addr, bool isWrite)
+    private bool HandleNativeFault(Engine engine, uint addr, NativeFaultAccess access)
     {
-        return HandlePageFault(addr, isWrite);
+        var isWrite = (access & NativeFaultAccess.Write) != 0;
+        var memory = Process.Mem;
+        if ((access & NativeFaultAccess.Restartable) == 0 ||
+            !memory.TryGetFilePageRead(addr, access, out var read))
+            return HandlePageFault(addr, isWrite);
+
+        var fault = new FilePageFault(memory, addr, access, read);
+        if (_failedFilePage is { } failed && failed.Fault == fault)
+            return HandlePageFaultCore(addr, isWrite, failed.Result);
+
+        _pendingFilePage = fault;
+        engine.Yield();
+        return true;
+    }
+
+    private async Task ReadFilePageAsync(FilePageFault fault)
+    {
+        var bytes = new byte[fault.Read.Length];
+        var count = 0;
+        try
+        {
+            // The backing layer is immutable and reads by inode and offset.
+            // No guest pointer or VMA attachment is retained during the wait.
+            count = await fault.Read.Inode.ReadToHostAsync(this, null, bytes, fault.Read.Offset);
+        }
+        catch (Exception ex)
+        {
+            Logger.LogWarning(ex, "Could not read mapped file page at 0x{Address:x}", fault.Address);
+        }
+
+        CommonKernel.RunIngress(() =>
+        {
+            if (Exited || !ReferenceEquals(_pendingFilePage, fault)) return;
+            _pendingFilePage = null;
+            if (count != -(int)Errno.ERESTARTSYS && ReferenceEquals(Process.Mem, fault.Memory) &&
+                fault.Memory.TryGetFilePageRead(fault.Address, fault.Access, out var current) && current == fault.Read)
+            {
+                if (count != bytes.Length)
+                    _failedFilePage = (fault, FaultResult.Segv);
+                else if (!current.Inode.InstallReadMappingPage(current.PageIndex, bytes))
+                    _failedFilePage = (fault, FaultResult.Oom);
+            }
+
+            if (Process.State != ProcessState.Stopped)
+            {
+                PrepareFreshWakeAfterAsyncWait();
+                CommonKernel.Schedule(this);
+            }
+        }, this);
     }
 
     // RegisterBlockingSyscall removed
@@ -1696,6 +1755,13 @@ public partial class FiberTask
             if (PendingSyscall == null && Continuation == null && !HasPendingAsyncSyscallCompletion())
                 ProcessPendingSignals();
 
+            if (_pendingFilePage != null)
+            {
+                ExecutionMode = TaskExecutionMode.WaitingFilePage;
+                Status = FiberTaskStatus.Waiting;
+                return;
+            }
+
             // ── Phase 1: Resume a stored continuation ────────────────────────────────
             // A Continuation is set when an awaiter (e.g. EpollAwaiter, PollAwaiter)
             // has completed an async wait and wants the task to advance its syscall
@@ -1807,6 +1873,7 @@ public partial class FiberTask
             finally
             {
                 EndGuestCpuAccounting();
+                _failedFilePage = null;
             }
 
             if (Process.Syscalls?.Strace == true)
@@ -1816,6 +1883,14 @@ public partial class FiberTask
             {
                 Status = FiberTaskStatus.Terminated;
                 ExecutionMode = TaskExecutionMode.Terminated;
+                return;
+            }
+
+            if (_pendingFilePage is { } fault)
+            {
+                ExecutionMode = TaskExecutionMode.WaitingFilePage;
+                Status = FiberTaskStatus.Waiting;
+                _ = ReadFilePageAsync(fault);
                 return;
             }
 
@@ -2506,7 +2581,7 @@ public partial class FiberTask
                 InterruptingSignal = null;
                 if (!Exited)
                 {
-                    PrepareFreshWakeAfterAsyncSyscall();
+                    PrepareFreshWakeAfterAsyncWait();
                     CommonKernel.Schedule(this);
                 }
 
@@ -2580,7 +2655,7 @@ public partial class FiberTask
                     DeliverSignalForRestart(sig!.Value, Process.SignalActions[sig.Value]);
 
                     PendingSyscall = null;
-                    PrepareFreshWakeAfterAsyncSyscall();
+                    PrepareFreshWakeAfterAsyncWait();
                     CommonKernel.Schedule(this);
                     return;
                 }
@@ -2599,7 +2674,7 @@ public partial class FiberTask
                     PendingSyscall = null;
                     if (!Exited && Process.State != ProcessState.Stopped)
                     {
-                        PrepareFreshWakeAfterAsyncSyscall();
+                        PrepareFreshWakeAfterAsyncWait();
                         CommonKernel.Schedule(this);
                     }
 
@@ -2611,7 +2686,7 @@ public partial class FiberTask
                 CPU.RegWrite(Reg.EAX, SyscallNr);
 
                 PendingSyscall = null;
-                PrepareFreshWakeAfterAsyncSyscall();
+                PrepareFreshWakeAfterAsyncWait();
                 CommonKernel.Schedule(this);
                 return;
             }
@@ -2632,7 +2707,7 @@ public partial class FiberTask
                 SyscallTracer.TraceExit(Logger, Process.Syscalls, TID, SyscallNr, result, SyscallArg1, SyscallArg2,
                     SyscallArg3);
 
-            PrepareFreshWakeAfterAsyncSyscall();
+            PrepareFreshWakeAfterAsyncWait();
             // Reschedule the task
             FiberTaskLog.HandleAsyncSyscallFinalizeScheduling(Logger, TID, Environment.CurrentManagedThreadId,
                 CommonKernel.OwnerThreadId, Status, IsReadyQueued);
@@ -2844,7 +2919,7 @@ public partial class FiberTask
         Send
     }
 
-    private void PrepareFreshWakeAfterAsyncSyscall()
+    private void PrepareFreshWakeAfterAsyncWait()
     {
         ExecutionMode = TaskExecutionMode.RunningGuest;
         Status = FiberTaskStatus.Ready;
