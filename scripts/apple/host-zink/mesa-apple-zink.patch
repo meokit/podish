@@ -1,0 +1,561 @@
+diff --git a/meson.build b/meson.build
+index 095aec5..228b14a 100644
+--- a/meson.build
++++ b/meson.build
+@@ -293,7 +293,7 @@ if freedreno_kmds.length() != 0 and freedreno_kmds != [ 'msm' ] and with_freedre
+ endif
+ 
+ with_dri = false
+-if with_gallium and system_has_kms_drm
++if with_gallium and (system_has_kms_drm or host_machine.system() == 'darwin')
+   _glx = get_option('glx')
+   _egl = get_option('egl')
+   if _glx == 'dri' or _egl.enabled() or (_glx == 'disabled' and _egl.allowed())
+diff --git a/src/egl/drivers/dri2/platform_surfaceless.c b/src/egl/drivers/dri2/platform_surfaceless.c
+index d981f55..1633321 100644
+--- a/src/egl/drivers/dri2/platform_surfaceless.c
++++ b/src/egl/drivers/dri2/platform_surfaceless.c
+@@ -370,12 +370,17 @@ dri2_initialize_surfaceless(_EGLDisplay *disp)
+    /* When ForceSoftware is false, we try the HW driver.  When ForceSoftware
+     * is true, we try kms_swrast and swrast in order.
+     */
++#if defined(__APPLE__)
++   disp->Options.Zink = true;
++   driver_loaded = surfaceless_probe_device_sw(disp);
++#else
+    driver_loaded = surfaceless_probe_device(disp, disp->Options.ForceSoftware,
+                                             disp->Options.Zink);
+    if (!driver_loaded && disp->Options.ForceSoftware) {
+       _eglLog(_EGL_DEBUG, "Falling back to surfaceless swrast without DRM.");
+       driver_loaded = surfaceless_probe_device_sw(disp);
+    }
++#endif
+ 
+    if (!driver_loaded) {
+       err = "DRI2: failed to load driver";
+diff --git a/src/egl/meson.build b/src/egl/meson.build
+index b6c803a..116741d 100644
+--- a/src/egl/meson.build
++++ b/src/egl/meson.build
+@@ -195,6 +195,19 @@ egl_def = custom_target(
+   command : gen_vs_module_defs_normal_command,
+ )
+ 
++egl_version_args = {'version': egl_lib_version, 'soversion': egl_lib_soversion}
++egl_name_prefix = host_machine.system() == 'windows' ? 'lib' : []
++if podish_host_zink
++  # EGL and DRI bind to the same static Zink pipe loader.
++  link_for_egl = [libgallium_dri, libloader]
++  egl_name_prefix = ''
++  egl_lib_name = 'PodishHostZink'
++  egl_version_args = {}
++  files_egl += files('podish_host_zink_bridge.c')
++  link_args_for_egl += ['-Wl,-exported_symbols_list,' + meson.current_source_dir() / 'podish_host_zink_exports.txt']
++  link_deps_for_egl += files('podish_host_zink_exports.txt')
++endif
++
+ libegl = shared_library(
+   egl_lib_name,
+   files_egl,
+@@ -210,9 +223,8 @@ libegl = shared_library(
+   link_depends : [link_deps_for_egl],
+   dependencies : [deps_for_egl, dep_dl, dep_libdrm, dep_clock, dep_thread, idep_mesautil],
+   install : true,
+-  version : egl_lib_version,
+-  soversion : egl_lib_soversion,
+-  name_prefix : host_machine.system() == 'windows' ? 'lib' : [],  # always use lib, but avoid warnings on !windows
++  kwargs : egl_version_args,
++  name_prefix : egl_name_prefix,  # always use lib, but avoid warnings on !windows
+   vs_module_defs : egl_def
+ )
+ 
+diff --git a/src/gallium/drivers/zink/meson.build b/src/gallium/drivers/zink/meson.build
+index edd1092..4cb7ce1 100644
+--- a/src/gallium/drivers/zink/meson.build
++++ b/src/gallium/drivers/zink/meson.build
+@@ -58,46 +58,25 @@ zink_nir_algebraic_c = custom_target(
+ )
+ 
+ zink_c_args = []
+-inc_zink_vk = []
++zink_platform_args = []
+ 
+ if host_machine.system() == 'darwin'
+-
+-  # MoltenVK options
+-  if with_moltenvk_dir != ''
+-    # Vulkan SDK 1.3.250 to 1.3.268 support
+-    moltenvk_includes = join_paths(with_moltenvk_dir, 'MoltenVK', 'include')
+-    if not fs.is_dir(moltenvk_includes)
+-      # Vulkan SDK 1.3.275 onwards support
+-      moltenvk_includes = join_paths(with_moltenvk_dir, 'macos', 'include')
+-      if not fs.is_dir(moltenvk_includes)
+-        # MoltenVK from brew support
+-        moltenvk_includes = join_paths(with_moltenvk_dir, 'include')
+-        if not fs.is_dir(moltenvk_includes)
+-          error(f'moltenvk includes cannot be found in moltenvk-dir="@with_moltenvk_dir@"')
+-        endif
+-      endif
+-    endif
+-    inc_zink_vk += include_directories(moltenvk_includes)
+-  else
+-    error('moltenvk-dir is required but not set.')
+-  endif
+-
+-  zink_c_args += ['-x','objective-c'] # Put compiler into objective-C mode to allow for MacOS types, like IOSurface and CAMetalLayer
+-  zink_c_args += ['-iframework' , 'Foundation']
+-
++  zink_platform_args = ['-DVK_USE_PLATFORM_METAL_EXT=1']
++  zink_c_args = ['-x', 'objective-c']
+ endif
+ 
+ libzink = static_library(
+   'zink',
+   [files_libzink, zink_device_info, zink_instance, zink_nir_algebraic_c, vk_dispatch_table, spirv_info_h],
+   gnu_symbol_visibility : 'hidden',
+-  include_directories : [inc_include, inc_src, inc_mapi, inc_mesa, inc_gallium, inc_gallium_aux, inc_vulkan_util, inc_zink_vk],
++  include_directories : [inc_include, inc_src, inc_mapi, inc_mesa, inc_gallium, inc_gallium_aux, inc_vulkan_util],
+   link_args : [ld_args_build_id],
+   dependencies: [
+     idep_nir_headers, idep_mesautil, idep_vulkan_util_headers,
+     idep_vulkan_wsi_defines, idep_vulkan_util, dep_libdrm, vulkan_wsi_deps
+   ],
+-  c_args: zink_c_args,
++  c_args: zink_c_args + zink_platform_args,
++  cpp_args: zink_platform_args,
+ )
+ 
+ driver_zink = declare_dependency(
+diff --git a/src/gallium/drivers/zink/zink_context.c b/src/gallium/drivers/zink/zink_context.c
+index d264c0f..6763018 100644
+--- a/src/gallium/drivers/zink/zink_context.c
++++ b/src/gallium/drivers/zink/zink_context.c
+@@ -5285,9 +5285,6 @@ zink_context_create(struct pipe_screen *pscreen, void *priv, unsigned flags)
+    ctx->gfx_pipeline_state.dyn_state2.vertices_per_patch = 1;
+    ctx->gfx_pipeline_state.uses_dynamic_stride = screen->info.have_EXT_extended_dynamic_state ||
+                                                  screen->info.have_EXT_vertex_input_dynamic_state;
+-#if defined(MVK_VERSION)
+-   ctx->gfx_pipeline_state.uses_dynamic_stride = ctx->gfx_pipeline_state.uses_dynamic_stride && screen->have_dynamic_state_vertex_input_binding_stride;
+-#endif
+    ctx->compute_pipeline_state.dirty = true;
+    ctx->fb_changed = ctx->rp_changed = true;
+    ctx->sample_mask_changed = true;
+diff --git a/src/gallium/drivers/zink/zink_device_info.py b/src/gallium/drivers/zink/zink_device_info.py
+index 0af02cc..174364a 100644
+--- a/src/gallium/drivers/zink/zink_device_info.py
++++ b/src/gallium/drivers/zink/zink_device_info.py
+@@ -139,6 +139,7 @@ EXTENSIONS = [
+               alias="driver",
+               properties=True),
+     Extension("VK_EXT_memory_budget"),
++    Extension("VK_EXT_metal_objects"),
+     Extension("VK_EXT_memory_priority", alias="memprio", features=True),
+     Extension("VK_EXT_pageable_device_local_memory", alias="mempage", features=True),
+     Extension("VK_KHR_draw_indirect_count"),
+diff --git a/src/gallium/drivers/zink/zink_instance.py b/src/gallium/drivers/zink/zink_instance.py
+index 00cdc8e..989f980 100644
+--- a/src/gallium/drivers/zink/zink_instance.py
++++ b/src/gallium/drivers/zink/zink_instance.py
+@@ -40,8 +40,6 @@ EXTENSIONS = [
+     Extension("VK_KHR_get_physical_device_properties2"),
+     Extension("VK_KHR_external_memory_capabilities"),
+     Extension("VK_KHR_external_semaphore_capabilities"),
+-    Extension("VK_MVK_moltenvk",
+-        nonstandard=True),
+     Extension("VK_KHR_surface"),
+     Extension("VK_EXT_headless_surface"),
+     Extension("VK_KHR_wayland_surface"),
+@@ -76,12 +74,6 @@ header_code = """
+ 
+ #include <vulkan/vulkan_core.h>
+ 
+-#ifdef __APPLE__
+-#include "MoltenVK/mvk_vulkan.h"
+-// Source of MVK_VERSION
+-#include "MoltenVK/mvk_config.h"
+-#endif /* __APPLE__ */
+-
+ struct pipe_screen;
+ struct zink_screen;
+ 
+@@ -131,7 +123,6 @@ impl_code = """
+ VkInstance
+ zink_create_instance(struct zink_screen *screen, struct zink_instance_info *instance_info)
+ {
+-   /* reserve one slot for MoltenVK */
+    const char *layers[${len(layers) + 1}] = {0};
+    uint32_t num_layers = 0;
+    
+@@ -146,9 +137,6 @@ zink_create_instance(struct zink_screen *screen, struct zink_instance_info *inst
+    bool have_layer_${layer.pure_name()} = false;
+ %endfor
+ 
+-#if defined(MVK_VERSION)
+-   bool have_moltenvk_layer = false;
+-#endif
+ 
+    GET_PROC_ADDR_INSTANCE_LOCAL(screen, NULL, EnumerateInstanceExtensionProperties);
+    GET_PROC_ADDR_INSTANCE_LOCAL(screen, NULL, EnumerateInstanceLayerProperties);
+@@ -199,12 +187,6 @@ zink_create_instance(struct zink_screen *screen, struct zink_instance_info *inst
+                      have_layer_${layer.pure_name()} = true;
+                   }
+ %endfor
+-#if defined(MVK_VERSION)
+-                  if (!strcmp(layer_props[i].layerName, "MoltenVK")) {
+-                     have_moltenvk_layer = true;
+-                     layers[num_layers++] = "MoltenVK";
+-                  }
+-#endif
+                }
+             }
+         free(layer_props);
+@@ -253,7 +235,8 @@ zink_create_instance(struct zink_screen *screen, struct zink_instance_info *inst
+    VkInstanceCreateInfo ici = {0};
+    ici.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+ #ifdef __APPLE__
+-   ici.flags = VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
++   if (instance_info->have_KHR_portability_enumeration)
++      ici.flags = VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+ #endif
+    ici.pApplicationInfo = &ai;
+    ici.ppEnabledExtensionNames = extensions;
+diff --git a/src/gallium/drivers/zink/zink_resource.c b/src/gallium/drivers/zink/zink_resource.c
+index 0e29737..b78abc3 100644
+--- a/src/gallium/drivers/zink/zink_resource.c
++++ b/src/gallium/drivers/zink/zink_resource.c
+@@ -59,12 +59,6 @@
+ #define DRM_FORMAT_MOD_LINEAR 0
+ #endif
+ 
+-#ifdef __APPLE__
+-#include "MoltenVK/mvk_vulkan.h"
+-// Source of MVK_VERSION
+-#include "MoltenVK/mvk_config.h"
+-#endif /* __APPLE__ */
+-
+ #define ZINK_EXTERNAL_MEMORY_HANDLE 999
+ 
+ 
+@@ -367,12 +361,6 @@ check_ici(struct zink_screen *screen, VkImageCreateInfo *ici, uint64_t modifier)
+       image_props = props2.imageFormatProperties;
+       if (screen->info.have_EXT_host_image_copy && ici->usage & VK_IMAGE_USAGE_HOST_TRANSFER_BIT_EXT)
+          optimalDeviceAccess = hic.optimalDeviceAccess;
+-#if defined(MVK_VERSION)
+-      // MoltenVK cannot allocate a depth buffer with VK_IMAGE_USAGE_HOST_TRANSFER_BIT_EXT
+-      // As hic.identicalMemoryLayout is set, it is not needed?
+-      if (screen->info.have_EXT_host_image_copy && ici->usage & VK_IMAGE_USAGE_HOST_TRANSFER_BIT_EXT && hic.identicalMemoryLayout)
+-         optimalDeviceAccess = false;
+-#endif
+    } else
+       ret = VKSCR(GetPhysicalDeviceImageFormatProperties)(screen->pdev, ici->format, ici->imageType,
+                                                    ici->tiling, ici->usage, ici->flags, &image_props);
+@@ -1398,6 +1386,17 @@ create_image(struct zink_screen *screen, struct zink_resource_object *obj,
+       obj->plane_strides[alloc_info->whandle->plane] = alloc_info->whandle->stride;
+    }
+ 
++#ifdef VK_USE_PLATFORM_METAL_EXT
++   VkExportMetalObjectCreateInfoEXT metal_export = {
++      .sType = VK_STRUCTURE_TYPE_EXPORT_METAL_OBJECT_CREATE_INFO_EXT,
++      .pNext = ici.pNext,
++      .exportObjectType = VK_EXPORT_METAL_OBJECT_TYPE_METAL_TEXTURE_BIT_EXT,
++   };
++   if (screen->info.have_EXT_metal_objects && templ->target == PIPE_TEXTURE_2D &&
++       ici.samples == VK_SAMPLE_COUNT_1_BIT)
++      ici.pNext = &metal_export;
++#endif
++
+    VkResult result = VKSCR(CreateImage)(screen->dev, &ici, NULL, &obj->image);
+    if (result != VK_SUCCESS) {
+       mesa_loge("ZINK: vkCreateImage failed (%s)", vk_Result_to_str(result));
+@@ -2434,14 +2433,6 @@ overwrite:
+    }
+ 
+    if (!res->obj->coherent
+-#if defined(MVK_VERSION)
+-      // Work around for MoltenVk limitation specifically on coherent memory
+-      // MoltenVk returns blank memory ranges when there should be data present
+-      // This is a known limitation of MoltenVK.
+-      // See https://github.com/KhronosGroup/MoltenVK/blob/master/Docs/MoltenVK_Runtime_UserGuide.md#known-moltenvk-limitations
+-
+-       || screen->instance_info->have_MVK_moltenvk
+-#endif
+       ) {
+       VkDeviceSize size = box->width;
+       VkDeviceSize offset = res->obj->offset + trans->offset;
+@@ -3252,3 +3243,38 @@ zink_context_resource_init(struct pipe_context *pctx)
+    pctx->texture_subdata = zink_image_subdata;
+    pctx->invalidate_resource = zink_resource_invalidate;
+ }
++
++#ifdef VK_USE_PLATFORM_METAL_EXT
++void *podish_mesa_zink_export_resource(struct pipe_resource *resource);
++
++void *
++podish_mesa_zink_export_resource(struct pipe_resource *resource)
++{
++   if (!resource || resource->target != PIPE_TEXTURE_2D || resource->nr_samples > 1)
++      return NULL;
++
++   struct zink_screen *screen = zink_screen(resource->screen);
++   if (!screen->info.have_EXT_metal_objects)
++      return NULL;
++   struct zink_resource *res = zink_resource(resource);
++   if (!res->obj || !res->obj->image)
++      return NULL;
++
++   PFN_vkExportMetalObjectsEXT export_objects = (PFN_vkExportMetalObjectsEXT)
++      screen->vk_GetDeviceProcAddr(screen->dev, "vkExportMetalObjectsEXT");
++   if (!export_objects)
++      return NULL;
++
++   VkExportMetalTextureInfoEXT texture = {
++      .sType = VK_STRUCTURE_TYPE_EXPORT_METAL_TEXTURE_INFO_EXT,
++      .image = res->obj->image,
++      .plane = VK_IMAGE_ASPECT_COLOR_BIT,
++   };
++   VkExportMetalObjectsInfoEXT objects = {
++      .sType = VK_STRUCTURE_TYPE_EXPORT_METAL_OBJECTS_INFO_EXT,
++      .pNext = &texture,
++   };
++   export_objects(screen->dev, &objects);
++   return (__bridge void *)texture.mtlTexture;
++}
++#endif
+diff --git a/src/gallium/drivers/zink/zink_screen.c b/src/gallium/drivers/zink/zink_screen.c
+index bc0cc58..115767a 100644
+--- a/src/gallium/drivers/zink/zink_screen.c
++++ b/src/gallium/drivers/zink/zink_screen.c
+@@ -80,15 +80,6 @@ bool zink_tracing = false;
+ #endif
+ #endif
+ 
+-#ifdef __APPLE__
+-#include "MoltenVK/mvk_vulkan.h"
+-// Source of MVK_VERSION
+-#include "MoltenVK/mvk_config.h"
+-#define VK_NO_PROTOTYPES
+-#include "MoltenVK/mvk_deprecated_api.h"
+-#include "MoltenVK/mvk_private_api.h"
+-#endif /* __APPLE__ */
+-
+ #ifdef HAVE_LIBDRM
+ #include "drm-uapi/dma-buf.h"
+ #include <xf86drm.h>
+@@ -800,11 +791,7 @@ zink_init_screen_caps(struct zink_screen *screen)
+          modes &= ~BITFIELD_BIT(MESA_PRIM_TRIANGLE_FAN);
+       caps->supported_prim_modes = modes;
+    }
+-#if defined(MVK_VERSION)
+-   caps->fbfetch = 0;
+-#else
+    caps->fbfetch = 1;
+-#endif
+    caps->fbfetch_coherent = screen->info.have_EXT_rasterization_order_attachment_access;
+ 
+    caps->memobj =
+@@ -2040,58 +2027,6 @@ create_debug(struct zink_screen *screen)
+    return true;
+ }
+ 
+-static bool
+-zink_internal_setup_moltenvk(struct zink_screen *screen)
+-{
+-#if defined(MVK_VERSION)
+-   // MoltenVK only supports VK_DYNAMIC_STATE_VERTEX_INPUT_BINDING_STRIDE in newer Metal versions
+-   // disable unless we can get MoltenVK to confirm it is supported
+-   screen->have_dynamic_state_vertex_input_binding_stride = false;
+-
+-   if (!screen->instance_info->have_MVK_moltenvk)
+-      return true;
+-
+-   GET_PROC_ADDR_INSTANCE_LOCAL(screen, screen->instance, GetMoltenVKConfigurationMVK);
+-   GET_PROC_ADDR_INSTANCE_LOCAL(screen, screen->instance, SetMoltenVKConfigurationMVK);
+-   GET_PROC_ADDR_INSTANCE_LOCAL(screen, screen->instance, GetVersionStringsMVK);
+-   GET_PROC_ADDR_INSTANCE_LOCAL(screen, screen->instance, GetPhysicalDeviceMetalFeaturesMVK);
+-
+-   if (vk_GetVersionStringsMVK) {
+-      char molten_version[64] = {0};
+-      char vulkan_version[64] = {0};
+-
+-      vk_GetVersionStringsMVK(molten_version, sizeof(molten_version) - 1, vulkan_version, sizeof(vulkan_version) - 1);
+-
+-      printf("zink: MoltenVK %s Vulkan %s \n", molten_version, vulkan_version);
+-   }
+-
+-   if (vk_GetMoltenVKConfigurationMVK && vk_SetMoltenVKConfigurationMVK) {
+-      MVKConfiguration molten_config = {0};
+-      size_t molten_config_size = sizeof(molten_config);
+-
+-      VkResult res = vk_GetMoltenVKConfigurationMVK(screen->instance, &molten_config, &molten_config_size);
+-      if (res == VK_SUCCESS || res == VK_INCOMPLETE) {
+-         // Needed to allow MoltenVK to accept VkImageView swizzles.
+-         // Encountered when using VK_FORMAT_R8G8_UNORM
+-         molten_config.fullImageViewSwizzle = VK_TRUE;
+-         vk_SetMoltenVKConfigurationMVK(screen->instance, &molten_config, &molten_config_size);
+-      }
+-   }
+-
+-   if (vk_GetPhysicalDeviceMetalFeaturesMVK) {
+-      MVKPhysicalDeviceMetalFeatures metal_features={0};
+-      size_t metal_features_size = sizeof(metal_features);
+-
+-      VkResult res = vk_GetPhysicalDeviceMetalFeaturesMVK(screen->pdev, &metal_features, &metal_features_size);
+-      if (res == VK_SUCCESS) {
+-        screen->have_dynamic_state_vertex_input_binding_stride = metal_features.dynamicVertexStride;
+-      }
+-   }
+-#endif // MVK_VERSION
+-
+-   return true;
+-}
+-
+ void
+ zink_init_format_props(struct zink_screen *screen, enum pipe_format pformat)
+ {
+@@ -3275,6 +3210,18 @@ zink_cl_cts_version(struct pipe_screen *pscreen)
+    return "v2024-08-08-00";
+ }
+ 
++#ifdef __APPLE__
++static PFN_vkGetInstanceProcAddr podish_vk_get_instance_proc_addr;
++
++void podish_mesa_zink_set_vk_get_instance_proc_addr(PFN_vkGetInstanceProcAddr get_proc);
++
++void
++podish_mesa_zink_set_vk_get_instance_proc_addr(PFN_vkGetInstanceProcAddr get_proc)
++{
++   podish_vk_get_instance_proc_addr = get_proc;
++}
++#endif
++
+ static struct zink_screen *
+ zink_internal_create_screen(const struct pipe_screen_config *config, int64_t dev_major, int64_t dev_minor, uint64_t adapter_luid)
+ {
+@@ -3308,21 +3255,21 @@ zink_internal_create_screen(const struct pipe_screen_config *config, int64_t dev
+ 
+    u_trace_state_init();
+ 
+-   screen->loader_lib = util_dl_open(VK_LIBNAME);
+-   if (!screen->loader_lib) {
+-      if (!screen->driver_name_is_inferred)
+-         mesa_loge("ZINK: failed to load "VK_LIBNAME);
++#ifdef __APPLE__
++   screen->vk_GetInstanceProcAddr = podish_vk_get_instance_proc_addr;
++   if (!screen->vk_GetInstanceProcAddr) {
++      mesa_loge("ZINK: no Vulkan provider supplied by Podish");
+       goto fail;
+    }
+-
++#else
++   screen->loader_lib = util_dl_open(VK_LIBNAME);
++   if (!screen->loader_lib)
++      goto fail;
+    screen->vk_GetInstanceProcAddr = (PFN_vkGetInstanceProcAddr)util_dl_get_proc_address(screen->loader_lib, "vkGetInstanceProcAddr");
+    screen->vk_GetDeviceProcAddr = (PFN_vkGetDeviceProcAddr)util_dl_get_proc_address(screen->loader_lib, "vkGetDeviceProcAddr");
+-   if (!screen->vk_GetInstanceProcAddr ||
+-       !screen->vk_GetDeviceProcAddr) {
+-      if (!screen->driver_name_is_inferred)
+-         mesa_loge("ZINK: failed to get proc address");
++   if (!screen->vk_GetInstanceProcAddr || !screen->vk_GetDeviceProcAddr)
+       goto fail;
+-   }
++#endif
+ 
+    if (config) {
+       driParseConfigFiles(config->options, config->options_info, 0, "zink",
+@@ -3337,8 +3284,10 @@ zink_internal_create_screen(const struct pipe_screen_config *config, int64_t dev
+    if (++instance_refcount == 1) {
+       instance_info.loader_version = zink_get_loader_version(screen);
+       instance = zink_create_instance(screen, &instance_info);
+-      if (!instance)
++      if (!instance) {
++         simple_mtx_unlock(&instance_lock);
+          goto fail;
++      }
+    } else {
+       assert(instance);
+    }
+@@ -3346,6 +3295,12 @@ zink_internal_create_screen(const struct pipe_screen_config *config, int64_t dev
+    screen->instance_info = &instance_info;
+    simple_mtx_unlock(&instance_lock);
+ 
++   if (!screen->vk_GetDeviceProcAddr)
++      screen->vk_GetDeviceProcAddr = (PFN_vkGetDeviceProcAddr)
++         screen->vk_GetInstanceProcAddr(screen->instance, "vkGetDeviceProcAddr");
++   if (!screen->vk_GetDeviceProcAddr)
++      goto fail;
++
+    if (zink_debug & ZINK_DEBUG_VALIDATION) {
+       if (!screen->instance_info->have_layer_KHRONOS_validation &&
+           !screen->instance_info->have_layer_LUNARG_standard_validation) {
+@@ -3447,7 +3402,6 @@ zink_internal_create_screen(const struct pipe_screen_config *config, int64_t dev
+       goto fail;
+    }
+ 
+-   zink_internal_setup_moltenvk(screen);
+    if (!screen->info.have_KHR_timeline_semaphore && !screen->info.feats12.timelineSemaphore) {
+       if (!screen->driver_name_is_inferred)
+          mesa_loge("zink: KHR_timeline_semaphore is required");
+diff --git a/src/gallium/targets/dri/meson.build b/src/gallium/targets/dri/meson.build
+index 5ecdc7b..3c5d4f5 100644
+--- a/src/gallium/targets/dri/meson.build
++++ b/src/gallium/targets/dri/meson.build
+@@ -40,7 +40,13 @@ else
+   libgallium_name = 'gallium-@0@'.format(meson.project_version())
+ endif
+ 
+-libgallium_dri = shared_library(
++# Keep the Apple surfaceless EGL backend in one signed framework.
++podish_host_zink = host_machine.system() == 'darwin' and with_gallium_zink and not with_platform_x11
++gallium_dri_kwargs = {
++  'install': not podish_host_zink,
++  'name_suffix': podish_host_zink ? 'a' : libname_suffix,
++}
++libgallium_dri = library(
+   libgallium_name,
+   files('dri_target.c'),
+   include_directories : [
+@@ -64,8 +70,7 @@ libgallium_dri = shared_library(
+     driver_panfrost, driver_iris, driver_lima, driver_zink, driver_d3d12,
+     driver_asahi, driver_crocus
+   ],
+-  install : true,
+-  name_suffix : libname_suffix,
++  kwargs : gallium_dri_kwargs,
+ )
+ 
+ shared_glapi_lib = libgallium_dri
+diff --git a/src/mesa/main/texobj.c b/src/mesa/main/texobj.c
+index 794d428..e87bd05 100644
+--- a/src/mesa/main/texobj.c
++++ b/src/mesa/main/texobj.c
+@@ -2492,3 +2492,13 @@ _mesa_TexturePageCommitmentEXT(GLuint texture, GLint level, GLint xoffset,
+ }
+ 
+ /*@}*/
++
++#ifdef __APPLE__
++struct pipe_resource *
++podish_mesa_current_texture_resource(GLuint texture)
++{
++   GET_CURRENT_CONTEXT(ctx);
++   struct gl_texture_object *object = ctx && texture ? _mesa_lookup_texture(ctx, texture) : NULL;
++   return object ? object->pt : NULL;
++}
++#endif
+diff --git a/src/mesa/main/texobj.h b/src/mesa/main/texobj.h
+index 754fdd3..3f8d620 100644
+--- a/src/mesa/main/texobj.h
++++ b/src/mesa/main/texobj.h
+@@ -50,6 +50,11 @@ extern "C" {
+ extern struct gl_texture_object *
+ _mesa_lookup_texture(struct gl_context *ctx, GLuint id);
+ 
++#ifdef __APPLE__
++struct pipe_resource *
++podish_mesa_current_texture_resource(GLuint texture);
++#endif
++
+ extern struct gl_texture_object *
+ _mesa_lookup_texture_err(struct gl_context *ctx, GLuint id, const char* func);
+ 
