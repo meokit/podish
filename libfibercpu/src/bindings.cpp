@@ -899,6 +899,9 @@ int X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
     state->current_block_head = nullptr;
 #endif
     uint64_t total_run_insts = 0;
+    uint32_t total_rep_iterations = 0;
+    state->rep_iterations = 0;
+    constexpr uint32_t rep_slice_limit = 65536;
 
     // Reset chaining state for this run
     state->last_block = state->mmu.invalid_code_block();
@@ -933,14 +936,35 @@ int X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
             state->status = EmuStatus::Stopped;
             break;
         }
-        if (!smc_single_step && max_insts != 0 && total_run_insts >= max_insts) {
-            state->status = EmuStatus::Stopped;
-            break;
+        if (!smc_single_step && max_insts != 0) {
+            if (total_rep_iterations >= rep_slice_limit) {
+                state->status = EmuStatus::Yield;
+                break;
+            }
+            if (total_run_insts >= max_insts) {
+                state->status = EmuStatus::Stopped;
+                break;
+            }
         }
         if (state->mmu.code_cache_flush_pending() && !smc_single_step) {
             state->status = EmuStatus::CachePressure;
             break;
         }
+        // REP exits the block after charging its iterations. Keep this out
+        // of the dispatch ABI and cap long strings independently of the
+        // (much larger) ordinary interpreter scheduling quantum.
+        const auto previous_rep_iterations = state->rep_iterations;
+        state->rep_iterations = 0;
+        state->rep_allowance = max_insts == 0
+                                   ? rep_slice_limit
+                                   : static_cast<uint32_t>(std::min<uint64_t>(
+                                         rep_slice_limit - std::min(rep_slice_limit - 1, total_rep_iterations),
+                                         std::max<uint64_t>(1, max_insts - std::min(max_insts, total_run_insts))));
+        const auto charge_rep = [&] {
+            if (max_insts != 0) total_rep_iterations += state->rep_iterations;
+            return state->rep_iterations == 0 ? 0u : state->rep_iterations - 1;
+        };
+
         auto execute_block = [&](BasicBlock* block_ptr) {
 #ifdef FIBERCPU_ENABLE_SEQUENCE_PROFILE
             state->sequence_expected_op = nullptr;
@@ -986,7 +1010,7 @@ int X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
                     block_ptr->entry(state, head, batch_limit, utlb_tags, utlb_addend,
                                      std::numeric_limits<uint32_t>::max(), flags_cache FIBERCPU_PIN_INIT);
                 state->intercept_exec_write_for_smc = false;
-                total_run_insts += (initial_batch_limit - remaining);
+                total_run_insts += initial_batch_limit - remaining + charge_rep();
 #ifdef FIBERCPU_ENABLE_HANDLER_PROFILE
                 state->current_block_head = nullptr;
 #endif
@@ -1002,7 +1026,7 @@ int X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
         if (smc_single_step) {
             // The previous attempt yielded before the guest instruction committed.
             // Refund that speculative instruction budget before re-executing it.
-            if (total_run_insts > 0) {
+            if (total_run_insts > 0 && previous_rep_iterations == 0) {
                 total_run_insts--;
             }
             state->smc_write_to_exec = false;
@@ -1013,7 +1037,7 @@ int X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
             state->intercept_exec_write_for_smc = false;
             state->allow_write_exec_page = false;
             state->last_block = state->mmu.invalid_code_block();
-            if (executed) ++total_run_insts;
+            if (executed) total_run_insts += 1 + charge_rep();
             if (state->status != EmuStatus::Running) break;
             if (state->mmu.code_cache_flush_pending()) {
                 state->status = EmuStatus::CachePressure;
@@ -1035,7 +1059,7 @@ int X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
                 const bool executed = ExecuteSingleInstructionOnStack(state);
                 state->intercept_exec_write_for_smc = false;
                 state->allow_write_exec_page = false;
-                if (executed) ++total_run_insts;
+                if (executed) total_run_insts += 1 + charge_rep();
                 if (state->status == EmuStatus::Running) {
                     state->status =
                         end_eip != 0 && state->ctx.eip == end_eip ? EmuStatus::Stopped : EmuStatus::CachePressure;
@@ -1275,6 +1299,8 @@ int X86_Step(EmuState* state) {
     state->mmu.sync_runtime_tlb_shootdowns();
     [[maybe_unused]] auto runtime_tlb_batch = state->mmu.scoped_runtime_tlb_publish_batch();
 
+    state->rep_allowance = std::numeric_limits<uint32_t>::max();
+    state->rep_iterations = 0;
     (void)ExecuteSingleInstructionOnStack(state);
     state->allow_write_exec_page = prev_allow_write_exec_page;
     state->intercept_exec_write_for_smc = prev_intercept_exec_write_for_smc;

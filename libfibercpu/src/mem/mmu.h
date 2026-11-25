@@ -1753,6 +1753,17 @@ public:
     template <typename T>
     [[nodiscard]] FORCE_INLINE MemResult<void> write_no_utlb(GuestAddr addr, T val);
 
+    // Returns a page-local span backed by an already usable TLB entry.
+    // The caller must ensure its entire span stays inside this page.
+    template <bool Write>
+    [[nodiscard]] HostAddr try_bulk_page(GuestAddr address) {
+        if (mem_hook) return nullptr;
+        const auto index = (address >> PAGE_SHIFT) & TLB_INDEX_MASK;
+        const auto& entry = Write ? tlb.write_tlb[index] : tlb.read_tlb[index];
+        if ((Write ? entry.WriteTag() : entry.ReadTag()) != (address & ~PAGE_MASK)) return nullptr;
+        return reinterpret_cast<HostAddr>(entry.addend + address);
+    }
+
     template <typename T>
     [[nodiscard]] FORCE_INLINE MemResult<T> read_tlb_only(GuestAddr addr, MicroTLB* utlb);
 

@@ -125,6 +125,8 @@ struct EmuState {
     // A deferred fault exits X86_Run, discarding the temporary memory op.
     // Only paths that can restart at the saved EIP may set this.
     bool can_restart_memory_fault = false;
+    uint32_t rep_allowance = 0;
+    uint32_t rep_iterations = 0;
     void* fault_userdata = nullptr;
 
     MemHook mem_hook = nullptr;
@@ -258,6 +260,19 @@ struct EmuState {
 
         return std::unexpected(mem::FaultCode::PageFault);
     }
+};
+
+// Used only at instruction boundaries where retrying can reproduce the same
+// architectural state, including between successfully committed REP iterations.
+class RestartableMemoryFaultScope {
+public:
+    explicit RestartableMemoryFaultScope(EmuState* state)
+        : state_(state), previous_(std::exchange(state->can_restart_memory_fault, true)) {}
+    ~RestartableMemoryFaultScope() { state_->can_restart_memory_fault = previous_; }
+
+private:
+    EmuState* state_;
+    bool previous_;
 };
 
 FORCE_INLINE uint32_t GetNextEip(const EmuState* state, const DecodedOp* op) {

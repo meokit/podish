@@ -651,11 +651,22 @@ FORCE_INLINE LogicFlow OpPop_Reg(LogicFuncParams) { return OpPop_Reg_Internal<>(
 
 template <typename T, AddrModeSpec Form = AddrModeSpec::Dynamic>
 FORCE_INLINE LogicFlow OpPopModRM(LogicFuncParams) {
-    const auto value = Pop<T, true>(state, gpr, utlb, op);
-    if (!value) return LogicFlow::RestartMemoryOp;
-    // Resolve the destination after the stack increment, including POP [ESP].
-    if (!WriteModRM<T, OpOnTLBMiss::Retry, 1, Form>(state, gpr, op, operand_modrm, *value, utlb))
-        return LogicFlow::RetryMemoryOp;
+    if (OperandIsReg<Form>(operand_modrm)) {
+        const auto value = Pop<T, true>(state, gpr, utlb, op);
+        if (!value) return LogicFlow::RestartMemoryOp;
+        WriteRegGeneric<T>(state, gpr, operand_modrm & 7, *value);
+        return LogicFlow::Continue;
+    }
+
+    RestartableMemoryFaultScope restartable(state);
+    const uint32_t sp = gpr.GetReg(state, ESP);
+    const auto value = ReadMem<T, OpOnTLBMiss::Blocking>(state, gpr, state->ctx.seg_base[3] + sp, utlb, op);
+    if (!value) return LogicFlow::ExitOnCurrentEIP;
+
+    // POP [ESP] addresses memory using the incremented stack pointer.
+    const uint32_t address = ComputeLinearAddress(state, gpr, op) + (op->AddressBase() == ESP ? sizeof(T) : 0);
+    if (!WriteMem<T, OpOnTLBMiss::Blocking>(state, gpr, address, *value, utlb, op)) return LogicFlow::ExitOnCurrentEIP;
+    gpr.SetReg(state, ESP, sp + sizeof(T));
     return LogicFlow::Continue;
 }
 
@@ -878,46 +889,103 @@ FORCE_INLINE uint32_t StringDestinationAddress(EmuState* state, uint32_t offset)
     return offset + state->ctx.seg_base[1];  // ES
 }
 
-template <typename T, AddrsizeSpec AddressSize = AddrsizeSpec::Dynamic, class Operands = OperandSpec::Dynamic>
-FORCE_INLINE bool Helper_Movs(LogicFuncParams, const Operands& operands = {}) {
-    const bool addr16 = AddressIs16<AddressSize>(op, operands);
-    const bool df = TestFlagBits(flags_cache, 0x400);  // DF
-    const int32_t step = df ? -static_cast<int32_t>(sizeof(T)) : static_cast<int32_t>(sizeof(T));
+template <typename Perform, typename ShouldContinue>
+FORCE_INLINE LogicFlow ExecuteStringOperation(EmuState* state, GprCache& gpr, bool addr16, bool repeat, Perform perform,
+                                              ShouldContinue should_continue) {
+    RestartableMemoryFaultScope restartable(state);
+    if (!repeat) return perform(1) != 0 ? LogicFlow::Continue : LogicFlow::ExitOnCurrentEIP;
 
-    auto perform = [&]() -> bool {
-        const uint32_t esi = GetStringOffset(state, gpr, ESI, addr16);
-        const uint32_t edi = GetStringOffset(state, gpr, EDI, addr16);
-
-        const uint32_t src_addr = esi + GetSegmentBase(state, op, operands);
-        auto val_res = ReadMem<T, OpOnTLBMiss::Blocking>(state, gpr, src_addr, utlb, op);
-        if (!val_res) return false;  // Fault
-        T val = *val_res;
-
-        if (!WriteMem<T, OpOnTLBMiss::Blocking>(state, gpr, StringDestinationAddress(state, edi), val, utlb, op))
-            return false;  // Fault
-
-        SetStringOffset(state, gpr, ESI, esi + step, addr16);
-        SetStringOffset(state, gpr, EDI, edi + step, addr16);
-        return true;
-    };
-
-    if (operands.ReadPrefixes(op).flags.rep) {
-        while (GetStringCount(state, gpr, addr16) > 0) {
-            if (!perform()) return false;
-
-            if (state->status != EmuStatus::Running) return false;
-            SetStringCount(state, gpr, GetStringCount(state, gpr, addr16) - 1, addr16);
-        }
-    } else {
-        if (!perform()) return false;
+    auto remaining = GetStringCount(state, gpr, addr16);
+    while (remaining != 0 && state->rep_iterations < state->rep_allowance) {
+        const auto available = std::min(remaining, state->rep_allowance - state->rep_iterations);
+        const auto done = perform(available);
+        if (done == 0) return LogicFlow::ExitOnCurrentEIP;
+        remaining -= done;
+        SetStringCount(state, gpr, remaining, addr16);
+        state->rep_iterations += done;
+        if (!should_continue()) return LogicFlow::ExitOnNextEIP;
+        if (state->status != EmuStatus::Running) break;
     }
-    return true;
+    return remaining == 0 ? LogicFlow::ExitOnNextEIP : LogicFlow::ExitOnCurrentEIP;
+}
+
+template <typename T>
+FORCE_INLINE uint32_t StringPageElements(uint32_t address, bool backwards) {
+    const auto offset = address & mem::PAGE_MASK;
+    if (offset > mem::PAGE_SIZE - sizeof(T)) return 0;
+    return backwards ? offset / sizeof(T) + 1 : (mem::PAGE_SIZE - offset) / sizeof(T);
+}
+
+template <typename T>
+uint32_t TryBulkMovs(EmuState* state, uint32_t src, uint32_t dst, uint32_t limit, bool backwards) {
+    const uint32_t count =
+        std::min(limit, std::min(StringPageElements<T>(src, backwards), StringPageElements<T>(dst, backwards)));
+    if (count < 8) return 0;
+
+    const uint32_t rewind = backwards ? (count - 1) * sizeof(T) : 0;
+    auto* from = state->mmu.try_bulk_page<false>(src - rewind);
+    auto* to = state->mmu.try_bulk_page<true>(dst - rewind);
+    if (!from || !to) return 0;
+
+    const auto from_address = reinterpret_cast<uintptr_t>(from);
+    const auto to_address = reinterpret_cast<uintptr_t>(to);
+    const auto bytes = count * sizeof(T);
+    // Directional overlap can feed earlier stores into later loads. Check
+    // host addresses as separate guest mappings can alias the same page.
+    if (backwards ? from_address > to_address && from_address - to_address < bytes
+                  : to_address > from_address && to_address - from_address < bytes)
+        return 0;
+
+    std::memmove(to, from, bytes);
+    return count;
+}
+
+template <typename T>
+uint32_t TryBulkStos(EmuState* state, uint32_t dst, T value, uint32_t limit, bool backwards) {
+    const uint32_t count = std::min(limit, StringPageElements<T>(dst, backwards));
+    if (count < 8) return 0;
+
+    auto* to = state->mmu.try_bulk_page<true>(dst - (backwards ? (count - 1) * sizeof(T) : 0));
+    if (!to) return 0;
+
+    const auto byte = static_cast<uint8_t>(value);
+    const uint32_t bytes = count * sizeof(T);
+    if (value == static_cast<T>(byte * 0x01010101u)) {
+        std::memset(to, byte, bytes);
+    } else {
+        std::memcpy(to, &value, sizeof(T));
+        for (uint32_t filled = sizeof(T); filled < bytes;) {
+            const auto copy = std::min(filled, bytes - filled);
+            std::memcpy(to + filled, to, copy);
+            filled += copy;
+        }
+    }
+    return count;
 }
 
 template <typename T, AddrsizeSpec AddressSize = AddrsizeSpec::Dynamic, class Operands = OperandSpec::Dynamic>
 FORCE_INLINE LogicFlow OpMovsWithShape(LogicFuncParams, const Operands& operands = {}) {
-    if (!Helper_Movs<T, AddressSize>(LogicPassParams, operands)) return LogicFlow::ExitOnCurrentEIP;
-    return LogicFlow::Continue;
+    const bool addr16 = AddressIs16<AddressSize>(op, operands);
+    const bool df = TestFlagBits(flags_cache, 0x400);
+    const int32_t step = df ? -static_cast<int32_t>(sizeof(T)) : static_cast<int32_t>(sizeof(T));
+    const auto perform = [&](uint32_t limit) -> uint32_t {
+        const auto esi = GetStringOffset(state, gpr, ESI, addr16);
+        const auto edi = GetStringOffset(state, gpr, EDI, addr16);
+        const auto src = esi + GetSegmentBase(state, op, operands);
+        const auto dst = StringDestinationAddress(state, edi);
+        uint32_t count = !addr16 && limit >= 8 ? TryBulkMovs<T>(state, src, dst, limit, df) : 0;
+        if (count == 0) {
+            const auto value = ReadMem<T, OpOnTLBMiss::Blocking>(state, gpr, src, utlb, op);
+            if (!value || !WriteMem<T, OpOnTLBMiss::Blocking>(state, gpr, dst, *value, utlb, op)) return 0;
+            count = 1;
+        }
+
+        SetStringOffset(state, gpr, ESI, esi + step * count, addr16);
+        SetStringOffset(state, gpr, EDI, edi + step * count, addr16);
+        return count;
+    };
+    return ExecuteStringOperation(state, gpr, addr16, operands.ReadPrefixes(op).flags.rep, perform,
+                                  [] { return true; });
 }
 
 FORCE_INLINE LogicFlow OpMovs_Byte(LogicFuncParams) { return OpMovsWithShape<uint8_t>(LogicPassParams); }
@@ -937,24 +1005,21 @@ FORCE_INLINE LogicFlow OpStosWithShape(LogicFuncParams, const Operands& operands
     const bool addr16 = AddressIs16<AddressSize>(op, operands);
     const bool df = TestFlagBits(flags_cache, 0x400);
     const int32_t step = df ? -static_cast<int32_t>(sizeof(T)) : static_cast<int32_t>(sizeof(T));
-    const auto perform = [&] {
-        const uint32_t edi = GetStringOffset(state, gpr, EDI, addr16);
-        const T value = static_cast<T>(gpr.GetReg(state, EAX));
-        if (!WriteMem<T, OpOnTLBMiss::Blocking>(state, gpr, StringDestinationAddress(state, edi), value, utlb, op))
-            return false;
-        SetStringOffset(state, gpr, EDI, edi + step, addr16);
-        return true;
-    };
-    if (operands.ReadPrefixes(op).flags.rep) {
-        while (GetStringCount(state, gpr, addr16) > 0) {
-            if (!perform()) return LogicFlow::ExitOnCurrentEIP;
-            if (state->status != EmuStatus::Running) break;
-            SetStringCount(state, gpr, GetStringCount(state, gpr, addr16) - 1, addr16);
+    const auto perform = [&](uint32_t limit) -> uint32_t {
+        const auto edi = GetStringOffset(state, gpr, EDI, addr16);
+        const auto value = static_cast<T>(gpr.GetReg(state, EAX));
+        const auto dst = StringDestinationAddress(state, edi);
+        uint32_t count = !addr16 && limit >= 8 ? TryBulkStos(state, dst, value, limit, df) : 0;
+        if (count == 0) {
+            if (!WriteMem<T, OpOnTLBMiss::Blocking>(state, gpr, dst, value, utlb, op)) return 0;
+            count = 1;
         }
-    } else {
-        if (!perform()) return LogicFlow::ExitOnCurrentEIP;
-    }
-    return LogicFlow::Continue;
+
+        SetStringOffset(state, gpr, EDI, edi + step * count, addr16);
+        return count;
+    };
+    return ExecuteStringOperation(state, gpr, addr16, operands.ReadPrefixes(op).flags.rep, perform,
+                                  [] { return true; });
 }
 
 FORCE_INLINE LogicFlow OpStos_Byte(LogicFuncParams) { return OpStosWithShape<uint8_t>(LogicPassParams); }
@@ -970,16 +1035,16 @@ FORCE_INLINE LogicFlow OpStos_Word(LogicFuncParams) {
 }
 
 template <typename T, AddrsizeSpec AddressSize = AddrsizeSpec::Dynamic, class Operands = OperandSpec::Dynamic>
-FORCE_INLINE bool Helper_Lods(LogicFuncParams, const Operands& operands = {}) {
+FORCE_INLINE LogicFlow OpLodsWithShape(LogicFuncParams, const Operands& operands = {}) {
     const bool addr16 = AddressIs16<AddressSize>(op, operands);
     bool df = TestFlagBits(flags_cache, 0x400);  // DF
     int32_t step = df ? -((int32_t)sizeof(T)) : (int32_t)sizeof(T);
 
-    auto perform = [&]() -> bool {
+    const auto perform = [&](uint32_t) -> uint32_t {
         uint32_t esi = GetStringOffset(state, gpr, ESI, addr16);
         uint32_t src_addr = esi + GetSegmentBase(state, op, operands);
         auto val_res = ReadMem<T, OpOnTLBMiss::Blocking>(state, gpr, src_addr, utlb, op);
-        if (!val_res) return false;
+        if (!val_res) return 0;
         T val = *val_res;
 
         if constexpr (sizeof(T) == 1) {
@@ -991,25 +1056,11 @@ FORCE_INLINE bool Helper_Lods(LogicFuncParams, const Operands& operands = {}) {
         }
 
         SetStringOffset(state, gpr, ESI, esi + step, addr16);
-        return true;
+        return 1;
     };
 
-    if (operands.ReadPrefixes(op).flags.rep) {
-        while (GetStringCount(state, gpr, addr16) > 0) {
-            if (!perform()) return false;
-            if (state->status != EmuStatus::Running) return false;
-            SetStringCount(state, gpr, GetStringCount(state, gpr, addr16) - 1, addr16);
-        }
-    } else {
-        if (!perform()) return false;
-    }
-    return true;
-}
-
-template <typename T, AddrsizeSpec AddressSize = AddrsizeSpec::Dynamic, class Operands = OperandSpec::Dynamic>
-FORCE_INLINE LogicFlow OpLodsWithShape(LogicFuncParams, const Operands& operands = {}) {
-    if (!Helper_Lods<T, AddressSize>(LogicPassParams, operands)) return LogicFlow::ExitOnCurrentEIP;
-    return LogicFlow::Continue;
+    return ExecuteStringOperation(state, gpr, addr16, operands.ReadPrefixes(op).flags.rep, perform,
+                                  [] { return true; });
 }
 
 FORCE_INLINE LogicFlow OpLods_Byte(LogicFuncParams) { return OpLodsWithShape<uint8_t>(LogicPassParams); }
@@ -1025,17 +1076,17 @@ FORCE_INLINE LogicFlow OpLods_Word(LogicFuncParams) {
 }
 
 template <typename T, AddrsizeSpec AddressSize = AddrsizeSpec::Dynamic, class Operands = OperandSpec::Dynamic>
-FORCE_INLINE bool Helper_Scas(LogicFuncParams, const Operands& operands = {}) {
+FORCE_INLINE LogicFlow OpScasWithShape(LogicFuncParams, const Operands& operands = {}) {
     const bool addr16 = AddressIs16<AddressSize>(op, operands);
     bool df = TestFlagBits(flags_cache, 0x400);  // DF
     int32_t step = df ? -((int32_t)sizeof(T)) : (int32_t)sizeof(T);
 
-    auto perform = [&]() -> bool {
+    const auto perform = [&](uint32_t) -> uint32_t {
         uint32_t edi = GetStringOffset(state, gpr, EDI, addr16);
         // ES:[EDI]
         auto mem_val_res =
             ReadMem<T, OpOnTLBMiss::Blocking>(state, gpr, StringDestinationAddress(state, edi), utlb, op);
-        if (!mem_val_res) return false;
+        if (!mem_val_res) return 0;
         T mem_val = *mem_val_res;
 
         T acc;
@@ -1049,34 +1100,12 @@ FORCE_INLINE bool Helper_Scas(LogicFuncParams, const Operands& operands = {}) {
         AluSub<T>(state, flags_cache, acc, mem_val);  // CMP uses Sub.
 
         SetStringOffset(state, gpr, EDI, edi + step, addr16);
-        return true;
+        return 1;
     };
 
-    if (operands.ReadPrefixes(op).flags.rep || operands.ReadPrefixes(op).flags.repne) {
-        while (GetStringCount(state, gpr, addr16) > 0) {
-            if (!perform()) return false;
-            if (state->status != EmuStatus::Running) return false;
-
-            SetStringCount(state, gpr, GetStringCount(state, gpr, addr16) - 1, addr16);
-
-            bool zf = TestFlagBits(flags_cache, ZF_MASK);
-            if (operands.ReadPrefixes(op).flags.rep) {
-                if (!zf) break;
-            }  // REPE: Stop if ZF=0
-            else if (operands.ReadPrefixes(op).flags.repne) {
-                if (zf) break;
-            }  // REPNE: Stop if ZF=1
-        }
-    } else {
-        if (!perform()) return false;
-    }
-    return true;
-}
-
-template <typename T, AddrsizeSpec AddressSize = AddrsizeSpec::Dynamic, class Operands = OperandSpec::Dynamic>
-FORCE_INLINE LogicFlow OpScasWithShape(LogicFuncParams, const Operands& operands = {}) {
-    if (!Helper_Scas<T, AddressSize>(LogicPassParams, operands)) return LogicFlow::ExitOnCurrentEIP;
-    return LogicFlow::Continue;
+    const auto prefix = operands.ReadPrefixes(op).flags;
+    return ExecuteStringOperation(state, gpr, addr16, prefix.rep || prefix.repne, perform,
+                                  [&] { return TestFlagBits(flags_cache, ZF_MASK) == static_cast<bool>(prefix.rep); });
 }
 
 FORCE_INLINE LogicFlow OpScas_Byte(LogicFuncParams) { return OpScasWithShape<uint8_t>(LogicPassParams); }
@@ -1092,57 +1121,35 @@ FORCE_INLINE LogicFlow OpScas_Word(LogicFuncParams) {
 }
 
 template <typename T, AddrsizeSpec AddressSize = AddrsizeSpec::Dynamic, class Operands = OperandSpec::Dynamic>
-FORCE_INLINE bool Helper_Cmps(LogicFuncParams, const Operands& operands = {}) {
+FORCE_INLINE LogicFlow OpCmpsWithShape(LogicFuncParams, const Operands& operands = {}) {
     const bool addr16 = AddressIs16<AddressSize>(op, operands);
     bool df = TestFlagBits(flags_cache, 0x400);  // DF
     int32_t step = df ? -((int32_t)sizeof(T)) : (int32_t)sizeof(T);
 
-    auto perform = [&]() -> bool {
+    const auto perform = [&](uint32_t) -> uint32_t {
         uint32_t esi = GetStringOffset(state, gpr, ESI, addr16);
         uint32_t edi = GetStringOffset(state, gpr, EDI, addr16);
 
         uint32_t src_addr = esi + GetSegmentBase(state, op, operands);
         auto src_val_res = ReadMem<T, OpOnTLBMiss::Blocking>(state, gpr, src_addr, utlb, op);
-        if (!src_val_res) return false;
+        if (!src_val_res) return 0;
         T src_val = *src_val_res;
 
         auto dst_val_res = ReadMem<T, OpOnTLBMiss::Blocking>(state, gpr, StringDestinationAddress(state, edi), utlb,
                                                              op);  // ES:EDI
-        if (!dst_val_res) return false;
+        if (!dst_val_res) return 0;
         T dst_val = *dst_val_res;
 
         AluSub<T>(state, flags_cache, src_val, dst_val);
 
         SetStringOffset(state, gpr, ESI, esi + step, addr16);
         SetStringOffset(state, gpr, EDI, edi + step, addr16);
-        return true;
+        return 1;
     };
 
-    if (operands.ReadPrefixes(op).flags.rep || operands.ReadPrefixes(op).flags.repne) {
-        while (GetStringCount(state, gpr, addr16) > 0) {
-            if (!perform()) return false;
-            if (state->status != EmuStatus::Running) return false;
-
-            SetStringCount(state, gpr, GetStringCount(state, gpr, addr16) - 1, addr16);
-
-            bool zf = TestFlagBits(flags_cache, ZF_MASK);
-            if (operands.ReadPrefixes(op).flags.rep) {
-                if (!zf) break;
-            }  // REPE: Stop if ZF=0
-            else if (operands.ReadPrefixes(op).flags.repne) {
-                if (zf) break;
-            }  // REPNE: Stop if ZF=1
-        }
-    } else {
-        if (!perform()) return false;
-    }
-    return true;
-}
-
-template <typename T, AddrsizeSpec AddressSize = AddrsizeSpec::Dynamic, class Operands = OperandSpec::Dynamic>
-FORCE_INLINE LogicFlow OpCmpsWithShape(LogicFuncParams, const Operands& operands = {}) {
-    if (!Helper_Cmps<T, AddressSize>(LogicPassParams, operands)) return LogicFlow::ExitOnCurrentEIP;
-    return LogicFlow::Continue;
+    const auto prefix = operands.ReadPrefixes(op).flags;
+    return ExecuteStringOperation(state, gpr, addr16, prefix.rep || prefix.repne, perform,
+                                  [&] { return TestFlagBits(flags_cache, ZF_MASK) == static_cast<bool>(prefix.rep); });
 }
 
 FORCE_INLINE LogicFlow OpCmps_Byte(LogicFuncParams) { return OpCmpsWithShape<uint8_t>(LogicPassParams); }

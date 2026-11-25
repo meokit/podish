@@ -128,6 +128,79 @@ public sealed class DeferredWriteTlbMissTests
         }
     }
 
+    [Fact]
+    public unsafe void PopToStackAddressDefersTheStackIncrementUntilTheStoreSucceeds()
+    {
+        using var cpu = new CpuSandbox();
+        var destination = CpuSandbox.StackAddress + CpuSandbox.PageSize;
+        var originalSp = destination - 4;
+        cpu.MapMemory(destination, CpuSandbox.PageSize, 1);
+        cpu.WriteMemory(originalSp, [0x12, 0x34, 0x56, 0x78]);
+        cpu[Reg.ESP] = originalSp;
+        cpu.WriteCode([0x8F, 0x04, 0x24]); // pop dword [esp]
+
+        var access = 0;
+        var root = GCHandle.Alloc((Action<int>)(flags => access = flags));
+        try
+        {
+            X86Native.SetExtendedFaultCallback(cpu.State, &YieldOnPageFault, GCHandle.ToIntPtr(root));
+            cpu.Run(CpuSandbox.CodeAddress + 3);
+            Assert.Equal(5, access);
+            Assert.Equal(EmuStatus.Yield, cpu.Status);
+            Assert.Equal(CpuSandbox.CodeAddress, cpu.Eip);
+            Assert.Equal(originalSp, cpu[Reg.ESP]);
+
+            cpu.ProtectMemory(destination, CpuSandbox.PageSize, 3);
+            cpu.Run(CpuSandbox.CodeAddress + 3);
+            Assert.Equal(destination, cpu[Reg.ESP]);
+            Assert.Equal(0x78563412u, BitConverter.ToUInt32(cpu.ReadMemory(destination, 4)));
+        }
+        finally
+        {
+            X86Native.SetFaultCallback(cpu.State, null, IntPtr.Zero);
+            root.Free();
+        }
+    }
+
+    [Fact]
+    public unsafe void RepMovsbKeepsCompletedIterationsWhenTheNextPageYields()
+    {
+        using var cpu = new CpuSandbox();
+        var pageBoundary = CpuSandbox.DataAddress + CpuSandbox.PageSize;
+        var source = pageBoundary - 2;
+        cpu.WriteMemory(source, [0x11, 0x22]);
+        cpu[Reg.ESI] = source;
+        cpu[Reg.EDI] = CpuSandbox.StackAddress;
+        cpu[Reg.ECX] = 4;
+        cpu.WriteCode([0xF3, 0xA4]);
+
+        var access = 0;
+        var root = GCHandle.Alloc((Action<int>)(flags => access = flags));
+        try
+        {
+            X86Native.SetExtendedFaultCallback(cpu.State, &YieldOnPageFault, GCHandle.ToIntPtr(root));
+            cpu.Run(CpuSandbox.CodeAddress + 2);
+            Assert.Equal(4, access);
+            Assert.Equal(EmuStatus.Yield, cpu.Status);
+            Assert.Equal(CpuSandbox.CodeAddress, cpu.Eip);
+            Assert.Equal(2u, cpu[Reg.ECX]);
+            Assert.Equal(pageBoundary, cpu[Reg.ESI]);
+            Assert.Equal(CpuSandbox.StackAddress + 2, cpu[Reg.EDI]);
+            Assert.Equal(new byte[] { 0x11, 0x22, 0, 0 }, cpu.ReadMemory(CpuSandbox.StackAddress, 4));
+
+            cpu.MapMemory(pageBoundary, CpuSandbox.PageSize);
+            cpu.WriteMemory(pageBoundary, [0x33, 0x44]);
+            cpu.Run(CpuSandbox.CodeAddress + 2);
+            Assert.Equal(0u, cpu[Reg.ECX]);
+            Assert.Equal(new byte[] { 0x11, 0x22, 0x33, 0x44 }, cpu.ReadMemory(CpuSandbox.StackAddress, 4));
+        }
+        finally
+        {
+            X86Native.SetFaultCallback(cpu.State, null, IntPtr.Zero);
+            root.Free();
+        }
+    }
+
     [UnmanagedCallersOnly]
     private static int YieldOnPageFault(IntPtr state, uint address, int access, IntPtr userdata)
     {
