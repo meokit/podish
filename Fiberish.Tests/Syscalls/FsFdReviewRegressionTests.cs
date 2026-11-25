@@ -11,7 +11,7 @@ using Xunit;
 
 namespace Fiberish.Tests.Syscalls;
 
-public class FsFdReviewRegressionTests
+public partial class FsFdReviewRegressionTests
 {
     private const uint PathPtr = 0x10000;
     private const uint DataPtr = 0x11000;
@@ -527,7 +527,7 @@ public class FsFdReviewRegressionTests
         public KernelScheduler Scheduler { get; } = new();
         public FiberTask Task { get; }
 
-        public TestEnv(bool overlay = false)
+        public TestEnv(bool overlay = false, LayerContent? layerContent = null)
         {
             Engine = _runtime.CreateEngine();
             Mem = _runtime.CreateAddressSpace();
@@ -535,12 +535,16 @@ public class FsFdReviewRegressionTests
             Process = new Process(100, Mem, Sm);
             Task = new FiberTask(100, Process, Engine, Scheduler);
             var type = new FileSystemType { Name = "tmpfs" };
-            var lower = new Tmpfs(memoryContext: _runtime.MemoryContext).ReadSuper(type, 0, "review-root", null);
+            var lower = layerContent?.Mount(Sm.MemoryContext) ??
+                new Tmpfs(memoryContext: _runtime.MemoryContext).ReadSuper(type, 0, "review-root", null);
             SuperBlock root = lower;
             if (overlay)
             {
-                var file = new Dentry(FsName.FromString("lower-file"), null, lower.Root, lower);
-                Assert.Equal(0, lower.Root.Inode!.Create(file, 0x1B6, 0, 0));
+                if (layerContent == null)
+                {
+                    var file = new Dentry(FsName.FromString("lower-file"), null, lower.Root, lower);
+                    Assert.Equal(0, lower.Root.Inode!.Create(file, 0x1B6, 0, 0));
+                }
                 var upper = new Tmpfs(memoryContext: _runtime.MemoryContext).ReadSuper(type, 0, "review-upper", null);
                 root = new OverlayFileSystem(memoryContext: _runtime.MemoryContext).ReadSuper(
                     new FileSystemType { Name = "overlay" }, 0, "review-overlay",
