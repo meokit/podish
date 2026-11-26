@@ -1,4 +1,5 @@
 #include "bindings.h"
+#include "exec_utils.h"
 #include "instruction_variants.h"
 #include "operand_specialization.h"
 #include "specialization.h"
@@ -68,7 +69,49 @@ static bool ValidateProfileOperands() {
            rejects([](auto& op) { op.len++; }) && rejects([](auto& op) { op.meta.flags.no_flags = 1; });
 }
 
+template <fiberish::CompareRelation relation, uint8_t condition, typename T>
+static bool CompareFlagsMatch(T left, T right) {
+    using namespace fiberish;
+    const SubtractionResultFlags<T> operands{left, right};
+    uint64_t scalar = InitFlagsCache(0xed7); // Include preserved DF/IF and old arithmetic flags.
+    uint64_t forwarded = scalar;
+    operands.Pack(scalar, operands.IsZero());
+    const bool predicate = operands.template Matches<relation>();
+    operands.template PackRelation<relation>(forwarded, predicate);
+    return scalar == forwarded && predicate == CheckConditionFixed<condition>(scalar);
+}
+
+template <typename T>
+static bool CompareRelationsMatch(T left, T right) {
+    using R = fiberish::CompareRelation;
+    return CompareFlagsMatch<R::UnsignedLess, 2>(left, right) &&
+           CompareFlagsMatch<R::UnsignedLessEqual, 6>(left, right) &&
+           CompareFlagsMatch<R::SignedLess, 12>(left, right) && CompareFlagsMatch<R::SignedLessEqual, 14>(left, right);
+}
+
+static bool ValidateForwardedComparisons() {
+    for (unsigned left = 0; left < 256; ++left) {
+        for (unsigned right = 0; right < 256; ++right) {
+            if (!CompareRelationsMatch(static_cast<uint8_t>(left), static_cast<uint8_t>(right)))
+                return false;
+        }
+    }
+    constexpr uint32_t edges[] = {0, 1, 15, 16, 0x7fff, 0x8000, 0xffff, 0x7fffffff, 0x80000000, 0xffffffff};
+    for (auto left : edges) {
+        for (auto right : edges) {
+            if (!CompareRelationsMatch(static_cast<uint16_t>(left), static_cast<uint16_t>(right)) ||
+                !CompareRelationsMatch(left, right))
+                return false;
+        }
+    }
+    return true;
+}
+
 int main() {
+    if (!ValidateForwardedComparisons()) {
+        std::fprintf(stderr, "Fused signed or unsigned comparison flags differ from scalar CMP/Jcc\n");
+        return 1;
+    }
 #ifdef FIBERCPU_DYNAMIC_OPERANDS
     if (!fiberish::ValidateDynamicOperandSpecializations()) {
         std::fprintf(stderr, "Dynamic operand handler lookup, publication or fallback mismatch\n");
