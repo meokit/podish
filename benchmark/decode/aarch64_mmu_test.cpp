@@ -3,8 +3,15 @@
 #undef NDEBUG
 #include <array>
 #include <cassert>
+#include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
+#include <fstream>
+#include <iterator>
+#include <map>
+#include <string>
+#include <vector>
 
 namespace {
 
@@ -42,6 +49,90 @@ void observe(EmuState*, uint64_t address, uint32_t size, int write, uint64_t val
 void run(EmuState* state, uint64_t pc, uint64_t budget) {
     AArch64_RegWrite(state, 32, pc);
     assert(AArch64_Run(state, 0, budget, 0));
+}
+
+void profile_block_boundaries() {
+    const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
+    const auto path = "aarch64-mmu-test-" + std::to_string(nonce) + ".json";
+    const auto args = "AArch64ProfilePath=" + path;
+    char error[256]{};
+    auto* context = X86_CreateRun(args.c_str(), args.size() + 1, error, sizeof(error));
+    assert(context);
+    auto* state = X86_CreateForRun(context);
+    assert(state);
+    AArch64_Reset(state);
+
+    constexpr uint32_t A = 0x91000400, B = 0x91000800, C = 0x91000c00, D = 0x91001000, E = 0x91001400;
+    constexpr uint32_t BCond = 0x54000020, BSkip = 0x14000002, Nop = 0xd503201f, Load = 0xf9400041;
+    alignas(PageSize) std::array<uint8_t, PageSize> first{}, second{};
+    put(first.data() + PageSize - 8, A);
+    put(first.data() + PageSize - 4, B);
+    for (unsigned i = 0; i < 24; ++i)
+        put(second.data() + i * 4, C);
+    put(second.data() + 24 * 4, BCond); // b.eq .+4, a block boundary even on fallthrough
+    put(second.data() + 25 * 4, D);
+    put(second.data() + 26 * 4, BSkip); // jump over an unexecuted word
+    put(second.data() + 28 * 4, E);
+    put(second.data() + 29 * 4, Load); // ldr x1,[x2] faults at zero
+    const std::array extra{A, B, C, Nop, A, B, C};
+    std::memcpy(first.data(), extra.data(), sizeof(extra));
+    const std::array with_hook{A, Load, C};
+    std::memcpy(first.data() + 128, with_hook.data(), sizeof(with_hook));
+    assert(AArch64_MemMapHostPage(state, HighPc, first.data(), 5));
+    assert(AArch64_MemMapHostPage(state, HighPc + PageSize, second.data(), 5));
+    for (unsigned i = 0; i < 2; ++i) {
+        run(state, HighPc + PageSize - 8, 40);
+        assert(X86_GetFaultVector(state) == 14 && AArch64_RegRead(state, 32) == HighPc + PageSize + 29 * 4);
+    }
+    run(state, HighPc, extra.size());
+    AArch64_RegWrite(state, 32, HighPc);
+    AArch64_Run(state, 0, 1, 1);
+    AArch64_Run(state, 0, 1, 1);
+    assert(AArch64_RegRead(state, 32) == HighPc + 8);
+
+    // A successful slow load ends the current trace at refetch. The nested
+    // run attempted by its callback must not contribute any instructions.
+    unsigned callbacks = 0;
+    AArch64_SetMemHook(
+        state,
+        [](EmuState* cpu, uint64_t, uint32_t, int, uint64_t, void* opaque) {
+            ++*static_cast<unsigned*>(opaque);
+            assert(!AArch64_Run(cpu, 0, 1, 0));
+        },
+        &callbacks);
+    AArch64_RegWrite(state, 2, HighPc);
+    run(state, HighPc + 128, with_hook.size());
+    assert(callbacks == 1 && AArch64_RegRead(state, 32) == HighPc + 140);
+    X86_Destroy(state);
+    assert(X86_FinishRun(context, error, sizeof(error)));
+    X86_DestroyRun(context);
+
+    std::ifstream stream(path);
+    assert(stream);
+    const std::string json{std::istreambuf_iterator<char>(stream), {}};
+    stream.close();
+    assert(!std::remove(path.c_str()));
+    assert(json.find(R"("version":2,"architecture":"aarch64")") != std::string::npos);
+    const std::map<std::vector<uint32_t>, unsigned> expected = {
+        {{A, B}, 2},    {std::vector<uint32_t>(24, C), 2},
+        {{BCond}, 2},   {{D, BSkip}, 2},
+        {{E}, 2},       {std::vector<uint32_t>(extra.begin(), extra.end()), 1},
+        {{A}, 1},       {{B}, 1},
+        {{A, Load}, 1}, {{C}, 1},
+    };
+    std::string blocks = R"("blocks":[)";
+    for (const auto& [words, count] : expected) {
+        if (blocks.back() == '}')
+            blocks += ',';
+        blocks += R"({"words":[)";
+        for (auto word : words) {
+            if (blocks.back() != '[')
+                blocks += ',';
+            blocks += std::to_string(word);
+        }
+        blocks += R"(],"count":)" + std::to_string(count) + '}';
+    }
+    assert(json.find(blocks + "]") != std::string::npos);
 }
 
 #if FIBERCPU_GUEST_I386
@@ -90,6 +181,7 @@ void switch_address_space() {
 } // namespace
 
 int main() {
+    profile_block_boundaries();
 #if FIBERCPU_GUEST_I386
     switch_address_space();
 #endif

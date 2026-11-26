@@ -167,8 +167,8 @@ def aarch64_imm12_shapes(counts, exact_words, budget):
 
 
 def generate_aarch64(plan, budget, pair_budget, sequence_budget, partial_budget=32):
-    if plan.get("architecture") != "aarch64" or plan.get("version") != 1:
-        raise ValueError("expected an AArch64 version 1 operand profile")
+    if plan.get("architecture") != "aarch64" or plan.get("version") not in (1, 2):
+        raise ValueError("expected an AArch64 operand plan or execution profile")
     counts = {}
     for row in plan["entries"]:
         word, count = row["word"], row["count"]
@@ -232,23 +232,27 @@ def generate_aarch64(plan, budget, pair_budget, sequence_budget, partial_budget=
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--sequence-budget", type=int, choices=range(1025), default=128, metavar="0..1024")
-    parser.add_argument("--partial-budget", type=int, choices=range(1025), default=32, metavar="0..1024")
-    parser.add_argument("--pair-budget", type=int, choices=range(1025), default=128, metavar="0..1024")
+    parser.add_argument("--sequence-budget", type=int, default=128)
+    parser.add_argument("--partial-budget", type=int, default=32)
+    parser.add_argument("--pair-budget", type=int, default=128)
     parser.add_argument("--guest", choices=("i386", "aarch64"), default="i386")
     parser.add_argument("--source", type=Path)
     parser.add_argument("--catalog", type=Path)
     for name in ("plan", "output"):
         parser.add_argument(f"--{name}", type=Path, required=True)
-    parser.add_argument("--budget", type=int, choices=range(1025), default=768, metavar="0..1024")
+    parser.add_argument("--budget", type=int, default=768)
     parser.add_argument("--pin-specialization", type=int, choices=range(3), default=0)
     parser.add_argument("--pin-mask", type=int, default=0)
     args = parser.parse_args()
     try:
         plan = json.loads(args.plan.read_text())
         if args.guest == "aarch64":
+            if min(args.budget, args.pair_budget, args.sequence_budget, args.partial_budget) < 0:
+                parser.error("AArch64 budgets must be nonnegative")
             content = generate_aarch64(plan, args.budget, args.pair_budget, args.sequence_budget, args.partial_budget)
         else:
+            if not 0 <= args.budget <= 1024:
+                parser.error("i386 budget must be in 0..1024")
             if not args.source or not args.catalog:
                 parser.error("i386 generation requires --source and --catalog")
             content = generate(args.source.read_text(), plan, read_catalog(args.catalog),

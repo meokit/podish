@@ -20,6 +20,7 @@ struct ArmInstructionProfile {
     std::map<uint32_t, uint64_t> words;
     std::map<uint64_t, uint64_t> pairs;
     std::map<std::vector<uint32_t>, uint64_t> sequences;
+    std::map<std::vector<uint32_t>, uint64_t> blocks;
     std::string path;
 };
 

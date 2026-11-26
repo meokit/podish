@@ -1856,7 +1856,7 @@ int X86_FinishRun(const X86_RunContext* run, char* error, size_t error_size) {
         if (g_native_execution_active) return 0;
         std::lock_guard guard(profile->mutex);
         std::ofstream output(profile->path);
-        output << R"({"version":1,"architecture":"aarch64","entries":[)";
+        output << R"({"version":2,"architecture":"aarch64","entries":[)";
         bool first = true;
         for (const auto& [word, count] : profile->words) {
             if (!first) output << ',';
@@ -1871,18 +1871,22 @@ int X86_FinishRun(const X86_RunContext* run, char* error, size_t error_size) {
             output << R"({"first":)" << (key >> 32) << R"(,"second":)" << static_cast<uint32_t>(key) << R"(,"count":)"
                    << count << '}';
         }
-        output << R"(],"sequences":[)";
-        first = true;
-        for (const auto& [words, count] : profile->sequences) {
-            if (!first) output << ',';
-            first = false;
-            output << R"({"words":[)";
-            for (size_t i = 0; i < words.size(); ++i) {
-                if (i) output << ',';
-                output << words[i];
+        auto write_sequences = [&](const char* name, const auto& histogram) {
+            output << "],\"" << name << "\":[";
+            bool separator = false;
+            for (const auto& [words, count] : histogram) {
+                if (separator) output << ',';
+                separator = true;
+                output << R"({"words":[)";
+                for (size_t i = 0; i < words.size(); ++i) {
+                    if (i) output << ',';
+                    output << words[i];
+                }
+                output << R"(],"count":)" << count << '}';
             }
-            output << R"(],"count":)" << count << '}';
-        }
+        };
+        write_sequences("sequences", profile->sequences);
+        write_sequences("blocks", profile->blocks);
         output << "]}\n";
         output.close();
         if (!output) {

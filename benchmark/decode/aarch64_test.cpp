@@ -692,7 +692,7 @@ bool BakedDispatch() {
     };
     unsigned records = 0;
     profile.context = &records;
-    profile.record = [](void* context, const DecodedInstruction&) { ++*static_cast<unsigned*>(context); };
+    profile.record = [](void* context, uint64_t, uint32_t, bool) { ++*static_cast<unsigned*>(context); };
     const auto result = Run(state, backing.Callbacks(), 2, profile);
     return result.reason == Stop::Budget && state.x[0] == 3 && records == 2 && backing.executes == 2;
 }

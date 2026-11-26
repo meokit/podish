@@ -162,6 +162,52 @@ uint64_t* ArmSlot(aarch64::State& cpu, int index) {
     }
     return nullptr;
 }
+
+// An engine entry may end halfway through a block (budget, fault or debugger).
+// Commit its retired prefix before control returns to the caller.
+class ArmCapture {
+    std::shared_ptr<ArmInstructionProfile> counts;
+    std::vector<uint32_t> block;
+    uint64_t next_pc = 0;
+
+public:
+    explicit ArmCapture(const std::shared_ptr<ArmInstructionProfile>& profile) : counts(profile) {
+        block.reserve(aarch64::detail::BlockMax);
+    }
+    void FlushBlock() {
+        if (block.empty()) return;
+        std::lock_guard guard(counts->mutex);
+        ++counts->blocks[block];
+        auto start = block.begin();
+        bool pair_start = false;
+        for (auto it = start; it != block.end(); ++it) {
+            const uint32_t word = *it;
+            const bool baked = aarch64::CanBake(word);
+            if (baked) {
+                ++counts->words[word];
+                if (pair_start) ++counts->pairs[(uint64_t{it[-1]} << 32) | word];
+            }
+            const auto kind = aarch64::detail::DecodeFields(word).kind;
+            pair_start = kind >= aarch64::Kind::Address && kind <= aarch64::Kind::Multiply;
+            if (!aarch64::CanFollowInBakedSequence(word) || it + 1 == block.end()) {
+                const auto end = baked ? it + 1 : it;
+                if (end - start >= 3) ++counts->sequences[std::vector<uint32_t>(start, end)];
+                start = it + 1;
+            }
+        }
+        block.clear();
+    }
+
+    static void Record(void* context, uint64_t pc, uint32_t word, bool can_follow) {
+        auto& capture = *static_cast<ArmCapture*>(context);
+        if (pc != capture.next_pc) capture.FlushBlock();
+        capture.block.push_back(word);
+        capture.next_pc = pc + 4;
+        if (!can_follow || capture.block.size() == aarch64::detail::BlockMax ||
+            (capture.next_pc & aarch64::detail::PageMask) == 0)
+            capture.FlushBlock();
+    }
+};
 }  // namespace
 
 #if FIBERCPU_AARCH64_BAKED
@@ -194,39 +240,11 @@ int RunArmEngine(EmuState& engine, uint64_t end_pc, uint64_t budget, bool step) 
     profile.resolve_sequence = FindBakedArmSequence;
     profile.trusted_baking = true;
 #endif
-    const auto options = engine.mmu.code_cache().run_options;
-    struct Capture {
-        aarch64::State& cpu;
-        ArmInstructionProfile* counts = nullptr;
-        uint64_t next_pc = UINT64_MAX;
-        uint32_t first = 0;
-        uint64_t next_sequence_pc = UINT64_MAX;
-        std::vector<uint32_t> sequence{};
-        void FlushSequence() {
-            if (sequence.size() >= 3) ++counts->sequences[sequence];
-            sequence.clear();
-        }
-    } capture{cpu};
+    const auto& options = engine.mmu.code_cache().run_options;
+    std::optional<ArmCapture> capture;
     if (options && options->arm_profile) {
-        capture.counts = options->arm_profile.get();
-        profile.context = &capture;
-        profile.record = [](void* context, const aarch64::DecodedInstruction& op) {
-            auto& c = *static_cast<Capture*>(context);
-            std::lock_guard lock(c.counts->mutex);
-            if (c.cpu.pc != c.next_sequence_pc) c.FlushSequence();
-            if (aarch64::CanBake(op.word)) {
-                c.sequence.push_back(op.word);
-                ++c.counts->words[op.word];
-                if (c.cpu.pc == c.next_pc) ++c.counts->pairs[(uint64_t{c.first} << 32) | op.word];
-            }
-            c.next_sequence_pc = c.cpu.pc + 4;
-            if (!aarch64::CanFollowInBakedSequence(op.word) || c.sequence.size() == 24 ||
-                (c.next_sequence_pc & 4095) == 0)
-                c.FlushSequence();
-            c.next_pc =
-                op.kind >= aarch64::Kind::Address && op.kind <= aarch64::Kind::Multiply ? c.cpu.pc + 4 : UINT64_MAX;
-            c.first = op.word;
-        };
+        profile.context = &capture.emplace(options->arm_profile);
+        profile.record = ArmCapture::Record;
     }
     uint64_t remaining = budget ? budget : UINT64_MAX;
     while (engine.status == EmuStatus::Running && remaining && (!end_pc || cpu.pc != end_pc)) {
@@ -266,10 +284,7 @@ int RunArmEngine(EmuState& engine, uint64_t end_pc, uint64_t budget, bool step) 
         if (cache_pressure && engine.status == EmuStatus::Running && (!end_pc || cpu.pc != end_pc))
             engine.status = EmuStatus::CachePressure;
     }
-    if (capture.counts) {
-        std::lock_guard guard(capture.counts->mutex);
-        capture.FlushSequence();
-    }
+    if (capture) capture->FlushBlock();
     if (!step && engine.status == EmuStatus::Running) engine.status = EmuStatus::Stopped;
     return step ? static_cast<int>(engine.status) : 1;
 }

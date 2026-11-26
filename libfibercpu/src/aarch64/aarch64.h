@@ -195,7 +195,7 @@ struct HandlerBinding {
 
 struct Profile {
     void* context = nullptr;
-    void (*record)(void*, const DecodedInstruction&) = nullptr;
+    void (*record)(void*, uint64_t pc, uint32_t word, bool can_follow) = nullptr;
     detail::HandlerBinding (*resolve)(const DecodedInstruction&, bool omit_nzcv) = nullptr;
     ScalarHandlerFunc (*resolve_pair)(uint32_t first, uint32_t second, uint32_t dead,
                                       detail::HandlerFunc& handler) = nullptr;

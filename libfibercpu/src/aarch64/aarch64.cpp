@@ -431,7 +431,6 @@ RunResult Run(State& state, const Memory& memory, uint64_t budget, const Profile
                 single = &local_slot;
             }
         }
-        if (profile.record) profile.record(profile.context, single->op);
         StepResult step;
         const DecodedOp* stop_op = nullptr;
         unsigned stop_ordinal = 0;
@@ -465,6 +464,9 @@ RunResult Run(State& state, const Memory& memory, uint64_t budget, const Profile
                 step = DispatchSpan(state, memory, *block, count, full_block);
             } else {
                 step = single->op.scalar_handler(state, memory, single->op);
+                if (profile.record && (step.reason == Stop::Continue || RetiresOnExit(step.reason)))
+                    profile.record(profile.context, pc, single->op.word,
+                                   single->can_follow && step.reason == Stop::Continue);
                 if (step.reason == Stop::Continue) state.pc = pc + 4;
             }
             if (step.reason == Stop::Continue) {
