@@ -34,15 +34,82 @@ A64_COMPARE_BRANCH_INLINE auto ReadCompareOperands(const HotRegisters& registers
     return std::pair{Word(left), Word(right)};
 }
 
+#if defined(__aarch64__) && defined(__clang__) && !defined(_MSC_VER)
+#if __has_extension(gnu_asm_goto_with_outputs_full) && \
+    (!defined(FIBERCPU_AARCH64_NATIVE_COMPARE_BRANCH) || FIBERCPU_AARCH64_NATIVE_COMPARE_BRANCH)
+#define A64_USE_NATIVE_COMPARE_BRANCH 1
+#endif
+#endif
+
+#if defined(A64_USE_NATIVE_COMPARE_BRANCH)
+inline constexpr bool HasNativeCompareBranch = true;
+
+// The two outputs are independent: the branch consumes host PSTATE and both
+// guest successors still receive the complete NZCV carried in a GPR.
+#define A64_COMPARE_BRANCH_ASM(cc, reg)              \
+    asm goto("cmp %" reg "[left], %" reg             \
+             "[right]\n\t"                           \
+             "mrs %x[flags], nzcv\n\t"               \
+             "b." cc " %l[taken]"                    \
+             : [flags] "=r"(flags)                   \
+             : [left] "r"(left), [right] "rI"(right) \
+             : "cc"                                  \
+             : taken)
+
+#define A64_COMPARE_BRANCH_CASE(index, cc)              \
+    if constexpr (condition == index) {                 \
+        if constexpr (sizeof(Word) == sizeof(uint32_t)) \
+            A64_COMPARE_BRANCH_ASM(cc, "w");            \
+        else                                            \
+            A64_COMPARE_BRANCH_ASM(cc, "x");            \
+    }
+
+template <unsigned condition, class Word>
+A64_COMPARE_BRANCH_INLINE bool NativeCompareBranch(uint32_t& flags, Word left, Word right) {
+    static_assert(condition < ConditionalBranchCount);
+    A64_COMPARE_BRANCH_CASE(0, "eq")
+    else A64_COMPARE_BRANCH_CASE(1, "ne") else A64_COMPARE_BRANCH_CASE(2, "hs") else A64_COMPARE_BRANCH_CASE(
+        3,
+        "lo") else A64_COMPARE_BRANCH_CASE(4,
+                                           "mi") else A64_COMPARE_BRANCH_CASE(5,
+                                                                              "pl") else A64_COMPARE_BRANCH_CASE(6,
+                                                                                                                 "v"
+                                                                                                                 "s") else A64_COMPARE_BRANCH_CASE(7,
+                                                                                                                                                   "vc") else A64_COMPARE_BRANCH_CASE(8,
+                                                                                                                                                                                      "hi") else A64_COMPARE_BRANCH_CASE(9,
+                                                                                                                                                                                                                         "ls") else A64_COMPARE_BRANCH_CASE(10,
+                                                                                                                                                                                                                                                            "ge") else A64_COMPARE_BRANCH_CASE(11,
+                                                                                                                                                                                                                                                                                               "lt") else A64_COMPARE_BRANCH_CASE(12,
+                                                                                                                                                                                                                                                                                                                                  "gt") else A64_COMPARE_BRANCH_CASE(13,
+                                                                                                                                                                                                                                                                                                                                                                     "le") return false;
+taken:
+    return true;
+}
+#undef A64_COMPARE_BRANCH_CASE
+#undef A64_COMPARE_BRANCH_ASM
+#else
+inline constexpr bool HasNativeCompareBranch = false;
+#endif
+
+template <Kind kind, unsigned width, unsigned condition>
+A64_COMPARE_BRANCH_INLINE bool CompareAndTest(State& state, const DecodedInstruction& compare,
+                                              uint32_t& flags_cache A64_HOT_PIN_REF) {
+    const HotRegisters registers{state A64_HANDLER_PIN_ARGS};
+    const auto [left, right] = ReadCompareOperands<kind, width>(registers, compare);
+#if defined(A64_USE_NATIVE_COMPARE_BRANCH)
+    return NativeCompareBranch<condition>(flags_cache, left, right);
+#else
+    AddSub<false>(flags_cache, left, right, width, true, true);
+    return ConditionHolds(flags_cache, condition);
+#endif
+}
+
 template <Kind kind, unsigned width, unsigned condition>
 FIBERCPU_AARCH64_HANDLER_ABI uint64_t CompareBranchHandler(A64_HANDLER_PARAMS) {
     const auto compare = GetOpOperands<kind>(*current);
-    const HotRegisters registers{state A64_HANDLER_PIN_ARGS};
-    const auto [left, right] = ReadCompareOperands<kind, width>(registers, compare);
-    AddSub<false>(flags_cache, left, right, width, true, true);
-
+    const bool taken = CompareAndTest<kind, width, condition>(state, compare, flags_cache A64_HANDLER_PIN_ARGS);
     current = current->NextOp<false>();
-    if (ConditionHolds(flags_cache, condition)) A64_RESOLVE_DIRECT_BRANCH_TARGET();
+    if (taken) A64_RESOLVE_DIRECT_BRANCH_TARGET();
     A64_DISPATCH_NEXT(current->NextOp<true>());
 }
 
@@ -62,6 +129,7 @@ inline HandlerFunc LowerCompareBranch(const DecodedInstruction& first, const Dec
     return (first.kind == Kind::AddSubImmediate ? immediate : reg)[index];
 }
 
+#undef A64_USE_NATIVE_COMPARE_BRANCH
 #undef A64_COMPARE_BRANCH_INLINE
 #endif
 
