@@ -1211,7 +1211,7 @@ public partial class FiberTask
             // Return address (restorer or some trampoline)
             var retAddr = Process.Syscalls.RtSigReturnAddr;
             if ((action.Flags & LinuxConstants.SA_RESTORER) != 0 && action.Restorer != 0)
-                retAddr = action.Restorer;
+                retAddr = (uint)action.Restorer;
 
             var frameEsp = sp;
 

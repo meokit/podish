@@ -73,7 +73,7 @@ public struct SigAction
 {
     public uint Handler;
     public uint Flags;
-    public uint Restorer;
+    public ulong Restorer;
     public ulong Mask;
 }
 

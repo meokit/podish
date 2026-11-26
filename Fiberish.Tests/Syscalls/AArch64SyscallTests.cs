@@ -119,6 +119,7 @@ public class AArch64SyscallTests
         var action = new byte[32];
         BinaryPrimitives.WriteUInt64LittleEndian(action, 0x14000);
         BinaryPrimitives.WriteUInt64LittleEndian(action.AsSpan(8), LinuxConstants.SA_RESTART);
+        BinaryPrimitives.WriteUInt64LittleEndian(action.AsSpan(16), 0xfedc_ba98_7654_3210);
         BinaryPrimitives.WriteUInt64LittleEndian(action.AsSpan(24), 1UL << 32);
         Assert.True(env.Engine.CopyToUser(0x12000, action));
         Assert.Equal(0, Invoke(env, 134, (int)Signal.SIGUSR1, 0x12000, 0, 8)); // rt_sigaction
@@ -157,13 +158,16 @@ public class AArch64SyscallTests
         Assert.Equal(-(long)Errno.EFAULT, Invoke(env, 221, 0x10000, 0x12000, 0));
     }
 
-    [Fact]
-    public void SignalHandlerAndTrampolineRestoreFullWidthIntegerAndVectorState()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void SignalHandlerAndTrampolineRestoreFullWidthIntegerAndVectorState(bool useRestorer)
     {
         using var env = new SyscallTestEnv(architecture: GuestArchitecture.AArch64);
         var engine = env.Engine;
         const uint main = 0x14000;
         const uint handler = main + 4;
+        const uint restorer = main + 6 * 4;
         const uint result = 0x10000;
         const uint stackTop = 0x13ff0;
         const int signal = (int)Signal.SIGUSR1;
@@ -178,7 +182,9 @@ public class AArch64SyscallTests
             0xd2800000, // mov x0, #0
             0xd2800028, // mov x8, #1
             0x4f00e400, // movi v0.16b, #0
-            0xd65f03c0  // ret
+            0xd65f03c0, // ret
+            0xd2801168, // mov x8, #139
+            0xd4000001  // svc #0
         ];
         Assert.True(engine.CopyToUser(main, System.Runtime.InteropServices.MemoryMarshal.AsBytes(instructions.AsSpan())));
         Assert.Equal(0, ProcessAddressSpaceSync.Mprotect(env.Mem, engine, main,
@@ -186,7 +192,9 @@ public class AArch64SyscallTests
         Span<byte> action = stackalloc byte[32];
         action.Clear();
         BinaryPrimitives.WriteUInt64LittleEndian(action, handler);
-        BinaryPrimitives.WriteUInt64LittleEndian(action[8..], LinuxConstants.SA_SIGINFO);
+        BinaryPrimitives.WriteUInt64LittleEndian(action[8..],
+            LinuxConstants.SA_SIGINFO | (useRestorer ? LinuxConstants.SA_RESTORER : 0));
+        BinaryPrimitives.WriteUInt64LittleEndian(action[16..], useRestorer ? restorer : ulong.MaxValue);
         Assert.True(engine.CopyToUser(0x11000, action));
         Assert.Equal(0, Invoke(env, 134, signal, 0x11000, 0, 8)); // rt_sigaction
 
@@ -210,8 +218,8 @@ public class AArch64SyscallTests
         Assert.Equal(1UL, engine.ReadArmRegister(8));
         Assert.Equal(0UL, engine.ReadArmRegister(64) | engine.ReadArmRegister(65));
 
-        engine.Step(); // Return from the handler to the VDSO trampoline.
-        Assert.Equal((ulong)env.Sm.RtSigReturnAddr, engine.InstructionPointer);
+        engine.Step(); // Return from the handler to the selected trampoline.
+        Assert.Equal(useRestorer ? restorer : (ulong)env.Sm.RtSigReturnAddr, engine.InstructionPointer);
         engine.Step(); // mov x8, #139
         Assert.Equal(139UL, engine.ReadArmRegister(8));
         engine.Step(); // svc #0

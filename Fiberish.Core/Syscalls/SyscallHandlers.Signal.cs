@@ -75,12 +75,14 @@ public partial class SyscallManager
             if (!engine.CopyFromUser(newSaPtr, buf)) return -(int)Errno.EFAULT;
             var handler = ReadGuestWord(buf, wordSize);
             var restorer = ReadGuestWord(buf[(wordSize * 2)..], wordSize);
-            if (handler > uint.MaxValue || restorer > uint.MaxValue) return -(int)Errno.EFAULT;
+            if (handler > uint.MaxValue) return -(int)Errno.EFAULT;
             task.Process.SignalActions[sig] = new SigAction
             {
                 Handler = (uint)handler,
                 Flags = (uint)ReadGuestWord(buf[wordSize..], wordSize),
-                Restorer = (uint)restorer,
+                // The kernel ABI round-trips this word. Arm64 glibc can leave
+                // it uninitialized when SA_RESTORER is clear.
+                Restorer = restorer,
                 Mask = BinaryPrimitives.ReadUInt64LittleEndian(buf[(wordSize * 3)..])
             };
         }

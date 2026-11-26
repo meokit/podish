@@ -586,7 +586,18 @@ public class EngineMmuTransferTests : IDisposable
         ]);
         engine.SelectArchitecture(GuestArchitecture.AArch64);
         MapHostPage(engine, CodeAddr, code.Pointer, Protection.Read | Protection.Exec);
-        engine.SetCodeCacheBudgetBytesForTesting(384);
+
+        // Fit either of the two blocks, but leave the arena one byte short
+        // of holding both. Their allocations depend on the decoded slot layout.
+        engine.InstructionPointer = CodeAddr;
+        engine.Run(maxInsts: 4);
+        Assert.Equal(EmuStatus.Stopped, engine.Status);
+        var filled = ReadCodeCacheStats(engine);
+        Assert.Equal(2, filled.AllBlocksCount);
+        Assert.True(filled.CodeCacheBytesRequested > 1);
+        engine.ResetAllCodeCache();
+        engine.SetCodeCacheBudgetBytesForTesting(filled.CodeCacheBytesRequested - 1);
+        engine.WriteArmRegister(0, 0);
         engine.InstructionPointer = CodeAddr;
         engine.Run(maxInsts: 4);
         Assert.Equal(EmuStatus.CachePressure, engine.Status);
