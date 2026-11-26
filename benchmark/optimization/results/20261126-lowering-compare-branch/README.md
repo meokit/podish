@@ -77,3 +77,5 @@ The table uses the median of paired baseline/variant elapsed-time ratios. A rati
 | Family-weighted geometric mean | 1.023 | 1.000 | 1.024 | 1.000 |
 
 [Per-round timing and digests](no-tiering.json)
+
+The [integrated benchmark](combined/README.md) reruns the same workloads on revision `e2d106dc`.

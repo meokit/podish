@@ -1,0 +1,75 @@
+{
+  "cases": [
+    {
+      "id": "gzip",
+      "group": "compression",
+      "shell": "gzip -n -6 -c input.txt",
+      "sha256": "b6c8d023b153e79acf9f5b2fc69d4cb8be536fd3d91f78bba8378a6198265eeb",
+      "repetitions": 1,
+      "verify": "gzip",
+      "cwd": "/opt/nested-training",
+      "family": "gzip"
+    },
+    {
+      "id": "gunzip",
+      "group": "compression",
+      "shell": "gzip -dc input.gz",
+      "sha256": "b6c8d023b153e79acf9f5b2fc69d4cb8be536fd3d91f78bba8378a6198265eeb",
+      "repetitions": 10,
+      "verify": "bytes",
+      "cwd": "/opt/nested-training",
+      "family": "gzip"
+    }
+  ],
+  "timing_unit": "ms per command",
+  "rounds": [
+    {
+      "base-release": 33.21948749944568,
+      "a64-native-release": 34.620612498838454,
+      "a64-alu-release": 33.86728750047041,
+      "a64-memory-release": 33.628516700991895,
+      "combined-release": 34.73375839967048,
+      "a64-pair-release": 33.44475420017261
+    },
+    {
+      "a64-pair-release": 33.19800000026589,
+      "combined-release": 33.3826375004719,
+      "a64-memory-release": 33.58445420017233,
+      "a64-alu-release": 33.39117499999702,
+      "a64-native-release": 32.94772499939427,
+      "base-release": 32.99818340019556
+    },
+    {
+      "a64-alu-release": 33.94520419969922,
+      "a64-pair-release": 33.67684580007335,
+      "a64-memory-release": 33.45748749998165,
+      "a64-native-release": 33.48048750049202,
+      "base-release": 32.98147500026971,
+      "combined-release": 33.22376670112135
+    },
+    {
+      "combined-release": 33.26390000001993,
+      "base-release": 33.57807499996852,
+      "a64-native-release": 33.29602089943364,
+      "a64-memory-release": 33.8229874992976,
+      "a64-pair-release": 33.462379200500436,
+      "a64-alu-release": 33.88020830025198
+    },
+    {
+      "a64-pair-release": 33.47739169985289,
+      "base-release": 32.89727500086883,
+      "a64-memory-release": 34.204675001092255,
+      "a64-alu-release": 33.28202089905972,
+      "a64-native-release": 33.26438749936642,
+      "combined-release": 33.23481660045218
+    },
+    {
+      "combined-release": 33.150049998948816,
+      "a64-native-release": 33.381120799458586,
+      "a64-alu-release": 33.6218166994513,
+      "a64-memory-release": 33.54758749919711,
+      "base-release": 33.26772919972427,
+      "a64-pair-release": 33.560841700818855
+    }
+  ]
+}
