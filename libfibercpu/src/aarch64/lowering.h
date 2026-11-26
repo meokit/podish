@@ -62,14 +62,14 @@ constexpr HandlerBinding BindMemoryHandler() {
 }
 
 #if FIBERCPU_AARCH64_TAIL_DISPATCH
-template <Kind kind, unsigned width, int operation, int shift, bool write_nzcv>
+template <Kind kind, unsigned width, int operation, int shift, bool write_nzcv, IntegerForm form>
 FIBERCPU_AARCH64_HANDLER_ABI uint64_t IntegerHandler(A64_HANDLER_PARAMS) {
     const auto op = GetOpOperands<kind>(*current);
     uint64_t pc = 0;
     if constexpr (kind == Kind::BranchImmediate || kind == Kind::BranchRegister)
         pc = GetExtraOperands(*current).secondary;
-    const auto result = HotInteger<kind, width, operation, shift, write_nzcv>(state, op, pc, BlockTarget<kind>(op),
-                                                                              flags_cache A64_HANDLER_PIN_ARGS);
+    const auto result = HotInteger<kind, width, operation, shift, write_nzcv, form>(
+        state, op, pc, BlockTarget<kind>(op), flags_cache A64_HANDLER_PIN_ARGS);
     if constexpr (kind >= Kind::BranchImmediate && kind <= Kind::TestBranch) {
         if (result.reason == Stop::Branch) {
             if constexpr (kind == Kind::BranchRegister) {
@@ -83,11 +83,12 @@ FIBERCPU_AARCH64_HANDLER_ABI uint64_t IntegerHandler(A64_HANDLER_PARAMS) {
 }
 #endif
 
-template <Kind kind, unsigned width = 0, int operation = -1, int shift = -1, bool write_nzcv = true>
+template <Kind kind, unsigned width = 0, int operation = -1, int shift = -1, bool write_nzcv = true,
+          IntegerForm form = IntegerForm::Default>
 constexpr HandlerBinding BindIntegerKernel() {
-    constexpr auto scalar = Integer<kind, width, operation, shift, write_nzcv>;
+    constexpr auto scalar = Integer<kind, width, operation, shift, write_nzcv, form>;
 #if FIBERCPU_AARCH64_TAIL_DISPATCH
-    return {scalar, &IntegerHandler<kind, width, operation, shift, write_nzcv>};
+    return {scalar, &IntegerHandler<kind, width, operation, shift, write_nzcv, form>};
 #else
     return {scalar, nullptr};
 #endif
@@ -112,17 +113,27 @@ constexpr std::array<HandlerBinding, size_t(Kind::Count)> Handlers{
     BindTrapHandler<Stop::Undefined>(),           BindTrapHandler<Stop::Undefined>(),
 };
 
-template <Kind kind, unsigned operations, int shift, bool write_nzcv, size_t... index>
+template <Kind kind, unsigned operations, int shift, bool write_nzcv, IntegerForm form, size_t... index>
 constexpr auto IntegerVariants(std::index_sequence<index...>) {
     return std::array<HandlerBinding, sizeof...(index)>{
-        BindIntegerKernel < kind, index<operations ? 32 : 64, index % operations, shift, write_nzcv>()...};
+        BindIntegerKernel < kind, index<operations ? 32 : 64, index % operations, shift, write_nzcv, form>()...};
 }
 
-template <Kind kind, unsigned operations = 4, int shift = -1, bool write_nzcv = true>
+template <Kind kind, unsigned operations = 4, int shift = -1, bool write_nzcv = true,
+          IntegerForm form = IntegerForm::Default>
 HandlerBinding BindInteger(const DecodedInstruction& op) {
     constexpr auto variants =
-        IntegerVariants<kind, operations, shift, write_nzcv>(std::make_index_sequence<2 * operations>{});
+        IntegerVariants<kind, operations, shift, write_nzcv, form>(std::make_index_sequence<2 * operations>{});
     return variants[(op.width == 64 ? operations : 0) + op.operation];
+}
+
+template <bool write_nzcv>
+HandlerBinding BindExtended(const DecodedInstruction& op) {
+    if (op.shift == 0) {
+        if (op.mode == 0) return BindInteger<Kind::AddSubExtended, 4, 0, write_nzcv, IntegerForm::Uxtb>(op);
+        if (op.mode == 2) return BindInteger<Kind::AddSubExtended, 4, 0, write_nzcv, IntegerForm::Uxtw>(op);
+    }
+    return BindInteger<Kind::AddSubExtended, 4, -1, write_nzcv>(op);
 }
 
 template <int mode, unsigned operations, size_t... index>
@@ -182,7 +193,13 @@ inline HandlerBinding Lower(const DecodedInstruction& op) {
         case Kind::AddSubShifted:
             return op.shift ? BindInteger<Kind::AddSubShifted>(op) : BindInteger<Kind::AddSubShifted, 4, 0>(op);
         case Kind::AddSubExtended:
-            return BindInteger<Kind::AddSubExtended>(op);
+            return BindExtended<true>(op);
+        case Kind::Extract:
+            if (IsRotateImmediate(op)) {
+                return op.width == 32 ? BindIntegerKernel<Kind::Extract, 32, 0, -1, true, IntegerForm::RotateRight>()
+                                      : BindIntegerKernel<Kind::Extract, 64, 0, -1, true, IntegerForm::RotateRight>();
+            }
+            break;
         case Kind::AddSubCarry:
             return BindInteger<Kind::AddSubCarry>(op);
         case Kind::LogicalImmediate:
@@ -235,7 +252,7 @@ inline HandlerBinding LowerDeadNZCV(const DecodedInstruction& op) {
             return op.shift ? BindInteger<Kind::AddSubShifted, 4, -1, false>(op)
                             : BindInteger<Kind::AddSubShifted, 4, 0, false>(op);
         case Kind::AddSubExtended:
-            return BindInteger<Kind::AddSubExtended, 4, -1, false>(op);
+            return BindExtended<false>(op);
         case Kind::AddSubCarry:
             return BindInteger<Kind::AddSubCarry, 4, -1, false>(op);
         case Kind::LogicalImmediate:

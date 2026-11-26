@@ -54,7 +54,9 @@ A64_BAKED_INLINE StepResult Baked(State& state, const Memory& memory, const Deco
 #if defined(__clang__)
         [[clang::always_inline]]
 #endif
-        return detail::Integer<op.kind, op.width, op.operation, op.shift, write_nzcv>(state, memory, operands);
+        constexpr auto form =
+            detail::IsRotateImmediate(op) ? detail::IntegerForm::RotateRight : detail::IntegerForm::Default;
+        return detail::Integer<op.kind, op.width, op.operation, op.shift, write_nzcv, form>(state, memory, operands);
     }
 }
 
@@ -95,7 +97,8 @@ A64_BAKED_INLINE BakedStop ExecuteBakedOps(State& state, const detail::DecodedOp
         uint64_t pc = 0;
         if constexpr ((op.kind == Kind::BranchImmediate || op.kind == Kind::BranchRegister) && op.operation != 0)
             pc = GetExtraOperands(*member).secondary;
-        const auto step = detail::HotInteger<op.kind, op.width, op.operation, op.shift, !(dead & 1)>(
+        constexpr auto form = IsRotateImmediate(op) ? IntegerForm::RotateRight : IntegerForm::Default;
+        const auto step = detail::HotInteger<op.kind, op.width, op.operation, op.shift, !(dead & 1), form>(
             state, operands, pc, target, flags_cache A64_HANDLER_PIN_ARGS);
         if constexpr (op.kind >= Kind::BranchImmediate && op.kind <= Kind::TestBranch) return {member, step};
     }

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <bit>
 #include <limits>
 
 #include "decoder.h"
@@ -394,8 +395,12 @@ A64_INTEGER_INLINE uint64_t RelativeTarget(uint64_t base, uint64_t immediate, ui
     return base + immediate;
 }
 
+enum class IntegerForm { Default, Uxtb, Uxtw, RotateRight };
+
+constexpr bool IsRotateImmediate(const DecodedInstruction& op) { return op.kind == Kind::Extract && op.rn == op.rm; }
+
 template <Kind kind, unsigned fixed_width = 0, int fixed_operation = -1, int fixed_shift = -1, bool write_nzcv = true,
-          bool bound_pc = false, class Registers>
+          bool bound_pc = false, IntegerForm form = IntegerForm::Default, class Registers>
 A64_INTEGER_INLINE StepResult IntegerKernel(const Registers& registers, const DecodedInstruction& op, uint64_t pc,
                                             uint32_t& nzcv, uint64_t bound_target = 0) {
     const unsigned width = fixed_width == 0 ? op.width : fixed_width;
@@ -416,7 +421,14 @@ A64_INTEGER_INLINE StepResult IntegerKernel(const Registers& registers, const De
             if constexpr (kind == Kind::AddSubShifted) {
                 if (shift) right = Shift(right, op.mode, shift, width);
             }
-            if constexpr (kind == Kind::AddSubExtended) right = Extend(right, op.mode, shift, width);
+            if constexpr (kind == Kind::AddSubExtended) {
+                if constexpr (form == IntegerForm::Uxtb || form == IntegerForm::Uxtw) {
+                    static_assert(fixed_shift == 0);
+                    right = form == IntegerForm::Uxtb ? uint8_t(right) : uint32_t(right);
+                } else {
+                    right = Extend(right, op.mode, shift, width);
+                }
+            }
         }
         const bool subtract = operation & 2;
         const bool set_flags = operation & 1;
@@ -468,9 +480,15 @@ A64_INTEGER_INLINE StepResult IntegerKernel(const Registers& registers, const De
         registers.Write(op.rd, width, result);
     } else if constexpr (kind == Kind::Extract) {
         const auto low = registers.Read(op.rm, width);
-        const auto high = registers.Read(op.rn, width);
-        const auto result = shift ? (low >> shift) | (high << (width - shift)) : low;
-        registers.Write(op.rd, width, result);
+        if constexpr (form == IntegerForm::RotateRight) {
+            static_assert(fixed_width == 32 || fixed_width == 64);
+            const auto result = fixed_width == 32 ? std::rotr(uint32_t(low), int(shift)) : std::rotr(low, int(shift));
+            registers.Write(op.rd, width, result);
+        } else {
+            const auto high = registers.Read(op.rn, width);
+            const auto result = shift ? (low >> shift) | (high << (width - shift)) : low;
+            registers.Write(op.rd, width, result);
+        }
     } else if constexpr (kind == Kind::ConditionalCompare) {
         if constexpr (write_nzcv) {
             if (ConditionHolds(nzcv, shift)) {
@@ -517,13 +535,15 @@ A64_INTEGER_INLINE StepResult IntegerKernel(const Registers& registers, const De
     return {};
 }
 
-template <Kind kind, unsigned fixed_width = 0, int fixed_operation = -1, int fixed_shift = -1, bool write_nzcv = true>
+template <Kind kind, unsigned fixed_width = 0, int fixed_operation = -1, int fixed_shift = -1, bool write_nzcv = true,
+          IntegerForm form = IntegerForm::Default>
 inline StepResult Integer(State& state, const Memory&, const DecodedInstruction& op) {
-    return IntegerKernel<kind, fixed_width, fixed_operation, fixed_shift, write_nzcv>(ScalarRegisters{state}, op,
-                                                                                      state.pc, state.nzcv);
+    return IntegerKernel<kind, fixed_width, fixed_operation, fixed_shift, write_nzcv, false, form>(
+        ScalarRegisters{state}, op, state.pc, state.nzcv);
 }
 
-template <Kind kind, unsigned fixed_width = 0, int fixed_operation = -1, int fixed_shift = -1, bool write_nzcv = true>
+template <Kind kind, unsigned fixed_width = 0, int fixed_operation = -1, int fixed_shift = -1, bool write_nzcv = true,
+          IntegerForm form = IntegerForm::Default>
 A64_INTEGER_INLINE StepResult HotInteger(State& state, const DecodedInstruction& op, uint64_t pc, uint64_t bound_target,
                                          uint32_t& nzcv A64_HOT_PIN_REF) {
 #if FIBERCPU_AARCH64_PIN_REG >= 0
@@ -531,8 +551,8 @@ A64_INTEGER_INLINE StepResult HotInteger(State& state, const DecodedInstruction&
 #else
     const HotRegisters registers{state};
 #endif
-    return IntegerKernel<kind, fixed_width, fixed_operation, fixed_shift, write_nzcv, true>(registers, op, pc, nzcv,
-                                                                                            bound_target);
+    return IntegerKernel<kind, fixed_width, fixed_operation, fixed_shift, write_nzcv, true, form>(registers, op, pc,
+                                                                                                  nzcv, bound_target);
 }
 
 }  // namespace fiberish::aarch64::detail
