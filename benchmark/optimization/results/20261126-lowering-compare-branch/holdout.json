@@ -1,0 +1,33 @@
+{
+  "cases": [
+    {
+      "id": "dpkg-deb-xz",
+      "family": "dpkg/liblzma",
+      "cwd": "/opt/fiber-general-lowering-holdout",
+      "repetitions": 3,
+      "verify": "bytes",
+      "shell": "/usr/bin/dpkg-deb --fsys-tarfile fixture.deb",
+      "sha256": "59f6f182bbfc0fe5c4a5d45419252b7937d0df217bdba6fa788e9828528e4e8c"
+    },
+    {
+      "id": "find-dat",
+      "family": "findutils",
+      "cwd": "/opt/nested-training",
+      "repetitions": 6,
+      "verify": "bytes",
+      "shell": "/usr/bin/find project-* -name 'unit-*.dat' -type f -printf '.'",
+      "sha256": "19788f8d6dc5faa7353b5326064ac9845012168032968ebf17c382f1568f945d"
+    }
+  ],
+  "fixture_sha256": "63c1ede845d4463a77a43712b802b181738628cfe408c49d938fe4302ca3fbc9",
+  "elf_sha256": {
+    "i386": {
+      "dpkg-deb": "5719dec8fd97b86370a62cef3d7f4ce9990e55cf348524f84c8bb03f7a8f6929",
+      "find": "a51f12260a814d98e4754d6f76a116df61bbe91ac48304f046a838f6d4677d3d"
+    },
+    "aarch64": {
+      "dpkg-deb": "b85e5cbe3dbb1cb9af9319994fdedf00d3dfac6234191e8b2e5ba0e90f5fa197",
+      "find": "02953b247cc5538ed853c4a21d50dd789a964b21ae9908c0dfdf46358188f9fe"
+    }
+  }
+}

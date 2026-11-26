@@ -70,3 +70,5 @@ PYTHON
 ```
 
 The [paired reruns and disassembly profiles](profile/README.md) trace five workloads to guest code and host handlers and test the effect of host tiering on recursive ls.
+
+The [independent lowering and conditional-branch experiments](../20261126-lowering-compare-branch/README.md) use the same 3 MiB plans and add two holdout families.
