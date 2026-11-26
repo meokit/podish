@@ -119,7 +119,30 @@ public static class SyscallTracer
         logger.LogTrace(sb.ToString());
     }
 
+    internal static void TraceAArch64Entry(ILogger logger, int tid, uint number, uint operation,
+        ReadOnlySpan<ulong> args)
+    {
+        if (!logger.IsEnabled(LogLevel.Trace)) return;
+        var name = number switch
+        {
+            45 => "truncate",
+            46 => "ftruncate",
+            71 => "sendfile",
+            79 => "newfstatat",
+            80 => "fstat",
+            202 => "accept",
+            222 => "mmap",
+            _ when operation == uint.MaxValue => $"syscall_{number}",
+            _ => GetSyscallName(operation).Replace("_time64", "").Replace("time64", "time")
+        };
+        logger.LogTrace("[{Tid}] [Syscall] {Name} [{Number}](0x{Arg1:X}, 0x{Arg2:X}, 0x{Arg3:X}, 0x{Arg4:X}, 0x{Arg5:X}, 0x{Arg6:X})",
+            tid, name, number, args[0], args[1], args[2], args[3], args[4], args[5]);
+    }
+
     public static void TraceExit(ILogger logger, SyscallManager sys, int tid, uint nr, int ret, uint a1, uint a2,
+        uint a3) => TraceExit(logger, sys, tid, nr, (long)ret, a1, a2, a3);
+
+    internal static void TraceExit(ILogger logger, SyscallManager sys, int tid, uint nr, long ret, uint a1, uint a2,
         uint a3)
     {
         var sb = new StringBuilder();
@@ -138,7 +161,7 @@ public static class SyscallTracer
             if ((nr == X86SyscallNumbers.epoll_wait ||
                  nr == X86SyscallNumbers.epoll_pwait ||
                  nr == X86SyscallNumbers.epoll_pwait2) && ret > 0)
-                sb.Append($" {ReadEpollWaitEvents(sys, a2, ret)}");
+                sb.Append($" {ReadEpollWaitEvents(sys, a2, (int)ret)}");
         }
 
         logger.LogTrace(sb.ToString());
@@ -684,7 +707,8 @@ public static class SyscallTracer
         var parts = new List<string>(eventCount);
         for (var index = 0; index < eventCount; index++)
         {
-            var eventAddr = addr + (uint)(index * 12);
+            var eventSize = sys.CurrentSyscallEngine.IsAArch64 ? 16 : 12;
+            var eventAddr = addr + (uint)(index * eventSize);
             if (!TryReadEpollEvent(sys, eventAddr, out var events, out var data))
             {
                 parts.Add($"{{addr=0x{eventAddr:X}}}");
@@ -706,11 +730,12 @@ public static class SyscallTracer
 
         try
         {
-            Span<byte> buffer = stackalloc byte[12];
+            var eventSize = sys.CurrentSyscallEngine.IsAArch64 ? 16 : 12;
+            Span<byte> buffer = stackalloc byte[eventSize];
             if (!sys.CurrentSyscallEngine.CopyFromUser(addr, buffer)) return false;
 
             events = BinaryPrimitives.ReadUInt32LittleEndian(buffer.Slice(0, 4));
-            data = BinaryPrimitives.ReadUInt64LittleEndian(buffer.Slice(4, 8));
+            data = BinaryPrimitives.ReadUInt64LittleEndian(buffer[^8..]);
             return true;
         }
         catch

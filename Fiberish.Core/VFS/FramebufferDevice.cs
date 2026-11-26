@@ -233,7 +233,7 @@ public sealed class FramebufferDevice
 
     private static byte ExpandColor(int value, int bits) => (byte)(value * 255 / ((1 << bits) - 1));
 
-    internal int Ioctl(Engine cpu, uint request, uint arg)
+    internal int Ioctl(Engine cpu, uint request, ulong arg)
     {
         lock (_gate)
         {
@@ -246,27 +246,29 @@ public sealed class FramebufferDevice
                 0x4605 => TransferPalette(cpu, arg, true),  // FBIOPUTCMAP
                 0x4606 => PanDisplay(cpu, arg),            // FBIOPAN_DISPLAY
                 0x460f => GetConsoleMapping(cpu, arg),     // FBIOGET_CON2FBMAP
-                0x4611 => SetBlank(arg),                   // FBIOBLANK
+                0x4611 => SetBlank((uint)arg),                   // FBIOBLANK
                 _ => -(int)Errno.ENOTTY
             };
         }
     }
 
-    private int GetFixedInfo(Engine cpu, uint arg)
+    private int GetFixedInfo(Engine cpu, ulong arg)
     {
-        // IA-32 fb_fix_screeninfo, including its two-byte trailing alignment padding.
-        Span<byte> data = stackalloc byte[68];
+        // fb_fix_screeninfo contains two unsigned long addresses.
+        var isAArch64 = cpu.IsAArch64;
+        Span<byte> data = stackalloc byte[isAArch64 ? 80 : 68];
         data.Clear();
         "Podish fbdev"u8.CopyTo(data);
-        Put32(data, 20, _videoMemoryLength);
-        Put32(data, 32, _mode.Depth == 8 ? 3 : 2); // Pseudocolor / truecolor
-        BinaryPrimitives.WriteUInt16LittleEndian(data[36..], 1);
-        BinaryPrimitives.WriteUInt16LittleEndian(data[38..], 1);
-        Put32(data, 44, _mode.Stride);
+        var addressPadding = isAArch64 ? 4 : 0;
+        Put32(data, 20 + addressPadding, _videoMemoryLength);
+        Put32(data, 32 + addressPadding, _mode.Depth == 8 ? 3 : 2); // Pseudocolor / truecolor
+        BinaryPrimitives.WriteUInt16LittleEndian(data[(36 + addressPadding)..], 1);
+        BinaryPrimitives.WriteUInt16LittleEndian(data[(38 + addressPadding)..], 1);
+        Put32(data, 44 + addressPadding, _mode.Stride);
         return cpu.CopyToUser(arg, data) ? 0 : -(int)Errno.EFAULT;
     }
 
-    private int GetVariableInfo(Engine cpu, uint arg)
+    private int GetVariableInfo(Engine cpu, ulong arg)
     {
         Span<byte> data = stackalloc byte[160];
         WriteVariableInfo(data, _mode, 0);
@@ -313,7 +315,7 @@ public sealed class FramebufferDevice
         Put32(data, 92, -1);
     }
 
-    private int SetVariableInfo(Engine cpu, uint arg)
+    private int SetVariableInfo(Engine cpu, ulong arg)
     {
         Span<byte> data = stackalloc byte[160];
         if (!cpu.CopyFromUser(arg, data)) return -(int)Errno.EFAULT;
@@ -352,7 +354,7 @@ public sealed class FramebufferDevice
         return 0;
     }
 
-    private int PanDisplay(Engine cpu, uint arg)
+    private int PanDisplay(Engine cpu, ulong arg)
     {
         Span<byte> data = stackalloc byte[160];
         if (!cpu.CopyFromUser(arg, data)) return -(int)Errno.EFAULT;
@@ -366,9 +368,10 @@ public sealed class FramebufferDevice
         return 0;
     }
 
-    private int TransferPalette(Engine cpu, uint arg, bool put)
+    private int TransferPalette(Engine cpu, ulong arg, bool put)
     {
-        Span<byte> cmap = stackalloc byte[24];
+        var pointerSize = cpu.IsAArch64 ? 8 : 4;
+        Span<byte> cmap = stackalloc byte[8 + 4 * pointerSize];
         if (!cpu.CopyFromUser(arg, cmap)) return -(int)Errno.EFAULT;
         var start = Get32(cmap, 0);
         var length = Get32(cmap, 4);
@@ -377,14 +380,18 @@ public sealed class FramebufferDevice
         if (length == 0) return 0;
 
         Span<byte> channels = stackalloc byte[4 * 256 * sizeof(ushort)];
-        for (var channel = 0; channel < 4; channel++)
+        var channelCount = 0;
+        for (; channelCount < 4; channelCount++)
         {
-            var address = (uint)Get32(cmap, 8 + channel * 4);
-            if (channel == 3 && address == 0)
+            var pointer = cmap[(8 + channelCount * pointerSize)..];
+            var address = pointerSize == 8
+                ? BinaryPrimitives.ReadUInt64LittleEndian(pointer)
+                : BinaryPrimitives.ReadUInt32LittleEndian(pointer);
+            if (channelCount == 3 && address == 0)
                 break;
-            if (address == 0)
+            if (address == 0 || !cpu.IsUserRange(address, (uint)(length * 2)))
                 return -(int)Errno.EFAULT;
-            var bytes = channels.Slice(channel * length * 2, length * 2);
+            var bytes = channels.Slice(channelCount * length * 2, length * 2);
             if (put)
             {
                 if (!cpu.CopyFromUser(address, bytes)) return -(int)Errno.EFAULT;
@@ -392,14 +399,13 @@ public sealed class FramebufferDevice
             else
             {
                 for (var i = 0; i < length; i++)
-                    BinaryPrimitives.WriteUInt16LittleEndian(bytes[(i * 2)..], _palette[channel][start + i]);
+                    BinaryPrimitives.WriteUInt16LittleEndian(bytes[(i * 2)..], _palette[channelCount][start + i]);
                 if (!cpu.CopyToUser(address, bytes)) return -(int)Errno.EFAULT;
             }
         }
 
         if (put)
         {
-            var channelCount = Get32(cmap, 20) == 0 ? 3 : 4;
             for (var channel = 0; channel < channelCount; channel++)
                 for (var i = 0; i < length; i++)
                     _palette[channel][start + i] =
@@ -409,7 +415,7 @@ public sealed class FramebufferDevice
         return 0;
     }
 
-    private static int GetConsoleMapping(Engine cpu, uint arg)
+    private static int GetConsoleMapping(Engine cpu, ulong arg)
     {
         Span<byte> mapping = stackalloc byte[8];
         if (!cpu.CopyFromUser(arg, mapping)) return -(int)Errno.EFAULT;
@@ -461,13 +467,13 @@ internal sealed class FramebufferInode : MappingBackedInode
     // Video memory must remain resident when guests unmap it or invoke msync.
     protected override AddressSpacePolicy.AddressSpaceCacheClass? MappingCacheClass => null;
 
-    public override int ResolveMmapBacking(LinuxFile file, uint length, ref long offset, out LinuxFile backing)
+    public override int ResolveMmapBacking(LinuxFile file, ulong length, ref long offset, out LinuxFile backing)
     {
         backing = file;
         return offset >= 0 && (ulong)offset + length <= Size ? 0 : -(int)Errno.EINVAL;
     }
 
-    public override int Ioctl(LinuxFile linuxFile, FiberTask task, uint request, uint arg) =>
+    public override int Ioctl(LinuxFile linuxFile, FiberTask task, uint request, ulong arg) =>
         _device.Ioctl(task.CPU, request, arg);
 
     internal unsafe void CopyVideoMemory(int offset, Span<byte> destination)
@@ -548,7 +554,7 @@ internal sealed class FramebufferInode : MappingBackedInode
                 if (address < iov.BaseAddr)
                     return total > 0 ? total : -(int)Errno.EFAULT;
                 var count = (int)Math.Min(Math.Min(iov.Len - transferred,
-                    LinuxConstants.PageSize - (address & LinuxConstants.PageOffsetMask)), remaining);
+                    LinuxConstants.PageSize - ((uint)address & LinuxConstants.PageOffsetMask)), remaining);
                 var data = buffer[..count];
                 int result;
                 if (write)

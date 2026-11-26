@@ -1,0 +1,2815 @@
+{
+  "design": "Post-hoc diagnostic after observing lookup discrepancies in the recent links. All features, fitting and the residual guard use only the 36 older archives. The 24 recent links are rescored unchanged and are not a prospective trial of a new selector.",
+  "script_sha256": "a4183e5360433dd4cc9f99ef5e47642f0a7de82fcf683a0e4b99c96747104e75",
+  "old_fit_sha256": "ea450b67589deac2fb5669c079cccf9834759f351d9692cccff623fe9dd82bf2",
+  "old_cache_sha256": "82511952e6b18b1fe05156f9dd381a130ba949d6ddc3a7d7b9c19ae13c073fa0",
+  "features": {
+    "FindBakedArmHandler": [
+      "exact_words",
+      "imm12_shapes"
+    ],
+    "FindBakedArmPair": [
+      "pairs",
+      "distinct_pair_first_words"
+    ],
+    "FindBakedArmSequence": [
+      "sequences",
+      "distinct_sequence_first_words",
+      "distinct_first_word_and_length",
+      "distinct_nonfirst_prefix_edges"
+    ]
+  },
+  "fit_note": "One nonnegative no-intercept linear model per resolver plus one nonnegative other bytes/selection. Each target uses 1/max(4096, |measured bytes|) weighted residual, column RMS normalization and ridge 0.001. Body uses old symbol spans/structural median without multiplicative lookup adjustment.",
+  "feature_note": "Sequence nonfirst edges are unique prefix trie edges beyond the first instruction.",
+  "units": "bytes",
+  "fitted_coefficients": {
+    "FindBakedArmHandler": [
+      64.18873054781113,
+      48.95043130447106
+    ],
+    "FindBakedArmPair": [
+      46.398960336626544,
+      12.603294638212622
+    ],
+    "FindBakedArmSequence": [
+      80.39312806585755,
+      30.649446286422194,
+      0.0,
+      8.70568916297374
+    ],
+    "other": 0.2415073013212567
+  },
+  "old_cross_validation": {
+    "groups": {
+      "all": {
+        "new": {
+          "covered_by_guard": 33,
+          "guard_bytes": 65832,
+          "links": 36,
+          "maximum_overprediction": 36717,
+          "maximum_underprediction": 147984,
+          "mean_absolute_error": 24380.38888888889,
+          "mean_signed_error": 12025.944444444445,
+          "median_absolute_error": 15883.0
+        },
+        "old": {
+          "covered_by_guard": 33,
+          "guard_bytes": 174708,
+          "links": 36,
+          "maximum_overprediction": 98938,
+          "maximum_underprediction": 376274,
+          "mean_absolute_error": 64094.333333333336,
+          "mean_signed_error": 37674.666666666664,
+          "median_absolute_error": 22600.5
+        }
+      },
+      "greedy": {
+        "new": {
+          "covered_by_guard": 8,
+          "guard_bytes": 65832,
+          "links": 9,
+          "maximum_overprediction": 33425,
+          "maximum_underprediction": 80009,
+          "mean_absolute_error": 23038.777777777777,
+          "mean_signed_error": 14965,
+          "median_absolute_error": 21611
+        },
+        "old": {
+          "covered_by_guard": 8,
+          "guard_bytes": 174708,
+          "links": 9,
+          "maximum_overprediction": 47270,
+          "maximum_underprediction": 204828,
+          "mean_absolute_error": 45590.333333333336,
+          "mean_signed_error": 23919.222222222223,
+          "median_absolute_error": 21103
+        }
+      },
+      "knapsack": {
+        "new": {
+          "covered_by_guard": 8,
+          "guard_bytes": 65832,
+          "links": 9,
+          "maximum_overprediction": 24001,
+          "maximum_underprediction": 77153,
+          "mean_absolute_error": 25411.777777777777,
+          "mean_signed_error": 10445.555555555555,
+          "median_absolute_error": 17984
+        },
+        "old": {
+          "covered_by_guard": 9,
+          "guard_bytes": 174708,
+          "links": 9,
+          "maximum_overprediction": 50018,
+          "maximum_underprediction": 174708,
+          "mean_absolute_error": 58882.77777777778,
+          "mean_signed_error": 17023,
+          "median_absolute_error": 23465
+        }
+      },
+      "model": {
+        "new": {
+          "covered_by_guard": 8,
+          "guard_bytes": 65832,
+          "links": 9,
+          "maximum_overprediction": 36717,
+          "maximum_underprediction": 147984,
+          "mean_absolute_error": 30263.555555555555,
+          "mean_signed_error": 3885.777777777778,
+          "median_absolute_error": 14493
+        },
+        "old": {
+          "covered_by_guard": 8,
+          "guard_bytes": 174708,
+          "links": 9,
+          "maximum_overprediction": 98938,
+          "maximum_underprediction": 363308,
+          "mean_absolute_error": 83483.22222222222,
+          "mean_signed_error": 41335.444444444445,
+          "median_absolute_error": 72835
+        }
+      },
+      "prefix": {
+        "new": {
+          "covered_by_guard": 9,
+          "guard_bytes": 65832,
+          "links": 9,
+          "maximum_overprediction": 0,
+          "maximum_underprediction": 46050,
+          "mean_absolute_error": 18807.444444444445,
+          "mean_signed_error": 18807.444444444445,
+          "median_absolute_error": 15595
+        },
+        "old": {
+          "covered_by_guard": 8,
+          "guard_bytes": 174708,
+          "links": 9,
+          "maximum_overprediction": 0,
+          "maximum_underprediction": 376274,
+          "mean_absolute_error": 68421,
+          "mean_signed_error": 68421,
+          "median_absolute_error": 21696
+        }
+      }
+    },
+    "guards": [
+      174708,
+      65832
+    ],
+    "method": "withhold whole previous search method and purge identical table from training, including its symbols",
+    "trials": [
+      {
+        "actual": 1368472,
+        "actual_body": 1148280.0,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 76940,
+          "FindBakedArmPair": 24252,
+          "FindBakedArmSequence": 118452
+        },
+        "feature_values": {
+          "FindBakedArmHandler": [
+            883,
+            402
+          ],
+          "FindBakedArmPair": [
+            422,
+            379
+          ],
+          "FindBakedArmSequence": [
+            820,
+            519,
+            772,
+            4076
+          ]
+        },
+        "identity": "3ca0aca407ce70cc11e492fc73713369c0dd896a12b879f5ca896799d595d74a",
+        "method": "prefix",
+        "name": "b001-1.5m",
+        "new_components": {
+          "body": 1149598,
+          "other": 595,
+          "prediction": 1352877,
+          "resolvers": {
+            "FindBakedArmHandler": 76467,
+            "FindBakedArmPair": 24340,
+            "FindBakedArmSequence": 101877
+          }
+        },
+        "new_prediction": 1352877,
+        "old_prediction": 1347978
+      },
+      {
+        "actual": 2788908,
+        "actual_body": 2364952.0,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 163312,
+          "FindBakedArmPair": 48204,
+          "FindBakedArmSequence": 211892
+        },
+        "feature_values": {
+          "FindBakedArmHandler": [
+            1974,
+            804
+          ],
+          "FindBakedArmPair": [
+            844,
+            714
+          ],
+          "FindBakedArmSequence": [
+            1639,
+            919,
+            1451,
+            6013
+          ]
+        },
+        "identity": "24e1321f935d6c499115713bfdb5672c77f05e0c7dafc2cd6730a9e2371cbbc4",
+        "method": "prefix",
+        "name": "b002-3m",
+        "new_components": {
+          "body": 2366664,
+          "other": 1238,
+          "prediction": 2780121,
+          "resolvers": {
+            "FindBakedArmHandler": 166388,
+            "FindBakedArmPair": 48128,
+            "FindBakedArmSequence": 197703
+          }
+        },
+        "new_prediction": 2780121,
+        "old_prediction": 2779977
+      },
+      {
+        "actual": 6678892,
+        "actual_body": 5317140.0,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 472160,
+          "FindBakedArmPair": 157628,
+          "FindBakedArmSequence": 698180
+        },
+        "feature_values": {
+          "FindBakedArmHandler": [
+            7001,
+            1024
+          ],
+          "FindBakedArmPair": [
+            2845,
+            1949
+          ],
+          "FindBakedArmSequence": [
+            5844,
+            2375,
+            4459,
+            12593
+          ]
+        },
+        "identity": "f097233dabb7d833059a9cf3c8b3e9eb093b2b21aba469cbba39bba6584e56cd",
+        "method": "prefix",
+        "name": "b003-10m",
+        "new_components": {
+          "body": 5310502,
+          "other": 3934,
+          "prediction": 6632842,
+          "resolvers": {
+            "FindBakedArmHandler": 502146,
+            "FindBakedArmPair": 156488,
+            "FindBakedArmSequence": 659772
+          }
+        },
+        "new_prediction": 6632842,
+        "old_prediction": 6302618
+      },
+      {
+        "actual": 2486928,
+        "actual_body": 1958024.0,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 324620,
+          "FindBakedArmPair": 91860,
+          "FindBakedArmSequence": 97288
+        },
+        "feature_values": {
+          "FindBakedArmHandler": [
+            5100,
+            184
+          ],
+          "FindBakedArmPair": [
+            1644,
+            1242
+          ],
+          "FindBakedArmSequence": [
+            665,
+            430,
+            632,
+            3697
+          ]
+        },
+        "identity": "d776de4e98985879b031ca22c205ac68685e509685747ae99cd3b84828c1c227",
+        "method": "prefix",
+        "name": "b004-1.5m",
+        "new_components": {
+          "body": 1958166,
+          "other": 1787,
+          "prediction": 2473655,
+          "resolvers": {
+            "FindBakedArmHandler": 338746,
+            "FindBakedArmPair": 91880,
+            "FindBakedArmSequence": 83076
+          }
+        },
+        "new_prediction": 2473655,
+        "old_prediction": 2379942
+      },
+      {
+        "actual": 1939516,
+        "actual_body": 1605732.0,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 83448,
+          "FindBakedArmPair": 108936,
+          "FindBakedArmSequence": 140852
+        },
+        "feature_values": {
+          "FindBakedArmHandler": [
+            1133,
+            184
+          ],
+          "FindBakedArmPair": [
+            1885,
+            1396
+          ],
+          "FindBakedArmSequence": [
+            992,
+            617,
+            921,
+            4524
+          ]
+        },
+        "identity": "acedb337542e0babc79989fb78ae5bb28661b5f002aaba6780ba4149d270175c",
+        "method": "prefix",
+        "name": "b005-1.5m",
+        "new_components": {
+          "body": 1606070,
+          "other": 987,
+          "prediction": 1916901,
+          "resolvers": {
+            "FindBakedArmHandler": 82144,
+            "FindBakedArmPair": 104997,
+            "FindBakedArmSequence": 122703
+          }
+        },
+        "new_prediction": 1916901,
+        "old_prediction": 1925208
+      },
+      {
+        "actual": 1791392,
+        "actual_body": 1494420.0,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 104692,
+          "FindBakedArmPair": 36088,
+          "FindBakedArmSequence": 155644
+        },
+        "feature_values": {
+          "FindBakedArmHandler": [
+            1510,
+            184
+          ],
+          "FindBakedArmPair": [
+            624,
+            540
+          ],
+          "FindBakedArmSequence": [
+            1119,
+            669,
+            1033,
+            4739
+          ]
+        },
+        "identity": "45a8210f8587a461afa25a481c6580111b99dcc5c458ee1d61b50ca26e26028c",
+        "method": "prefix",
+        "name": "b006-1.5m",
+        "new_components": {
+          "body": 1495514,
+          "other": 809,
+          "prediction": 1775647,
+          "resolvers": {
+            "FindBakedArmHandler": 106530,
+            "FindBakedArmPair": 35734,
+            "FindBakedArmSequence": 137060
+          }
+        },
+        "new_prediction": 1775647,
+        "old_prediction": 1767442
+      },
+      {
+        "actual": 1724932,
+        "actual_body": 1437816.0,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 101528,
+          "FindBakedArmPair": 38292,
+          "FindBakedArmSequence": 146748
+        },
+        "feature_values": {
+          "FindBakedArmHandler": [
+            1455,
+            184
+          ],
+          "FindBakedArmPair": [
+            670,
+            575
+          ],
+          "FindBakedArmSequence": [
+            1042,
+            638,
+            967,
+            4610
+          ]
+        },
+        "identity": "a1ab5a4ca3815f7f6727d4d10193120281f831abe4646d5b24898cf4bf75b3a8",
+        "method": "prefix",
+        "name": "b007-1.5m",
+        "new_components": {
+          "body": 1438886,
+          "other": 789,
+          "prediction": 1709337,
+          "resolvers": {
+            "FindBakedArmHandler": 102973,
+            "FindBakedArmPair": 38308,
+            "FindBakedArmSequence": 128381
+          }
+        },
+        "new_prediction": 1709337,
+        "old_prediction": 1702648
+      },
+      {
+        "actual": 1681420,
+        "actual_body": 1400476.0,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 99928,
+          "FindBakedArmPair": 39548,
+          "FindBakedArmSequence": 140920
+        },
+        "feature_values": {
+          "FindBakedArmHandler": [
+            1427,
+            184
+          ],
+          "FindBakedArmPair": [
+            698,
+            596
+          ],
+          "FindBakedArmSequence": [
+            993,
+            617,
+            922,
+            4524
+          ]
+        },
+        "identity": "0e173a8c4998ce66891d1addd7190f5762e112e12b21e78dcd428d1c440bd473",
+        "method": "prefix",
+        "name": "b008-1.5m",
+        "new_components": {
+          "body": 1401230,
+          "other": 777,
+          "prediction": 1665834,
+          "resolvers": {
+            "FindBakedArmHandler": 101161,
+            "FindBakedArmPair": 39871,
+            "FindBakedArmSequence": 122795
+          }
+        },
+        "new_prediction": 1665834,
+        "old_prediction": 1659724
+      },
+      {
+        "actual": 1657452,
+        "actual_body": 1380336.0,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 99212,
+          "FindBakedArmPair": 40396,
+          "FindBakedArmSequence": 136960
+        },
+        "feature_values": {
+          "FindBakedArmHandler": [
+            1415,
+            184
+          ],
+          "FindBakedArmPair": [
+            715,
+            611
+          ],
+          "FindBakedArmSequence": [
+            957,
+            595,
+            892,
+            4426
+          ]
+        },
+        "identity": "14165e00c7b0e91e4ce0fa6ecfeb5b8227320bd3e766a009c735d124d2496042",
+        "method": "prefix",
+        "name": "b009-1.5m",
+        "new_components": {
+          "body": 1381066,
+          "other": 770,
+          "prediction": 1641431,
+          "resolvers": {
+            "FindBakedArmHandler": 100385,
+            "FindBakedArmPair": 40848,
+            "FindBakedArmSequence": 118362
+          }
+        },
+        "new_prediction": 1641431,
+        "old_prediction": 1636586
+      },
+      {
+        "actual": 1351676,
+        "actual_body": 1149812.0,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 44812,
+          "FindBakedArmPair": 20552,
+          "FindBakedArmSequence": 135952
+        },
+        "feature_values": {
+          "FindBakedArmHandler": [
+            540,
+            159
+          ],
+          "FindBakedArmPair": [
+            362,
+            333
+          ],
+          "FindBakedArmSequence": [
+            974,
+            543,
+            889,
+            2704
+          ]
+        },
+        "identity": "724c9ba98e79ac6b7ed586683567a8dc0d9c5221493a0b44b3240803073adb23",
+        "method": "greedy",
+        "name": "b001-1.5m",
+        "new_components": {
+          "body": 1151032,
+          "other": 550,
+          "prediction": 1330432,
+          "resolvers": {
+            "FindBakedArmHandler": 42214,
+            "FindBakedArmPair": 20993,
+            "FindBakedArmSequence": 115643
+          }
+        },
+        "new_prediction": 1330432,
+        "old_prediction": 1345913
+      },
+      {
+        "actual": 2878176,
+        "actual_body": 2475148.0,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 139956,
+          "FindBakedArmPair": 37192,
+          "FindBakedArmSequence": 225332
+        },
+        "feature_values": {
+          "FindBakedArmHandler": [
+            1972,
+            247
+          ],
+          "FindBakedArmPair": [
+            651,
+            569
+          ],
+          "FindBakedArmSequence": [
+            2012,
+            1011,
+            1741,
+            4674
+          ]
+        },
+        "identity": "77da48bc08c2a8d7b92692169fafa20882c663608da000e42182be0e6a2d2d38",
+        "method": "greedy",
+        "name": "b002-3m",
+        "new_components": {
+          "body": 2475466,
+          "other": 1320,
+          "prediction": 2880271,
+          "resolvers": {
+            "FindBakedArmHandler": 138173,
+            "FindBakedArmPair": 37376,
+            "FindBakedArmSequence": 227936
+          }
+        },
+        "new_prediction": 2880271,
+        "old_prediction": 2925446
+      },
+      {
+        "actual": 7559276,
+        "actual_body": 6239356.0,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 319604,
+          "FindBakedArmPair": 149616,
+          "FindBakedArmSequence": 839532
+        },
+        "feature_values": {
+          "FindBakedArmHandler": [
+            4676,
+            584
+          ],
+          "FindBakedArmPair": [
+            2732,
+            1952
+          ],
+          "FindBakedArmSequence": [
+            6598,
+            3088,
+            5007,
+            16296
+          ]
+        },
+        "identity": "9e56cae7f521993890de75831d197879915fca61f73ee39623ca3bdee56184fd",
+        "method": "greedy",
+        "name": "b003-10m",
+        "new_components": {
+          "body": 6239344,
+          "other": 3944,
+          "prediction": 7479267,
+          "resolvers": {
+            "FindBakedArmHandler": 327554,
+            "FindBakedArmPair": 151361,
+            "FindBakedArmSequence": 757064
+          }
+        },
+        "new_prediction": 7479267,
+        "old_prediction": 7354448
+      },
+      {
+        "actual": 1653348,
+        "actual_body": 1399036.0,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 81652,
+          "FindBakedArmPair": 56996,
+          "FindBakedArmSequence": 115116
+        },
+        "feature_values": {
+          "FindBakedArmHandler": [
+            1247,
+            36
+          ],
+          "FindBakedArmPair": [
+            970,
+            810
+          ],
+          "FindBakedArmSequence": [
+            991,
+            551,
+            906,
+            2713
+          ]
+        },
+        "identity": "6f07b195526670dcdf377b4abfa8599ce7a8f116dac2ce63c960843ff9488ee2",
+        "method": "greedy",
+        "name": "b004-1.5m",
+        "new_components": {
+          "body": 1399128,
+          "other": 877,
+          "prediction": 1654056,
+          "resolvers": {
+            "FindBakedArmHandler": 81616,
+            "FindBakedArmPair": 55214,
+            "FindBakedArmSequence": 117221
+          }
+        },
+        "new_prediction": 1654056,
+        "old_prediction": 1676265
+      },
+      {
+        "actual": 1505868,
+        "actual_body": 1295812.0,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 43316,
+          "FindBakedArmPair": 47216,
+          "FindBakedArmSequence": 118976
+        },
+        "feature_values": {
+          "FindBakedArmHandler": [
+            518,
+            156
+          ],
+          "FindBakedArmPair": [
+            830,
+            704
+          ],
+          "FindBakedArmSequence": [
+            1030,
+            563,
+            938,
+            2774
+          ]
+        },
+        "identity": "aa3e434a6d3e9e9e3b2db6a9a8c541132f911b6da81869a6d9f5915fc59cf99c",
+        "method": "greedy",
+        "name": "b005-1.5m",
+        "new_components": {
+          "body": 1295984,
+          "other": 685,
+          "prediction": 1505972,
+          "resolvers": {
+            "FindBakedArmHandler": 40660,
+            "FindBakedArmPair": 47383,
+            "FindBakedArmSequence": 121260
+          }
+        },
+        "new_prediction": 1505972,
+        "old_prediction": 1526971
+      },
+      {
+        "actual": 7798652,
+        "actual_body": 6525656.0,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 265620,
+          "FindBakedArmPair": 219496,
+          "FindBakedArmSequence": 786000
+        },
+        "feature_values": {
+          "FindBakedArmHandler": [
+            3979,
+            283
+          ],
+          "FindBakedArmPair": [
+            3858,
+            2756
+          ],
+          "FindBakedArmSequence": [
+            7267,
+            3220,
+            5522,
+            16863
+          ]
+        },
+        "identity": "eb06eaa7e189e1ce272a60cd97ed1b2bfa5726c34d3d03f52b71811aa8481633",
+        "method": "greedy",
+        "name": "b006-10m",
+        "new_components": {
+          "body": 6525200,
+          "other": 4160,
+          "prediction": 7832077,
+          "resolvers": {
+            "FindBakedArmHandler": 268479,
+            "FindBakedArmPair": 213738,
+            "FindBakedArmSequence": 820500
+          }
+        },
+        "new_prediction": 7832077,
+        "old_prediction": 7696450
+      },
+      {
+        "actual": 1856248,
+        "actual_body": 1582076.0,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 33076,
+          "FindBakedArmPair": 55340,
+          "FindBakedArmSequence": 185208
+        },
+        "feature_values": {
+          "FindBakedArmHandler": [
+            469,
+            38
+          ],
+          "FindBakedArmPair": [
+            945,
+            792
+          ],
+          "FindBakedArmSequence": [
+            1425,
+            713,
+            1269,
+            3346
+          ]
+        },
+        "identity": "fc531a0aeb3cca62846a9b06de0caff5a2b4817812a63099ca720f817ddb5b18",
+        "method": "greedy",
+        "name": "b007-1.5m",
+        "new_components": {
+          "body": 1582272,
+          "other": 778,
+          "prediction": 1830566,
+          "resolvers": {
+            "FindBakedArmHandler": 31868,
+            "FindBakedArmPair": 53828,
+            "FindBakedArmSequence": 161820
+          }
+        },
+        "new_prediction": 1830566,
+        "old_prediction": 1859371
+      },
+      {
+        "actual": 1769220,
+        "actual_body": 1508060.0,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 39648,
+          "FindBakedArmPair": 41216,
+          "FindBakedArmSequence": 179748
+        },
+        "feature_values": {
+          "FindBakedArmHandler": [
+            572,
+            38
+          ],
+          "FindBakedArmPair": [
+            736,
+            636
+          ],
+          "FindBakedArmSequence": [
+            1380,
+            692,
+            1232,
+            3260
+          ]
+        },
+        "identity": "30d40dabd3c36c83fecd753fe550ad4dedb241fcab1d6d1e3c00091d1365e4be",
+        "method": "greedy",
+        "name": "b008-1.5m",
+        "new_components": {
+          "body": 1508440,
+          "other": 737,
+          "prediction": 1746749,
+          "resolvers": {
+            "FindBakedArmHandler": 38467,
+            "FindBakedArmPair": 42164,
+            "FindBakedArmSequence": 156941
+          }
+        },
+        "new_prediction": 1746749,
+        "old_prediction": 1771049
+      },
+      {
+        "actual": 1746480,
+        "actual_body": 1484804.0,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 48164,
+          "FindBakedArmPair": 38508,
+          "FindBakedArmSequence": 174456
+        },
+        "feature_values": {
+          "FindBakedArmHandler": [
+            720,
+            38
+          ],
+          "FindBakedArmPair": [
+            677,
+            592
+          ],
+          "FindBakedArmSequence": [
+            1333,
+            674,
+            1193,
+            3178
+          ]
+        },
+        "identity": "1e0848d7c064b4e474912d43c7ddc378d9d384040655f09d82f959e94724141b",
+        "method": "greedy",
+        "name": "b009-1.5m",
+        "new_components": {
+          "body": 1485344,
+          "other": 748,
+          "prediction": 1724869,
+          "resolvers": {
+            "FindBakedArmHandler": 47948,
+            "FindBakedArmPair": 38872,
+            "FindBakedArmSequence": 151957
+          }
+        },
+        "new_prediction": 1724869,
+        "old_prediction": 1747758
+      },
+      {
+        "actual": 1341484,
+        "actual_body": 1140820.0,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 44712,
+          "FindBakedArmPair": 20176,
+          "FindBakedArmSequence": 135228
+        },
+        "feature_values": {
+          "FindBakedArmHandler": [
+            553,
+            144
+          ],
+          "FindBakedArmPair": [
+            354,
+            326
+          ],
+          "FindBakedArmSequence": [
+            965,
+            542,
+            880,
+            2702
+          ]
+        },
+        "identity": "96f4de06fe6aa8d19cfaecaa1c632c388e99835db133f4ae17870f48e8b7f131",
+        "method": "knapsack",
+        "name": "b001-1.5m",
+        "new_components": {
+          "body": 1141884,
+          "other": 481,
+          "prediction": 1323500,
+          "resolvers": {
+            "FindBakedArmHandler": 42484,
+            "FindBakedArmPair": 20597,
+            "FindBakedArmSequence": 118054
+          }
+        },
+        "new_prediction": 1323500,
+        "old_prediction": 1338000
+      },
+      {
+        "actual": 2726664,
+        "actual_body": 2370504.0,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 90796,
+          "FindBakedArmPair": 20176,
+          "FindBakedArmSequence": 244640
+        },
+        "feature_values": {
+          "FindBakedArmHandler": [
+            1259,
+            199
+          ],
+          "FindBakedArmPair": [
+            354,
+            326
+          ],
+          "FindBakedArmSequence": [
+            2214,
+            1092,
+            1917,
+            6218
+          ]
+        },
+        "identity": "ce46be1169791f5500b3e7d71b3e4c1e1f14fbbf3165eb981cfa2643768b6749",
+        "method": "knapsack",
+        "name": "b002-3m",
+        "new_components": {
+          "body": 2371926,
+          "other": 960,
+          "prediction": 2750665,
+          "resolvers": {
+            "FindBakedArmHandler": 90568,
+            "FindBakedArmPair": 20597,
+            "FindBakedArmSequence": 266614
+          }
+        },
+        "new_prediction": 2750665,
+        "old_prediction": 2775370
+      },
+      {
+        "actual": 8219452,
+        "actual_body": 6785260.0,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 383920,
+          "FindBakedArmPair": 133744,
+          "FindBakedArmSequence": 891696
+        },
+        "feature_values": {
+          "FindBakedArmHandler": [
+            6049,
+            354
+          ],
+          "FindBakedArmPair": [
+            2371,
+            1726
+          ],
+          "FindBakedArmSequence": [
+            7009,
+            3258,
+            5239,
+            17193
+          ]
+        },
+        "identity": "8d8dd41cf87be8371d64fd489f5cd9b4ab7ae79404606fb2b0eb265846c847bf",
+        "method": "knapsack",
+        "name": "b003-10m",
+        "new_components": {
+          "body": 6783980,
+          "other": 3764,
+          "prediction": 8142299,
+          "resolvers": {
+            "FindBakedArmHandler": 406383,
+            "FindBakedArmPair": 131683,
+            "FindBakedArmSequence": 816489
+          }
+        },
+        "new_prediction": 8142299,
+        "old_prediction": 8044744
+      },
+      {
+        "actual": 1561664,
+        "actual_body": 1289540.0,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 129264,
+          "FindBakedArmPair": 62388,
+          "FindBakedArmSequence": 79924
+        },
+        "feature_values": {
+          "FindBakedArmHandler": [
+            1984,
+            32
+          ],
+          "FindBakedArmPair": [
+            1059,
+            875
+          ],
+          "FindBakedArmSequence": [
+            656,
+            364,
+            607,
+            1969
+          ]
+        },
+        "identity": "db6f1c6f6b0a3f15f336f9d0bb65da41362343092087ebba5c5ae674bb179b88",
+        "method": "knapsack",
+        "name": "b004-1.5m",
+        "new_components": {
+          "body": 1289592,
+          "other": 890,
+          "prediction": 1561275,
+          "resolvers": {
+            "FindBakedArmHandler": 129272,
+            "FindBakedArmPair": 60243,
+            "FindBakedArmSequence": 81278
+          }
+        },
+        "new_prediction": 1561275,
+        "old_prediction": 1583786
+      },
+      {
+        "actual": 2723484,
+        "actual_body": 2364008.0,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 97268,
+          "FindBakedArmPair": 20176,
+          "FindBakedArmSequence": 241484
+        },
+        "feature_values": {
+          "FindBakedArmHandler": [
+            1403,
+            158
+          ],
+          "FindBakedArmPair": [
+            354,
+            326
+          ],
+          "FindBakedArmSequence": [
+            2192,
+            1074,
+            1891,
+            5940
+          ]
+        },
+        "identity": "2a421cebc6cb5b5a859b2dd30c75b2c9b770cbb49927f5293d9504fb218f1eee",
+        "method": "knapsack",
+        "name": "b005-3m",
+        "new_components": {
+          "body": 2364810,
+          "other": 979,
+          "prediction": 2746135,
+          "resolvers": {
+            "FindBakedArmHandler": 97881,
+            "FindBakedArmPair": 20597,
+            "FindBakedArmSequence": 261868
+          }
+        },
+        "new_prediction": 2746135,
+        "old_prediction": 2773502
+      },
+      {
+        "actual": 7334508,
+        "actual_body": 6106584.0,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 239040,
+          "FindBakedArmPair": 71636,
+          "FindBakedArmSequence": 914316
+        },
+        "feature_values": {
+          "FindBakedArmHandler": [
+            3654,
+            199
+          ],
+          "FindBakedArmPair": [
+            1260,
+            1016
+          ],
+          "FindBakedArmSequence": [
+            7381,
+            3223,
+            5597,
+            16933
+          ]
+        },
+        "identity": "8a71ce11a1163a0774cbefb9b300261214e01332eacf18fa89b7951728abb83a",
+        "method": "knapsack",
+        "name": "b006-10m",
+        "new_components": {
+          "body": 6106048,
+          "other": 2980,
+          "prediction": 7268676,
+          "resolvers": {
+            "FindBakedArmHandler": 244774,
+            "FindBakedArmPair": 71333,
+            "FindBakedArmSequence": 843541
+          }
+        },
+        "new_prediction": 7268676,
+        "old_prediction": 7171124
+      },
+      {
+        "actual": 1619904,
+        "actual_body": 1388324.0,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 76576,
+          "FindBakedArmPair": 22056,
+          "FindBakedArmSequence": 132400
+        },
+        "feature_values": {
+          "FindBakedArmHandler": [
+            1096,
+            96
+          ],
+          "FindBakedArmPair": [
+            391,
+            352
+          ],
+          "FindBakedArmSequence": [
+            1179,
+            608,
+            1066,
+            2953
+          ]
+        },
+        "identity": "2aee715a9fcccdef3442210b0e532c4742bcc0330c7bc9b1c156dcb7f7e474ab",
+        "method": "knapsack",
+        "name": "b007-1.5m",
+        "new_components": {
+          "body": 1389276,
+          "other": 659,
+          "prediction": 1627345,
+          "resolvers": {
+            "FindBakedArmHandler": 75153,
+            "FindBakedArmPair": 22639,
+            "FindBakedArmSequence": 139618
+          }
+        },
+        "new_prediction": 1627345,
+        "old_prediction": 1643369
+      },
+      {
+        "actual": 1603320,
+        "actual_body": 1369564.0,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 78604,
+          "FindBakedArmPair": 28004,
+          "FindBakedArmSequence": 126600
+        },
+        "feature_values": {
+          "FindBakedArmHandler": [
+            1133,
+            96
+          ],
+          "FindBakedArmPair": [
+            475,
+            423
+          ],
+          "FindBakedArmSequence": [
+            1117,
+            588,
+            1010,
+            2878
+          ]
+        },
+        "identity": "99855821299d7484f5897bc29cfd45440ae4953cc70d707cd4aa00462b0d004a",
+        "method": "knapsack",
+        "name": "b008-1.5m",
+        "new_components": {
+          "body": 1370416,
+          "other": 673,
+          "prediction": 1609389,
+          "resolvers": {
+            "FindBakedArmHandler": 77535,
+            "FindBakedArmPair": 27440,
+            "FindBakedArmSequence": 133325
+          }
+        },
+        "new_prediction": 1609389,
+        "old_prediction": 1625559
+      },
+      {
+        "actual": 1606408,
+        "actual_body": 1379504.0,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 68900,
+          "FindBakedArmPair": 22424,
+          "FindBakedArmSequence": 135032
+        },
+        "feature_values": {
+          "FindBakedArmHandler": [
+            972,
+            96
+          ],
+          "FindBakedArmPair": [
+            396,
+            355
+          ],
+          "FindBakedArmSequence": [
+            1207,
+            616,
+            1088,
+            2988
+          ]
+        },
+        "identity": "d90d569c96da94dd4961e9e453282446aa73d2fd73c638fa892d5f5520d63ef6",
+        "method": "knapsack",
+        "name": "b009-1.5m",
+        "new_components": {
+          "body": 1380440,
+          "other": 637,
+          "prediction": 1613594,
+          "resolvers": {
+            "FindBakedArmHandler": 67169,
+            "FindBakedArmPair": 22908,
+            "FindBakedArmSequence": 142440
+          }
+        },
+        "new_prediction": 1613594,
+        "old_prediction": 1628227
+      },
+      {
+        "actual": 1416472,
+        "actual_body": 1209928.0,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 127524,
+          "FindBakedArmPair": 5044,
+          "FindBakedArmSequence": 73428
+        },
+        "feature_values": {
+          "FindBakedArmHandler": [
+            1290,
+            1024
+          ],
+          "FindBakedArmPair": [
+            88,
+            84
+          ],
+          "FindBakedArmSequence": [
+            603,
+            329,
+            567,
+            1822
+          ]
+        },
+        "identity": "a9173eedad42087073dcff93c41474e5ac199aa011bab03f26c95e7b0d74f01c",
+        "method": "model",
+        "name": "b001-1.5m",
+        "new_components": {
+          "body": 1210260,
+          "other": 678,
+          "prediction": 1430965,
+          "resolvers": {
+            "FindBakedArmHandler": 139260,
+            "FindBakedArmPair": 5128,
+            "FindBakedArmSequence": 75639
+          }
+        },
+        "new_prediction": 1430965,
+        "old_prediction": 1413884
+      },
+      {
+        "actual": 2559284,
+        "actual_body": 2169652.0,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 172844,
+          "FindBakedArmPair": 25680,
+          "FindBakedArmSequence": 190560
+        },
+        "feature_values": {
+          "FindBakedArmHandler": [
+            1982,
+            1024
+          ],
+          "FindBakedArmPair": [
+            441,
+            399
+          ],
+          "FindBakedArmSequence": [
+            1487,
+            723,
+            1321,
+            3458
+          ]
+        },
+        "identity": "cb5c464d52524d59078359c3b45a0db14598ca09914ff485b056782913a46045",
+        "method": "model",
+        "name": "b002-3m",
+        "new_components": {
+          "body": 2169668,
+          "other": 1113,
+          "prediction": 2553982,
+          "resolvers": {
+            "FindBakedArmHandler": 183020,
+            "FindBakedArmPair": 25448,
+            "FindBakedArmSequence": 174733
+          }
+        },
+        "new_prediction": 2553982,
+        "old_prediction": 2554932
+      },
+      {
+        "actual": 8587616,
+        "actual_body": 7047168.0,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 371296,
+          "FindBakedArmPair": 332928,
+          "FindBakedArmSequence": 818436
+        },
+        "feature_values": {
+          "FindBakedArmHandler": [
+            5306,
+            1024
+          ],
+          "FindBakedArmPair": [
+            6159,
+            3977
+          ],
+          "FindBakedArmSequence": [
+            6391,
+            3043,
+            4886,
+            16041
+          ]
+        },
+        "identity": "cf2f0b3c3ab6c99d383b481fab8bece813a19bd546797d2103c57c9c1ec1b5c7",
+        "method": "model",
+        "name": "b003-10m",
+        "new_components": {
+          "body": 6948662,
+          "other": 4259,
+          "prediction": 8439632,
+          "resolvers": {
+            "FindBakedArmHandler": 393223,
+            "FindBakedArmPair": 337135,
+            "FindBakedArmSequence": 756353
+          }
+        },
+        "new_prediction": 8439632,
+        "old_prediction": 8224308
+      },
+      {
+        "actual": 1646564,
+        "actual_body": 1356568.0,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 55608,
+          "FindBakedArmPair": 147596,
+          "FindBakedArmSequence": 86244
+        },
+        "feature_values": {
+          "FindBakedArmHandler": [
+            760,
+            129
+          ],
+          "FindBakedArmPair": [
+            2686,
+            1924
+          ],
+          "FindBakedArmSequence": [
+            705,
+            392,
+            658,
+            2097
+          ]
+        },
+        "identity": "3fde706e3c10fe7f524d15e356ce5d6c3b4a09e5852168b58e145f4a683345dd",
+        "method": "model",
+        "name": "b004-1.5m",
+        "new_components": {
+          "body": 1356752,
+          "other": 966,
+          "prediction": 1650798,
+          "resolvers": {
+            "FindBakedArmHandler": 55328,
+            "FindBakedArmPair": 149199,
+            "FindBakedArmSequence": 88553
+          }
+        },
+        "new_prediction": 1650798,
+        "old_prediction": 1612365
+      },
+      {
+        "actual": 1493424,
+        "actual_body": 1258036.0,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 44576,
+          "FindBakedArmPair": 99024,
+          "FindBakedArmSequence": 91240
+        },
+        "feature_values": {
+          "FindBakedArmHandler": [
+            567,
+            126
+          ],
+          "FindBakedArmPair": [
+            1746,
+            1320
+          ],
+          "FindBakedArmSequence": [
+            744,
+            415,
+            688,
+            2193
+          ]
+        },
+        "identity": "aa1517b10eb2feacff81ac83d6fc4405bd86f9e6023a23f5ed55a8d5a9ec564c",
+        "method": "model",
+        "name": "b005-1.5m",
+        "new_components": {
+          "body": 1258216,
+          "other": 718,
+          "prediction": 1493038,
+          "resolvers": {
+            "FindBakedArmHandler": 42954,
+            "FindBakedArmPair": 97779,
+            "FindBakedArmSequence": 93371
+          }
+        },
+        "new_prediction": 1493038,
+        "old_prediction": 1489089
+      },
+      {
+        "actual": 8206808,
+        "actual_body": 6952592.0,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 172844,
+          "FindBakedArmPair": 25680,
+          "FindBakedArmSequence": 1051080
+        },
+        "feature_values": {
+          "FindBakedArmHandler": [
+            1982,
+            1024
+          ],
+          "FindBakedArmPair": [
+            441,
+            399
+          ],
+          "FindBakedArmSequence": [
+            9355,
+            3647,
+            6878,
+            20026
+          ]
+        },
+        "identity": "c36f78352fee166cd956517e01b9b97fec8da44ef4123b709a1196957222c665",
+        "method": "model",
+        "name": "b006-10m",
+        "new_components": {
+          "body": 6975990,
+          "other": 2888,
+          "prediction": 8230063,
+          "resolvers": {
+            "FindBakedArmHandler": 183020,
+            "FindBakedArmPair": 25448,
+            "FindBakedArmSequence": 1042717
+          }
+        },
+        "new_prediction": 8230063,
+        "old_prediction": 8133973
+      },
+      {
+        "actual": 1178520,
+        "actual_body": 911572.0,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 60564,
+          "FindBakedArmPair": 192896,
+          "FindBakedArmSequence": 12940
+        },
+        "feature_values": {
+          "FindBakedArmHandler": [
+            793,
+            180
+          ],
+          "FindBakedArmPair": [
+            3483,
+            2516
+          ],
+          "FindBakedArmSequence": [
+            131,
+            74,
+            130,
+            340
+          ]
+        },
+        "identity": "e0f93c1c811b79196fa4a98fa169101eda706c3075f791d9101d09ffb791bfa1",
+        "method": "model",
+        "name": "b007-1.5m",
+        "new_components": {
+          "body": 911540,
+          "other": 1035,
+          "prediction": 1182727,
+          "resolvers": {
+            "FindBakedArmHandler": 60287,
+            "FindBakedArmPair": 193712,
+            "FindBakedArmSequence": 16153
+          }
+        },
+        "new_prediction": 1182727,
+        "old_prediction": 1098453
+      },
+      {
+        "actual": 3921648,
+        "actual_body": 3438788.0,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 44576,
+          "FindBakedArmPair": 99024,
+          "FindBakedArmSequence": 338712
+        },
+        "feature_values": {
+          "FindBakedArmHandler": [
+            567,
+            126
+          ],
+          "FindBakedArmPair": [
+            1746,
+            1320
+          ],
+          "FindBakedArmSequence": [
+            3163,
+            1452,
+            2666,
+            8712
+          ]
+        },
+        "identity": "78bd874e10a66cf7d3a6fc44194ac22947fef3bbe17c0154f9360c7dc3c0f49a",
+        "method": "model",
+        "name": "b008-3m",
+        "new_components": {
+          "body": 3439096,
+          "other": 1264,
+          "prediction": 3958365,
+          "resolvers": {
+            "FindBakedArmHandler": 42954,
+            "FindBakedArmPair": 97779,
+            "FindBakedArmSequence": 377272
+          }
+        },
+        "new_prediction": 3958365,
+        "old_prediction": 4020586
+      },
+      {
+        "actual": 3748836,
+        "actual_body": 3282904.0,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 44576,
+          "FindBakedArmPair": 99024,
+          "FindBakedArmSequence": 321784
+        },
+        "feature_values": {
+          "FindBakedArmHandler": [
+            567,
+            126
+          ],
+          "FindBakedArmPair": [
+            1746,
+            1320
+          ],
+          "FindBakedArmSequence": [
+            3018,
+            1378,
+            2557,
+            8300
+          ]
+        },
+        "identity": "b77de22159b32d18ea14ee4ca6a03778852ce8726043f21cf13911e24c514286",
+        "method": "model",
+        "name": "b009-3m",
+        "new_components": {
+          "body": 3283144,
+          "other": 1231,
+          "prediction": 3784630,
+          "resolvers": {
+            "FindBakedArmHandler": 42954,
+            "FindBakedArmPair": 97779,
+            "FindBakedArmSequence": 359522
+          }
+        },
+        "new_prediction": 3784630,
+        "old_prediction": 3839563
+      }
+    ]
+  },
+  "old_component_errors": {
+    "body": {
+      "median_absolute_error": 538.0,
+      "mean_signed_error": 1851.2777777777778,
+      "maximum_underprediction": 98506.0,
+      "maximum_overprediction": 23398.0
+    },
+    "other": {
+      "median_absolute_error": 335.5,
+      "mean_signed_error": 2106.0,
+      "maximum_underprediction": 29850.0,
+      "maximum_overprediction": 2280.0
+    },
+    "FindBakedArmHandler": {
+      "median_absolute_error": 1622.0,
+      "mean_signed_error": -3415.6111111111113,
+      "maximum_underprediction": 2656,
+      "maximum_overprediction": 29986
+    },
+    "FindBakedArmPair": {
+      "median_absolute_error": 468.0,
+      "mean_signed_error": 279.02777777777777,
+      "maximum_underprediction": 5758,
+      "maximum_overprediction": 4207
+    },
+    "FindBakedArmSequence": {
+      "median_absolute_error": 18137.0,
+      "mean_signed_error": 11205.25,
+      "maximum_underprediction": 82468,
+      "maximum_overprediction": 38560
+    }
+  },
+  "current_24": {
+    "groups": {
+      "all": {
+        "old": {
+          "links": 24,
+          "median_absolute_error": 397399.0,
+          "mean_absolute_error": 385316.2083333333,
+          "mean_signed_error": 385316.2083333333,
+          "maximum_underprediction": 758073,
+          "maximum_overprediction": 0,
+          "covered_by_guard": 2,
+          "guard_bytes": 174708
+        },
+        "new": {
+          "links": 24,
+          "median_absolute_error": 97075.5,
+          "mean_absolute_error": 134324.41666666666,
+          "mean_signed_error": 122012.25,
+          "maximum_underprediction": 431190,
+          "maximum_overprediction": 61730,
+          "covered_by_guard": 10,
+          "guard_bytes": 65832
+        }
+      },
+      "A": {
+        "old": {
+          "links": 7,
+          "median_absolute_error": 346999,
+          "mean_absolute_error": 333195.4285714286,
+          "mean_signed_error": 333195.4285714286,
+          "maximum_underprediction": 444518,
+          "maximum_overprediction": 0,
+          "covered_by_guard": 1,
+          "guard_bytes": 174708
+        },
+        "new": {
+          "links": 7,
+          "median_absolute_error": 49871,
+          "mean_absolute_error": 52868.42857142857,
+          "mean_signed_error": 10753.57142857143,
+          "maximum_underprediction": 107760,
+          "maximum_overprediction": 61730,
+          "covered_by_guard": 5,
+          "guard_bytes": 65832
+        }
+      },
+      "B": {
+        "old": {
+          "links": 5,
+          "median_absolute_error": 285445,
+          "mean_absolute_error": 291781.8,
+          "mean_signed_error": 291781.8,
+          "maximum_underprediction": 407784,
+          "maximum_overprediction": 0,
+          "covered_by_guard": 1,
+          "guard_bytes": 174708
+        },
+        "new": {
+          "links": 5,
+          "median_absolute_error": 114512,
+          "mean_absolute_error": 137891.6,
+          "mean_signed_error": 137754,
+          "maximum_underprediction": 244904,
+          "maximum_overprediction": 344,
+          "covered_by_guard": 1,
+          "guard_bytes": 65832
+        }
+      },
+      "C": {
+        "old": {
+          "links": 6,
+          "median_absolute_error": 448145.0,
+          "mean_absolute_error": 454816,
+          "mean_signed_error": 454816,
+          "maximum_underprediction": 758073,
+          "maximum_overprediction": 0,
+          "covered_by_guard": 0,
+          "guard_bytes": 174708
+        },
+        "new": {
+          "links": 6,
+          "median_absolute_error": 139641.5,
+          "mean_absolute_error": 180455.66666666666,
+          "mean_signed_error": 180455.66666666666,
+          "maximum_underprediction": 431190,
+          "maximum_overprediction": 0,
+          "covered_by_guard": 2,
+          "guard_bytes": 65832
+        }
+      },
+      "D": {
+        "old": {
+          "links": 6,
+          "median_absolute_error": 448321.0,
+          "mean_absolute_error": 454569.3333333333,
+          "mean_signed_error": 454569.3333333333,
+          "maximum_underprediction": 756285,
+          "maximum_overprediction": 0,
+          "covered_by_guard": 0,
+          "guard_bytes": 174708
+        },
+        "new": {
+          "links": 6,
+          "median_absolute_error": 139852.0,
+          "mean_absolute_error": 180252.5,
+          "mean_signed_error": 180252.5,
+          "maximum_underprediction": 429437,
+          "maximum_overprediction": 0,
+          "covered_by_guard": 2,
+          "guard_bytes": 65832
+        }
+      }
+    },
+    "component_errors": {
+      "body": {
+        "median_absolute_error": 88228.0,
+        "mean_signed_error": 91061.66666666667,
+        "maximum_underprediction": 258714,
+        "maximum_overprediction": 60
+      },
+      "other": {
+        "median_absolute_error": 1567.5,
+        "mean_signed_error": 32921.458333333336,
+        "maximum_underprediction": 123709,
+        "maximum_overprediction": 1620
+      },
+      "FindBakedArmHandler": {
+        "median_absolute_error": 20042.0,
+        "mean_signed_error": -26759,
+        "maximum_underprediction": 1892,
+        "maximum_overprediction": 79820
+      },
+      "FindBakedArmPair": {
+        "median_absolute_error": 1653.0,
+        "mean_signed_error": 2350.9583333333335,
+        "maximum_underprediction": 26427,
+        "maximum_overprediction": 3661
+      },
+      "FindBakedArmSequence": {
+        "median_absolute_error": 21061.0,
+        "mean_signed_error": 22437.166666666668,
+        "maximum_underprediction": 102336,
+        "maximum_overprediction": 57565
+      }
+    },
+    "trials": [
+      {
+        "method": "A",
+        "name": "rank-01-1.5m",
+        "identity": "411643377900443e606a23e185f1e80d974b51bd63c03cafb3e69463ec0d8cfc",
+        "is_original_tier_cut": true,
+        "cap": 1572864,
+        "actual": 1573800,
+        "old_prediction": 1398094,
+        "new_prediction": 1591775,
+        "new_components": {
+          "body": 1194380,
+          "resolvers": {
+            "FindBakedArmHandler": 69160,
+            "FindBakedArmPair": 46187,
+            "FindBakedArmSequence": 281038
+          },
+          "other": 1010,
+          "prediction": 1591775
+        },
+        "actual_body": 1194324,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 71052,
+          "FindBakedArmPair": 45544,
+          "FindBakedArmSequence": 262332
+        },
+        "actual_other": 548,
+        "feature_values": {
+          "FindBakedArmHandler": [
+            1005,
+            95
+          ],
+          "FindBakedArmPair": [
+            808,
+            690
+          ],
+          "FindBakedArmSequence": [
+            2274,
+            1323,
+            2000,
+            6625
+          ]
+        }
+      },
+      {
+        "method": "A",
+        "name": "rank-02-1.5m",
+        "identity": "3460d69444b0bd1e4d628fa3bdcee0975e4a046a1e8cc9ac6263f6d59c4de341",
+        "is_original_tier_cut": false,
+        "cap": 1572864,
+        "actual": 1528760,
+        "old_prediction": 1354613,
+        "new_prediction": 1546586,
+        "new_components": {
+          "body": 1157012,
+          "resolvers": {
+            "FindBakedArmHandler": 68307,
+            "FindBakedArmPair": 44749,
+            "FindBakedArmSequence": 275529
+          },
+          "other": 989,
+          "prediction": 1546586
+        },
+        "actual_body": 1156952,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 70076,
+          "FindBakedArmPair": 43868,
+          "FindBakedArmSequence": 257316
+        },
+        "actual_other": 548,
+        "feature_values": {
+          "FindBakedArmHandler": [
+            994,
+            92
+          ],
+          "FindBakedArmPair": [
+            783,
+            668
+          ],
+          "FindBakedArmSequence": [
+            2228,
+            1294,
+            1962,
+            6519
+          ]
+        }
+      },
+      {
+        "method": "A",
+        "name": "rank-03-3m",
+        "identity": "fcb827ade54eb59a491dc8c985ba45166586d6bfb9808f61e5c2b8907a56a6f1",
+        "is_original_tier_cut": true,
+        "cap": 3145728,
+        "actual": 3317984,
+        "old_prediction": 2970985,
+        "new_prediction": 3379714,
+        "new_components": {
+          "body": 2543068,
+          "resolvers": {
+            "FindBakedArmHandler": 114764,
+            "FindBakedArmPair": 83057,
+            "FindBakedArmSequence": 636629
+          },
+          "other": 2196,
+          "prediction": 3379714
+        },
+        "actual_body": 2543104,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 114180,
+          "FindBakedArmPair": 80836,
+          "FindBakedArmSequence": 579064
+        },
+        "actual_other": 800,
+        "feature_values": {
+          "FindBakedArmHandler": [
+            1672,
+            152
+          ],
+          "FindBakedArmPair": [
+            1469,
+            1182
+          ],
+          "FindBakedArmSequence": [
+            5798,
+            2326,
+            4422,
+            11397
+          ]
+        }
+      },
+      {
+        "method": "A",
+        "name": "rank-04-3m",
+        "identity": "8fbc1177b34dfa155d952c5af726d37a7c018c9f6246b36745408136ea41a47a",
+        "is_original_tier_cut": false,
+        "cap": 3145728,
+        "actual": 3176064,
+        "old_prediction": 2731546,
+        "new_prediction": 3134370,
+        "new_components": {
+          "body": 2338954,
+          "resolvers": {
+            "FindBakedArmHandler": 108758,
+            "FindBakedArmPair": 68515,
+            "FindBakedArmSequence": 616080
+          },
+          "other": 2063,
+          "prediction": 3134370
+        },
+        "actual_body": 2338980,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 107348,
+          "FindBakedArmPair": 69272,
+          "FindBakedArmSequence": 659916
+        },
+        "actual_other": 548,
+        "feature_values": {
+          "FindBakedArmHandler": [
+            1583,
+            146
+          ],
+          "FindBakedArmPair": [
+            1211,
+            978
+          ],
+          "FindBakedArmSequence": [
+            5602,
+            2260,
+            4277,
+            11079
+          ]
+        }
+      },
+      {
+        "method": "A",
+        "name": "rank-05-3m",
+        "identity": "445a5ca02b8eb55572d5855ddd97d647b618328b6565e1f10050c31a98a0ac04",
+        "is_original_tier_cut": false,
+        "cap": 3145728,
+        "actual": 2969772,
+        "old_prediction": 2623566,
+        "new_prediction": 3019643,
+        "new_components": {
+          "body": 2247166,
+          "resolvers": {
+            "FindBakedArmHandler": 98352,
+            "FindBakedArmPair": 65838,
+            "FindBakedArmSequence": 606297
+          },
+          "other": 1990,
+          "prediction": 3019643
+        },
+        "actual_body": 2247216,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 97308,
+          "FindBakedArmPair": 67080,
+          "FindBakedArmSequence": 557620
+        },
+        "actual_other": 548,
+        "feature_values": {
+          "FindBakedArmHandler": [
+            1427,
+            138
+          ],
+          "FindBakedArmPair": [
+            1162,
+            946
+          ],
+          "FindBakedArmSequence": [
+            5512,
+            2228,
+            4216,
+            10899
+          ]
+        }
+      },
+      {
+        "method": "A",
+        "name": "rank-06-10m",
+        "identity": "5b17a6a15986679fdd13972453e66fec1f60cb793bc0c9ba5a7437832289d607",
+        "is_original_tier_cut": true,
+        "cap": 10485760,
+        "actual": 10746796,
+        "old_prediction": 10308572,
+        "new_prediction": 10639036,
+        "new_components": {
+          "body": 8699496,
+          "resolvers": {
+            "FindBakedArmHandler": 505801,
+            "FindBakedArmPair": 346296,
+            "FindBakedArmSequence": 1081626
+          },
+          "other": 5817,
+          "prediction": 10639036
+        },
+        "actual_body": 8773288,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 482196,
+          "FindBakedArmPair": 348064,
+          "FindBakedArmSequence": 1097976
+        },
+        "actual_other": 45272,
+        "feature_values": {
+          "FindBakedArmHandler": [
+            7417,
+            607
+          ],
+          "FindBakedArmPair": [
+            6359,
+            4066
+          ],
+          "FindBakedArmSequence": [
+            9702,
+            3853,
+            7135,
+            21085
+          ]
+        }
+      },
+      {
+        "method": "A",
+        "name": "rank-07-10m",
+        "identity": "b1cc24c73f7df2ca9163e8022a46923af792b9ee85c5dc2e33a851058f3f3545",
+        "is_original_tier_cut": false,
+        "cap": 10485760,
+        "actual": 10162580,
+        "old_prediction": 9756012,
+        "new_prediction": 10089357,
+        "new_components": {
+          "body": 8242090,
+          "resolvers": {
+            "FindBakedArmHandler": 471525,
+            "FindBakedArmPair": 317529,
+            "FindBakedArmSequence": 1052710
+          },
+          "other": 5503,
+          "prediction": 10089357
+        },
+        "actual_body": 8290972,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 446960,
+          "FindBakedArmPair": 317200,
+          "FindBakedArmSequence": 1068112
+        },
+        "actual_other": 39336,
+        "feature_values": {
+          "FindBakedArmHandler": [
+            6912,
+            569
+          ],
+          "FindBakedArmPair": [
+            5811,
+            3801
+          ],
+          "FindBakedArmSequence": [
+            9492,
+            3745,
+            6981,
+            20083
+          ]
+        }
+      },
+      {
+        "method": "B",
+        "name": "rank-01-1.5m",
+        "identity": "730c24bc76fc0a8b432faa2de287bbc81ac36eed3ac46c8327374b3171b54eef",
+        "is_original_tier_cut": true,
+        "cap": 1572864,
+        "actual": 1499516,
+        "old_prediction": 1397720,
+        "new_prediction": 1499860,
+        "new_components": {
+          "body": 1194334,
+          "resolvers": {
+            "FindBakedArmHandler": 74310,
+            "FindBakedArmPair": 38221,
+            "FindBakedArmSequence": 192238
+          },
+          "other": 757,
+          "prediction": 1499860
+        },
+        "actual_body": 1198664,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 73304,
+          "FindBakedArmPair": 35892,
+          "FindBakedArmSequence": 191108
+        },
+        "actual_other": 548,
+        "feature_values": {
+          "FindBakedArmHandler": [
+            1086,
+            94
+          ],
+          "FindBakedArmPair": [
+            673,
+            555
+          ],
+          "FindBakedArmSequence": [
+            1281,
+            944,
+            1141,
+            6929
+          ]
+        }
+      },
+      {
+        "method": "B",
+        "name": "rank-02-3m",
+        "identity": "dc0e6af1dadde03b3ec477d4bba468f5137a18737704ab698fbe3adb2f986620",
+        "is_original_tier_cut": true,
+        "cap": 3145728,
+        "actual": 3255296,
+        "old_prediction": 2969851,
+        "new_prediction": 3140784,
+        "new_components": {
+          "body": 2525928,
+          "resolvers": {
+            "FindBakedArmHandler": 192371,
+            "FindBakedArmPair": 100640,
+            "FindBakedArmSequence": 320146
+          },
+          "other": 1699,
+          "prediction": 3140784
+        },
+        "actual_body": 2657004,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 175892,
+          "FindBakedArmPair": 100096,
+          "FindBakedArmSequence": 321756
+        },
+        "actual_other": 548,
+        "feature_values": {
+          "FindBakedArmHandler": [
+            2833,
+            215
+          ],
+          "FindBakedArmPair": [
+            1811,
+            1318
+          ],
+          "FindBakedArmSequence": [
+            2177,
+            1490,
+            1853,
+            11425
+          ]
+        }
+      },
+      {
+        "method": "B",
+        "name": "rank-03-3m",
+        "identity": "cae64646ebd42cd3d6fa1d68ea3cfefe9ec4aeb07f8a6ba551c46a3f6d636c3a",
+        "is_original_tier_cut": false,
+        "cap": 3145728,
+        "actual": 3040552,
+        "old_prediction": 2783724,
+        "new_prediction": 2949193,
+        "new_components": {
+          "body": 2368226,
+          "resolvers": {
+            "FindBakedArmHandler": 181838,
+            "FindBakedArmPair": 92032,
+            "FindBakedArmSequence": 305500
+          },
+          "other": 1597,
+          "prediction": 2949193
+        },
+        "actual_body": 2477204,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 167184,
+          "FindBakedArmPair": 89288,
+          "FindBakedArmSequence": 306328
+        },
+        "actual_other": 548,
+        "feature_values": {
+          "FindBakedArmHandler": [
+            2675,
+            207
+          ],
+          "FindBakedArmPair": [
+            1654,
+            1213
+          ],
+          "FindBakedArmSequence": [
+            2077,
+            1425,
+            1772,
+            10895
+          ]
+        }
+      },
+      {
+        "method": "B",
+        "name": "rank-04-10m",
+        "identity": "6d8bf0c87fd636c897d61b784a2c44fad24de89b797e4e08e1c74af5a20ff48c",
+        "is_original_tier_cut": true,
+        "cap": 10485760,
+        "actual": 10718328,
+        "old_prediction": 10310544,
+        "new_prediction": 10473424,
+        "new_components": {
+          "body": 8782908,
+          "resolvers": {
+            "FindBakedArmHandler": 445234,
+            "FindBakedArmPair": 321098,
+            "FindBakedArmSequence": 919454
+          },
+          "other": 4730,
+          "prediction": 10473424
+        },
+        "actual_body": 8994496,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 389760,
+          "FindBakedArmPair": 319560,
+          "FindBakedArmSequence": 921200
+        },
+        "actual_other": 93312,
+        "feature_values": {
+          "FindBakedArmHandler": [
+            6690,
+            323
+          ],
+          "FindBakedArmPair": [
+            6002,
+            3381
+          ],
+          "FindBakedArmSequence": [
+            6572,
+            3578,
+            4867,
+            32329
+          ]
+        }
+      },
+      {
+        "method": "B",
+        "name": "rank-05-10m",
+        "identity": "922cd9fe388d09ee14f7884a4ff4577b033440b6d73b434d6e0bc5ae162171d0",
+        "is_original_tier_cut": false,
+        "cap": 10485760,
+        "actual": 10190432,
+        "old_prediction": 9783376,
+        "new_prediction": 9952093,
+        "new_components": {
+          "body": 8329422,
+          "resolvers": {
+            "FindBakedArmHandler": 436599,
+            "FindBakedArmPair": 312932,
+            "FindBakedArmSequence": 868569
+          },
+          "other": 4571,
+          "prediction": 9952093
+        },
+        "actual_body": 8534168,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 382032,
+          "FindBakedArmPair": 312504,
+          "FindBakedArmSequence": 871716
+        },
+        "actual_other": 90012,
+        "feature_values": {
+          "FindBakedArmHandler": [
+            6557,
+            321
+          ],
+          "FindBakedArmPair": [
+            5848,
+            3300
+          ],
+          "FindBakedArmSequence": [
+            6202,
+            3401,
+            4615,
+            30524
+          ]
+        }
+      },
+      {
+        "method": "C",
+        "name": "rank-01-1.5m",
+        "identity": "10f8cd43742657d2c5b5837a32cd338a72c2d261295df238bd8b93cb0af1b068",
+        "is_original_tier_cut": true,
+        "cap": 1572864,
+        "actual": 1604936,
+        "old_prediction": 1397571,
+        "new_prediction": 1591760,
+        "new_components": {
+          "body": 1184722,
+          "resolvers": {
+            "FindBakedArmHandler": 144332,
+            "FindBakedArmPair": 45441,
+            "FindBakedArmSequence": 216103
+          },
+          "other": 1162,
+          "prediction": 1591760
+        },
+        "actual_body": 1187076,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 138096,
+          "FindBakedArmPair": 42052,
+          "FindBakedArmSequence": 237164
+        },
+        "actual_other": 548,
+        "feature_values": {
+          "FindBakedArmHandler": [
+            2003,
+            322
+          ],
+          "FindBakedArmPair": [
+            796,
+            675
+          ],
+          "FindBakedArmSequence": [
+            1689,
+            1335,
+            1523,
+            4526
+          ]
+        }
+      },
+      {
+        "method": "C",
+        "name": "rank-02-1.5m",
+        "identity": "025be6e4632d53ed8aa76b24211c5e103fd72716ec20e57f6bdcd8765f92c250",
+        "is_original_tier_cut": false,
+        "cap": 1572864,
+        "actual": 1532280,
+        "old_prediction": 1328534,
+        "new_prediction": 1519779,
+        "new_components": {
+          "body": 1126030,
+          "resolvers": {
+            "FindBakedArmHandler": 140092,
+            "FindBakedArmPair": 43641,
+            "FindBakedArmSequence": 208891
+          },
+          "other": 1125,
+          "prediction": 1519779
+        },
+        "actual_body": 1128372,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 133948,
+          "FindBakedArmPair": 39980,
+          "FindBakedArmSequence": 229432
+        },
+        "actual_other": 548,
+        "feature_values": {
+          "FindBakedArmHandler": [
+            1940,
+            318
+          ],
+          "FindBakedArmPair": [
+            764,
+            650
+          ],
+          "FindBakedArmSequence": [
+            1635,
+            1297,
+            1477,
+            4330
+          ]
+        }
+      },
+      {
+        "method": "C",
+        "name": "rank-03-3m",
+        "identity": "bf8c618b9b0e0d58437abac451bec47e12a0ad133cb4f14ed4c7a2f545b2967e",
+        "is_original_tier_cut": true,
+        "cap": 3145728,
+        "actual": 3470256,
+        "old_prediction": 2970930,
+        "new_prediction": 3293765,
+        "new_components": {
+          "body": 2492772,
+          "resolvers": {
+            "FindBakedArmHandler": 341820,
+            "FindBakedArmPair": 124526,
+            "FindBakedArmSequence": 332165
+          },
+          "other": 2482,
+          "prediction": 3293765
+        },
+        "actual_body": 2631068,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 306196,
+          "FindBakedArmPair": 125028,
+          "FindBakedArmSequence": 362464
+        },
+        "actual_other": 45500,
+        "feature_values": {
+          "FindBakedArmHandler": [
+            4918,
+            534
+          ],
+          "FindBakedArmPair": [
+            2234,
+            1656
+          ],
+          "FindBakedArmSequence": [
+            2590,
+            1912,
+            2251,
+            7506
+          ]
+        }
+      },
+      {
+        "method": "C",
+        "name": "rank-04-3m",
+        "identity": "a22c3d12e93b80b9b8b81424e0c72207baa0b1771e5070ad15522fb36bd1e3fc",
+        "is_original_tier_cut": false,
+        "cap": 3145728,
+        "actual": 3009132,
+        "old_prediction": 2612168,
+        "new_prediction": 2906340,
+        "new_components": {
+          "body": 2196528,
+          "resolvers": {
+            "FindBakedArmHandler": 295034,
+            "FindBakedArmPair": 103701,
+            "FindBakedArmSequence": 308909
+          },
+          "other": 2168,
+          "prediction": 2906340
+        },
+        "actual_body": 2299192,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 269740,
+          "FindBakedArmPair": 102756,
+          "FindBakedArmSequence": 336896
+        },
+        "actual_other": 548,
+        "feature_values": {
+          "FindBakedArmHandler": [
+            4212,
+            504
+          ],
+          "FindBakedArmPair": [
+            1849,
+            1421
+          ],
+          "FindBakedArmSequence": [
+            2411,
+            1800,
+            2105,
+            6882
+          ]
+        }
+      },
+      {
+        "method": "C",
+        "name": "rank-05-10m",
+        "identity": "2a686f8af5d3ffaad24d57bf607f4bbc24e8e6c443684779950630e5f4a46f54",
+        "is_original_tier_cut": true,
+        "cap": 10485760,
+        "actual": 11068916,
+        "old_prediction": 10310843,
+        "new_prediction": 10637726,
+        "new_components": {
+          "body": 8647626,
+          "resolvers": {
+            "FindBakedArmHandler": 674468,
+            "FindBakedArmPair": 440613,
+            "FindBakedArmSequence": 868840
+          },
+          "other": 6179,
+          "prediction": 10637726
+        },
+        "actual_body": 8906204,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 594648,
+          "FindBakedArmPair": 467040,
+          "FindBakedArmSequence": 971136
+        },
+        "actual_other": 129888,
+        "feature_values": {
+          "FindBakedArmHandler": [
+            9973,
+            701
+          ],
+          "FindBakedArmPair": [
+            8213,
+            4724
+          ],
+          "FindBakedArmSequence": [
+            6698,
+            3973,
+            5121,
+            23961
+          ]
+        }
+      },
+      {
+        "method": "C",
+        "name": "rank-06-10m",
+        "identity": "0a23bae71be4d4cae6cfcc5128e5dc6dcea15053de89bbd0e417a54cd25f669a",
+        "is_original_tier_cut": false,
+        "cap": 10485760,
+        "actual": 10137632,
+        "old_prediction": 9474210,
+        "new_prediction": 9791048,
+        "new_components": {
+          "body": 7949570,
+          "resolvers": {
+            "FindBakedArmHandler": 628790,
+            "FindBakedArmPair": 396692,
+            "FindBakedArmSequence": 810304
+          },
+          "other": 5692,
+          "prediction": 9791048
+        },
+        "actual_body": 8146060,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 555656,
+          "FindBakedArmPair": 409860,
+          "FindBakedArmSequence": 908044
+        },
+        "actual_other": 118012,
+        "feature_values": {
+          "FindBakedArmHandler": [
+            9269,
+            691
+          ],
+          "FindBakedArmPair": [
+            7368,
+            4350
+          ],
+          "FindBakedArmSequence": [
+            6242,
+            3781,
+            4833,
+            22124
+          ]
+        }
+      },
+      {
+        "method": "D",
+        "name": "rank-01-1.5m",
+        "identity": "487f81d2a3c8b865930de869862eb45852da63e579c6083228d40e2b5467a5de",
+        "is_original_tier_cut": true,
+        "cap": 1572864,
+        "actual": 1605140,
+        "old_prediction": 1397717,
+        "new_prediction": 1591936,
+        "new_components": {
+          "body": 1184834,
+          "resolvers": {
+            "FindBakedArmHandler": 144396,
+            "FindBakedArmPair": 45441,
+            "FindBakedArmSequence": 216103
+          },
+          "other": 1162,
+          "prediction": 1591936
+        },
+        "actual_body": 1187188,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 138188,
+          "FindBakedArmPair": 42052,
+          "FindBakedArmSequence": 237164
+        },
+        "actual_other": 548,
+        "feature_values": {
+          "FindBakedArmHandler": [
+            2004,
+            322
+          ],
+          "FindBakedArmPair": [
+            796,
+            675
+          ],
+          "FindBakedArmSequence": [
+            1689,
+            1335,
+            1523,
+            4526
+          ]
+        }
+      },
+      {
+        "method": "D",
+        "name": "rank-02-1.5m",
+        "identity": "c393272191c31b7f20ae4f97aef24734616e7fb610357c21d2bf6188cd655c6c",
+        "is_original_tier_cut": false,
+        "cap": 1572864,
+        "actual": 1532076,
+        "old_prediction": 1328315,
+        "new_prediction": 1519560,
+        "new_components": {
+          "body": 1125858,
+          "resolvers": {
+            "FindBakedArmHandler": 140092,
+            "FindBakedArmPair": 43595,
+            "FindBakedArmSequence": 208891
+          },
+          "other": 1124,
+          "prediction": 1519560
+        },
+        "actual_body": 1128200,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 133948,
+          "FindBakedArmPair": 39948,
+          "FindBakedArmSequence": 229432
+        },
+        "actual_other": 548,
+        "feature_values": {
+          "FindBakedArmHandler": [
+            1940,
+            318
+          ],
+          "FindBakedArmPair": [
+            763,
+            650
+          ],
+          "FindBakedArmSequence": [
+            1635,
+            1297,
+            1477,
+            4330
+          ]
+        }
+      },
+      {
+        "method": "D",
+        "name": "rank-03-3m",
+        "identity": "bd6744b3eab31e67836727fa990a33fa2c9a4de3ab05c3edd6162c582d149ca2",
+        "is_original_tier_cut": true,
+        "cap": 3145728,
+        "actual": 3468716,
+        "old_prediction": 2969908,
+        "new_prediction": 3292643,
+        "new_components": {
+          "body": 2491940,
+          "resolvers": {
+            "FindBakedArmHandler": 341756,
+            "FindBakedArmPair": 124349,
+            "FindBakedArmSequence": 332117
+          },
+          "other": 2481,
+          "prediction": 3292643
+        },
+        "actual_body": 2629876,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 306132,
+          "FindBakedArmPair": 124892,
+          "FindBakedArmSequence": 362392
+        },
+        "actual_other": 45424,
+        "feature_values": {
+          "FindBakedArmHandler": [
+            4917,
+            534
+          ],
+          "FindBakedArmPair": [
+            2231,
+            1653
+          ],
+          "FindBakedArmSequence": [
+            2590,
+            1911,
+            2251,
+            7504
+          ]
+        }
+      },
+      {
+        "method": "D",
+        "name": "rank-04-3m",
+        "identity": "b4b545172a83076ecb6fc9b0fc1783391c2362b8244ec890b470238a8d24243e",
+        "is_original_tier_cut": false,
+        "cap": 3145728,
+        "actual": 3010292,
+        "old_prediction": 2612458,
+        "new_prediction": 2906661,
+        "new_components": {
+          "body": 2196756,
+          "resolvers": {
+            "FindBakedArmHandler": 295034,
+            "FindBakedArmPair": 103794,
+            "FindBakedArmSequence": 308909
+          },
+          "other": 2168,
+          "prediction": 2906661
+        },
+        "actual_body": 2300204,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 269740,
+          "FindBakedArmPair": 102904,
+          "FindBakedArmSequence": 336896
+        },
+        "actual_other": 548,
+        "feature_values": {
+          "FindBakedArmHandler": [
+            4212,
+            504
+          ],
+          "FindBakedArmPair": [
+            1851,
+            1421
+          ],
+          "FindBakedArmSequence": [
+            2411,
+            1800,
+            2105,
+            6882
+          ]
+        }
+      },
+      {
+        "method": "D",
+        "name": "rank-05-10m",
+        "identity": "ca7cfc1420959e7e7541c7144819691f2090ff1135aa0d646f6caa8c0ec06712",
+        "is_original_tier_cut": true,
+        "cap": 10485760,
+        "actual": 11067324,
+        "old_prediction": 10311039,
+        "new_prediction": 10637887,
+        "new_components": {
+          "body": 8647806,
+          "resolvers": {
+            "FindBakedArmHandler": 674468,
+            "FindBakedArmPair": 440554,
+            "FindBakedArmSequence": 868880
+          },
+          "other": 6179,
+          "prediction": 10637887
+        },
+        "actual_body": 8906520,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 594648,
+          "FindBakedArmPair": 466980,
+          "FindBakedArmSequence": 971216
+        },
+        "actual_other": 127960,
+        "feature_values": {
+          "FindBakedArmHandler": [
+            9973,
+            701
+          ],
+          "FindBakedArmPair": [
+            8212,
+            4723
+          ],
+          "FindBakedArmSequence": [
+            6698,
+            3974,
+            5121,
+            23962
+          ]
+        }
+      },
+      {
+        "method": "D",
+        "name": "rank-06-10m",
+        "identity": "d76e54043eef97a64742ecddd51c0c2a609a491b567fb510f3e116fe80aab373",
+        "is_original_tier_cut": false,
+        "cap": 10485760,
+        "actual": 10139148,
+        "old_prediction": 9475843,
+        "new_prediction": 9792494,
+        "new_components": {
+          "body": 7950822,
+          "resolvers": {
+            "FindBakedArmHandler": 628983,
+            "FindBakedArmPair": 396692,
+            "FindBakedArmSequence": 810304
+          },
+          "other": 5693,
+          "prediction": 9792494
+        },
+        "actual_body": 8147396,
+        "actual_resolvers": {
+          "FindBakedArmHandler": 555836,
+          "FindBakedArmPair": 409860,
+          "FindBakedArmSequence": 908044
+        },
+        "actual_other": 118012,
+        "feature_values": {
+          "FindBakedArmHandler": [
+            9272,
+            691
+          ],
+          "FindBakedArmPair": [
+            7368,
+            4350
+          ],
+          "FindBakedArmSequence": [
+            6242,
+            3781,
+            4833,
+            22124
+          ]
+        }
+      }
+    ]
+  }
+}

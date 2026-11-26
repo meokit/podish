@@ -36,7 +36,7 @@ public static class ContainerLaunchSpecResolver
             throw new InvalidOperationException("image is required unless rootfs is set");
 
         var rootfsPathForImage = spec.Image;
-        var ociStoreDir = Path.Combine(ociStoreImagesDir, ToSafeImageName(spec.Image));
+        var ociStoreDir = Path.Combine(ociStoreImagesDir, OciPullService.GetImageCacheName(spec.Image, spec.ImagePlatform));
         if (!Directory.Exists(rootfsPathForImage) && Directory.Exists(ociStoreDir))
             rootfsPathForImage = ociStoreDir;
 
@@ -197,6 +197,7 @@ public static class ContainerLaunchSpecResolver
             AutoRemove = spec.AutoRemove,
             NetworkMode = spec.NetworkMode,
             Image = spec.Image,
+            ImagePlatform = spec.ImagePlatform,
             Rootfs = spec.Rootfs,
             FileSystemBackend = spec.FileSystemBackend,
             User = user ?? spec.User,

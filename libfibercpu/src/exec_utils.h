@@ -766,6 +766,8 @@ FORCE_INLINE T AluAdd(EmuState* state, uint64_t& flags_cache, T dest, T src) {
     return res;
 }
 
+enum class CompareRelation { UnsignedLess, UnsignedLessEqual, SignedLess, SignedLessEqual };
+
 template <typename T>
 struct SubtractionResultFlags {
     using Difference = std::conditional_t<sizeof(T) == 2, uint32_t, T>;
@@ -774,6 +776,35 @@ struct SubtractionResultFlags {
 
     FORCE_INLINE Difference GetDifference() const { return Difference(dest) - Difference(src); }
     FORCE_INLINE bool IsZero() const { return dest == src; }
+
+    template <CompareRelation relation>
+    FORCE_INLINE bool Matches() const {
+        using Signed = std::make_signed_t<T>;
+        if constexpr (relation == CompareRelation::UnsignedLess) return dest < src;
+        if constexpr (relation == CompareRelation::UnsignedLessEqual) return dest <= src;
+        if constexpr (relation == CompareRelation::SignedLess)
+            return static_cast<Signed>(dest) < static_cast<Signed>(src);
+        return static_cast<Signed>(dest) <= static_cast<Signed>(src);
+    }
+
+    template <CompareRelation relation>
+    FORCE_INLINE void PackRelation(uint64_t& flags_cache, bool matched) const {
+        constexpr bool inclusive =
+            relation == CompareRelation::UnsignedLessEqual || relation == CompareRelation::SignedLessEqual;
+        constexpr bool signed_relation =
+            relation == CompareRelation::SignedLess || relation == CompareRelation::SignedLessEqual;
+        constexpr T sign_bit = T{1} << (sizeof(T) * 8 - 1);
+        const T result = static_cast<T>(GetDifference());
+        const bool zero = (inclusive ? matched : !matched) && IsZero();
+        const bool less = inclusive ? matched && !zero : matched;
+        const bool negative = (result & sign_bit) != 0;
+        // Signed less is SF != OF; unsigned less is CF. The already-taken edge supplies one of these predicates.
+        const bool overflow = signed_relation ? negative != less : ((dest ^ src) & (dest ^ result) & sign_bit) != 0;
+        const bool borrow = signed_relation ? dest < src : less;
+        const uint32_t flags = (zero ? ZF_MASK : 0) | (negative ? SF_MASK : 0) | (borrow ? CF_MASK : 0) |
+                               (overflow ? OF_MASK : 0) | ((dest ^ src ^ result) & AF_MASK);
+        WriteArithmeticFlags(flags_cache, flags, static_cast<uint8_t>(result));
+    }
 
     FORCE_INLINE void Pack(uint64_t& flags_cache, bool zero) const {
         const Difference difference = GetDifference();

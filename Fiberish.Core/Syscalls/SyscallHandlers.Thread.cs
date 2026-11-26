@@ -18,12 +18,12 @@ public partial class SyscallManager
         return SysFutexCore(engine, a1, a2, a3, a4, a5, a6, false);
     }
 
-    private ValueTask<int> SysFutexTime64(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private ValueTask<int> SysFutexTime64(Engine engine, ulong a1, uint a2, uint a3, ulong a4, ulong a5, uint a6)
     {
         return SysFutexCore(engine, a1, a2, a3, a4, a5, a6, true);
     }
 
-    private ValueTask<int> SysFutexCore(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6,
+    private ValueTask<int> SysFutexCore(Engine engine, ulong a1, uint a2, uint a3, ulong a4, ulong a5, uint a6,
         bool isTime64)
     {
         var uaddr = a1;
@@ -251,7 +251,7 @@ public partial class SyscallManager
         return new ValueTask<int>(-(int)Errno.ENOSYS);
     }
 
-    private ValueTask<int> FutexWait(Engine engine, uint uaddr, uint expectedValue, int? timeoutMs,
+    private ValueTask<int> FutexWait(Engine engine, ulong uaddr, uint expectedValue, int? timeoutMs,
         bool isPrivate,
         uint bitsetMask, string opName)
     {
@@ -292,7 +292,7 @@ public partial class SyscallManager
     }
 
     private async ValueTask<int> AwaitFutexWait(FiberTask task, FutexKey waitKey, Waiter waiter,
-        ITaskAsyncRegistration registration, int? timeoutMs, string opName, uint uaddr, uint expectedValue,
+        ITaskAsyncRegistration registration, int? timeoutMs, string opName, ulong uaddr, uint expectedValue,
         uint bitsetMask, bool isPrivate)
     {
         if (Logger.IsEnabled(LogLevel.Trace))
@@ -320,7 +320,7 @@ public partial class SyscallManager
         return 0;
     }
 
-    private async ValueTask<int> FutexLockPi(Engine engine, uint uaddr, bool isPrivate, int opCode, FiberTask task)
+    private async ValueTask<int> FutexLockPi(Engine engine, ulong uaddr, bool isPrivate, int opCode, FiberTask task)
     {
         while (true)
         {
@@ -396,7 +396,7 @@ public partial class SyscallManager
         }
     }
 
-    internal int WakeFutexAddress(Engine engine, uint uaddr, int count, bool includePrivate = true,
+    internal int WakeFutexAddress(Engine engine, ulong uaddr, int count, bool includePrivate = true,
         bool includeShared = true)
     {
         var woke = 0;
@@ -407,7 +407,7 @@ public partial class SyscallManager
         return woke;
     }
 
-    private static int ValidateFutexAddress(uint uaddr)
+    private static int ValidateFutexAddress(ulong uaddr)
     {
         return (uaddr & 0x3) == 0 ? 0 : -(int)Errno.EINVAL;
     }
@@ -419,7 +419,7 @@ public partial class SyscallManager
                opCode == LinuxConstants.FUTEX_WAIT_REQUEUE_PI;
     }
 
-    private static bool TryReadAbsoluteTimespec32TimeoutMs(Engine engine, uint timespecPtr, int clockId,
+    private static bool TryReadAbsoluteTimespec32TimeoutMs(Engine engine, ulong timespecPtr, int clockId,
         out int timeoutMs, out int err)
     {
         timeoutMs = -1;
@@ -448,7 +448,7 @@ public partial class SyscallManager
             out timeoutMs, out err);
     }
 
-    private static bool TryReadAbsoluteTimespec64TimeoutMs(Engine engine, uint timespecPtr, int clockId,
+    private static bool TryReadAbsoluteTimespec64TimeoutMs(Engine engine, ulong timespecPtr, int clockId,
         out int timeoutMs, out int err)
     {
         timeoutMs = -1;
@@ -558,7 +558,7 @@ public partial class SyscallManager
         return (value & 0x800) != 0 ? value | unchecked((int)0xFFFFF000) : value;
     }
 
-    private static bool TryReadUserUInt32(Engine engine, uint uaddr, out uint value)
+    private static bool TryReadUserUInt32(Engine engine, ulong uaddr, out uint value)
     {
         Span<byte> buf = stackalloc byte[4];
         if (!engine.CopyFromUser(uaddr, buf))
@@ -571,25 +571,25 @@ public partial class SyscallManager
         return true;
     }
 
-    private static bool TryWriteUserUInt32(Engine engine, uint uaddr, uint value)
+    private static bool TryWriteUserUInt32(Engine engine, ulong uaddr, uint value)
     {
         Span<byte> buf = stackalloc byte[4];
         BinaryPrimitives.WriteUInt32LittleEndian(buf, value);
         return engine.CopyToUser(uaddr, buf);
     }
 
-    private static bool TryProbeUserAddress(Engine engine, uint uaddr)
+    private static bool TryProbeUserAddress(Engine engine, ulong uaddr)
     {
         Span<byte> buf = stackalloc byte[1];
         return engine.CopyFromUser(uaddr, buf);
     }
 
-    private bool TryResolveFutexKey(Engine engine, uint uaddr, bool fshared, out FutexKey key, out int error)
+    private bool TryResolveFutexKey(Engine engine, ulong uaddr, bool fshared, out FutexKey key, out int error)
     {
         return TryResolveFutexKey(engine, uaddr, fshared, false, out key, out error);
     }
 
-    private bool TryResolveFutexKey(Engine engine, uint uaddr, bool fshared, bool addressValidated,
+    private bool TryResolveFutexKey(Engine engine, ulong uaddr, bool fshared, bool addressValidated,
         out FutexKey key, out int error)
     {
         key = default;
@@ -621,13 +621,13 @@ public partial class SyscallManager
         return true;
     }
 
-    private FutexKey ResolvePrivateFutexKeyUnchecked(uint uaddr)
+    private FutexKey ResolvePrivateFutexKeyUnchecked(ulong uaddr)
     {
-        return FutexKey.Private(Mem, uaddr & LinuxConstants.PageMask,
+        return FutexKey.Private(Mem, uaddr & LinuxConstants.PageMask64,
             (ushort)(uaddr & LinuxConstants.PageOffsetMask));
     }
 
-    private bool TryResolvePrivateFutexKey(Engine engine, uint uaddr, out FutexKey key)
+    private bool TryResolvePrivateFutexKey(Engine engine, ulong uaddr, out FutexKey key)
     {
         key = default;
         if (!TryProbeUserAddress(engine, uaddr))
@@ -637,17 +637,17 @@ public partial class SyscallManager
         return true;
     }
 
-    private bool TryResolveSharedFutexKey(Engine engine, uint uaddr, out FutexKey key)
+    private bool TryResolveSharedFutexKey(Engine engine, ulong uaddr, out FutexKey key)
     {
         return TryResolveSharedFutexKey(engine, uaddr, false, out key, out _);
     }
 
-    private bool TryResolveSharedFutexKey(Engine engine, uint uaddr, out FutexKey key, out int error)
+    private bool TryResolveSharedFutexKey(Engine engine, ulong uaddr, out FutexKey key, out int error)
     {
         return TryResolveSharedFutexKey(engine, uaddr, false, out key, out error);
     }
 
-    private bool TryResolveSharedFutexKey(Engine engine, uint uaddr, bool addressValidated, out FutexKey key,
+    private bool TryResolveSharedFutexKey(Engine engine, ulong uaddr, bool addressValidated, out FutexKey key,
         out int error)
     {
         key = default;
@@ -660,7 +660,7 @@ public partial class SyscallManager
         if (vma == null || (vma.Flags & MapFlags.Shared) == 0)
             return false;
 
-        var pageStart = uaddr & LinuxConstants.PageMask;
+        var pageStart = uaddr & LinuxConstants.PageMask64;
         var pageIndex = vma.GetPageIndex(pageStart);
         var offsetWithinPage = (ushort)(uaddr & LinuxConstants.PageOffsetMask);
 
@@ -794,7 +794,7 @@ public partial class SyscallManager
         return 0;
     }
 
-    private async ValueTask<int> SysSetTidAddress(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysSetTidAddress(Engine engine, ulong a1, uint a2, uint a3, uint a4, uint a5,
         uint a6)
     {
         if (engine.Owner is FiberTask task)
@@ -807,7 +807,7 @@ public partial class SyscallManager
         return 1;
     }
 
-    private async ValueTask<int> SysSetRobustList(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysSetRobustList(Engine engine, ulong a1, ulong a2, uint a3, uint a4, uint a5,
         uint a6)
     {
         if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
@@ -815,15 +815,15 @@ public partial class SyscallManager
         var head = a1;
         var len = a2;
 
-        if (len != 12) return -(int)Errno.EINVAL; // 32-bit robust_list_head is exactly 12 bytes
+        if (len != (ulong)(3 * GuestWordSize(engine))) return -(int)Errno.EINVAL;
 
         task.RobustListHead = head;
-        task.RobustListSize = len;
+        task.RobustListSize = (uint)len;
 
         return 0;
     }
 
-    private async ValueTask<int> SysGetRobustList(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysGetRobustList(Engine engine, uint a1, ulong a2, ulong a3, uint a4, uint a5,
         uint a6)
     {
         var pid = (int)a1;
@@ -843,15 +843,22 @@ public partial class SyscallManager
 
         if (targetTask == null) return -(int)Errno.ESRCH;
 
-        Span<byte> headBuf = stackalloc byte[4];
-        BinaryPrimitives.WriteUInt32LittleEndian(headBuf, targetTask.RobustListHead);
-        if (!engine.CopyToUser(headPtr, headBuf)) return -(int)Errno.EFAULT;
-
-        if (lenPtr != 0)
+        var wordSize = GuestWordSize(engine);
+        Span<byte> output = stackalloc byte[wordSize];
+        if (engine.IsAArch64)
         {
-            Span<byte> lenBuf = stackalloc byte[4];
-            BinaryPrimitives.WriteUInt32LittleEndian(lenBuf, targetTask.RobustListSize);
-            if (!engine.CopyToUser(lenPtr, lenBuf)) return -(int)Errno.EFAULT;
+            // Linux writes sizeof(robust_list_head) before the head pointer.
+            WriteGuestWord(output, wordSize, 24);
+            if (!engine.CopyToUser(lenPtr, output)) return -(int)Errno.EFAULT;
+        }
+
+        WriteGuestWord(output, wordSize, targetTask.RobustListHead);
+        if (!engine.CopyToUser(headPtr, output)) return -(int)Errno.EFAULT;
+
+        if (!engine.IsAArch64 && lenPtr != 0)
+        {
+            WriteGuestWord(output, wordSize, targetTask.RobustListSize);
+            if (!engine.CopyToUser(lenPtr, output)) return -(int)Errno.EFAULT;
         }
 
         return 0;

@@ -32,6 +32,12 @@ constexpr size_t PAGE_SHIFT = 12;
 constexpr size_t PAGE_SIZE = 1 << PAGE_SHIFT;  // 4096
 constexpr size_t PAGE_MASK = PAGE_SIZE - 1;
 
+constexpr uint64_t ArmTaskSize = uint64_t{1} << 39;
+constexpr uint32_t ArmPageTag(uint64_t address) { return static_cast<uint32_t>(address >> PAGE_SHIFT); }
+constexpr bool ArmAddressRangeValid(uint64_t address, uint64_t size) {
+    return address < ArmTaskSize && size <= ArmTaskSize - address;
+}
+
 // Permission and Property Bits
 enum class Property : uint32_t {
     None = 0,
@@ -40,6 +46,9 @@ enum class Property : uint32_t {
     Exec = 1 << 2,
     Dirty = 1 << 3,
     ForceWriteSlow = 1 << 5,
+    // Private runtime allocation with a unique host virtual address. Raw
+    // host mappings and file views have no such aliasing guarantee.
+    StableBacking = 1 << 6,
     Valid = 1 << 11,
     // Combinations
     RW = Read | Write,

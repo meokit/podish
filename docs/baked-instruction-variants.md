@@ -1,8 +1,8 @@
 # Baked instruction variants
 
 CMake generates native scalar handlers for the interpreter's 16-byte slots from the
-[ModRM table](../libfibercpu/presets/3.5m/modrm.json) and
-[scalar plan](../libfibercpu/presets/3.5m/scalar.json) in the default `3.5m`
+[ModRM table](../libfibercpu/presets/3m/modrm.json) and
+[scalar plan](../libfibercpu/presets/3m/scalar.json) in the default `3m`
 preset. The [native build presets](build-presets.md) describe the other table sets.
 The scalar plan binds prefixes, flag liveness, effective addresses and immediates
 for selected shapes. The C++ and exact LLVM paths use the catalog kernel
@@ -36,14 +36,31 @@ It ranks observed ModRM, width/flags, exact and partial scalar, and fusion
 shapes. Partial candidates group observed operands after removing the
 displacement, the immediate, or both from the match key.
 
-Each round adjusts how much of each ranked list to include. The trainer
-learns the code size cost from measured builds and verifies each candidate's
-guest output. It ranks candidates by the geometric mean of training-case
-speedups against a build without baking. It remeasures the finalists and
-freezes three strict supersets against the 1.75, 3.5, and 10 MiB native text
-budgets. The size check during training includes the generic interpreter.
+### Ranking and linking
 
-From the repository root, configure the training target with a workload JSON.
+Both guest architectures use generalization-aware marginal ranking. One offline
+search per guest produces the 1.5, 3 and 10 MiB tiers. The shipped default is
+the 3 MiB prefix. Costs apply to native text growth relative to an unbaked
+build with the same guest and toolchain.
+
+The trainer replays affected blocks in native match order when a candidate is
+added. It credits dispatches saved by fusions and estimated savings from
+scalar bindings. It divides the incremental gain by the estimated bytes of the
+candidate and any unpaid dependencies. The default `--risk 0.5` gives equal
+weight to the mean gain across training families and the mean after dropping
+the strongest family. The same setting discounts strict matches and long
+fusions. More distinct neighboring instruction shapes or more observed operand
+encodings for a partial scalar reduce the discount. Both evidence counts
+saturate at 32. Each entry records its per-family gain at insertion.
+
+To train both guests with the shared workload config and hold out grep and Node:
+
+```sh
+python3 scripts/train_nested_presets.py --config training.json --output out/training \
+  --holdout-family grep --holdout-family node
+```
+
+To use the CMake training target:
 
 ```sh
 cmake -S libfibercpu -B out/train -DCMAKE_BUILD_TYPE=Release \
@@ -51,31 +68,105 @@ cmake -S libfibercpu -B out/train -DCMAKE_BUILD_TYPE=Release \
 cmake --build out/train --config Release --target fibercpu_train_presets
 ```
 
-For a different round count or a comparison without partial scalar forms,
-invoke the same script directly with `--rounds` or `--no-partial-operands`.
+The default `--search-depth 1` refreshes marginal estimates at the standard
+budget checkpoints. Increasing depth refreshes estimates more often within
+the same offline ranking. Use `--capture-source` to reuse verified execution profiles. The trainer
+rebuilds the candidate pool from the training split. The i386 pool includes up
+to 1,024 exact fusion candidates. AArch64 includes recurring three- and
+four-word windows from eligible maximal runs.
+
+The static cost cache maps native function spans to decoder bindings, resolves
+plan-local i386 fusion clone numbers, and estimates whole-plan residuals by
+holding out independent training runs (or distinct tables from a single run). Its current reader supports thin
+little-endian 64-bit Mach-O with symbols and function starts. Cache reuse checks
+the unbaked text, compiler, build options and source fingerprints. Without
+`--rank-cost-cache` the trainer uses the guest's class priors with zero reserve.
+The calibrated path subtracts a one-sided historical 90th-percentile reserve
+from each byte budget. The linker supplies the final size. To calibrate from linked training archives,
+run `python3 scripts/baking_rank_cost.py RUNS GUEST COST.json` for each guest.
+Pass a cache file or a directory containing `i386.json` and `aarch64.json`
+to `--rank-cost-cache`.
+
+Use `--rank-only` to inspect `ranking.json` before linking presets. Resume with
+the same search options and omit that flag to build. Each entry contains its
+binding, admission rank, estimated cost, cumulative bytes, estimated first
+tier, marginal gain and evidence. `rank-builds.json` records all candidate build
+attempts. If a prefix exceeds its measured tier, the trainer moves the cutoff
+back along the same order and links again. The previous tier is a lower bound.
+Identical cutoffs share a binary. Training defaults to six candidate
+build attempts per guest. Increasing the limit resumes the same ranking.
+`search-summary.json` records the estimated and verified cuts. The frozen
+archive includes the ranking and manifest for the verified prefixes.
+
+### Held-out evaluation
+
+Repeat `--holdout-family` to reserve more than one software family.
+The manifest groups gzip and gunzip together, both grep cases together, and
+the GNU coreutils programs together. Cases without an explicit `family`
+default to their individual IDs. Reserve every related case under a common
+family name when supplying a custom manifest. Held-out cases are excluded
+before capture, pool construction, cost fitting and finalist measurement.
+
+After freezing, evaluate an archive directly. The command verifies the manifest,
+profile identities and frozen artifact hashes, and writes case ratios, family
+ratios and the slowest family to `report.json`. For a production comparison,
+supply the matching unbaked or baked reference library explicitly with
+`--reference-library`.
 
 ```sh
-python3 scripts/train_nested_presets.py --config /path/to/training.json \
-  --output out/preset-training --rounds 10
+python3 scripts/evaluate_baking_holdout.py --config training.json \
+  --frozen out/training/aarch64/frozen --output out/held-out-aarch64 --repeats 3
 ```
 
-The config names a writable IA-32 guest `rootfs`, the matching
-framework-dependent Podish build directory in `managed_cli`, the path to
-`Podish.PerfTools.dll` in `perf_tools`, the `cmake` executable, its
+For leave-one-family-out comparison, train a fresh chain for each training
+split. Unseen compiler builds, libc versions or genuinely new applications
+require corresponding binaries and verified cases in the original evaluation
+configuration. Use the same splits for both guests.
+Keep a separate untouched suite for any release claim after algorithm selection.
+
+The config supplies writable guest root filesystems and a framework-dependent
+Podish build in `managed_cli` that supports the selected guests. Set `perf_tools`
+to `Podish.PerfTools.dll` for i386, and provide the `cmake` executable,
 `cmake_args`, and a `benchmark_lock` shared with other local benchmarks.
-Each entry in `workloads` supplies `id`, `group`, guest `cwd`, `shell`,
-`repetitions` and the expected output `sha256`. Optional `verify` selects
-the output representation to hash. Use a fresh output directory for each
-new suite.
+
+For shared training, set `rootfs` to an object with `i386` and `aarch64`
+paths. Populate both root filesystems with the architecture's binaries and
+the same input files. The shared suite expects GNU tools on `PATH`, the
+fixtures under `/opt/nested-training`, Node at `/opt/bench/node` and the
+JavaScript dependencies under `/opt/bench/webpack`.
+Set `workloads` to the path of the
+[shared training suite](../benchmark/optimization/manifests/baking-workloads.json)
+or supply the workload array inline. Relative manifest paths resolve against
+the config directory. Each entry supplies `id`, descriptive `group`, software `family`, guest `cwd`, `shell`,
+`repetitions` and an expected output `sha256`. Optional `verify` selects
+the output representation to hash. Both guests use the same entries.
+
+```json
+{
+  "rootfs": {"i386": "/tmp/rootfs-i386", "aarch64": "/tmp/rootfs-arm64"},
+  "workloads": "/path/to/podish/benchmark/optimization/manifests/baking-workloads.json"
+}
+```
+
+The trainer runs both guests by default and writes their results under
+`i386/` and `aarch64/` in the output directory. Use `--guest i386` or
+`--guest aarch64` to run one guest with the shared config. A single `rootfs`
+path with an optional `guest` still works and retains the original output
+layout. Use a fresh output directory for each new suite.
 
 The CMake target writes captures, plans, and timings under
-`out/train/preset-training/Release/`. The `frozen/` directory contains
-the selected plans, native libraries, baseline, and provenance. Compare the
-frozen libraries and baseline on a separate holdout suite with the same
-guest inputs and runtime settings. After review, copy the four JSON files
+`out/train/preset-training/Release/`. Each guest's `frozen/` directory contains
+its unbaked library, measured text sizes and growth, and the selected
+`1.5m`, `3m`, and `10m` plans and native libraries. Each tier is capped
+at the unbaked native text size plus its per-guest MiB allowance. The trainer
+uses a single-guest build so the measured increase belongs to that guest.
+Compare the frozen libraries and
+unbaked baseline on a separate holdout suite with the same
+guest inputs and runtime settings. For i386, copy the four JSON files
 and, for tiers with fusion, the generated C++ source into the matching
-`libfibercpu/presets/<tier>/` directories. A normal CMake build reads those
-files directly.
+`libfibercpu/presets/<tier>/` directories. For AArch64, copy each tier's
+`scalar.json` to `libfibercpu/presets/aarch64/<tier>/`. A normal CMake build
+selects the corresponding plan for every enabled guest.
 
 Use `FIBERCPU_BAKING_PRESET=custom` and the individual plan options to try
 candidate tables. Set `FIBERCPU_MODRM_PLAN_FILE` for the ModRM plan,
@@ -121,3 +212,32 @@ two-slot memory compare loaded its immediate from offset 24 and advanced 32
 bytes. Both selected the ModRM operation at compile time. The LLVM exact
 probe materialized `0x12345678` with `mov` and `movk`, inlined the instruction
 bodies and retained the MMU replay and block-link exits.
+
+## AArch64 plans
+
+The AArch64 interpreter records executed integer, branch and memory words using `-XX:AArch64ProfilePath=/absolute/path/to/words.json` on a Podish run. Version 2 also records a histogram of ordered, retired blocks up to 24 instructions, including words with no baking candidate. Page edges, control transfers and runtime exits split the stream. Word, pair and sequence counts are retained. Item-level training requires version 2 captures. Recording disables cached execution for that run so instruction counts also include normally fused constituents.
+
+`scripts/train_nested_presets.py` uses the shared workload configuration. It
+normalizes each workload's capture before ranking candidates and measures
+their throughput against the unbaked interpreter, with software families weighted
+equally. It ranks exact words, partial shapes, pairs and long sequences together,
+then checks the linked text growth of each prefix. The CMake
+generator can also consume a single capture directly.
+
+```sh
+python3 scripts/train_nested_presets.py --config training.json --guest aarch64 --output /tmp/preset-training
+```
+
+The stock plans use the same GNU training workloads on both guests. Node and grep were held out.
+The partials specialize ADD/SUB immediate and unsigned-offset load/store
+words. They keep the register indices, operation, scale and width fixed and
+read the decoded immediate from the slot. Training ranks shapes by residual
+frequency after allocating the exact words, using all observed encodings
+before truncating the profile. The three tiers share one ranked list. Every larger tier retains the bindings of the smaller tier. Use `--no-partial-operands` to train exact shapes alone.
+
+The CMake limits are `FIBERCPU_AARCH64_OPERAND_BUDGET`,
+`FIBERCPU_AARCH64_PARTIAL_BUDGET`, `FIBERCPU_AARCH64_PAIR_BUDGET`, and
+`FIBERCPU_AARCH64_SEQUENCE_BUDGET`. `FIBERCPU_AARCH64_OPERAND_PLAN_FILE`
+selects another plan. Unsupported keys fall back to the lowered handler.
+The optimization fingerprint includes the plan hash, all four budgets, the
+guest pin selection and the NZCV elimination setting.

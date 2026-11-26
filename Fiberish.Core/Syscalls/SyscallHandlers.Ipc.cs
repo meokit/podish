@@ -113,14 +113,15 @@ public partial class SyscallManager
         return sm.SysVShm.ShmDt(shmaddr, pid, sm.Mem, engine, process);
     }
 
-    private ValueTask<int> SysShmGet(Engine engine, uint key, uint size, uint flags)
+    private ValueTask<int> SysShmGet(Engine engine, uint key, ulong size, uint flags)
     {
         var process = (engine.Owner as FiberTask)?.Process;
         return ValueTask.FromResult(SysVShm.ShmGet((int)key, size, (int)flags,
-            process?.EUID ?? 0, process?.EGID ?? 0, process?.TGID ?? 0));
+            process?.EUID ?? 0, process?.EGID ?? 0, process?.TGID ?? 0,
+            engine.IsAArch64 ? LinuxConstants.TaskSizeAArch64 : uint.MaxValue));
     }
 
-    private ValueTask<int> SysShmCtl(Engine engine, uint shmid, uint command, uint buffer)
+    private ValueTask<int> SysShmCtl(Engine engine, uint shmid, uint command, ulong buffer)
     {
         // The direct syscall always uses shmid64_ds and takes an unversioned command.
         if ((command & LinuxConstants.IPC_64) != 0)
@@ -132,13 +133,15 @@ public partial class SyscallManager
     }
 
     private ValueTask<int> SysShmAt(Engine engine, uint shmid, uint address, uint flags)
+        => ValueTask.FromResult((int)AttachSharedMemory(engine, shmid, address, flags));
+
+    private long AttachSharedMemory(Engine engine, uint shmid, ulong address, uint flags)
     {
         var process = (engine.Owner as FiberTask)?.Process;
-        return ValueTask.FromResult((int)SysVShm.ShmAt((int)shmid, address, (int)flags, process?.TGID ?? 0,
-            Mem, engine, process));
+        return SysVShm.ShmAt((int)shmid, address, (int)flags, process?.TGID ?? 0, Mem, engine, process);
     }
 
-    private ValueTask<int> SysShmDt(Engine engine, uint address)
+    private ValueTask<int> SysShmDt(Engine engine, ulong address)
     {
         var process = (engine.Owner as FiberTask)?.Process;
         return ValueTask.FromResult(SysVShm.ShmDt(address, process?.TGID ?? 0, Mem, engine, process));
@@ -180,7 +183,7 @@ public partial class SyscallManager
         return await DoSemTimedOp(engine, (int)semid, sops, nsops, timeout, true);
     }
 
-    private ValueTask<int> SysSemCtl(Engine engine, uint semid, uint semnum, uint cmd, uint arg, uint _5, uint _6)
+    private ValueTask<int> SysSemCtl(Engine engine, uint semid, uint semnum, uint cmd, ulong arg, uint _5, uint _6)
     {
         var t = engine.Owner as FiberTask;
         var uid = t?.Process.EUID ?? 0;
@@ -193,7 +196,7 @@ public partial class SyscallManager
         return ValueTask.FromResult(SysVSem.SemCtl((int)semid, (int)semnum, actualCmd, arg, engine, uid, gid, t?.Process));
     }
 
-    private async ValueTask<int> DoSemTimedOp(Engine engine, int semid, uint sops, uint nsops, uint timeoutPtr,
+    private async ValueTask<int> DoSemTimedOp(Engine engine, int semid, ulong sops, uint nsops, ulong timeoutPtr,
         bool time64)
     {
         long? timeoutMs = null;

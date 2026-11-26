@@ -1,0 +1,213 @@
+{
+  "guest": "aarch64",
+  "held_family": "coreutils",
+  "train_cases": [
+    "gzip",
+    "gunzip",
+    "sed",
+    "tar"
+  ],
+  "held_cases": [
+    "sort",
+    "sha256",
+    "du",
+    "ls"
+  ],
+  "candidates": {
+    "entries": 18596,
+    "partials": 946,
+    "pairs": 14805,
+    "sequences": 13333
+  },
+  "pool_sha256": "eb9dd3c1604c49abb68b5a44b104dbe9c0f86968cfdd40ac5a727254e179cb98",
+  "estimated_budgets": [
+    1398156,
+    2971020,
+    10311052
+  ],
+  "reserve_bytes": 174708,
+  "ranking_inputs_seconds": 0.3018036660068901,
+  "held_replay_seconds": 0.1113737499981653,
+  "cost_model": {
+    "distinct": 36,
+    "linked": 36,
+    "max_underprediction": 376274,
+    "median_abs_error": 22600.5,
+    "method": "leave one strategy out, purge identical tables",
+    "quantile": 0.9,
+    "model": "Mach-O binding spans and calibrated class multipliers",
+    "coverage": {
+      "entries": {
+        "linked_bindings": 4868,
+        "total": 18596
+      },
+      "partials": {
+        "linked_bindings": 931,
+        "total": 946
+      },
+      "pairs": {
+        "linked_bindings": 3639,
+        "total": 14805
+      },
+      "sequences": {
+        "linked_bindings": 4734,
+        "total": 13333
+      }
+    },
+    "cache_sha256": "82511952e6b18b1fe05156f9dd381a130ba949d6ddc3a7d7b9c19ae13c073fa0"
+  },
+  "methods": {
+    "joint-static": {
+      "depth": 1,
+      "risk": 0.5,
+      "ranking_seconds": 0.4677106669987552,
+      "tiers": [
+        {
+          "tier_mib": 1.5,
+          "cut": 3458,
+          "predicted_bytes": 1397220,
+          "held_dispatch_proxy": 0.16593811547644782,
+          "ids_sha256": "35a50214f32dc8910ae8e431dcba31c8778bc5c89185d23726c068de5f9b96d8"
+        },
+        {
+          "tier_mib": 3,
+          "cut": 5680,
+          "predicted_bytes": 2970743,
+          "held_dispatch_proxy": 0.21049572049274587,
+          "ids_sha256": "bcfc9915e9a5971aaf73446ddbd00721cfc8c344c8a6746af22762eb4cb5b3db"
+        },
+        {
+          "tier_mib": 10,
+          "cut": 18851,
+          "predicted_bytes": 10310090,
+          "held_dispatch_proxy": 0.280164073333419,
+          "ids_sha256": "dbd16e878ee783e012bbd5ad2f0a888c2bfb971ce9c2801293e26d42f9c9b7ba"
+        }
+      ],
+      "stats": {
+        "marginal_evaluations": 66532,
+        "affected_blocks": 132949,
+        "beam_prefix_evaluations": 0,
+        "tier_values": [
+          0.6709304438301545,
+          0.7319615518363959,
+          0.7765539585674155
+        ]
+      }
+    },
+    "joint-marginal": {
+      "depth": 1,
+      "risk": 0.5,
+      "ranking_seconds": 1.0885435419913847,
+      "tiers": [
+        {
+          "tier_mib": 1.5,
+          "cut": 3792,
+          "predicted_bytes": 1396492,
+          "held_dispatch_proxy": 0.23361680514531596,
+          "ids_sha256": "578aa5f4ffcd5ee3078e1d074612d6be5ab151e69ea4474ce2762881d5332334"
+        },
+        {
+          "tier_mib": 3,
+          "cut": 7641,
+          "predicted_bytes": 2970904,
+          "held_dispatch_proxy": 0.26854086458857174,
+          "ids_sha256": "05429dc54f92350aa38509f16fb2056af5ac208627476330d859fa0aaa9d791f"
+        },
+        {
+          "tier_mib": 10,
+          "cut": 18797,
+          "predicted_bytes": 10130785,
+          "held_dispatch_proxy": 0.31379826778341047,
+          "ids_sha256": "247345c417c45c5dc885123356668a977fc541e25f2a1d431ffa89fab2114d6b"
+        }
+      ],
+      "stats": {
+        "marginal_evaluations": 387087,
+        "affected_blocks": 611286,
+        "beam_prefix_evaluations": 0,
+        "tier_values": [
+          0.7681661850821593,
+          0.7777160062103053,
+          0.7833744444391916
+        ]
+      }
+    },
+    "joint-general": {
+      "depth": 1,
+      "risk": 0.5,
+      "ranking_seconds": 1.181823541992344,
+      "tiers": [
+        {
+          "tier_mib": 1.5,
+          "cut": 4658,
+          "predicted_bytes": 1397857,
+          "held_dispatch_proxy": 0.23237193028196204,
+          "ids_sha256": "cd192c3baa015f96e2eb2eda57df338705b8c377573b684ca76858c7d74212c4"
+        },
+        {
+          "tier_mib": 3,
+          "cut": 10384,
+          "predicted_bytes": 2970924,
+          "held_dispatch_proxy": 0.26950904792002495,
+          "ids_sha256": "dac5184129b9e061be30132912d1dd88e3a993aed06b8d89425cbc395c819447"
+        },
+        {
+          "tier_mib": 10,
+          "cut": 21957,
+          "predicted_bytes": 9387132,
+          "held_dispatch_proxy": 0.3020333686615051,
+          "ids_sha256": "bbc96f7212f748d65a75b3f0777d7527e0a267cfc1582e26969c2ff730bd0630"
+        }
+      ],
+      "stats": {
+        "marginal_evaluations": 402367,
+        "affected_blocks": 582923,
+        "beam_prefix_evaluations": 0,
+        "tier_values": [
+          0.3735323366194103,
+          0.3780834852741877,
+          0.38043488047134894
+        ]
+      }
+    },
+    "joint-beam": {
+      "depth": 3,
+      "risk": 0.5,
+      "ranking_seconds": 1.7317027079989202,
+      "tiers": [
+        {
+          "tier_mib": 1.5,
+          "cut": 4655,
+          "predicted_bytes": 1398129,
+          "held_dispatch_proxy": 0.2323706075325498,
+          "ids_sha256": "c4d84215fb7019d1577f68443ef7997ee8d4a8255f77c523c4d081b956952bda"
+        },
+        {
+          "tier_mib": 3,
+          "cut": 10383,
+          "predicted_bytes": 2970316,
+          "held_dispatch_proxy": 0.26934573045026416,
+          "ids_sha256": "cd7efdda73b6da6d35ae03e1b78d0422ec2460c546baf7c4d0e15c93e17d0a13"
+        },
+        {
+          "tier_mib": 10,
+          "cut": 21957,
+          "predicted_bytes": 9387132,
+          "held_dispatch_proxy": 0.3020333686615051,
+          "ids_sha256": "6403b7d912ea505d0d7a0b282d6652f40c999833368ad8e61dadb4f47d8cb475"
+        }
+      ],
+      "stats": {
+        "marginal_evaluations": 402367,
+        "affected_blocks": 582923,
+        "beam_prefix_evaluations": 15,
+        "tier_values": [
+          0.37355065341575044,
+          0.3782689443348616,
+          0.38043488047134894
+        ]
+      }
+    }
+  }
+}

@@ -181,7 +181,7 @@ internal struct HostPageRmapRef
     public required VmArea Vma { get; init; }
     public required HostPageOwnerKind OwnerKind { get; init; }
     public required uint PageIndex { get; init; }
-    public required uint GuestPageStart { get; set; }
+    public required ulong GuestPageStart { get; set; }
 
     public readonly HostPageRmapKey GetKey()
     {
@@ -580,10 +580,10 @@ internal readonly record struct RmapHit(
     VmArea Vma,
     HostPageOwnerKind OwnerKind,
     uint PageIndex,
-    uint GuestPageStart);
+    ulong GuestPageStart);
 
 internal delegate void HostPageRmapVisitor<TState>(HostPageRef hostPageRef, in HostPageRmapRef rmapRef, ref TState state);
-internal delegate void TbCohMmPageVisitor<TState>(VMAManager mm, uint guestPageStart, ref TState state);
+internal delegate void TbCohMmPageVisitor<TState>(VMAManager mm, ulong guestPageStart, ref TState state);
 
 internal readonly record struct TbCohExecSummary(bool HasExecPeer, bool HasMultipleExecIdentities, nuint ExecIdentity);
 
@@ -706,6 +706,9 @@ internal struct HostPageRef
             return owner.GetSlotRef(slot).Page.Kind;
         }
     }
+
+    internal bool HasStableBacking => TryGetLiveSlot(out var owner, out var slot) &&
+                                      owner.GetSlotRef(slot).Page.BackingHandle.IsPooled;
 
     public bool Dirty
     {
@@ -1096,7 +1099,7 @@ internal struct HostPageRef
         return mm.AddressSpaceIdentity;
     }
 
-    private static void ApplyWriterPolicy(VMAManager mm, uint pageStart, ref WriterPolicyApplyState state)
+    private static void ApplyWriterPolicy(VMAManager mm, ulong pageStart, ref WriterPolicyApplyState state)
     {
         state.VisitedWriterPages++;
         switch (state.Policy.Kind)
@@ -1167,7 +1170,7 @@ internal struct HostPageRef
     }
 
     public bool AddOrUpdateRmapRef(VMAManager mm, VmArea vma, HostPageOwnerKind ownerKind, uint pageIndex,
-        uint guestPageStart)
+        ulong guestPageStart)
     {
         if (!TryGetOwnerBinding(out var ownerBinding))
             return false;
@@ -1209,7 +1212,7 @@ internal struct HostPageRef
     }
 
     public bool UpdateTbCohRolesForRmapRef(VMAManager mm, VmArea vma, HostPageOwnerKind ownerKind, uint pageIndex,
-        uint guestPageStart, Protection oldPerms, Protection newPerms)
+        ulong guestPageStart, Protection oldPerms, Protection newPerms)
     {
         if (!TryGetOwnerBinding(out var ownerBinding))
             return false;
@@ -1224,7 +1227,7 @@ internal struct HostPageRef
     }
 
     public bool RebindRmapRef(VMAManager mm, VmArea oldVma, VmArea newVma, HostPageOwnerKind ownerKind, uint pageIndex,
-        uint guestPageStart, Protection oldPerms, Protection newPerms)
+        ulong guestPageStart, Protection oldPerms, Protection newPerms)
     {
         ArgumentNullException.ThrowIfNull(mm);
         ArgumentNullException.ThrowIfNull(oldVma);
@@ -1894,7 +1897,7 @@ internal sealed class HostPageManager : IDisposable
     }
 
     internal bool AddOrUpdateRmapRef(IntPtr ptr, HostPageKind preferredKind, VMAManager mm, VmArea vma,
-        HostPageOwnerKind ownerKind, uint pageIndex, uint guestPageStart)
+        HostPageOwnerKind ownerKind, uint pageIndex, ulong guestPageStart)
     {
         return GetOrCreate(ptr, preferredKind).AddOrUpdateRmapRef(mm, vma, ownerKind, pageIndex, guestPageStart);
     }
@@ -1909,7 +1912,7 @@ internal sealed class HostPageManager : IDisposable
     }
 
     internal bool UpdateTbCohRolesForRmapRef(IntPtr ptr, VMAManager mm, VmArea vma,
-        HostPageOwnerKind ownerKind, uint pageIndex, uint guestPageStart, Protection oldPerms, Protection newPerms)
+        HostPageOwnerKind ownerKind, uint pageIndex, ulong guestPageStart, Protection oldPerms, Protection newPerms)
     {
         if (!TryLookup(ptr, out var page))
             return false;
@@ -1918,7 +1921,7 @@ internal sealed class HostPageManager : IDisposable
     }
 
     internal bool RebindRmapRef(IntPtr ptr, VMAManager mm, VmArea oldVma, VmArea newVma,
-        HostPageOwnerKind ownerKind, uint pageIndex, uint guestPageStart, Protection oldPerms, Protection newPerms)
+        HostPageOwnerKind ownerKind, uint pageIndex, ulong guestPageStart, Protection oldPerms, Protection newPerms)
     {
         if (!TryLookup(ptr, out var page))
             return false;

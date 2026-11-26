@@ -18,7 +18,7 @@ struct LinkedBlockEntry {
 };
 
 struct LinkedPageMember {
-    const LinkedBlockEntry* fallback;
+    const block_recipe::BlockKeyView* key;
     HandlerFunc handler;
     uint32_t offset;
 };
@@ -32,14 +32,16 @@ struct LinkedPageRegion {
 std::atomic<uint64_t> linked_hits{0};
 std::atomic<uint64_t> linked_page_hits{0};
 
-bool TryLinkedPageRegion(EmuState& state, BasicBlock& root, const LinkedBlockEntry* fallback) {
+bool TryLinkedPageRegion(EmuState& state, BasicBlock& root, block_recipe::BlockKeyView key) {
     if (!root.chain.has_region_context || !LinkedPageRegionsEnabled()) return false;
+    const auto recipe = std::ranges::lower_bound(linked_cache_keys, key);
+    if (recipe == std::end(linked_cache_keys) || *recipe != key) return false;
     auto& mmu = state.mmu;
     const auto page = root.start_eip() & ~uint32_t(mem::PAGE_MASK);
     const auto offset = root.start_eip() - page;
     for (const auto& region : linked_page_regions) {
         if (!std::ranges::any_of(region.members, [&](const auto& member) {
-                return member.offset == offset && member.fallback == fallback;
+                return member.offset == offset && member.key == recipe;
             }))
             continue;
 
@@ -52,7 +54,7 @@ bool TryLinkedPageRegion(EmuState& state, BasicBlock& root, const LinkedBlockEnt
             const auto eip = page + member.offset;
             auto* block = mmu.lookup_cached_block(eip);
             if (!block || !block->is_valid() || !block->chain.has_region_context) break;
-            entries.push_back({eip, block, block->invalidation_revision, member.handler, member.fallback->handler});
+            entries.push_back({eip, block, block->invalidation_revision, member.handler});
         }
         if (entries.size() != region.members.size()) continue;
 
@@ -61,7 +63,7 @@ bool TryLinkedPageRegion(EmuState& state, BasicBlock& root, const LinkedBlockEnt
         for (size_t i = 0; i < plans.size(); ++i) {
             auto& plan = plans[i];
             if (!block_recipe::PlanBlock(state, *entries[i].block, true, plan) ||
-                plan.Key(true) != region.members[i].fallback->key) {
+                plan.Key(true) != *region.members[i].key) {
                 matching = false;
                 break;
             }
@@ -102,9 +104,9 @@ bool TryLinkedBlockCache(EmuState& state, BasicBlock& block) {
     block_recipe::Plan plan;
     if (!block_recipe::PlanBlock(state, block, true, plan)) return false;
     const auto key = plan.Key(true);
+    if (TryLinkedPageRegion(state, block, key)) return true;
     const auto found = std::ranges::lower_bound(linked_cache_entries, key, {}, &LinkedBlockEntry::key);
     if (found == std::ranges::end(linked_cache_entries) || found->key != key) return false;
-    if (TryLinkedPageRegion(state, block, found)) return true;
     block_recipe::InstallBlockHandler(block, plan.ReplayHandlers(), found->handler);
     linked_hits.fetch_add(1, std::memory_order_relaxed);
     return true;

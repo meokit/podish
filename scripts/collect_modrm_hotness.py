@@ -17,7 +17,7 @@ from scalar_modrm import scalar_modrm_plans
 
 
 DEFAULT_COVERAGE = Decimal("0.999")
-DEFAULT_FUSIONS = SRC.parent / "presets/3.5m/superopcodes.generated.cpp"
+DEFAULT_FUSIONS = SRC.parent / "presets/3m/superopcodes.generated.cpp"
 
 
 def read_modrm_counts(profiles, fusion_source, collect_policies):

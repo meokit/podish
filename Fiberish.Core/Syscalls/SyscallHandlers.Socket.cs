@@ -192,7 +192,7 @@ public partial class SyscallManager
         }
     }
 
-    private async ValueTask<int> SysConnect(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysConnect(Engine engine, uint a1, ulong a2, uint a3, uint a4, uint a5, uint a6)
     {
         var task = engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
@@ -213,7 +213,7 @@ public partial class SyscallManager
         return -(int)Errno.ENOTSOCK;
     }
 
-    private async ValueTask<int> SysBind(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysBind(Engine engine, uint a1, ulong a2, uint a3, uint a4, uint a5, uint a6)
     {
         var task = engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
@@ -261,12 +261,12 @@ public partial class SyscallManager
         return await SysAccept4(engine, a1, a2, a3, 0, 0, 0);
     }
 
-    private static int ValidateOptionalSockaddrPair(uint addrPtr, uint addrLenPtr)
+    private static int ValidateOptionalSockaddrPair(ulong addrPtr, ulong addrLenPtr)
     {
         return (addrPtr == 0) != (addrLenPtr == 0) ? -(int)Errno.EFAULT : 0;
     }
 
-    private async ValueTask<int> SysGetSockName(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysGetSockName(Engine engine, uint a1, ulong a2, ulong a3, uint a4, uint a5,
         uint a6)
     {
         var fd = (int)a1;
@@ -292,7 +292,7 @@ public partial class SyscallManager
         return -(int)Errno.ENOTSOCK;
     }
 
-    private async ValueTask<int> SysGetPeerName(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysGetPeerName(Engine engine, uint a1, ulong a2, ulong a3, uint a4, uint a5,
         uint a6)
     {
         var fd = (int)a1;
@@ -315,7 +315,7 @@ public partial class SyscallManager
         return -(int)Errno.ENOTSOCK;
     }
 
-    private async ValueTask<int> SysAccept4(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysAccept4(Engine engine, uint a1, ulong a2, ulong a3, uint a4, uint a5, uint a6)
     {
         var task = engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
@@ -386,7 +386,7 @@ public partial class SyscallManager
         return -(int)Errno.ENOTSOCK;
     }
 
-    private async ValueTask<int> SysSendTo(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysSendTo(Engine engine, uint a1, ulong a2, uint a3, uint a4, ulong a5, uint a6)
     {
         var task = engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
@@ -426,7 +426,7 @@ public partial class SyscallManager
         return -(int)Errno.ENOTSOCK;
     }
 
-    private async ValueTask<int> SysRecvFrom(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysRecvFrom(Engine engine, uint a1, ulong a2, uint a3, uint a4, ulong a5, ulong a6)
     {
         var task = engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
@@ -500,10 +500,10 @@ public partial class SyscallManager
             RecvMessageResult res,
             LinuxFile recvFile,
             Engine recvEngine,
-            uint recvSrcAddrPtr,
-            uint recvAddrLenPtr,
+            ulong recvSrcAddrPtr,
+            ulong recvAddrLenPtr,
             byte[]? recvBuf = null,
-            uint recvBufPtr = 0)
+            ulong recvBufPtr = 0)
         {
             var bytes = res.BytesRead;
             if (bytes < 0)
@@ -541,7 +541,7 @@ public partial class SyscallManager
         }
     }
 
-    private async ValueTask<int> SysSendMsg(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysSendMsg(Engine engine, uint a1, ulong a2, uint a3, uint a4, uint a5, uint a6)
     {
         var task = engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
@@ -557,7 +557,7 @@ public partial class SyscallManager
         var msg = msgRes.Value;
 
         if (msg.msg_controllen < 0) return -(int)Errno.EINVAL;
-        if (msg.msg_controllen > 0 && msg.msg_controllen < 16) return -(int)Errno.EINVAL;
+        if (msg.msg_controllen > 0 && msg.msg_controllen < MinControlLength(engine)) return -(int)Errno.EINVAL;
         if (msg.msg_control == 0 && msg.msg_controllen != 0) return -(int)Errno.EINVAL;
 
         object? endpoint = null;
@@ -573,7 +573,7 @@ public partial class SyscallManager
         var buf = bufRes.Buffer;
 
         List<LinuxFile>? fds = null;
-        if (msg.msg_control != 0 && msg.msg_controllen >= 16)
+        if (msg.msg_control != 0 && msg.msg_controllen >= MinControlLength(engine))
         {
             var res = ReadCmsgFds(engine, msg.msg_control, msg.msg_controllen);
             if (res.Error < 0) return res.Error;
@@ -596,7 +596,7 @@ public partial class SyscallManager
         return -(int)Errno.ENOTSOCK;
     }
 
-    private async ValueTask<int> SysRecvMsg(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysRecvMsg(Engine engine, uint a1, ulong a2, uint a3, uint a4, uint a5, uint a6)
     {
         var task = engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
@@ -645,7 +645,7 @@ public partial class SyscallManager
             if (msg.msg_name != 0 && msg.msg_namelen > 0)
             {
                 var addrRes = new SocketAddressResult(res.SourceEndPoint, res.SourceSunPathRaw);
-                var addressRc = WriteAnySockaddr(engine, file, msg.msg_name, msgPtr + 4, addrRes);
+                var addressRc = WriteAnySockaddr(engine, file, msg.msg_name, msgPtr + (uint)GuestWordSize(engine), addrRes);
                 if (addressRc < 0)
                 {
                     if (res.Fds != null) foreach (var received in res.Fds) received.Close();
@@ -656,7 +656,7 @@ public partial class SyscallManager
             var outMsgFlags = 0;
 
             if ((res.Fds is { Count: > 0 } || res.Credentials != null) && msg.msg_control != 0 &&
-                msg.msg_controllen >= 16)
+                msg.msg_controllen >= MinControlLength(engine))
             {
                 var cloexec = (flags & LinuxConstants.MSG_CMSG_CLOEXEC) != 0;
                 var cmsgRc = WriteCmsg(engine, msg.msg_control, msg.msg_controllen, res.Fds, res.Credentials, out var outCtlLen,
@@ -698,7 +698,7 @@ public partial class SyscallManager
         return -(int)Errno.ENOTSOCK;
     }
 
-    private async ValueTask<int> SysSocketPair(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysSocketPair(Engine engine, uint a1, uint a2, uint a3, ulong a4, uint a5,
         uint a6)
     {
         var task = engine.Owner as FiberTask;
@@ -812,7 +812,7 @@ public partial class SyscallManager
     }
 
 
-    private static (object? Endpoint, int Error) ReadAnySockaddr(Engine engine, LinuxFile file, uint addrPtr,
+    private static (object? Endpoint, int Error) ReadAnySockaddr(Engine engine, LinuxFile file, ulong addrPtr,
         int addrLen, bool requireNonNull = false)
     {
         if (addrPtr == 0) return (null, requireNonNull ? -(int)Errno.EFAULT : 0);
@@ -836,7 +836,7 @@ public partial class SyscallManager
         return ReadSockaddr(engine, addrPtr, addrLen);
     }
 
-    private static int WriteAnySockaddr(Engine engine, LinuxFile file, uint addrPtr, uint addrLenPtr,
+    private static int WriteAnySockaddr(Engine engine, LinuxFile file, ulong addrPtr, ulong addrLenPtr,
         SocketAddressResult res)
     {
         if (addrPtr == 0 || addrLenPtr == 0) return -(int)Errno.EFAULT;
@@ -879,37 +879,44 @@ public partial class SyscallManager
 
     private struct MsgHdr
     {
-        public uint msg_name;
+        public ulong msg_name;
         public uint msg_namelen;
-        public uint msg_iov;
+        public ulong msg_iov;
         public int msg_iovlen;
-        public uint msg_control;
+        public ulong msg_control;
         public int msg_controllen;
         public int msg_flags;
     }
 
 
-    private static (MsgHdr Value, int Error) ReadMsgHdr(Engine engine, uint msgPtr)
+    private static int MessageHeaderSize(Engine engine) => engine.IsAArch64 ? 56 : 28;
+
+    private static (MsgHdr Value, int Error) ReadMsgHdr(Engine engine, ulong msgPtr)
     {
-        var msgRaw = new byte[28];
-        if (!engine.CopyFromUser(msgPtr, msgRaw)) return (default, -(int)Errno.EFAULT);
-        var msg = new MsgHdr
+        var wordSize = GuestWordSize(engine);
+        Span<byte> raw = stackalloc byte[MessageHeaderSize(engine)];
+        if (!engine.CopyFromUser(msgPtr, raw)) return (default, -(int)Errno.EFAULT);
+
+        var name = ReadGuestWord(raw, wordSize);
+        var iov = ReadGuestWord(raw[(2 * wordSize)..], wordSize);
+        var iovCount = ReadGuestWord(raw[(3 * wordSize)..], wordSize);
+        var control = ReadGuestWord(raw[(4 * wordSize)..], wordSize);
+        var controlLength = ReadGuestWord(raw[(5 * wordSize)..], wordSize);
+        if (iovCount > 1024) return (default, -(int)Errno.EMSGSIZE);
+        if (controlLength > 1 << 20) return (default, -(int)Errno.EINVAL);
+        return (new MsgHdr
         {
-            msg_name = BinaryPrimitives.ReadUInt32LittleEndian(msgRaw.AsSpan(0, 4)),
-            msg_namelen = BinaryPrimitives.ReadUInt32LittleEndian(msgRaw.AsSpan(4, 4)),
-            msg_iov = BinaryPrimitives.ReadUInt32LittleEndian(msgRaw.AsSpan(8, 4)),
-            msg_iovlen = BinaryPrimitives.ReadInt32LittleEndian(msgRaw.AsSpan(12, 4)),
-            msg_control = BinaryPrimitives.ReadUInt32LittleEndian(msgRaw.AsSpan(16, 4)),
-            msg_controllen = BinaryPrimitives.ReadInt32LittleEndian(msgRaw.AsSpan(20, 4)),
-            msg_flags = BinaryPrimitives.ReadInt32LittleEndian(msgRaw.AsSpan(24, 4))
-        };
-        if (msg.msg_iovlen != 0 && msg.msg_iovlen < 0) return (msg, -(int)Errno.EMSGSIZE);
-        if (msg.msg_iovlen > 1024) return (msg, -(int)Errno.EMSGSIZE);
-        if (msg.msg_controllen < 0 || msg.msg_controllen > 1 << 20) return (msg, -(int)Errno.EINVAL);
-        return (msg, 0);
+            msg_name = name,
+            msg_namelen = BinaryPrimitives.ReadUInt32LittleEndian(raw[wordSize..]),
+            msg_iov = iov,
+            msg_iovlen = (int)iovCount,
+            msg_control = control,
+            msg_controllen = (int)controlLength,
+            msg_flags = BinaryPrimitives.ReadInt32LittleEndian(raw[(6 * wordSize)..])
+        }, 0);
     }
 
-    private (byte[] Buffer, int Error) ReadIovecs(Engine engine, uint iovPtr, int iovLen)
+    private (byte[] Buffer, int Error) ReadIovecs(Engine engine, ulong iovPtr, int iovLen)
     {
         if (iovLen == 0) return ([], 0);
         var res = ReadIovecsDef(engine, iovPtr, iovLen);
@@ -929,23 +936,28 @@ public partial class SyscallManager
         return (buffer, 0);
     }
 
-    private (Iovec[] Iovecs, int Error) ReadIovecsDef(Engine engine, uint iovPtr, int iovLen)
+    private (Iovec[] Iovecs, int Error) ReadIovecsDef(Engine engine, ulong iovPtr, int iovLen)
     {
         if (iovLen == 0) return ([], 0);
+        var wordSize = GuestWordSize(engine);
+        var entrySize = wordSize * 2;
+        if (!engine.IsUserRange(iovPtr, (uint)(iovLen * entrySize)))
+            return ([], -(int)Errno.EFAULT);
+
         var iovs = new Iovec[iovLen];
+        Span<byte> raw = stackalloc byte[entrySize];
         long totalBytes = 0;
         for (var i = 0; i < iovLen; i++)
         {
-            var iovRaw = new byte[8];
-            if (!engine.CopyFromUser(iovPtr + (uint)(i * 8), iovRaw)) return ([], -(int)Errno.EFAULT);
-            iovs[i] = new Iovec
-            {
-                BaseAddr = BinaryPrimitives.ReadUInt32LittleEndian(iovRaw.AsSpan(0, 4)),
-                Len = (uint)BinaryPrimitives.ReadInt32LittleEndian(iovRaw.AsSpan(4, 4))
-            };
-            if ((int)iovs[i].Len < 0) return ([], -(int)Errno.EINVAL);
-            totalBytes += iovs[i].Len;
-            if (totalBytes > int.MaxValue) return ([], -(int)Errno.EINVAL);
+            if (!engine.CopyFromUser(iovPtr + (uint)(i * entrySize), raw)) return ([], -(int)Errno.EFAULT);
+            var address = ReadGuestWord(raw, wordSize);
+            var length = ReadGuestWord(raw[wordSize..], wordSize);
+            if (length > int.MaxValue || totalBytes + (long)length > int.MaxValue)
+                return ([], -(int)Errno.EINVAL);
+            if (!engine.IsUserRange(address, length))
+                return ([], -(int)Errno.EFAULT);
+            iovs[i] = new Iovec { BaseAddr = address, Len = (uint)length };
+            totalBytes += (long)length;
         }
 
         return (iovs, 0);
@@ -965,55 +977,63 @@ public partial class SyscallManager
         return 0;
     }
 
-    private (int Error, List<LinuxFile>? Fds) ReadCmsgFds(Engine engine, uint controlPtr, int controlLen)
+    private static int MinControlLength(Engine engine) => GuestWordSize(engine) + 12;
+
+    private (int Error, List<LinuxFile>? Fds) ReadCmsgFds(Engine engine, ulong controlPtr, int controlLen)
     {
-        if (controlLen < 16 || controlPtr == 0) return (0, null);
+        if (controlLen < MinControlLength(engine) || controlPtr == 0) return (0, null);
+        var wordSize = GuestWordSize(engine);
+        var headerSize = wordSize + 8;
         var cmRaw = new byte[controlLen];
         if (!engine.CopyFromUser(controlPtr, cmRaw)) return (-(int)Errno.EFAULT, null);
 
         List<LinuxFile> sendFds = new();
         var cmsgOffset = 0;
         var totalFds = 0;
-        while (cmsgOffset + 12 <= controlLen)
+        while (cmsgOffset + headerSize <= controlLen)
         {
-            var cmsgLen = BinaryPrimitives.ReadInt32LittleEndian(cmRaw.AsSpan(cmsgOffset, 4));
-            if (cmsgLen < 12 || cmsgOffset + cmsgLen > controlLen) break;
-            var cmsgLevel = BinaryPrimitives.ReadInt32LittleEndian(cmRaw.AsSpan(cmsgOffset + 4, 4));
-            var cmsgType = BinaryPrimitives.ReadInt32LittleEndian(cmRaw.AsSpan(cmsgOffset + 8, 4));
+            var header = cmRaw.AsSpan(cmsgOffset, headerSize);
+            var length = ReadGuestWord(header, wordSize);
+            if (length < (uint)headerSize || length > (uint)(controlLen - cmsgOffset)) break;
+            var cmsgLen = (int)length;
+            var cmsgLevel = BinaryPrimitives.ReadInt32LittleEndian(header[wordSize..]);
+            var cmsgType = BinaryPrimitives.ReadInt32LittleEndian(header[(wordSize + 4)..]);
 
             if (cmsgLevel == LinuxConstants.SOL_SOCKET && cmsgType == LinuxConstants.SCM_RIGHTS)
             {
-                var fdCount = (cmsgLen - 12) / 4;
+                var fdCount = (cmsgLen - headerSize) / 4;
                 if (totalFds + fdCount > LinuxConstants.SCM_MAX_FD)
                     return (-(int)Errno.EINVAL, null);
                 totalFds += fdCount;
 
                 for (var j = 0; j < fdCount; j++)
                 {
-                    var cmsgFd = BinaryPrimitives.ReadInt32LittleEndian(cmRaw.AsSpan(cmsgOffset + 12 + j * 4, 4));
+                    var cmsgFd = BinaryPrimitives.ReadInt32LittleEndian(cmRaw.AsSpan(cmsgOffset + headerSize + j * 4));
                     var file = GetFD(cmsgFd);
                     if (file == null) return (-(int)Errno.EBADF, null);
                     sendFds.Add(file);
                 }
             }
 
-            cmsgOffset += (cmsgLen + 3) & ~3;
+            cmsgOffset += (cmsgLen + wordSize - 1) & ~(wordSize - 1);
         }
 
         return (0, sendFds.Count > 0 ? sendFds : null);
     }
 
-    private int WriteCmsg(Engine engine, uint controlPtr, int controlLen, List<LinuxFile>? fds,
+    private int WriteCmsg(Engine engine, ulong controlPtr, int controlLen, List<LinuxFile>? fds,
         UnixCredentials? credentials, out int writtenBytes, out bool truncated, bool cloexec = false)
     {
         writtenBytes = 0;
         truncated = false;
+        var wordSize = GuestWordSize(engine);
+        var headerSize = wordSize + 8;
         var cmRaw = new byte[controlLen];
         var installedFds = new List<int>();
 
         if (fds is { Count: > 0 })
         {
-            var maxFds = Math.Max(0, (controlLen - 12) / 4);
+            var maxFds = Math.Max(0, (controlLen - headerSize) / 4);
             var numFds = Math.Min(fds.Count, maxFds);
             var consumed = 0;
             for (var i = 0; i < numFds; i++)
@@ -1022,39 +1042,30 @@ public partial class SyscallManager
                 consumed++; // AllocFD consumes even an EMFILE reference.
                 if (fd < 0) break;
                 installedFds.Add(fd);
-                BinaryPrimitives.WriteInt32LittleEndian(cmRaw.AsSpan(12 + i * 4, 4), fd);
+                BinaryPrimitives.WriteInt32LittleEndian(cmRaw.AsSpan(headerSize + i * 4), fd);
             }
+
             for (var i = consumed; i < fds.Count; i++) fds[i].Close();
             if (installedFds.Count != 0)
-            {
-                var reqLen = 12 + installedFds.Count * 4;
-                BinaryPrimitives.WriteInt32LittleEndian(cmRaw.AsSpan(0, 4), reqLen);
-                BinaryPrimitives.WriteInt32LittleEndian(cmRaw.AsSpan(4, 4), LinuxConstants.SOL_SOCKET);
-                BinaryPrimitives.WriteInt32LittleEndian(cmRaw.AsSpan(8, 4), LinuxConstants.SCM_RIGHTS);
-                writtenBytes = reqLen;
-            }
+                writtenBytes = WriteHeader(0, installedFds.Count * 4, LinuxConstants.SCM_RIGHTS);
             truncated = installedFds.Count < fds.Count;
         }
 
         if (credentials != null)
         {
             const int ucredSize = 12;
-            var reqLen = 12 + ucredSize;
-            var alignedReqLen = (reqLen + 3) & ~3;
-            if (writtenBytes + reqLen > controlLen)
+            if (writtenBytes + headerSize + ucredSize > controlLen)
             {
                 truncated = true;
             }
             else
             {
-                BinaryPrimitives.WriteInt32LittleEndian(cmRaw.AsSpan(writtenBytes + 0, 4), reqLen);
-                BinaryPrimitives.WriteInt32LittleEndian(cmRaw.AsSpan(writtenBytes + 4, 4), LinuxConstants.SOL_SOCKET);
-                BinaryPrimitives.WriteInt32LittleEndian(cmRaw.AsSpan(writtenBytes + 8, 4),
-                    LinuxConstants.SCM_CREDENTIALS);
-                BinaryPrimitives.WriteInt32LittleEndian(cmRaw.AsSpan(writtenBytes + 12, 4), credentials.Pid);
-                BinaryPrimitives.WriteInt32LittleEndian(cmRaw.AsSpan(writtenBytes + 16, 4), credentials.Uid);
-                BinaryPrimitives.WriteInt32LittleEndian(cmRaw.AsSpan(writtenBytes + 20, 4), credentials.Gid);
-                writtenBytes += alignedReqLen;
+                var headerOffset = writtenBytes;
+                var payload = cmRaw.AsSpan(headerOffset + headerSize);
+                BinaryPrimitives.WriteInt32LittleEndian(payload, credentials.Pid);
+                BinaryPrimitives.WriteInt32LittleEndian(payload[4..], credentials.Uid);
+                BinaryPrimitives.WriteInt32LittleEndian(payload[8..], credentials.Gid);
+                writtenBytes = WriteHeader(headerOffset, ucredSize, LinuxConstants.SCM_CREDENTIALS);
             }
         }
 
@@ -1064,26 +1075,37 @@ public partial class SyscallManager
             return -(int)Errno.EFAULT;
         }
         return 0;
+
+        int WriteHeader(int offset, int payloadLength, int type)
+        {
+            var header = cmRaw.AsSpan(offset, headerSize);
+            var length = headerSize + payloadLength;
+            WriteGuestWord(header, wordSize, (uint)length);
+            BinaryPrimitives.WriteInt32LittleEndian(header[wordSize..], LinuxConstants.SOL_SOCKET);
+            BinaryPrimitives.WriteInt32LittleEndian(header[(wordSize + 4)..], type);
+            return offset + Math.Min(controlLen - offset, (length + wordSize - 1) & ~(wordSize - 1));
+        }
     }
 
-    private void WriteBackMsgFlags(Engine engine, uint msgPtr, int msgFlags)
+    private static void WriteBackMsgFlags(Engine engine, ulong msgPtr, int msgFlags)
     {
         Span<byte> buf = stackalloc byte[4];
         BinaryPrimitives.WriteInt32LittleEndian(buf, msgFlags);
-        engine.CopyToUser(msgPtr + 24, buf);
+        engine.CopyToUser(msgPtr + (uint)(6 * GuestWordSize(engine)), buf);
     }
 
-    private void WriteBackMsgControllen(Engine engine, uint msgPtr, int writtenLen)
+    private static void WriteBackMsgControllen(Engine engine, ulong msgPtr, int writtenLen)
     {
-        Span<byte> buf = stackalloc byte[4];
-        BinaryPrimitives.WriteInt32LittleEndian(buf, writtenLen);
-        engine.CopyToUser(msgPtr + 20, buf);
+        var wordSize = GuestWordSize(engine);
+        Span<byte> buf = stackalloc byte[wordSize];
+        WriteGuestWord(buf, wordSize, (uint)writtenLen);
+        engine.CopyToUser(msgPtr + (uint)(5 * wordSize), buf);
     }
 
     // --- Helpers ---
 
 
-    internal static (UnixSockaddrInfo? Address, int Error) ReadUnixSockaddr(Engine engine, uint addrPtr, int addrLen)
+    internal static (UnixSockaddrInfo? Address, int Error) ReadUnixSockaddr(Engine engine, ulong addrPtr, int addrLen)
     {
         if (addrPtr == 0) return (null, -(int)Errno.EFAULT);
         if (addrLen < 2 || addrLen > 110) return (null, -(int)Errno.EINVAL);
@@ -1126,7 +1148,7 @@ public partial class SyscallManager
         }, 0);
     }
 
-    internal static int WriteSockaddrUnix(Engine engine, uint addrPtr, uint addrLenPtr, byte[]? sunPathRaw)
+    internal static int WriteSockaddrUnix(Engine engine, ulong addrPtr, ulong addrLenPtr, byte[]? sunPathRaw)
     {
         Span<byte> lenBuf = stackalloc byte[4];
         if (!engine.CopyFromUser(addrLenPtr, lenBuf)) return -(int)Errno.EFAULT;
@@ -1148,7 +1170,7 @@ public partial class SyscallManager
         return engine.CopyToUser(addrLenPtr, lenBuf) ? 0 : -(int)Errno.EFAULT;
     }
 
-    private static bool WriteInt32ToUser(Engine engine, uint ptr, int value)
+    private static bool WriteInt32ToUser(Engine engine, ulong ptr, int value)
     {
         Span<byte> buf = stackalloc byte[4];
         BinaryPrimitives.WriteInt32LittleEndian(buf, value);
@@ -1169,7 +1191,7 @@ public partial class SyscallManager
             file.Close();
     }
 
-    private static (EndPoint? Endpoint, int Error) ReadSockaddr(Engine engine, uint addrPtr, int addrLen)
+    private static (EndPoint? Endpoint, int Error) ReadSockaddr(Engine engine, ulong addrPtr, int addrLen)
     {
         if (addrPtr == 0) return (null, -(int)Errno.EFAULT);
         if (addrLen < 2 || addrLen > 128) return (null, -(int)Errno.EINVAL);
@@ -1201,7 +1223,7 @@ public partial class SyscallManager
         return (null, -(int)Errno.EAFNOSUPPORT);
     }
 
-    private static int WriteSockaddr(Engine engine, uint addrPtr, uint addrLenPtr, EndPoint? ep)
+    private static int WriteSockaddr(Engine engine, ulong addrPtr, ulong addrLenPtr, EndPoint? ep)
     {
         if (ep == null) return 0;
 
@@ -1245,7 +1267,7 @@ public partial class SyscallManager
         return 0;
     }
 
-    private static int WriteSockaddrNetlink(Engine engine, uint addrPtr, uint addrLenPtr,
+    private static int WriteSockaddrNetlink(Engine engine, ulong addrPtr, ulong addrLenPtr,
         NetlinkSocketAddress? bound = null)
     {
         Span<byte> lenBuf = stackalloc byte[4];

@@ -1,0 +1,19 @@
+{
+  "guest": "aarch64",
+  "started_utc": "2026-11-26T11:18:00.032758+00:00",
+  "ended_utc": "2026-11-26T11:18:01.390990+00:00",
+  "outputs": {
+    "blind-perl-groups": "da8448ffee9ab5d923ad77362c88834db79295d9241ab43ebf187cac205a9521",
+    "blind-rev-lines": "bf8e6055bbe210614184156b85c3e853ec85634d8dd434af0efae2506751e9a0",
+    "codegen-gzip-o1": "d0b9f472ebdaca6e1ec749e37bdfdc44ae8cfc3d4310f92b985b630cbf4176ed",
+    "codegen-gzip-o3": "d0b9f472ebdaca6e1ec749e37bdfdc44ae8cfc3d4310f92b985b630cbf4176ed"
+  },
+  "binaries": {
+    "opt/fiber-joint-blind-v1/gzip-O1": "38ece1fb82b9d80fa91d2c063b1d37670161ed913a4e5aa255759cd68ec6e9d5",
+    "opt/fiber-joint-blind-v1/gzip-O3": "255e7adb0d2dd14c431b50b05d40852730a6f6d37388cd7b8832c79c7a4e0c7c",
+    "usr/bin/perl": "a6097f7672f78105082b665344a2deef7f26be89833dc170fa573c0c64deba2b",
+    "usr/bin/rev": "c71bff2a45669e6a5330dcc1b2a1a974434779e43ee0b8f7437f235dd5876f08",
+    "usr/bin/gzip": "d3afaebcb97bf6fa214a813d89b108f48955665ea596228340ec80580ee55a0e"
+  },
+  "unbaked_sha256": "f0de933578647d07776f388ad622a7f12db1f865559f07fc612efd8dcca7fde8"
+}

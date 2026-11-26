@@ -37,7 +37,7 @@ public partial class SyscallManager
         return unchecked((int)oldAction.Handler);
     }
 
-    private async ValueTask<int> SysRtSigAction(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysRtSigAction(Engine engine, uint a1, ulong a2, ulong a3, uint a4, uint a5,
         uint a6)
     {
         // a1: sig, a2: new_sa, a3: old_sa, a4: sigsetsize
@@ -53,45 +53,41 @@ public partial class SyscallManager
 
         if (sig < 1 || sig > 64) return -(int)Errno.EINVAL;
 
-        // Save old action
+        var wordSize = GuestWordSize(engine);
+        var actionSize = wordSize * 3 + 8;
         if (oldSaPtr != 0)
         {
-            if (task.Process.SignalActions.TryGetValue(sig, out var oldSa))
-            {
-                var buf = new byte[20];
-                BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(0, 4), oldSa.Handler);
-                BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(4, 4), oldSa.Flags);
-                BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(8, 4), oldSa.Restorer);
-                BinaryPrimitives.WriteUInt64LittleEndian(buf.AsSpan(12, 8), oldSa.Mask);
-                if (!engine.CopyToUser(oldSaPtr, buf)) return -(int)Errno.EFAULT;
-            }
-            else
-            {
-                if (!engine.CopyToUser(oldSaPtr, new byte[20])) return -(int)Errno.EFAULT;
-            }
+            task.Process.SignalActions.TryGetValue(sig, out var oldSa);
+            Span<byte> buf = stackalloc byte[actionSize];
+            WriteGuestWord(buf, wordSize, oldSa.Handler);
+            WriteGuestWord(buf[wordSize..], wordSize, oldSa.Flags);
+            WriteGuestWord(buf[(wordSize * 2)..], wordSize, oldSa.Restorer);
+            BinaryPrimitives.WriteUInt64LittleEndian(buf[(wordSize * 3)..], oldSa.Mask);
+            if (!engine.CopyToUser(oldSaPtr, buf)) return -(int)Errno.EFAULT;
         }
 
         if (newSaPtr != 0)
         {
             if (sig == (int)Signal.SIGKILL || sig == (int)Signal.SIGSTOP)
-                return -(int)Errno.EINVAL; // Cannot catch SIGKILL or SIGSTOP
+                return -(int)Errno.EINVAL;
 
-            var buf = new byte[20];
+            Span<byte> buf = stackalloc byte[actionSize];
             if (!engine.CopyFromUser(newSaPtr, buf)) return -(int)Errno.EFAULT;
-            var sa = new SigAction
+            task.Process.SignalActions[sig] = new SigAction
             {
-                Handler = BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(0, 4)),
-                Flags = BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(4, 4)),
-                Restorer = BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(8, 4)),
-                Mask = BinaryPrimitives.ReadUInt64LittleEndian(buf.AsSpan(12, 8))
+                Handler = ReadGuestWord(buf, wordSize),
+                Flags = (uint)ReadGuestWord(buf[wordSize..], wordSize),
+                // The kernel ABI round-trips this word. Arm64 glibc can leave
+                // it uninitialized when SA_RESTORER is clear.
+                Restorer = ReadGuestWord(buf[(wordSize * 2)..], wordSize),
+                Mask = BinaryPrimitives.ReadUInt64LittleEndian(buf[(wordSize * 3)..])
             };
-            task.Process.SignalActions[sig] = sa;
         }
 
         return 0;
     }
 
-    private async ValueTask<int> SysRtSigProcMask(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysRtSigProcMask(Engine engine, uint a1, ulong a2, ulong a3, uint a4, uint a5,
         uint a6)
     {
         // a1: how, a2: set, a3: oldset, a4: sigsetsize
@@ -168,7 +164,7 @@ public partial class SyscallManager
         return engine.CopyToUser(a1, buf) ? 0 : -(int)Errno.EFAULT;
     }
 
-    private async ValueTask<int> SysRtSigPending(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysRtSigPending(Engine engine, ulong a1, uint a2, uint a3, uint a4, uint a5,
         uint a6)
     {
         if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
@@ -179,7 +175,7 @@ public partial class SyscallManager
         return engine.CopyToUser(a1, buf) ? 0 : -(int)Errno.EFAULT;
     }
 
-    private async ValueTask<int> SysSigAltStack(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysSigAltStack(Engine engine, ulong a1, ulong a2, uint a3, uint a4, uint a5,
         uint a6)
     {
         if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
@@ -189,20 +185,22 @@ public partial class SyscallManager
 
         // Snapshot the old state before applying the new stack, including when
         // the input and output stack_t pointers alias.
-        var oldBuf = new byte[12];
-        BinaryPrimitives.WriteUInt32LittleEndian(oldBuf.AsSpan(0, 4), task.AltStackSp);
-        BinaryPrimitives.WriteInt32LittleEndian(oldBuf.AsSpan(4, 4), task.GetAltStackFlags(engine.RegRead(Reg.ESP)));
-        BinaryPrimitives.WriteUInt32LittleEndian(oldBuf.AsSpan(8, 4), task.AltStackSize);
+        var wordSize = GuestWordSize(engine);
+        var stackSize = wordSize * 3;
+        Span<byte> oldBuf = stackalloc byte[stackSize];
+        oldBuf.Clear();
+        WriteGuestWord(oldBuf, wordSize, task.AltStackSp);
+        BinaryPrimitives.WriteInt32LittleEndian(oldBuf[wordSize..], task.GetAltStackFlags(engine.StackPointer));
+        WriteGuestWord(oldBuf[(wordSize * 2)..], wordSize, task.AltStackSize);
 
         if (newStackPtr != 0)
         {
-            var buf = new byte[12];
+            Span<byte> buf = stackalloc byte[stackSize];
             if (!engine.CopyFromUser(newStackPtr, buf)) return -(int)Errno.EFAULT;
 
-            var ssSp = BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(0, 4));
-            var ssFlags = BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(4, 4));
-            var ssSize = BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(8, 4));
-
+            var ssSp = ReadGuestWord(buf, wordSize);
+            var ssFlags = BinaryPrimitives.ReadUInt32LittleEndian(buf[wordSize..]);
+            var ssSize = ReadGuestWord(buf[(wordSize * 2)..], wordSize);
             var error = task.SetAltStack(ssSp, ssSize, ssFlags);
             if (error != 0) return error;
         }
@@ -324,6 +322,12 @@ public partial class SyscallManager
         var task = engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
 
+        if (engine.IsAArch64)
+        {
+            if (!task.RestoreAArch64SignalFrame()) task.FailSignalFrame();
+            return 0; // The restored x0 is already in the engine.
+        }
+
         var sp = task.CPU.RegRead(Reg.ESP);
 
         // Linux derives uc from the frame itself, not the user-editable puc
@@ -360,7 +364,7 @@ public partial class SyscallManager
         return (int)task.CPU.RegRead(Reg.EAX);
     }
 
-    private async ValueTask<int> SysRtSigSuspend(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysRtSigSuspend(Engine engine, ulong a1, uint a2, uint a3, uint a4, uint a5,
         uint a6)
     {
         var task = engine.Owner as FiberTask;
@@ -397,7 +401,7 @@ public partial class SyscallManager
         return rc;
     }
 
-    private async ValueTask<int> SysRtSigQueueInfo(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysRtSigQueueInfo(Engine engine, uint a1, uint a2, ulong a3, uint a4, uint a5,
         uint a6)
     {
         var pid = (int)a1;
@@ -434,7 +438,7 @@ public partial class SyscallManager
         return 0;
     }
 
-    private async ValueTask<int> SysRtTgSigQueueInfo(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysRtTgSigQueueInfo(Engine engine, uint a1, uint a2, uint a3, ulong a4, uint a5,
         uint a6)
     {
         var tgid = (int)a1;
@@ -502,7 +506,7 @@ public partial class SyscallManager
                (ulong)sender.CommonKernel.GetPendingSignalCountForUser(target.UID) < limit.Soft;
     }
 
-    private static bool TryReadSigInfo(Engine engine, uint ptr, int defaultSig, out SigInfo info, out int error)
+    private static bool TryReadSigInfo(Engine engine, ulong ptr, int defaultSig, out SigInfo info, out int error)
     {
         info = new SigInfo { Signo = defaultSig, Code = 0 };
         error = 0;
@@ -512,19 +516,21 @@ public partial class SyscallManager
             return false;
         }
 
-        var buf = new byte[24];
+        var wordSize = GuestWordSize(engine);
+        var payloadOffset = wordSize == 8 ? 16 : 12;
+        Span<byte> buf = stackalloc byte[payloadOffset + 8 + wordSize];
         if (!engine.CopyFromUser(ptr, buf))
         {
             error = -(int)Errno.EFAULT;
             return false;
         }
 
-        var signo = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(0, 4));
-        var errno = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(4, 4));
-        var code = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(8, 4));
-        var pid = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(12, 4));
-        var uid = BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(16, 4));
-        var value = BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(20, 4));
+        var signo = BinaryPrimitives.ReadInt32LittleEndian(buf);
+        var errno = BinaryPrimitives.ReadInt32LittleEndian(buf[4..]);
+        var code = BinaryPrimitives.ReadInt32LittleEndian(buf[8..]);
+        var pid = BinaryPrimitives.ReadInt32LittleEndian(buf[payloadOffset..]);
+        var uid = BinaryPrimitives.ReadUInt32LittleEndian(buf[(payloadOffset + 4)..]);
+        var value = ReadGuestWord(buf[(payloadOffset + 8)..], wordSize);
 
         info = new SigInfo
         {
@@ -591,7 +597,7 @@ public partial class SyscallManager
     ///     rt_sigtimedwait_time64 - wait for a signal with timeout (64-bit timespec)
     ///     syscall 421
     /// </summary>
-    private async ValueTask<int> SysRtSigTimedWaitTime64(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysRtSigTimedWaitTime64(Engine engine, ulong a1, ulong a2, ulong a3, uint a4, uint a5,
         uint a6)
     {
         var setPtr = a1;
@@ -641,7 +647,7 @@ public partial class SyscallManager
     ///     Shared implementation for rt_sigtimedwait syscalls.
     /// </summary>
     private async ValueTask<int> DoRtSigTimedWait(Engine engine, FiberTask task, ulong waitSet, long? timeoutMs,
-        uint infoPtr)
+        ulong infoPtr)
     {
         // SIGKILL and SIGSTOP can never be caught, but an empty wait set is
         // valid: like Linux, the wait can still be interrupted by a handler.
@@ -672,7 +678,7 @@ public partial class SyscallManager
         return result.TimedOut ? -(int)Errno.EAGAIN : -(int)Errno.EINTR;
     }
 
-    private static bool WriteSigInfoForTask(Engine engine, FiberTask task, uint addr, SigInfo info)
+    private static bool WriteSigInfoForTask(Engine engine, FiberTask task, ulong addr, SigInfo info)
     {
         // Async syscall continuations may run without a current syscall manager.
         // Without it, an invalid user pointer would be routed through ordinary

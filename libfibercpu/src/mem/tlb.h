@@ -1,11 +1,39 @@
 #pragma once
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cstring>
 #include <functional>
 #include "types.h"
 
 namespace fiberish::mem {
+
+#ifdef ENABLE_TLB_STATS
+struct TlbStats {
+    uint64_t l1_read_hits = 0;
+    uint64_t l1_write_hits = 0;
+    uint64_t l2_read_hits = 0;
+    uint64_t l2_write_hits = 0;
+    uint64_t read_misses = 0;
+    uint64_t write_misses = 0;
+    uint64_t total_reads = 0;
+    uint64_t total_writes = 0;
+
+    void reset() { *this = {}; }
+};
+
+struct DispatchStats {
+    uint64_t direct_links = 0;
+    uint64_t resolved_links = 0;
+    uint64_t cross_page_links = 0;
+    uint64_t link_misses = 0;
+    uint64_t block_lookup_hits = 0;
+    uint64_t block_lookup_misses = 0;
+    uint64_t block_allocations = 0;
+    uint64_t block_allocated_bytes = 0;
+    uint64_t memory_replays = 0;
+};
+#endif
 
 using MicroTlbAbiWord = uint64_t;
 inline constexpr uint32_t kInvalidMicroTlbTag = std::numeric_limits<uint32_t>::max();
@@ -56,16 +84,23 @@ struct alignas(16) TlbEntry {
     std::uintptr_t addend = 0;
 };
 
-// TLB Size, must be power of 2
-constexpr size_t TLB_ENTRIES = 256;
+#ifndef FIBERCPU_DATA_TLB_ENTRIES
+#define FIBERCPU_DATA_TLB_ENTRIES 1024
+#endif
+
+constexpr size_t TLB_ENTRIES = FIBERCPU_DATA_TLB_ENTRIES;
+static_assert(std::has_single_bit(TLB_ENTRIES));
 constexpr size_t TLB_INDEX_MASK = TLB_ENTRIES - 1;
+constexpr size_t EXEC_TLB_ENTRIES = 256;
+
+constexpr size_t ExecTlbIndex(GuestAddr address) { return (address >> PAGE_SHIFT) & (EXEC_TLB_ENTRIES - 1); }
 
 class SoftTlb {
 public:
     // Split 3-way TLB
     std::array<MicroTLB, TLB_ENTRIES> read_tlb;
     std::array<MicroTLB, TLB_ENTRIES> write_tlb;
-    std::array<TlbEntry, TLB_ENTRIES> exec_tlb;
+    std::array<TlbEntry, EXEC_TLB_ENTRIES> exec_tlb;
 
     SoftTlb() { flush(); }
 
@@ -86,8 +121,9 @@ public:
 
         if (read_tlb[idx].ReadTag() == tag) read_tlb[idx].invalidate();
         if (write_tlb[idx].WriteTag() == tag) write_tlb[idx].invalidate();
-        if (exec_tlb[idx].tag == tag) {
-            exec_tlb[idx].tag = std::numeric_limits<uint32_t>::max();
+        auto& exec_entry = exec_tlb[ExecTlbIndex(vaddr)];
+        if (exec_entry.tag == tag) {
+            exec_entry.tag = std::numeric_limits<uint32_t>::max();
         }
     }
 
@@ -108,7 +144,33 @@ public:
         if (writable) write_tlb[idx] = entry;
 
         if (has_property(property, Property::Exec)) {
-            exec_tlb[idx] = {tag, property, addend};
+            exec_tlb[ExecTlbIndex(vaddr)] = {tag, property, addend};
+        }
+    }
+
+    // AArch64 packs the 27-bit VPN in each existing tag word.
+    void flush_arm_page(uint32_t tag) {
+        const size_t index = tag & TLB_INDEX_MASK;
+        if (read_tlb[index].ReadTag() == tag) read_tlb[index].invalidate();
+        if (write_tlb[index].WriteTag() == tag) write_tlb[index].invalidate();
+        auto& exec_entry = exec_tlb[tag & (EXEC_TLB_ENTRIES - 1)];
+        if (exec_entry.tag == tag) exec_entry.tag = kInvalidMicroTlbTag;
+    }
+
+    void fill_arm(uint64_t address, HostAddr host_page, Property property) {
+        const uint32_t tag = ArmPageTag(address);
+        const size_t index = tag & TLB_INDEX_MASK;
+        const auto addend =
+            reinterpret_cast<uintptr_t>(host_page) - static_cast<uintptr_t>(address & ~uint64_t{PAGE_MASK});
+        const bool readable = has_property(property, Property::Read);
+        const bool writable = has_property(property, Property::Write | Property::Dirty) &&
+                              !has_property(property, Property::ForceWriteSlow);
+        const MicroTLB entry{
+            PackMicroTlbTags(readable ? tag : kInvalidMicroTlbTag, writable ? tag : kInvalidMicroTlbTag), addend};
+        if (readable) read_tlb[index] = entry;
+        if (writable) write_tlb[index] = entry;
+        if (has_property(property, Property::Exec)) {
+            exec_tlb[tag & (EXEC_TLB_ENTRIES - 1)] = {tag, property, addend};
         }
     }
 };

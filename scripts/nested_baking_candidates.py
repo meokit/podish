@@ -25,11 +25,12 @@ def rank(samples):
     hotness = Counter()
     breadth = defaultdict(set)
     visits = Counter()
+    family_sizes = Counter(group for group, _ in samples)
     for group, counts in samples:
         total = sum(counts.values())
         for key, count in counts.items():
             fraction = count / total
-            hotness[key] += fraction
+            hotness[key] += fraction / family_sizes[group]
             visits[key] += count
             if fraction >= 0.0001:
                 breadth[key].add(group)
@@ -85,7 +86,7 @@ def build_pools(cases, directory, include_partial=False):
     modrm_samples, policy_samples, exact_samples = [], [], []
     for case, profile in zip(cases, captures):
         print(f"Ranking {case['id']}", flush=True)
-        group = case["group"]
+        group = case.get("family", case["id"])
         modrm, policies = read_modrm_counts([profile], None, True)
         modrm_samples.append((group, modrm))
         policy_samples.append((group, policies))
@@ -97,7 +98,11 @@ def build_pools(cases, directory, include_partial=False):
                                        operand := Operand(**row["operands"][0]))
         })))
     print("Replaying fusion candidates against all training profiles", flush=True)
-    recipes, fusion, _ = select_variants(captures, handlers, relative, top=1024, budget=1024)
+    families = [case.get("family", case["id"]) for case in cases]
+    sizes = Counter(families)
+    weights = {capture: 1 / sizes[group] for capture, group in zip(captures, families)}
+    recipes, fusion, _ = select_variants(captures, handlers, relative, top=1024, budget=1024,
+                                         profile_weights=weights)
     sequences = {fusion_training_id(recipe): recipe for recipe in recipes}
     if len(sequences) != len(recipes):
         raise ValueError("fusion recipe IDs collided")

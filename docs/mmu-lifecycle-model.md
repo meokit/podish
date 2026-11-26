@@ -58,6 +58,16 @@ index. The core tracks which host pages each block spans so an executable
 write can invalidate affected blocks. The monotonic pool allocates these
 blocks at `alignof(BasicBlock)`.
 
+AArch64 checks the current instruction bytes when entering a cached block,
+including hits on a same-page successor link. Replacing a cache slot
+invalidates links to its prior occupant. The same host file range can appear
+at distinct host virtual addresses, and callers can write directly to the
+backing memory. Fast guest stores that
+continue in a block require a dirty, writable page from the runtime's
+private backing pool and zero executable aliases in the current MMU.
+Stores to caller-owned or host file views use the ordinary MMU write path and
+refetch the next instruction.
+
 ## Translation caches
 
 `MicroTlbAccessGuard` checks once that the operand fits in its guest page.

@@ -14,25 +14,31 @@ public sealed class GuestAddressSpaceLayout
     private const uint InterpreterGap = 0x02000000;
     private const uint ReservedTopPages = 2;
 
-    public required uint TaskSize { get; init; }
-    public required uint StackTopMax { get; init; }
-    public required uint InitialStackTop { get; init; }
-    public required uint StackLowerBound { get; init; }
-    public required uint MmapBase { get; init; }
-    public required uint LegacyMmapBase { get; init; }
-    public required uint PieBase { get; init; }
-    public required uint InterpreterBaseHint { get; init; }
-    public required uint VdsoBaseHint { get; init; }
-    public required uint StackRandomOffset { get; init; }
-    public required uint MmapRandomOffset { get; init; }
-    public required uint StackGuardGap { get; init; }
+    public required ulong TaskSize { get; init; }
+    public required ulong StackTopMax { get; init; }
+    public required ulong InitialStackTop { get; init; }
+    public required ulong StackLowerBound { get; init; }
+    public required ulong MmapBase { get; init; }
+    public required ulong LegacyMmapBase { get; init; }
+    public required ulong PieBase { get; init; }
+    public required ulong InterpreterBaseHint { get; init; }
+    public required ulong VdsoBaseHint { get; init; }
+    public required ulong StackRandomOffset { get; init; }
+    public required ulong MmapRandomOffset { get; init; }
+    public required ulong StackGuardGap { get; init; }
     public required byte[] AuxRandomBytes { get; init; }
 
-    public GuestAddressSpaceLayout Clone()
+    public GuestAddressSpaceLayout Clone() => Copy(TaskSize);
+
+    // Keep the conventional low exec layout while allowing explicit and
+    // oversized mappings anywhere in AArch64's lower 39-bit user range.
+    internal GuestAddressSpaceLayout WithAArch64AddressLimit() => Copy(LinuxConstants.TaskSizeAArch64);
+
+    private GuestAddressSpaceLayout Copy(ulong taskSize)
     {
         return new GuestAddressSpaceLayout
         {
-            TaskSize = TaskSize,
+            TaskSize = taskSize,
             StackTopMax = StackTopMax,
             InitialStackTop = InitialStackTop,
             StackLowerBound = StackLowerBound,

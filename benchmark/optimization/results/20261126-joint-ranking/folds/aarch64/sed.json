@@ -1,0 +1,213 @@
+{
+  "guest": "aarch64",
+  "held_family": "sed",
+  "train_cases": [
+    "gzip",
+    "gunzip",
+    "sort",
+    "sha256",
+    "tar",
+    "du",
+    "ls"
+  ],
+  "held_cases": [
+    "sed"
+  ],
+  "candidates": {
+    "entries": 20494,
+    "partials": 946,
+    "pairs": 17439,
+    "sequences": 14255
+  },
+  "pool_sha256": "eecbe962567d904a16b1fe88da5723270128013f7b602956c9c6a88b4394eaee",
+  "estimated_budgets": [
+    1398156,
+    2971020,
+    10311052
+  ],
+  "reserve_bytes": 174708,
+  "ranking_inputs_seconds": 0.37428008299320936,
+  "held_replay_seconds": 0.05949762499949429,
+  "cost_model": {
+    "distinct": 36,
+    "linked": 36,
+    "max_underprediction": 376274,
+    "median_abs_error": 22600.5,
+    "method": "leave one strategy out, purge identical tables",
+    "quantile": 0.9,
+    "model": "Mach-O binding spans and calibrated class multipliers",
+    "coverage": {
+      "entries": {
+        "linked_bindings": 6361,
+        "total": 20494
+      },
+      "partials": {
+        "linked_bindings": 941,
+        "total": 946
+      },
+      "pairs": {
+        "linked_bindings": 5667,
+        "total": 17439
+      },
+      "sequences": {
+        "linked_bindings": 7746,
+        "total": 14255
+      }
+    },
+    "cache_sha256": "82511952e6b18b1fe05156f9dd381a130ba949d6ddc3a7d7b9c19ae13c073fa0"
+  },
+  "methods": {
+    "joint-static": {
+      "depth": 1,
+      "risk": 0.5,
+      "ranking_seconds": 0.4806284170044819,
+      "tiers": [
+        {
+          "tier_mib": 1.5,
+          "cut": 4989,
+          "predicted_bytes": 1398155,
+          "held_dispatch_proxy": 0.12629504362782445,
+          "ids_sha256": "c99edd036ef24c9598db348a7ce04f78f26ac51bd471ec4e676ad97a664e528a"
+        },
+        {
+          "tier_mib": 3,
+          "cut": 10441,
+          "predicted_bytes": 2970187,
+          "held_dispatch_proxy": 0.19597352311708255,
+          "ids_sha256": "21121d8134f335c38434beccfffefd5695676b9f7660177ecb408d5c79db3d8e"
+        },
+        {
+          "tier_mib": 10,
+          "cut": 25382,
+          "predicted_bytes": 10310481,
+          "held_dispatch_proxy": 0.2870607777004383,
+          "ids_sha256": "8a91c0faadda378233963eb5fe2aa16e90dc55b26b3a7e57d947812a2c83a06d"
+        }
+      ],
+      "stats": {
+        "marginal_evaluations": 78517,
+        "affected_blocks": 158960,
+        "beam_prefix_evaluations": 0,
+        "tier_values": [
+          0.6502243801770434,
+          0.7175047681281157,
+          0.7913611922645392
+        ]
+      }
+    },
+    "joint-marginal": {
+      "depth": 1,
+      "risk": 0.5,
+      "ranking_seconds": 1.1626822499965783,
+      "tiers": [
+        {
+          "tier_mib": 1.5,
+          "cut": 3351,
+          "predicted_bytes": 1397611,
+          "held_dispatch_proxy": 0.22279852006084463,
+          "ids_sha256": "a3e6731f74bf491bf03ffe400f2400b9a8ecb1feb520de9a8f9c03d9057f1b32"
+        },
+        {
+          "tier_mib": 3,
+          "cut": 7299,
+          "predicted_bytes": 2970775,
+          "held_dispatch_proxy": 0.25771650021185427,
+          "ids_sha256": "eff9e734ab0e95e187d5b47010ebb4464dd150e944b06c3092f109ca623b050f"
+        },
+        {
+          "tier_mib": 10,
+          "cut": 19590,
+          "predicted_bytes": 10310294,
+          "held_dispatch_proxy": 0.2775548275640627,
+          "ids_sha256": "b574170829327a59a50a5b1b1a2938207f11418f35a0eaa2fa1f2e2c8e093fec"
+        }
+      ],
+      "stats": {
+        "marginal_evaluations": 369327,
+        "affected_blocks": 655497,
+        "beam_prefix_evaluations": 0,
+        "tier_values": [
+          0.7726751064581364,
+          0.7903887467768467,
+          0.7986588683545146
+        ]
+      }
+    },
+    "joint-general": {
+      "depth": 1,
+      "risk": 0.5,
+      "ranking_seconds": 1.4229422089993022,
+      "tiers": [
+        {
+          "tier_mib": 1.5,
+          "cut": 5059,
+          "predicted_bytes": 1397810,
+          "held_dispatch_proxy": 0.234601940513757,
+          "ids_sha256": "e989c88587778f98276f1b75e5b97da805580130b3a6b7cc00915b83c8c9ccc5"
+        },
+        {
+          "tier_mib": 3,
+          "cut": 10670,
+          "predicted_bytes": 2970891,
+          "held_dispatch_proxy": 0.2683131335525168,
+          "ids_sha256": "1b38b2f4cebcc037276068bf04bc7d1af0b6157a43fbea69019d564b496bdc08"
+        },
+        {
+          "tier_mib": 10,
+          "cut": 23733,
+          "predicted_bytes": 9895370,
+          "held_dispatch_proxy": 0.28441696197667,
+          "ids_sha256": "157bad7ab904264cc97a00670ec9f5366f3bcda5001d85d5307d21ff3a344e69"
+        }
+      ],
+      "stats": {
+        "marginal_evaluations": 452763,
+        "affected_blocks": 692380,
+        "beam_prefix_evaluations": 0,
+        "tier_values": [
+          0.36893636581648903,
+          0.3765714493778727,
+          0.37970791922852754
+        ]
+      }
+    },
+    "joint-beam": {
+      "depth": 3,
+      "risk": 0.5,
+      "ranking_seconds": 2.0707821669930127,
+      "tiers": [
+        {
+          "tier_mib": 1.5,
+          "cut": 5060,
+          "predicted_bytes": 1397976,
+          "held_dispatch_proxy": 0.234601940513757,
+          "ids_sha256": "789f954b78b3160a8087c90c9fcc03eba30d9d5adc8ee6fd0dd7aae9d8a5d4ad"
+        },
+        {
+          "tier_mib": 3,
+          "cut": 10666,
+          "predicted_bytes": 2970954,
+          "held_dispatch_proxy": 0.26830870358978354,
+          "ids_sha256": "438ec3c5ef6a72ef47de3f6eccf5103a86e0e0796216b685ded4c7169162d896"
+        },
+        {
+          "tier_mib": 10,
+          "cut": 23733,
+          "predicted_bytes": 9895370,
+          "held_dispatch_proxy": 0.28441696197667,
+          "ids_sha256": "1a2931d0a6d2c6f3c20af35145a85d6ddac654c23f9a6b3844daa927a07cb599"
+        }
+      ],
+      "stats": {
+        "marginal_evaluations": 452763,
+        "affected_blocks": 692380,
+        "beam_prefix_evaluations": 15,
+        "tier_values": [
+          0.3689466886671947,
+          0.37678172943895916,
+          0.37970791922852754
+        ]
+      }
+    }
+  }
+}

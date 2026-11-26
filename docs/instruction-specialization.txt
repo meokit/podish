@@ -167,7 +167,7 @@ shared function before any helper that may invoke a guest observer.
 External chains and memory replay materialize the current block and use
 the normal dispatcher. Publication validates the entire snapshot. A
 member invalidation revokes every entry of that page's region and restores
-the independent LLVM handlers with their scalar replay slots.
+the interpreter entries at their first decoded slots.
 
 Set FIBERCPU_LLVM_SHARED_REGION_EXITS=ON at CMake configure time to share
 flag packing and exit code among region edges with the same exit action.
@@ -208,6 +208,51 @@ Native stats report the total shared budget charge in jit_arena_used_bytes
 and the LLVM portion in llvm_code_cache_bytes. The configured capacity is
 jit_arena_capacity_bytes. A zero capacity means the arena has yet to be
 mapped. X86_GetLLVMJitBlockCount counts online block materializations.
+
+AArch64 online JIT
+------------------
+The same native macOS ARM64 build supports online JIT with either or both
+guests enabled. Use -XX:JitMode=exact for single blocks or -XX:JitMode=region
+for same-page regions. Both guests share the LLVM workers, optimization
+pipeline, executable arena and cache generations. AArch64 generic mode
+uses the same specialized instruction-word recipes as exact mode.
+
+AArch64 counts entries in the existing dispatch and block-link paths.
+An expired counter records a candidate for the VM thread to process after
+the threaded chain returns. The worker queue ranks asynchronous candidates
+by recent visits and expected dispatch savings and expires inactive
+candidates. Standalone recipes can share machine code across guest page
+offsets. Concurrent requests for an identical recipe share a compilation.
+The recipe records the physical width of each decoded step. The compiler
+accumulates those widths and binds each kernel to the member's first
+slot plus its constant offset. Each region member publishes its own
+threaded wrapper. The wrapper reads the optional region table pointer
+from the block footer and enters the shared body. Links and replay use
+the original slots and the interpreter's block-header validation.
+
+The AArch64 operation catalog supplies interpreter bindings and LLVM
+operation IDs from the same instruction families. The LLVM template takes
+the original slot, decoded operands, guest PC, TLB and live handler state, and returns
+one of Continue, Branch, Replay or Refetch. The existing tail ABI holds
+NZCV and any pinned GPR across ordinary dispatch. The JIT inlines the
+same operation implementations for integer, FP, NEON, ordinary and atomic
+transfers and supported system instructions. Syscalls and unsupported
+encodings use the interpreter at the original decoded slot.
+
+Replay leaves the instruction unretired and starts at its original
+slot. The fast transfers check permissions before guest-visible effects.
+Refetch retires one instruction and leaves the region with the next guest
+PC. Folded NOPs still consume guest instruction budget. Region members
+are connected decoded blocks on a read-only executable page. Each guest
+page publishes one region. Hot blocks outside it can compile as standalone
+entries. Invalidation restores the members' interpreter entries and
+clears their region contexts before releasing the table. Host backing
+invalidation also covers blocks decoded through guest aliases.
+
+FIBERCPU_LLVM_JIT_SCHEDULER_TRACE records AArch64 region installations as
+arm_region_install events. WeightedProfilePath and the offline linked
+block-cache format still apply to i386 recipes. AArch64ProfilePath
+continues to collect interpreter baking data.
 
 Linked LLVM block cache
 -----------------------
@@ -257,8 +302,9 @@ To add page regions, collect a block profile with JitMode=profile. Run the
 workload again with JitMode=region and FIBERCPU_LLVM_JIT_SCHEDULER_TRACE set
 to a file. The trace records the relative member offsets and exact recipes of
 published regions. Pass the trace as --regions to fibercpu_llvm_cache along
-with the block profile. The tool emits independent fallback objects and one
-object per compiled region.
+with the block profile. The tool emits standalone objects from the profile
+and one object per compiled region. Region members are selected from the
+trace independently of the standalone object limit.
 The consumer publishes a region once all registered member blocks match its
 recipes and backing page. FIBERCPU_LINKED_PAGE_REGIONS=0 keeps the
 independent cache active and skips region installation.

@@ -23,6 +23,7 @@ public sealed class PodishRunSpec
     public bool AutoRemove { get; init; }
     public NetworkMode NetworkMode { get; init; } = NetworkMode.Host;
     public string? Image { get; init; }
+    public string? ImagePlatform { get; init; }
     public string? Rootfs { get; init; }
     public string? FileSystemBackend { get; init; }
     public string? User { get; init; }
@@ -431,13 +432,13 @@ public sealed class PodishContext : IDisposable
         _fileLoggerProvider.SetObserver(observer);
     }
 
-    public async Task<OciStoredImage> PullImageAsync(string image)
+    public async Task<OciStoredImage> PullImageAsync(string image, string? platform = null)
     {
         using var _ = Logging.BeginScope(LoggerFactory);
         var pullService = new OciPullService(_logger);
-        var safeImageName = image.Replace("/", "_").Replace(":", "_");
+        var safeImageName = OciPullService.GetImageCacheName(image, platform);
         var storeDir = Path.Combine(OciStoreImagesDir, safeImageName);
-        return await pullService.PullAndStoreImageAsync(image, storeDir);
+        return await pullService.PullAndStoreImageAsync(image, storeDir, platform);
     }
 
     public async Task<PodishRunResult> RunAsync(PodishRunSpec spec)
@@ -515,6 +516,7 @@ public sealed class PodishContext : IDisposable
             AutoRemove = spec.AutoRemove,
             NetworkMode = spec.NetworkMode,
             Image = spec.Image,
+            ImagePlatform = spec.ImagePlatform,
             Rootfs = rootfsName,
             FileSystemBackend = "hostfs",
             User = spec.User,
@@ -578,7 +580,7 @@ public sealed class PodishContext : IDisposable
 
             image = spec.Image;
             rootfsPath = image;
-            var safeImageName = image.Replace("/", "_").Replace(":", "_");
+            var safeImageName = OciPullService.GetImageCacheName(image, spec.ImagePlatform);
             var ociStoreDir = Path.Combine(OciStoreImagesDir, safeImageName);
             if (!Directory.Exists(rootfsPath) && Directory.Exists(ociStoreDir))
             {
@@ -586,7 +588,7 @@ public sealed class PodishContext : IDisposable
             }
             else if (!Directory.Exists(rootfsPath))
             {
-                await PullImageAsync(image);
+                await PullImageAsync(image, spec.ImagePlatform);
                 rootfsPath = ociStoreDir;
             }
         }

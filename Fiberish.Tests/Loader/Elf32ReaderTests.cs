@@ -12,7 +12,7 @@ public class Elf32ReaderTests
         var image = BuildTwoProgramHeaderElfImage();
 
         using var stream = new MemoryStream(image, false);
-        var elf = Elf32Reader.Read(stream);
+        var elf = ElfReader.Read(stream);
 
         Assert.Equal(ElfFileType.Executable, elf.FileType);
         Assert.Equal(0x8048123u, elf.EntryPointAddress);
@@ -41,7 +41,7 @@ public class Elf32ReaderTests
         var minimumReadablePrefix = 0x74;
 
         using var stream = new PartialElfStream(image.AsSpan(0, minimumReadablePrefix).ToArray(), 0x4000);
-        var elf = Elf32Reader.Read(stream);
+        var elf = ElfReader.Read(stream);
 
         Assert.Equal(2, elf.Segments.Length);
         Assert.True(stream.TotalBytesRead <= minimumReadablePrefix);

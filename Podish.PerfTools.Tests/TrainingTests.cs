@@ -18,8 +18,8 @@ public sealed class TrainingTests
     }
 
     [Theory]
-    [InlineData("1.75m")]
-    [InlineData("3.5m")]
+    [InlineData("1.5m")]
+    [InlineData("3m")]
     [InlineData("10m")]
     public void PresetFusionSourceReproducesItsRecipes(string preset)
     {

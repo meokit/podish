@@ -14,7 +14,7 @@ internal readonly struct FutexKey : IEquatable<FutexKey>
 {
     private readonly object _identity;
 
-    private FutexKey(FutexKeyKind kind, object identity, uint pageValue, ushort offsetWithinPage)
+    private FutexKey(FutexKeyKind kind, object identity, ulong pageValue, ushort offsetWithinPage)
     {
         Kind = kind;
         _identity = identity;
@@ -23,10 +23,10 @@ internal readonly struct FutexKey : IEquatable<FutexKey>
     }
 
     public FutexKeyKind Kind { get; }
-    public uint PageValue { get; }
+    public ulong PageValue { get; }
     public ushort OffsetWithinPage { get; }
 
-    public static FutexKey Private(VMAManager addressSpace, uint pageAlignedAddress, ushort offsetWithinPage)
+    public static FutexKey Private(VMAManager addressSpace, ulong pageAlignedAddress, ushort offsetWithinPage)
     {
         return new FutexKey(FutexKeyKind.Private, addressSpace, pageAlignedAddress, offsetWithinPage);
     }

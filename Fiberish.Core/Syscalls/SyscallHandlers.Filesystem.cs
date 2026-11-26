@@ -59,7 +59,7 @@ public partial class SyscallManager
         return dirLoc.Dentry.Inode.Link(newDentry, oldLoc.Dentry.Inode);
     }
 
-    private async ValueTask<int> SysLinkat(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysLinkat(Engine engine, uint a1, ulong a2, uint a3, ulong a4, uint a5, uint a6)
     {
         var olddirfd = (int)a1;
         var oldPathErr = ReadPathArgumentBytes(a2, out var oldpath);
@@ -119,7 +119,7 @@ public partial class SyscallManager
         return dirLoc.Dentry.Inode.Link(newDentry, oldLoc.Dentry.Inode);
     }
 
-    private async ValueTask<int> SysChdir(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysChdir(Engine engine, ulong a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var pathErr = ReadPathArgumentBytes(a1, out var path);
         if (pathErr != 0) return pathErr;
@@ -181,7 +181,7 @@ public partial class SyscallManager
         return await DoTruncate(this, engine, a1, (int)a2);
     }
 
-    private async ValueTask<int> SysTruncate64(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysTruncate64(Engine engine, ulong a1, uint a2, uint a3, uint a4, uint a5,
         uint a6)
     {
         // 32-bit truncate64 has padding if we use 64-bit length. a2 and a3 are the split 64 bit integer
@@ -189,7 +189,7 @@ public partial class SyscallManager
         return await DoTruncate(this, engine, a1, length);
     }
 
-    private static ValueTask<int> DoTruncate(SyscallManager sm, Engine engine, uint pathPtr, long length)
+    private static ValueTask<int> DoTruncate(SyscallManager sm, Engine engine, ulong pathPtr, long length)
     {
         if (length < 0) return new ValueTask<int>(-(int)Errno.EINVAL);
         var pathErr = sm.ReadPathArgumentBytes(pathPtr, out var path);
@@ -371,7 +371,7 @@ public partial class SyscallManager
         return 0;
     }
 
-    private async ValueTask<int> SysMkdirAt(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysMkdirAt(Engine engine, uint a1, ulong a2, uint a3, uint a4, uint a5, uint a6)
     {
         var dirfd = (int)a1;
         var pathErr = ReadPathArgumentBytes(a2, out var path);
@@ -418,7 +418,7 @@ public partial class SyscallManager
         return await SysMknodat(engine, LinuxConstants.AT_FDCWD, a1, a2, a3, 0, 0);
     }
 
-    private async ValueTask<int> SysMknodat(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysMknodat(Engine engine, uint a1, ulong a2, uint a3, uint a4, uint a5, uint a6)
     {
         var dirfd = (int)a1;
         var pathErr = ReadPathArgumentBytes(a2, out var path);
@@ -466,17 +466,17 @@ public partial class SyscallManager
         }
     }
 
-    private async ValueTask<int> SysSetXAttr(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysSetXAttr(Engine engine, ulong a1, ulong a2, ulong a3, uint a4, uint a5, uint a6)
     {
         return await SetXAttrPath(this, a1, a2, a3, a4, a5, LookupFlags.FollowSymlink);
     }
 
-    private async ValueTask<int> SysLSetXAttr(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysLSetXAttr(Engine engine, ulong a1, ulong a2, ulong a3, uint a4, uint a5, uint a6)
     {
         return await SetXAttrPath(this, a1, a2, a3, a4, a5, LookupFlags.None);
     }
 
-    private async ValueTask<int> SysFSetXAttr(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysFSetXAttr(Engine engine, uint a1, ulong a2, ulong a3, uint a4, uint a5, uint a6)
     {
         var fd = (int)a1;
         var nameErr = ReadPathArgumentBytes(a2, out var name, allowEmpty: true);
@@ -493,17 +493,17 @@ public partial class SyscallManager
         return f.OpenedInode.SetXAttr(name.Span, valueBytes, (int)a5);
     }
 
-    private async ValueTask<int> SysGetXAttr(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysGetXAttr(Engine engine, ulong a1, ulong a2, ulong a3, uint a4, uint a5, uint a6)
     {
         return await GetXAttrPath(this, a1, a2, a3, a4, LookupFlags.FollowSymlink);
     }
 
-    private async ValueTask<int> SysLGetXAttr(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysLGetXAttr(Engine engine, ulong a1, ulong a2, ulong a3, uint a4, uint a5, uint a6)
     {
         return await GetXAttrPath(this, a1, a2, a3, a4, LookupFlags.None);
     }
 
-    private async ValueTask<int> SysFGetXAttr(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysFGetXAttr(Engine engine, uint a1, ulong a2, ulong a3, uint a4, uint a5, uint a6)
     {
         var fd = (int)a1;
         var nameErr = ReadPathArgumentBytes(a2, out var name, allowEmpty: true);
@@ -519,18 +519,18 @@ public partial class SyscallManager
         return CopyXAttrToUser(engine, f.OpenedInode, name.Span, valueAddr, size);
     }
 
-    private async ValueTask<int> SysListXAttr(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysListXAttr(Engine engine, ulong a1, ulong a2, uint a3, uint a4, uint a5, uint a6)
     {
         return await ListXAttrPath(this, a1, a2, a3, LookupFlags.FollowSymlink);
     }
 
-    private async ValueTask<int> SysLListXAttr(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysLListXAttr(Engine engine, ulong a1, ulong a2, uint a3, uint a4, uint a5,
         uint a6)
     {
         return await ListXAttrPath(this, a1, a2, a3, LookupFlags.None);
     }
 
-    private async ValueTask<int> SysFListXAttr(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysFListXAttr(Engine engine, uint a1, ulong a2, uint a3, uint a4, uint a5,
         uint a6)
     {
         var fd = (int)a1;
@@ -543,19 +543,19 @@ public partial class SyscallManager
         return CopyXAttrListToUser(engine, f.OpenedInode, listAddr, size);
     }
 
-    private async ValueTask<int> SysRemoveXAttr(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysRemoveXAttr(Engine engine, ulong a1, ulong a2, uint a3, uint a4, uint a5,
         uint a6)
     {
         return await RemoveXAttrPath(this, a1, a2, LookupFlags.FollowSymlink);
     }
 
-    private async ValueTask<int> SysLRemoveXAttr(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysLRemoveXAttr(Engine engine, ulong a1, ulong a2, uint a3, uint a4, uint a5,
         uint a6)
     {
         return await RemoveXAttrPath(this, a1, a2, LookupFlags.None);
     }
 
-    private async ValueTask<int> SysFRemoveXAttr(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysFRemoveXAttr(Engine engine, uint a1, ulong a2, uint a3, uint a4, uint a5,
         uint a6)
     {
         var fd = (int)a1;
@@ -569,7 +569,7 @@ public partial class SyscallManager
         return f.OpenedInode.RemoveXAttr(name.Span);
     }
 
-    private static ValueTask<int> SetXAttrPath(SyscallManager sm, uint pathPtr, uint namePtr, uint valuePtr,
+    private static ValueTask<int> SetXAttrPath(SyscallManager sm, ulong pathPtr, ulong namePtr, ulong valuePtr,
         uint sizeRaw,
         uint flags, LookupFlags lookupFlags)
     {
@@ -591,7 +591,7 @@ public partial class SyscallManager
         return new ValueTask<int>(loc.Dentry.Inode.SetXAttr(name.Span, valueBytes, (int)flags));
     }
 
-    private static ValueTask<int> GetXAttrPath(SyscallManager sm, uint pathPtr, uint namePtr, uint valuePtr,
+    private static ValueTask<int> GetXAttrPath(SyscallManager sm, ulong pathPtr, ulong namePtr, ulong valuePtr,
         uint sizeRaw,
         LookupFlags lookupFlags)
     {
@@ -610,7 +610,7 @@ public partial class SyscallManager
             (int)sizeRaw));
     }
 
-    private static ValueTask<int> ListXAttrPath(SyscallManager sm, uint pathPtr, uint listPtr, uint sizeRaw,
+    private static ValueTask<int> ListXAttrPath(SyscallManager sm, ulong pathPtr, ulong listPtr, uint sizeRaw,
         LookupFlags lookupFlags)
     {
         var pathErr = sm.ReadPathArgumentBytes(pathPtr, out var path);
@@ -624,7 +624,7 @@ public partial class SyscallManager
             (int)sizeRaw));
     }
 
-    private static ValueTask<int> RemoveXAttrPath(SyscallManager sm, uint pathPtr, uint namePtr,
+    private static ValueTask<int> RemoveXAttrPath(SyscallManager sm, ulong pathPtr, ulong namePtr,
         LookupFlags lookupFlags)
     {
         var pathErr = sm.ReadPathArgumentBytes(pathPtr, out var path);
@@ -641,7 +641,7 @@ public partial class SyscallManager
         return new ValueTask<int>(loc.Dentry.Inode.RemoveXAttr(name.Span));
     }
 
-    private static int CopyXAttrToUser(Engine engine, Inode inode, ReadOnlySpan<byte> name, uint valueAddr, int size)
+    private static int CopyXAttrToUser(Engine engine, Inode inode, ReadOnlySpan<byte> name, ulong valueAddr, int size)
     {
         Span<byte> probe = stackalloc byte[0];
         var needed = inode.GetXAttr(name, probe);
@@ -657,7 +657,7 @@ public partial class SyscallManager
         return rc;
     }
 
-    private static int CopyXAttrListToUser(Engine engine, Inode inode, uint listAddr, int size)
+    private static int CopyXAttrListToUser(Engine engine, Inode inode, ulong listAddr, int size)
     {
         Span<byte> probe = stackalloc byte[0];
         var needed = inode.ListXAttr(probe);
@@ -685,7 +685,7 @@ public partial class SyscallManager
         return 0;
     }
 
-    private static int ReadUserBuffer(Engine engine, uint addr, int size, out byte[] valueBytes)
+    private static int ReadUserBuffer(Engine engine, ulong addr, int size, out byte[] valueBytes)
     {
         valueBytes = [];
         if (size < 0) return -(int)Errno.EINVAL;
@@ -697,7 +697,7 @@ public partial class SyscallManager
         return 0;
     }
 
-    private async ValueTask<int> SysUnlinkAt(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysUnlinkAt(Engine engine, uint a1, ulong a2, uint a3, uint a4, uint a5, uint a6)
     {
         var dirfd = (int)a1;
         var pathErr = ReadPathArgumentBytes(a2, out var path);
@@ -848,7 +848,7 @@ public partial class SyscallManager
         }
     }
 
-    private async ValueTask<int> SysNewFstatAt(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysNewFstatAt(Engine engine, uint a1, ulong a2, ulong a3, uint a4, uint a5,
         uint a6)
     {
         var dirfd = (int)a1;
@@ -882,6 +882,8 @@ public partial class SyscallManager
         if (!loc.IsValid || loc.Dentry!.Inode == null) return -(int)Errno.ENOENT;
 
         RefreshHostfsProjectionForCaller(this, loc.Dentry.Inode);
+        if (engine.IsAArch64)
+            return WriteAArch64Stat(engine, statAddr, loc.Dentry.Inode) ? 0 : -(int)Errno.EFAULT;
         WriteStat64(engine, statAddr, loc.Dentry.Inode);
         return 0;
     }
@@ -970,7 +972,7 @@ LocResolvedUtimens32:
     ///     utimensat_time64 - same as utimensat but with 64-bit timespec
     ///     syscall 412
     /// </summary>
-    private async ValueTask<int> SysUtimensAtTime64(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysUtimensAtTime64(Engine engine, uint a1, ulong a2, ulong a3, uint a4, uint a5, uint a6)
     {
         var dirfd = (int)a1;
         var timesAddr = a3;
@@ -1110,7 +1112,7 @@ LocResolvedUtimens64:
         return -(int)Errno.EPERM;
     }
 
-    private async ValueTask<int> SysFchownAt(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysFchownAt(Engine engine, uint a1, ulong a2, uint a3, uint a4, uint a5, uint a6)
     {
         var dirfd = (int)a1;
         var pathErr = ReadPathArgumentBytes(a2, out var path);
@@ -1148,7 +1150,7 @@ LocResolvedUtimens64:
         return rc;
     }
 
-    private async ValueTask<int> SysFchmodAt(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysFchmodAt(Engine engine, uint a1, ulong a2, uint a3, uint a4, uint a5, uint a6)
     {
         var dirfd = (int)a1;
         var pathErr = ReadPathArgumentBytes(a2, out var path);
@@ -1185,7 +1187,7 @@ LocResolvedUtimens64:
         return rc;
     }
 
-    private async ValueTask<int> SysFaccessAt(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysFaccessAt(Engine engine, uint a1, ulong a2, uint a3, uint a4, uint a5, uint a6)
     {
         var dirfd = (int)a1;
         var pathErr = ReadPathArgumentBytes(a2, out var path);
@@ -1228,13 +1230,13 @@ LocResolvedUtimens64:
         return DacPolicy.CheckPathAccess(task.Process, loc.Dentry.Inode, req, useEffectiveIds);
     }
 
-    private async ValueTask<int> SysFaccessAt2(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysFaccessAt2(Engine engine, uint a1, ulong a2, uint a3, uint a4, uint a5,
         uint a6)
     {
         return await SysFaccessAt(engine, a1, a2, a3, a4, a5, a6);
     }
 
-    private async ValueTask<int> SysFchmodAt2(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysFchmodAt2(Engine engine, uint a1, ulong a2, uint a3, uint a4, uint a5,
         uint a6)
     {
         // Support the Linux fchmodat2 flag subset currently exercised by tar.
@@ -1254,7 +1256,7 @@ LocResolvedUtimens64:
         return ImplRename(this, -100, oldPath, -100, newPath, 0);
     }
 
-    private async ValueTask<int> SysRenameAt(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysRenameAt(Engine engine, uint a1, ulong a2, uint a3, ulong a4, uint a5, uint a6)
     {
         var oldPathErr = ReadPathArgumentBytes(a2, out var oldPath);
         if (oldPathErr != 0) return oldPathErr;
@@ -1266,7 +1268,7 @@ LocResolvedUtimens64:
         return ImplRename(this, (int)a1, oldPath, (int)a3, newPath, 0);
     }
 
-    private async ValueTask<int> SysRenameAt2(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysRenameAt2(Engine engine, uint a1, ulong a2, uint a3, ulong a4, uint a5, uint a6)
     {
         var oldPathErr = ReadPathArgumentBytes(a2, out var oldPath);
         if (oldPathErr != 0) return oldPathErr;
@@ -1565,7 +1567,7 @@ LocResolvedUtimens64:
         return 0;
     }
 
-    private ValueTask<int> SysStatx(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private ValueTask<int> SysStatx(Engine engine, uint a1, ulong a2, uint a3, uint a4, ulong a5, uint a6)
     {
         var dirfd = (int)a1;
         var flags = a3;
@@ -1787,13 +1789,13 @@ LocResolvedUtimens64:
         return rc;
     }
 
-    private async ValueTask<int> SysGetCwd(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysGetCwd(Engine engine, ulong a1, ulong a2, uint a3, uint a4, uint a5, uint a6)
     {
         var bufAddr = a1;
         var size = a2;
 
         var cwd = GetAbsolutePathBytes(CurrentWorkingDirectory);
-        if (cwd.Length + 1 > size) return -(int)Errno.ERANGE;
+        if ((ulong)cwd.Length + 1 > size) return -(int)Errno.ERANGE;
 
         var buf = new byte[cwd.Length + 1];
         cwd.CopyTo(buf, 0);
@@ -1911,7 +1913,7 @@ LocResolvedUtimens64:
         return DacPolicy.CheckPathAccess(task.Process, loc.Dentry.Inode, req, false);
     }
 
-    private ValueTask<int> SysGetdents64(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private ValueTask<int> SysGetdents64(Engine engine, uint a1, ulong a2, uint a3, uint a4, uint a5,
         uint a6)
     {
         var fd = (int)a1;
@@ -1969,7 +1971,7 @@ LocResolvedUtimens64:
         _ => 0,
     };
 
-    private static bool WriteDirentRecord(Engine engine, uint baseAddr, DirectoryEntry entry, int recLen, long nextOffset)
+    private static bool WriteDirentRecord(Engine engine, ulong baseAddr, DirectoryEntry entry, int recLen, long nextOffset)
     {
         byte[]? rented = null;
         try
@@ -2066,7 +2068,28 @@ LocResolvedUtimens64:
             silkInode.PersistMetadataImmediately();
     }
 
-    private static void WriteStat64(Engine engine, uint addr, Inode inode)
+    private static bool WriteAArch64Stat(Engine engine, ulong addr, Inode inode)
+    {
+        Span<byte> buf = stackalloc byte[128];
+        buf.Clear();
+
+        BinaryPrimitives.WriteUInt64LittleEndian(buf, inode.Dev);
+        BinaryPrimitives.WriteUInt64LittleEndian(buf[8..], inode.Ino);
+        BinaryPrimitives.WriteUInt32LittleEndian(buf[16..], (uint)inode.Mode | (uint)inode.Type);
+        BinaryPrimitives.WriteUInt32LittleEndian(buf[20..], inode.GetLinkCountForStat());
+        BinaryPrimitives.WriteUInt32LittleEndian(buf[24..], (uint)inode.Uid);
+        BinaryPrimitives.WriteUInt32LittleEndian(buf[28..], (uint)inode.Gid);
+        BinaryPrimitives.WriteUInt64LittleEndian(buf[32..], inode.Rdev);
+        BinaryPrimitives.WriteUInt64LittleEndian(buf[48..], inode.Size);
+        BinaryPrimitives.WriteUInt32LittleEndian(buf[56..], LinuxConstants.PageSize);
+        BinaryPrimitives.WriteUInt64LittleEndian(buf[64..], (inode.Size + 511) / 512);
+        WriteStatxTime(buf, 72, inode.ATime);
+        WriteStatxTime(buf, 88, inode.MTime);
+        WriteStatxTime(buf, 104, inode.CTime);
+        return engine.CopyToUser(addr, buf);
+    }
+
+    private static void WriteStat64(Engine engine, ulong addr, Inode inode)
     {
         Span<byte> buf = stackalloc byte[96];
         buf.Clear();
@@ -2133,7 +2156,7 @@ LocResolvedUtimens64:
         if (!engine.CopyToUser(addr, buf)) return;
     }
 
-    private static bool WriteStatx(Engine engine, uint addr, Inode inode, uint mask, Mount? mount)
+    private static bool WriteStatx(Engine engine, ulong addr, Inode inode, uint mask, Mount? mount)
     {
         Span<byte> buf = stackalloc byte[256];
         buf.Clear();
@@ -2203,7 +2226,27 @@ LocResolvedUtimens64:
         };
     }
 
-    private static void WriteStatfs32(Engine engine, uint addr, Dentry dentry)
+    private static bool WriteAArch64Statfs(Engine engine, ulong addr, Dentry dentry)
+    {
+        const ulong blockSize = LinuxConstants.PageSize;
+        const ulong totalBlocks = 256 * 1024 * 1024 / blockSize;
+        Span<byte> buf = stackalloc byte[120];
+        buf.Clear();
+        BinaryPrimitives.WriteUInt64LittleEndian(buf, (uint)GetFsMagic(dentry));
+        BinaryPrimitives.WriteUInt64LittleEndian(buf[8..], blockSize);
+        BinaryPrimitives.WriteUInt64LittleEndian(buf[16..], totalBlocks);
+        BinaryPrimitives.WriteUInt64LittleEndian(buf[24..], totalBlocks / 2);
+        BinaryPrimitives.WriteUInt64LittleEndian(buf[32..], totalBlocks / 2);
+        BinaryPrimitives.WriteUInt64LittleEndian(buf[40..], 1_000_000);
+        BinaryPrimitives.WriteUInt64LittleEndian(buf[48..], 900_000);
+        BinaryPrimitives.WriteUInt32LittleEndian(buf[56..], 0x78656D75);
+        BinaryPrimitives.WriteUInt32LittleEndian(buf[60..], 0x46535031);
+        BinaryPrimitives.WriteUInt64LittleEndian(buf[64..], 255);
+        BinaryPrimitives.WriteUInt64LittleEndian(buf[72..], blockSize);
+        return engine.CopyToUser(addr, buf);
+    }
+
+    private static void WriteStatfs32(Engine engine, ulong addr, Dentry dentry)
     {
         const int blockSize = 4096;
         const int totalBlocks = 256 * 1024 * 1024 / blockSize; // 256 MiB synthetic capacity
@@ -2262,7 +2305,7 @@ LocResolvedUtimens64:
         engine.CopyToUser(addr, buf);
     }
 
-    private async ValueTask<int> SysStatfs(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysStatfs(Engine engine, ulong a1, ulong a2, uint a3, uint a4, uint a5, uint a6)
     {
         var pathErr = ReadPathArgumentBytes(a1, out var path);
         if (pathErr != 0) return pathErr;
@@ -2270,16 +2313,20 @@ LocResolvedUtimens64:
         var loc = PathWalker.PathWalk(path.UnsafeBuffer, path.Length, LookupFlags.FollowSymlink);
         if (!loc.IsValid || loc.Dentry?.Inode == null) return -(int)Errno.ENOENT;
 
+        if (engine.IsAArch64)
+            return WriteAArch64Statfs(engine, a2, loc.Dentry) ? 0 : -(int)Errno.EFAULT;
         WriteStatfs32(engine, a2, loc.Dentry);
         return 0;
     }
 
-    private async ValueTask<int> SysFstatfs(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysFstatfs(Engine engine, uint a1, ulong a2, uint a3, uint a4, uint a5, uint a6)
     {
         var fd = (int)a1;
         var file = GetFD(fd);
         if (file?.OpenedInode == null) return -(int)Errno.EBADF;
 
+        if (engine.IsAArch64)
+            return WriteAArch64Statfs(engine, a2, file.Dentry) ? 0 : -(int)Errno.EFAULT;
         WriteStatfs32(engine, a2, file.Dentry);
         return 0;
     }
@@ -2343,13 +2390,15 @@ LocResolvedUtimens64:
         return 0;
     }
 
-    private async ValueTask<int> SysFstat64(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysFstat64(Engine engine, uint a1, ulong a2, uint a3, uint a4, uint a5, uint a6)
     {
         var fd = (int)a1;
         var f = GetFD(fd);
         if (f == null || f.OpenedInode == null) return -(int)Errno.EBADF;
 
         RefreshHostfsProjectionForCaller(this, f.OpenedInode);
+        if (engine.IsAArch64)
+            return WriteAArch64Stat(engine, a2, f.OpenedInode) ? 0 : -(int)Errno.EFAULT;
         WriteStat64(engine, a2, f.OpenedInode);
         return 0;
     }
@@ -2409,7 +2458,7 @@ LocResolvedUtimens64:
         return len;
     }
 
-    private async ValueTask<int> SysReadlinkAt(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysReadlinkAt(Engine engine, uint a1, ulong a2, ulong a3, uint a4, uint a5,
         uint a6)
     {
         var dirfd = (int)a1;
@@ -2470,7 +2519,7 @@ LocResolvedUtimens64:
         return len;
     }
 
-    private async ValueTask<int> SysSymlinkAt(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysSymlinkAt(Engine engine, ulong a1, uint a2, ulong a3, uint a4, uint a5, uint a6)
     {
         var targetErr = ReadPathArgumentBytes(a1, out var target);
         if (targetErr != 0) return targetErr;
@@ -2499,7 +2548,7 @@ LocResolvedUtimens64:
         return parentLoc.Dentry.Inode!.Symlink(dentry2, target.ToArray(), create.Uid, create.Gid);
     }
 
-    private async ValueTask<int> SysMount(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysMount(Engine engine, ulong a1, ulong a2, ulong a3, uint a4, ulong a5, uint a6)
     {
         RentedUserBytes source = default;
         if (a1 != 0)
@@ -2616,7 +2665,7 @@ LocResolvedUtimens64:
         return 0;
     }
 
-    private async ValueTask<int> SysUmount2(Engine engine, uint a1, uint flags, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysUmount2(Engine engine, ulong a1, uint flags, uint a3, uint a4, uint a5,
         uint a6)
     {
         var targetErr = ReadPathArgumentBytes(a1, out var target);
@@ -2653,7 +2702,7 @@ LocResolvedUtimens64:
         return 0;
     }
 
-    private async ValueTask<int> SysChroot(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysChroot(Engine engine, ulong a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var task = engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
@@ -2730,7 +2779,7 @@ LocResolvedUtimens64:
     ///     fsopen(2) - Open filesystem context
     ///     syscall number 430 on x86
     /// </summary>
-    private async ValueTask<int> SysFsopen(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysFsopen(Engine engine, ulong a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var fsName = ReadString(a1);
         var flags = a2;
@@ -2750,7 +2799,7 @@ LocResolvedUtimens64:
     ///     fsconfig(2) - Configure filesystem context
     ///     syscall number 431 on x86
     /// </summary>
-    private async ValueTask<int> SysFsconfig(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysFsconfig(Engine engine, uint a1, uint a2, ulong a3, ulong a4, uint a5,
         uint a6)
     {
         var fsFd = (int)a1;
@@ -2824,7 +2873,7 @@ LocResolvedUtimens64:
     ///     open_tree(2) - Get a file descriptor for a mount point
     ///     syscall number 428 on x86
     /// </summary>
-    private async ValueTask<int> SysOpenTree(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysOpenTree(Engine engine, uint a1, ulong a2, uint a3, uint a4, uint a5, uint a6)
     {
         var dfd = (int)a1; // dirfd
         var pathname = a2; // path string address
@@ -2880,7 +2929,7 @@ LocResolvedUtimens64:
     ///     move_mount(2) - Move a mount from one place to another
     ///     syscall number 429 on x86
     /// </summary>
-    private async ValueTask<int> SysMoveMount(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysMoveMount(Engine engine, uint a1, ulong a2, uint a3, ulong a4, uint a5, uint a6)
     {
         var fromDfd = (int)a1; // source dirfd
         var fromPath = a2; // source path
@@ -2927,7 +2976,7 @@ LocResolvedUtimens64:
     ///     mount_setattr(2) - Set attributes on a mount
     ///     syscall number 442 on x86
     /// </summary>
-    private async ValueTask<int> SysMountSetattr(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysMountSetattr(Engine engine, uint a1, ulong a2, uint a3, ulong a4, uint a5,
         uint a6)
     {
         var dfd = (int)a1; // dirfd

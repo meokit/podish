@@ -61,6 +61,12 @@ package identities, checks source hashes, and uses a lockfile for Webpack.
 The Webpack input is generated from fixed seeds and uses a separate corpus
 from the Podish bake step. It leaves the guest V8 JIT enabled.
 
+With AArch64 Node 14, the default Webpack MD4 backend reserves about 10 GiB
+of virtual address space for WebAssembly. Builds with the 39-bit address
+space can run the default fixture. For a build limited to 4 GiB, append
+`--native-md4` after `webpack/build.cjs` to select OpenSSL's MD4 and get the
+same bundle hash. Use the same backend on both guests when comparing timings.
+
 ### CoreMark build
 
 All platforms and backends run the same CoreMark 1.0 i386 ELF. The fixture

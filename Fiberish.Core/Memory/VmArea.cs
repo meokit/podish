@@ -27,8 +27,8 @@ public enum MapFlags
 
 public class VmArea
 {
-    public uint Start { get; set; }
-    public uint End { get; set; } // Exclusive
+    public ulong Start { get; set; }
+    public ulong End { get; set; } // Exclusive
     public Protection Perms { get; set; }
     public MapFlags Flags { get; set; }
     public VmaFileMapping? FileMapping { get; set; }
@@ -40,8 +40,8 @@ public class VmArea
     public bool DontFork { get; set; }
     public bool WipeOnFork { get; set; }
     public bool LockOnFault { get; set; }
-    public uint GrowDownLimit { get; set; }
-    public uint GrowDownGuardGap { get; set; }
+    public ulong GrowDownLimit { get; set; }
+    public ulong GrowDownGuardGap { get; set; }
 
     public string Name { get; set; } = string.Empty;
     public AddressSpace? VmMapping { get; set; }
@@ -51,22 +51,22 @@ public class VmArea
     ///     Null for MAP_SHARED and other non-private mappings.
     /// </summary>
     public AnonVma? VmAnonVma { get; set; }
-    public uint SyntheticZeroStart { get; set; }
-    public uint SyntheticZeroEnd { get; set; }
+    public ulong SyntheticZeroStart { get; set; }
+    public ulong SyntheticZeroEnd { get; set; }
 
-    public uint Length => End - Start;
+    public ulong Length => End - Start;
     public bool HasSyntheticZeroRange => SyntheticZeroStart < SyntheticZeroEnd;
 
     public bool IsFileBacked => File != null;
 
-    public uint GetPageIndex(uint guestPageStart)
+    public uint GetPageIndex(ulong guestPageStart)
     {
-        return checked((uint)VmPgoff) + (guestPageStart - Start) / LinuxConstants.PageSize;
+        return checked((uint)(VmPgoff + (guestPageStart - Start) / LinuxConstants.PageSize));
     }
 
-    public long GetRelativeOffsetForAddress(uint guestAddr)
+    public long GetRelativeOffsetForAddress(ulong guestAddr)
     {
-        return (long)guestAddr - Start;
+        return (long)guestAddr - (long)Start;
     }
 
     public long GetRelativeOffsetForPageIndex(uint pageIndex)
@@ -74,9 +74,9 @@ public class VmArea
         return (long)(pageIndex - checked((uint)VmPgoff)) * LinuxConstants.PageSize;
     }
 
-    public uint GetGuestPageStart(uint pageIndex)
+    public ulong GetGuestPageStart(uint pageIndex)
     {
-        return Start + (uint)GetRelativeOffsetForPageIndex(pageIndex);
+        return Start + (ulong)GetRelativeOffsetForPageIndex(pageIndex);
     }
 
     public long GetAbsoluteFileOffsetForPageIndex(uint pageIndex)
@@ -91,7 +91,7 @@ public class VmArea
         var inodeSize = (long)(LogicalInode?.Size ?? 0);
         var remaining = inodeSize - Offset;
         if (remaining <= 0) return 0;
-        return Math.Min(remaining, Length);
+        return Math.Min(remaining, (long)Length);
     }
 
     public long GetRemainingBackingBytes(long relativeOffset)
@@ -112,7 +112,7 @@ public class VmArea
         return LinuxConstants.PageSize;
     }
 
-    public void SetSyntheticZeroRange(uint start, uint end)
+    public void SetSyntheticZeroRange(ulong start, ulong end)
     {
         SyntheticZeroStart = start;
         SyntheticZeroEnd = end;
@@ -141,7 +141,7 @@ public class VmArea
         SyntheticZeroEnd = clampedEnd;
     }
 
-    public bool TryGetSyntheticZeroPageSlice(uint guestPageStart, out int zeroOffset, out int zeroLength)
+    public bool TryGetSyntheticZeroPageSlice(ulong guestPageStart, out int zeroOffset, out int zeroLength)
     {
         zeroOffset = 0;
         zeroLength = 0;

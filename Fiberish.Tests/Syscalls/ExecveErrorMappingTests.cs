@@ -231,7 +231,7 @@ public class ExecveErrorMappingTests
         var stackVma = env.StackVma;
         var originalStart = stackVma.Start;
         var blockerAddr = originalStart - LinuxConstants.PageSize * 2;
-        var blocker = AssertGuestAddressSuccess(await Call(env.Syscalls, "SysMmap2", blockerAddr,
+        var blocker = AssertGuestAddressSuccess(await Call(env.Syscalls, "SysMmap2", checked((uint)blockerAddr),
             LinuxConstants.PageSize, (uint)(Protection.Read | Protection.Write),
             (uint)(MapFlags.Private | MapFlags.Anonymous | MapFlags.Fixed)));
         Assert.Equal(blockerAddr, blocker);
@@ -526,7 +526,7 @@ public class ExecveErrorMappingTests
         Assert.True(engine.CopyToUser(addr, bytes));
     }
 
-    private static byte[] ReadBytes(Engine engine, uint addr, int length)
+    private static byte[] ReadBytes(Engine engine, ulong addr, int length)
     {
         var bytes = new byte[length];
         Assert.True(engine.CopyFromUser(addr, bytes));

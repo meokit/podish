@@ -1,0 +1,228 @@
+{
+  "guest": "i386",
+  "held_family": "tar",
+  "train_cases": [
+    "gzip",
+    "gunzip",
+    "sed",
+    "sort",
+    "sha256",
+    "du",
+    "ls"
+  ],
+  "held_cases": [
+    "tar"
+  ],
+  "candidates": {
+    "modrm": 1175,
+    "policies": 646,
+    "exact": 12643,
+    "fusion": 1024,
+    "dynamic-disp": 754,
+    "dynamic-imm": 391,
+    "dynamic-both": 87
+  },
+  "pool_sha256": "f1caa42b855cc898750349a4155d3a613dec1fdd561376327b85a72090f2bf4e",
+  "estimated_budgets": [
+    1567843,
+    3140707,
+    10480739
+  ],
+  "reserve_bytes": 5021,
+  "ranking_inputs_seconds": 6.375221499998588,
+  "held_replay_seconds": 0.2801665829902049,
+  "cost_model": {
+    "distinct": 33,
+    "linked": 36,
+    "max_underprediction": 7739,
+    "median_abs_error": 3367,
+    "method": "leave one strategy out, purge identical tables",
+    "quantile": 0.9,
+    "model": "Mach-O binding spans and calibrated class multipliers",
+    "coverage": {
+      "modrm": {
+        "linked_bindings": 1165,
+        "total": 1175
+      },
+      "policies": {
+        "linked_bindings": 646,
+        "total": 646
+      },
+      "exact": {
+        "linked_bindings": 12643,
+        "total": 12643
+      },
+      "fusion": {
+        "linked_bindings": 841,
+        "total": 1024
+      },
+      "dynamic-disp": {
+        "linked_bindings": 754,
+        "total": 754
+      },
+      "dynamic-imm": {
+        "linked_bindings": 391,
+        "total": 391
+      },
+      "dynamic-both": {
+        "linked_bindings": 87,
+        "total": 87
+      }
+    },
+    "cache_sha256": "ed151619f56a4add8b1b6f4832497eb2c301f87865955d41d5e4463a0817c7d3"
+  },
+  "methods": {
+    "joint-static": {
+      "depth": 1,
+      "risk": 0.5,
+      "ranking_seconds": 0.8355580000061309,
+      "tiers": [
+        {
+          "tier_mib": 1.5,
+          "cut": 8361,
+          "predicted_bytes": 1567764,
+          "held_dispatch_proxy": 0.4838331296777582,
+          "ids_sha256": "0718cc6c67d874c6e236479e5ed2a7ccdf41eec61233cec08f9d9bb7aa1ffba7"
+        },
+        {
+          "tier_mib": 3,
+          "cut": 16719,
+          "predicted_bytes": 3140685,
+          "held_dispatch_proxy": 0.4910684319868544,
+          "ids_sha256": "88f83f41fe0157d01f6b5d043ee28ab94c9fa3e3636e400528559928a023b116"
+        },
+        {
+          "tier_mib": 10,
+          "cut": 16720,
+          "predicted_bytes": 3142028,
+          "held_dispatch_proxy": 0.4910684319868544,
+          "ids_sha256": "07dc843b4556305159d1e96e72023edc7549394a302252f69befd624a8bbc569"
+        }
+      ],
+      "stats": {
+        "marginal_evaluations": 33710,
+        "affected_blocks": 278007,
+        "beam_prefix_evaluations": 0,
+        "tier_values": [
+          0.621649271220653,
+          0.6217894104377019,
+          0.6217894105701036
+        ]
+      }
+    },
+    "joint-marginal": {
+      "depth": 1,
+      "risk": 0.5,
+      "ranking_seconds": 1.5152607500058366,
+      "tiers": [
+        {
+          "tier_mib": 1.5,
+          "cut": 9347,
+          "predicted_bytes": 1567727,
+          "held_dispatch_proxy": 0.48746614594424637,
+          "ids_sha256": "1ea927ec5587f3487ec9d2478fff951fd632870d47db3cae2b4c4f3380a5a86c"
+        },
+        {
+          "tier_mib": 3,
+          "cut": 13886,
+          "predicted_bytes": 2461533,
+          "held_dispatch_proxy": 0.4894129517322303,
+          "ids_sha256": "b9de23aa63ed9e5dc5212af932dae0872c0bc38407cb73ab443b617bf3ffbc9d"
+        },
+        {
+          "tier_mib": 10,
+          "cut": 13886,
+          "predicted_bytes": 2461533,
+          "held_dispatch_proxy": 0.4894129517322303,
+          "ids_sha256": "b9de23aa63ed9e5dc5212af932dae0872c0bc38407cb73ab443b617bf3ffbc9d"
+        }
+      ],
+      "stats": {
+        "marginal_evaluations": 89771,
+        "affected_blocks": 564727,
+        "beam_prefix_evaluations": 0,
+        "tier_values": [
+          0.6195398303796221,
+          0.6214180708538906,
+          0.6214180708538906
+        ]
+      }
+    },
+    "joint-general": {
+      "depth": 1,
+      "risk": 0.5,
+      "ranking_seconds": 1.3249168750044191,
+      "tiers": [
+        {
+          "tier_mib": 1.5,
+          "cut": 7553,
+          "predicted_bytes": 1567677,
+          "held_dispatch_proxy": 0.4833186007239574,
+          "ids_sha256": "9ea892ef11e1413c3ee3906b576fe54c8cd6a749b664e09943bef5e884d12e21"
+        },
+        {
+          "tier_mib": 3,
+          "cut": 7680,
+          "predicted_bytes": 1603755,
+          "held_dispatch_proxy": 0.48340360281905853,
+          "ids_sha256": "3dedcfc4dafc036b97b2f584fe300330349b4304d2a7c3a0f69ea7247f07cb47"
+        },
+        {
+          "tier_mib": 10,
+          "cut": 7680,
+          "predicted_bytes": 1603755,
+          "held_dispatch_proxy": 0.48340360281905853,
+          "ids_sha256": "3dedcfc4dafc036b97b2f584fe300330349b4304d2a7c3a0f69ea7247f07cb47"
+        }
+      ],
+      "stats": {
+        "marginal_evaluations": 84650,
+        "affected_blocks": 525994,
+        "beam_prefix_evaluations": 0,
+        "tier_values": [
+          0.3717806666702099,
+          0.3719442211642212,
+          0.3719442211642212
+        ]
+      }
+    },
+    "joint-beam": {
+      "depth": 3,
+      "risk": 0.5,
+      "ranking_seconds": 1.3367344580037752,
+      "tiers": [
+        {
+          "tier_mib": 1.5,
+          "cut": 7551,
+          "predicted_bytes": 1567705,
+          "held_dispatch_proxy": 0.4833398026338862,
+          "ids_sha256": "1031d0fc9f864a7338bb303bec0a238db1ac0d355634ee1f043c9a0ef27720af"
+        },
+        {
+          "tier_mib": 3,
+          "cut": 7680,
+          "predicted_bytes": 1603755,
+          "held_dispatch_proxy": 0.48340360281905853,
+          "ids_sha256": "16105b9bb054d5471ed7b8184f72517a53c55be61ac3000a6a09fe7898c0d580"
+        },
+        {
+          "tier_mib": 10,
+          "cut": 7680,
+          "predicted_bytes": 1603755,
+          "held_dispatch_proxy": 0.48340360281905853,
+          "ids_sha256": "16105b9bb054d5471ed7b8184f72517a53c55be61ac3000a6a09fe7898c0d580"
+        }
+      ],
+      "stats": {
+        "marginal_evaluations": 84650,
+        "affected_blocks": 525994,
+        "beam_prefix_evaluations": 9,
+        "tier_values": [
+          0.3718933467075517,
+          0.3719442211642212,
+          0.3719442211642212
+        ]
+      }
+    }
+  }
+}

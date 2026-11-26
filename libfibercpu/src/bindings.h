@@ -33,6 +33,17 @@ typedef struct {
     void* host_page;
 } X86_PageMapping;
 
+typedef struct {
+    uint64_t guest_page;
+    uint8_t perms;
+    uint8_t flags;
+    uint16_t reserved;
+    void* host_page;
+} AArch64_PageMapping;
+
+typedef int (*AArch64_FaultHandler)(EmuState*, uint64_t address, int access, void* userdata);
+typedef void (*AArch64_MemHook)(EmuState*, uint64_t address, uint32_t size, int write, uint64_t value, void* userdata);
+
 enum { X86_PAGE_FLAG_DIRTY = 1 << 0 };
 
 // Creation / Destruction
@@ -50,6 +61,28 @@ EmuState* X86_CreateWithOptions(uint32_t options);
 // share_mem=1 shares the MMU. share_mem=0 copies its mappings and borrows the same backing pages.
 EmuState* X86_Clone(EmuState* parent, int share_mem);
 int X86_Destroy(EmuState* state);
+
+// A64 shares the engine lifetime, status, memory and callback interfaces above.
+void AArch64_Reset(EmuState* state);
+uint32_t AArch64_ReadSyscall(EmuState* state, uint64_t* arguments);
+uint64_t AArch64_RegRead(EmuState* state, int index);
+void AArch64_RegWrite(EmuState* state, int index, uint64_t value);
+int AArch64_Run(EmuState* state, uint64_t end_pc, uint64_t budget, int single_step);
+int AArch64_MemMapHostPage(EmuState* state, uint64_t address, void* host_page, uint8_t perms);
+void AArch64_MemUnmap(EmuState* state, uint64_t address, uint64_t size);
+void AArch64_MemProtect(EmuState* state, uint64_t address, uint64_t size, uint8_t perms);
+void AArch64_MemWrite(EmuState* state, uint64_t address, const uint8_t* data, uint32_t size);
+void AArch64_MemRead(EmuState* state, uint64_t address, uint8_t* data, uint32_t size);
+int AArch64_MemIsDirty(EmuState* state, uint64_t address);
+int AArch64_MemHasSlowWrite(EmuState* state, uint64_t address);
+void* AArch64_ResolvePtrForRead(EmuState* state, uint64_t address);
+void* AArch64_ResolvePtrForWrite(EmuState* state, uint64_t address);
+size_t AArch64_CollectMappedPages(EmuState* state, uint64_t address, uint64_t size, AArch64_PageMapping* buffer,
+                                  size_t max_count);
+void AArch64_SetExtendedFaultCallback(EmuState* state, AArch64_FaultHandler handler, void* userdata);
+void AArch64_SetMemHook(EmuState* state, AArch64_MemHook hook, void* userdata);
+uint64_t AArch64_GetFaultAddress(EmuState* state);
+void AArch64_ResetCodeCacheByRange(EmuState* state, uint64_t address, uint64_t size);
 
 // Register Access
 uint32_t X86_RegRead(EmuState* state, int reg_index);
@@ -85,6 +118,8 @@ void X86_SegBaseWrite(EmuState* state, int seg_index, uint32_t base);
 // Map one 4 KiB guest page. The guest address must be page-aligned and the host
 // pointer must cover 4 KiB. The caller keeps the backing alive for every mapping,
 // including aliases and clones. Returns 1 on success.
+// R/W/X are bits 0–2. Bit 6 is reserved for runtime-owned private backing with
+// one host virtual address per page. Ordinary caller-owned mappings omit it.
 int X86_MemMapHostPage(EmuState* state, uint32_t addr, void* host_page, uint8_t perms);
 void X86_MemUnmap(EmuState* state, uint32_t addr, uint32_t size);
 // Update the access permissions (R/W/X) of existing mappings.

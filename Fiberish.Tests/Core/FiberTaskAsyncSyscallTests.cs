@@ -108,7 +108,7 @@ public class FiberTaskAsyncSyscallTests
             BindingFlags.Instance | BindingFlags.NonPublic);
         Assert.NotNull(finalize);
 
-        finalize!.Invoke(task, [123, null]);
+        finalize!.Invoke(task, [123L, null]);
 
         Assert.Null(task.PendingSyscall);
         Assert.Equal(FiberTaskStatus.Ready, task.Status);

@@ -63,7 +63,7 @@ public sealed class SpecializedFusionBakingTests
     {
         // These handler expectations use the default preset's operand shapes.
         if ((X86Native.GetBuildFeatures() & 1) == 0 ||
-            !X86Native.GetOptimizationConfig().Contains("baking_preset=3.5m;")) return;
+            !X86Native.GetOptimizationConfig().Contains("baking_preset=3m;")) return;
         int count = X86Native.GetBlockCount(cpu.State);
         var blocks = new IntPtr[count];
         fixed (IntPtr* p = blocks) X86Native.GetBlockList(cpu.State, p, count);

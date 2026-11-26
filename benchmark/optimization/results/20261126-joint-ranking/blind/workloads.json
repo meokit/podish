@@ -1,0 +1,38 @@
+[
+  {
+    "cwd": "/opt/fiber-joint-blind-v1",
+    "verify": "bytes",
+    "id": "blind-perl-groups",
+    "family": "perl",
+    "shell": "/usr/bin/perl -ne 'if (/^[0-9]+\\|([0-9]+)\\|([0-9]+)\\|/ && $2 % 3) { $n[0+$1]++; $s[0+$1] += $2 } END { for ($i=0; $i<97; $i++) { printf \"%02d %d %d\\n\",$i,$n[$i],$s[$i] } }' records.txt",
+    "sha256": "da8448ffee9ab5d923ad77362c88834db79295d9241ab43ebf187cac205a9521",
+    "repetitions": 2
+  },
+  {
+    "cwd": "/opt/fiber-joint-blind-v1",
+    "verify": "bytes",
+    "id": "blind-rev-lines",
+    "family": "util-linux",
+    "shell": "/usr/bin/rev records.txt",
+    "sha256": "bf8e6055bbe210614184156b85c3e853ec85634d8dd434af0efae2506751e9a0",
+    "repetitions": 2
+  },
+  {
+    "cwd": "/opt/fiber-joint-blind-v1",
+    "verify": "bytes",
+    "id": "codegen-gzip-o1",
+    "family": "gzip",
+    "shell": "./gzip-O1 -dc records.gz",
+    "sha256": "d0b9f472ebdaca6e1ec749e37bdfdc44ae8cfc3d4310f92b985b630cbf4176ed",
+    "repetitions": 4
+  },
+  {
+    "cwd": "/opt/fiber-joint-blind-v1",
+    "verify": "bytes",
+    "id": "codegen-gzip-o3",
+    "family": "gzip",
+    "shell": "./gzip-O3 -dc records.gz",
+    "sha256": "d0b9f472ebdaca6e1ec749e37bdfdc44ae8cfc3d4310f92b985b630cbf4176ed",
+    "repetitions": 4
+  }
+]

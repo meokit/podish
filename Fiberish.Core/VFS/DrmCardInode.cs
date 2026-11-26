@@ -17,15 +17,16 @@ public sealed partial class DrmCardInode : Inode, ITaskWaitSource, IPollNotifica
     private const uint Xrgb8888 = 0x34325258;
     private const uint Argb8888 = 0x34325241;
 
-    // The ioctl sizes are Linux IA-32 sizes. UAPI pointer fields in mode structs
-    // are 64-bit even though the guest pointers in drm_version are 32-bit.
-    private const uint Version = 0xC0246400, GemClose = 0x40086409, GetCap = 0xC010640C;
+    // The fixed-width mode-setting structs can still differ in trailing
+    // padding, and the legacy version query uses size_t and pointers.
+    private const uint Version = 0xC0246400, VersionAArch64 = 0xC0406400, GemClose = 0x40086409, GetCap = 0xC010640C;
     private const uint AuthMagic = 0x40046411, SetMaster = 0x641E, DropMaster = 0x641F;
     private const uint GetResources = 0xC04064A0, GetCrtc = 0xC06864A1, SetCrtc = 0xC06864A2;
     private const uint GetEncoder = 0xC01464A6, GetConnector = 0xC05064A7;
     private const uint AddFb = 0xC01C64AE, RemoveFb = 0xC00464AF, PageFlip = 0xC01864B0;
     private const uint CreateDumb = 0xC02064B2, MapDumb = 0xC01064B3, DestroyDumb = 0xC00464B4;
-    private const uint AddFb2 = 0xC06464B8, GetProperties = 0xC01C64B9;
+    private const uint AddFb2 = 0xC06464B8, AddFb2AArch64 = 0xC06864B8;
+    private const uint GetProperties = 0xC01C64B9, GetPropertiesAArch64 = 0xC02064B9;
 
     // Podish-only ioctls used by the guest GBM library. Standard libdrm is unmodified.
     private const uint QueryGpuBuffers = 0x800464F0, LockGpuBuffer = 0x400864F1;
@@ -188,7 +189,7 @@ public sealed partial class DrmCardInode : Inode, ITaskWaitSource, IPollNotifica
             CloseBuffer(session, id);
     }
 
-    public override int ResolveMmapBacking(LinuxFile file, uint length, ref long offset, out LinuxFile backing)
+    public override int ResolveMmapBacking(LinuxFile file, ulong length, ref long offset, out LinuxFile backing)
     {
         backing = file;
         if (offset < BufferStride || (ulong)offset / BufferStride > uint.MaxValue) return -(int)Errno.EINVAL;
@@ -202,14 +203,14 @@ public sealed partial class DrmCardInode : Inode, ITaskWaitSource, IPollNotifica
         return 0;
     }
 
-    public override int Ioctl(LinuxFile file, FiberTask task, uint request, uint arg)
+    public override int Ioctl(LinuxFile file, FiberTask task, uint request, ulong arg)
     {
         var session = (Session)file.PrivateData!;
         if (request == QueryGpuBuffers)
         {
             Span<byte> flags = stackalloc byte[4];
             Put(flags, 0, file.OpenedInode is RenderNode ? (_allocateGpu != null ? 2u : 0) : (_gpuBuffers ? 1u : 0));
-            return arg != 0 && (ulong)arg + 4 <= 1UL << 32 && task.CPU.CopyToUser(arg, flags)
+            return arg != 0 && task.CPU.CopyToUser(arg, flags)
                 ? 0 : -(int)Errno.EFAULT;
         }
         if (request == SetMaster)
@@ -227,7 +228,18 @@ public sealed partial class DrmCardInode : Inode, ITaskWaitSource, IPollNotifica
 
         if (request == CreateLease) return -(int)Errno.EOPNOTSUPP;
 
-        var size = request switch
+        var cpu = task.CPU;
+        var operation = cpu.IsAArch64 ? request switch
+        {
+            VersionAArch64 => Version,
+            AddFb2AArch64 => AddFb2,
+            GetPropertiesAArch64 => GetProperties,
+            GetPlaneResourcesAArch64 => GetPlaneResources,
+            Version or AddFb2 or GetProperties or GetPlaneResources => 0,
+            _ => request
+        } : request;
+
+        var size = operation switch
         {
             Version or GemClose or GetCap or AuthMagic or GetResources or GetCrtc or SetCrtc or GetEncoder or
                 GetConnector or AddFb or AddFb2 or RemoveFb or PageFlip or CreateDumb or MapDumb or DestroyDumb or
@@ -238,13 +250,12 @@ public sealed partial class DrmCardInode : Inode, ITaskWaitSource, IPollNotifica
         };
         if (size == 0) return -(int)Errno.ENOTTY;
         Span<byte> data = stackalloc byte[size];
-        var cpu = task.CPU;
-        if (arg == 0 || (ulong)arg + (uint)size > 1UL << 32 || !cpu.CopyFromUser(arg, data))
+        if (arg == 0 || !cpu.CopyFromUser(arg, data))
             return -(int)Errno.EFAULT;
 
         try
         {
-            var rc = request switch
+            var rc = operation switch
             {
                 Version => GetVersion(cpu, data),
                 GetCap => GetCapability(data),
@@ -269,14 +280,14 @@ public sealed partial class DrmCardInode : Inode, ITaskWaitSource, IPollNotifica
                 CreateDumb => AllocateBuffer(session, task, arg, data),
                 MapDumb => GetBufferOffset(session, data),
                 DestroyDumb or GemClose => CloseBuffer(session, U32(data, 0)),
-                AddFb or AddFb2 => AddFramebuffer(session, cpu, arg, data, request == AddFb2),
+                AddFb or AddFb2 => AddFramebuffer(session, cpu, arg, data, operation == AddFb2),
                 RemoveFb => RemoveFramebuffer(session, U32(data, 0)),
                 PageFlip => QueueFlip(session, data),
                 LockGpuBuffer => SetGuestBufferLock(session, U32(data, 0), U32(data, 4)),
                 _ => -(int)Errno.ENOTTY
             };
             // Mutations returning identifiers validate their writeback before publishing the object.
-            if (rc != 0 || request is CreateDumb or AddFb or AddFb2 or GemClose or DestroyDumb or RemoveFb
+            if (rc != 0 || operation is CreateDumb or AddFb or AddFb2 or GemClose or DestroyDumb or RemoveFb
                 or SetCrtc or PageFlip or LockGpuBuffer or SetClientCap or AuthMagic or SetConnectorProperty
                 or SetCursor or PrimeExport or PrimeImport or ImportGbmBo or CreateGpuBo)
                 return rc;
@@ -293,17 +304,24 @@ public sealed partial class DrmCardInode : Inode, ITaskWaitSource, IPollNotifica
         Put(data, 0, 1);
         Put(data, 4, 0);
         Put(data, 8, 0);
-        WriteVersionString(cpu, data, 12, "podish"u8);
-        WriteVersionString(cpu, data, 20, "20261118"u8);
-        WriteVersionString(cpu, data, 28, "Podish virtual KMS"u8);
+        var wordSize = cpu.IsAArch64 ? 8 : 4;
+        var offset = cpu.IsAArch64 ? 16 : 12;
+        WriteVersionString(cpu, data[offset..], wordSize, "podish"u8);
+        WriteVersionString(cpu, data[(offset + 2 * wordSize)..], wordSize, "20261118"u8);
+        WriteVersionString(cpu, data[(offset + 4 * wordSize)..], wordSize, "Podish virtual KMS"u8);
         return 0;
     }
 
-    private static void WriteVersionString(Engine cpu, Span<byte> data, int offset, ReadOnlySpan<byte> value)
+    private static void WriteVersionString(Engine cpu, Span<byte> data, int wordSize, ReadOnlySpan<byte> value)
     {
-        var bytes = (int)Math.Min((uint)value.Length, U32(data, offset));
-        if (bytes > 0) CopyOut(cpu, U32(data, offset + 4), value[..bytes]);
-        Put(data, offset, (uint)value.Length);
+        var length = wordSize == 8 ? U64(data, 0) : U32(data, 0);
+        var address = wordSize == 8 ? U64(data, wordSize) : U32(data, wordSize);
+        var bytes = (int)Math.Min((ulong)value.Length, length);
+        if (bytes > 0) CopyOut(cpu, address, value[..bytes]);
+        if (wordSize == 8)
+            Put64(data, 0, (ulong)value.Length);
+        else
+            Put(data, 0, (uint)value.Length);
     }
 
     private static int GetCapability(Span<byte> data)
@@ -382,7 +400,7 @@ public sealed partial class DrmCardInode : Inode, ITaskWaitSource, IPollNotifica
         return 0;
     }
 
-    private int AllocateBuffer(Session session, FiberTask task, uint arg, Span<byte> data)
+    private int AllocateBuffer(Session session, FiberTask task, ulong arg, Span<byte> data)
     {
         var height = U32(data, 0);
         var width = U32(data, 4);
@@ -435,7 +453,7 @@ public sealed partial class DrmCardInode : Inode, ITaskWaitSource, IPollNotifica
         return 0;
     }
 
-    private int AddFramebuffer(Session session, Engine cpu, uint arg, Span<byte> data, bool extended)
+    private int AddFramebuffer(Session session, Engine cpu, ulong arg, Span<byte> data, bool extended)
     {
         var handle = U32(data, extended ? 20 : 24);
         if (!session.Buffers.TryGetValue(handle, out var buffer)) return -(int)Errno.ENOENT;
@@ -450,7 +468,8 @@ public sealed partial class DrmCardInode : Inode, ITaskWaitSource, IPollNotifica
             // One linear plane. The format and plane count are part of the framebuffer, not the BO handle.
             if (U32(data, 12) is not (Xrgb8888 or Argb8888) || (U32(data, 16) & ~2u) != 0 ||
                 U32(data, 36) != buffer.Pitch || data[24..36].ContainsAnyExcept((byte)0) ||
-                data[40..].ContainsAnyExcept((byte)0) ||
+                data[40..68].ContainsAnyExcept((byte)0) ||
+                data[(cpu.IsAArch64 ? 72 : 68)..].ContainsAnyExcept((byte)0) ||
                 (buffer.Gpu is { PrimeFormat: not 0 } gpu && gpu.PrimeFormat != U32(data, 12)))
                 return -(int)Errno.EINVAL;
         }
@@ -497,7 +516,7 @@ public sealed partial class DrmCardInode : Inode, ITaskWaitSource, IPollNotifica
             return -(int)Errno.EINVAL;
         Span<byte> connector = stackalloc byte[sizeof(uint)];
         var pointer = U64(data, 0);
-        if (pointer == 0 || pointer > uint.MaxValue - 3 || !cpu.CopyFromUser((uint)pointer, connector))
+        if (pointer == 0 || !cpu.CopyFromUser(pointer, connector))
             return -(int)Errno.EFAULT;
         if (U32(connector, 0) != ConnectorId) return -(int)Errno.ENOENT;
         if (buffer.Backing.Gpu is { Ready: false } || !PresentBuffer(buffer)) return -(int)Errno.EIO;
@@ -642,9 +661,8 @@ public sealed partial class DrmCardInode : Inode, ITaskWaitSource, IPollNotifica
                 var item = iovs[i];
                 if (offset == item.Len) { i++; offset = 0; continue; }
                 var size = (int)Math.Min(item.Len - offset, (uint)(EventSize - copied));
-                var ptr = (ulong)item.BaseAddr + offset;
-                if (ptr == 0 || ptr + (uint)size > 1UL << 32 ||
-                    !cpu.CopyToUser((uint)ptr, data.AsSpan(copied, size)))
+                var ptr = item.BaseAddr + offset;
+                if (ptr == 0 || ptr < item.BaseAddr || !cpu.CopyToUser(ptr, data.AsSpan(copied, size)))
                     return total > 0 ? total : -(int)Errno.EFAULT;
                 copied += size;
                 offset += (uint)size;
@@ -687,7 +705,7 @@ public sealed partial class DrmCardInode : Inode, ITaskWaitSource, IPollNotifica
 
     private static void CopyOut(Engine cpu, ulong address, ReadOnlySpan<byte> data)
     {
-        if (address == 0 || address > (1UL << 32) - (uint)data.Length || !cpu.CopyToUser((uint)address, data))
+        if (address == 0 || !cpu.CopyToUser(address, data))
             throw new UserMemoryFault();
     }
 

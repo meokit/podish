@@ -127,7 +127,7 @@ public partial class SyscallManager
         return await SysSignalFd4(engine, fd, maskPtr, size, 0, a5, a6);
     }
 
-    private async ValueTask<int> SysSignalFd4(Engine engine, uint fd, uint maskPtr, uint size, uint flags,
+    private async ValueTask<int> SysSignalFd4(Engine engine, uint fd, ulong maskPtr, uint size, uint flags,
         uint a5, uint a6)
     {
         if (size != 8) return -(int)Errno.EINVAL; // i386 sigset_t is 8 bytes
@@ -194,7 +194,7 @@ public partial class SyscallManager
         return AllocFD(file);
     }
 
-    private async ValueTask<int> SysInotifyAddWatch(Engine engine, uint fd, uint pathPtr, uint mask, uint a4,
+    private async ValueTask<int> SysInotifyAddWatch(Engine engine, uint fd, ulong pathPtr, uint mask, uint a4,
         uint a5, uint a6)
     {
         var file = GetFD((int)fd);

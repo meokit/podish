@@ -90,41 +90,45 @@ public partial class SyscallManager
         return remaining > 0 ? remaining : 0;
     }
 
-    private static bool TryReadItimerval32(Engine engine, uint ptr, out long intervalMs, out long valueMs)
+    private static int ReadItimerval(Engine engine, ulong ptr, out long intervalMs, out long valueMs)
     {
         intervalMs = 0;
         valueMs = 0;
 
-        var buf = new byte[16];
-        if (!engine.CopyFromUser(ptr, buf)) return false;
+        var wordSize = GuestWordSize(engine);
+        Span<byte> buf = stackalloc byte[wordSize * 4];
+        if (!engine.CopyFromUser(ptr, buf)) return engine.IsAArch64 ? -(int)Errno.EFAULT : -(int)Errno.EINVAL;
 
-        var intervalSec = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(0, 4));
-        var intervalUsec = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(4, 4));
-        var valueSec = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(8, 4));
-        var valueUsec = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(12, 4));
+        if (!TryTimevalToMilliseconds(buf, wordSize, out intervalMs) ||
+            !TryTimevalToMilliseconds(buf[(wordSize * 2)..], wordSize, out valueMs))
+            return -(int)Errno.EINVAL;
+        return 0;
+    }
 
-        if (intervalSec < 0 || valueSec < 0) return false;
-        if ((uint)intervalUsec >= USEC_PER_SEC || (uint)valueUsec >= USEC_PER_SEC) return false;
+    private static bool TryTimevalToMilliseconds(ReadOnlySpan<byte> timeval, int wordSize, out long ms)
+    {
+        ms = 0;
+        var seconds = wordSize == 8 ? (long)ReadGuestWord(timeval, wordSize) : (int)ReadGuestWord(timeval, wordSize);
+        var micros = ReadGuestWord(timeval[wordSize..], wordSize);
+        if (seconds < 0 || micros >= USEC_PER_SEC) return false;
 
-        // The scheduler's granularity is milliseconds. Never turn a positive timeval
-        // into zero (disarmed), or shorten a positive interval by truncating it.
-        intervalMs = intervalSec * 1000L + (intervalUsec + 999L) / 1000L;
-        valueMs = valueSec * 1000L + (valueUsec + 999L) / 1000L;
+        // Round up to the scheduler's millisecond granularity and saturate at
+        // Linux's signed 64-bit nanosecond limit.
+        const long maxMs = long.MaxValue / 1_000_000;
+        ms = seconds > maxMs / 1000
+            ? maxMs
+            : Math.Min(maxMs, seconds * 1000 + (long)(micros + 999) / 1000);
         return true;
     }
 
-    private static bool WriteItimerval32(Engine engine, uint ptr, long intervalMs, long valueMs)
+    private static bool WriteItimerval(Engine engine, ulong ptr, long intervalMs, long valueMs)
     {
-        var intervalSec = intervalMs / 1000;
-        var intervalUsec = intervalMs % 1000 * 1000;
-        var valueSec = valueMs / 1000;
-        var valueUsec = valueMs % 1000 * 1000;
-
-        var buf = new byte[16];
-        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(0, 4), (int)intervalSec);
-        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(4, 4), (int)intervalUsec);
-        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(8, 4), (int)valueSec);
-        BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(12, 4), (int)valueUsec);
+        var wordSize = GuestWordSize(engine);
+        Span<byte> buf = stackalloc byte[wordSize * 4];
+        WriteGuestWord(buf, wordSize, (ulong)(intervalMs / 1000));
+        WriteGuestWord(buf[wordSize..], wordSize, (ulong)(intervalMs % 1000 * 1000));
+        WriteGuestWord(buf[(wordSize * 2)..], wordSize, (ulong)(valueMs / 1000));
+        WriteGuestWord(buf[(wordSize * 3)..], wordSize, (ulong)(valueMs % 1000 * 1000));
         return engine.CopyToUser(ptr, buf);
     }
 
@@ -178,7 +182,7 @@ public partial class SyscallManager
         return remainingSeconds;
     }
 
-    private async ValueTask<int> SysSetitimer(Engine engine, uint which, uint newValuePtr, uint oldValuePtr,
+    private async ValueTask<int> SysSetitimer(Engine engine, uint which, ulong newValuePtr, ulong oldValuePtr,
         uint a4, uint a5, uint a6)
     {
         if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
@@ -189,14 +193,14 @@ public partial class SyscallManager
 
         // Linux validates the new value before touching old_value; an EINVAL must not
         // clobber the caller's output buffer.
-        if (!TryReadItimerval32(engine, newValuePtr, out var newIntervalMs, out var newValueMs))
-            return -(int)Errno.EINVAL;
+        var readError = ReadItimerval(engine, newValuePtr, out var newIntervalMs, out var newValueMs);
+        if (readError != 0) return readError;
 
         var proc = task.Process;
         if (oldValuePtr != 0)
         {
             var (oldIntervalMs, oldRemainingMs) = ReadItimerState(proc, scheduler, (int)which);
-            if (!WriteItimerval32(engine, oldValuePtr, oldIntervalMs, oldRemainingMs))
+            if (!WriteItimerval(engine, oldValuePtr, oldIntervalMs, oldRemainingMs))
                 return -(int)Errno.EFAULT;
         }
 
@@ -207,7 +211,7 @@ public partial class SyscallManager
         return 0;
     }
 
-    private async ValueTask<int> SysGetitimer(Engine engine, uint which, uint currValuePtr, uint a3, uint a4,
+    private async ValueTask<int> SysGetitimer(Engine engine, uint which, ulong currValuePtr, uint a3, uint a4,
         uint a5, uint a6)
     {
         if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
@@ -217,7 +221,7 @@ public partial class SyscallManager
         if (currValuePtr == 0) return -(int)Errno.EFAULT;
 
         var (intervalMs, remainingMs) = ReadItimerState(task.Process, scheduler, (int)which);
-        if (!WriteItimerval32(engine, currValuePtr, intervalMs, remainingMs))
+        if (!WriteItimerval(engine, currValuePtr, intervalMs, remainingMs))
             return -(int)Errno.EFAULT;
         return 0;
     }
@@ -237,21 +241,21 @@ public partial class SyscallManager
         return (state.IntervalMs, remaining > 0 ? remaining : 0);
     }
 
-    private async ValueTask<int> SysClockSetTime64(Engine engine, uint clockId, uint tsPtr, uint a3, uint a4,
+    private async ValueTask<int> SysClockSetTime64(Engine engine, uint clockId, ulong tsPtr, uint a3, uint a4,
         uint a5, uint a6)
     {
         // Not permitted
         return -(int)Errno.EPERM;
     }
 
-    private async ValueTask<int> SysClockAdjTime64(Engine engine, uint clockId, uint txPtr, uint a3, uint a4,
+    private async ValueTask<int> SysClockAdjTime64(Engine engine, uint clockId, ulong txPtr, uint a3, uint a4,
         uint a5, uint a6)
     {
         // Not permitted / Stubbed
         return -(int)Errno.EPERM;
     }
 
-    private async ValueTask<int> SysClockGetResTime64(Engine engine, uint clockId, uint resPtr, uint a3, uint a4,
+    private async ValueTask<int> SysClockGetResTime64(Engine engine, uint clockId, ulong resPtr, uint a3, uint a4,
         uint a5, uint a6)
     {
         if (!TryGetClockResolution((int)clockId, out var resolutionNs)) return -(int)Errno.EINVAL;
@@ -329,6 +333,7 @@ public partial class SyscallManager
     private async ValueTask<int> SysTimerGetTime32(Engine engine, uint timerId, uint currPtr, uint a3, uint a4,
         uint a5, uint a6)
     {
+        if (engine.IsAArch64) return await SysTimerGetTime64(engine, timerId, currPtr, a3, a4, a5, a6);
         if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
 
         var proc = task.Process;
@@ -364,7 +369,7 @@ public partial class SyscallManager
         return 0;
     }
 
-    private async ValueTask<int> SysTimerGetTime64(Engine engine, uint timerId, uint currPtr, uint a3, uint a4,
+    private async ValueTask<int> SysTimerGetTime64(Engine engine, uint timerId, ulong currPtr, uint a3, uint a4,
         uint a5, uint a6)
     {
         if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
@@ -464,8 +469,8 @@ public partial class SyscallManager
         return 0;
     }
 
-    private async ValueTask<int> SysTimerSetTime64(Engine engine, uint timerId, uint flags, uint newPtr,
-        uint oldPtr, uint a5, uint a6)
+    private async ValueTask<int> SysTimerSetTime64(Engine engine, uint timerId, uint flags, ulong newPtr,
+        ulong oldPtr, uint a5, uint a6)
     {
         if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
         var scheduler = (engine.Owner as FiberTask)?.CommonKernel;
@@ -528,7 +533,7 @@ public partial class SyscallManager
         return 0;
     }
 
-    private async ValueTask<int> SysTimerCreate(Engine engine, uint clockId, uint sevpPtr, uint timerIdPtr,
+    private async ValueTask<int> SysTimerCreate(Engine engine, uint clockId, ulong sevpPtr, ulong timerIdPtr,
         uint a4, uint a5, uint a6)
     {
         if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
@@ -543,16 +548,11 @@ public partial class SyscallManager
             var buf = new byte[64]; // sigevent is generally padded to 64 bytes
             if (!engine.CopyFromUser(sevpPtr, buf)) return -(int)Errno.EFAULT;
 
-            sigEvent.Value =
-                BinaryPrimitives.ReadUInt64LittleEndian(buf.AsSpan(0,
-                    8)); // Note: Depending on padding, might be (0,4) for 32 bit sys
-            // i386 sigevent: union sigval (4 bytes), int sigev_signo (4 bytes), int sigev_notify (4 bytes), union (padding + thread spec)
-
-            // Re-read carefully for 32-bit x86 sigevent ABI
-            sigEvent.Value = BinaryPrimitives.ReadUInt32LittleEndian(buf.AsSpan(0, 4));
-            sigEvent.Signo = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(4, 4));
-            sigEvent.Notify = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(8, 4));
-            sigEvent.Tid = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(12, 4));
+            var wordSize = GuestWordSize(engine);
+            sigEvent.Value = ReadGuestWord(buf, wordSize);
+            sigEvent.Signo = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(wordSize, 4));
+            sigEvent.Notify = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(wordSize + 4, 4));
+            sigEvent.Tid = BinaryPrimitives.ReadInt32LittleEndian(buf.AsSpan(wordSize + 8, 4));
         }
         else
         {
@@ -602,7 +602,7 @@ public partial class SyscallManager
         return timer.OverrunCount;
     }
 
-    private async ValueTask<int> SysTimerFdGetTime64(Engine engine, uint fd, uint curValuePtr, uint a3, uint a4,
+    private async ValueTask<int> SysTimerFdGetTime64(Engine engine, uint fd, ulong curValuePtr, uint a3, uint a4,
         uint a5, uint a6)
     {
         if (!FDs.TryGetValue((int)fd, out var file)) return -(int)Errno.EBADF;
@@ -624,8 +624,8 @@ public partial class SyscallManager
         return 0;
     }
 
-    private async ValueTask<int> SysTimerFdSetTime64(Engine engine, uint fd, uint flags, uint newValuePtr,
-        uint oldValuePtr, uint a5, uint a6)
+    private async ValueTask<int> SysTimerFdSetTime64(Engine engine, uint fd, uint flags, ulong newValuePtr,
+        ulong oldValuePtr, uint a5, uint a6)
     {
         if (!FDs.TryGetValue((int)fd, out var file)) return -(int)Errno.EBADF;
         if (file.OpenedInode is not TimerFdInode timerFd) return -(int)Errno.EINVAL;

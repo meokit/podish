@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <fstream>
 #include <limits>
 #include <mutex>
 #include <utility>
@@ -40,6 +41,10 @@
 #include "runtime_options.h"
 #include "state.h"
 #include "superopcodes.h"
+#if FIBERCPU_GUEST_AARCH64
+#include "aarch64/aarch64.h"
+#include "aarch64_engine.h"
+#endif
 
 #if defined(__SSE__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 1)
 #include <xmmintrin.h>
@@ -110,6 +115,19 @@ private:
 // callback run another engine (or Step) while block pointers are borrowed.
 static thread_local bool g_native_execution_active = false;
 
+void BasicBlock::Invalidate() {
+    if (!is_valid()) return;
+#if FIBERCPU_LLVM_JIT && FIBERCPU_GUEST_I386
+    if (chain.jit_execution_profile) {
+        TraceLLVMJitRetirement(*this);
+        chain.jit_execution_profile = false;
+    }
+#endif
+    set_valid(false);
+    ++invalidation_revision;
+    // No unlinking needed because chained exits validate the cached block header on dispatch.
+}
+
 class ScopedNativeExecution {
 public:
     explicit ScopedNativeExecution(EmuState* state) : state_(state) {
@@ -134,6 +152,25 @@ private:
     EmuState* state_;
     bool entered_ = false;
 };
+
+#if FIBERCPU_GUEST_AARCH64
+template <class Mapping>
+static size_t CollectArmMappedPages(EmuState* state, uint64_t address, uint64_t size, Mapping* buffer,
+                                    size_t capacity) {
+    if (!state || !buffer || !capacity || !size) return 0;
+    size_t count = 0;
+    state->mmu.visit_arm_mappings(address, size, [&](uint64_t page, mem::HostAddr backing, mem::Property perms) {
+        auto& slot = buffer[count++];
+        slot.guest_page = static_cast<decltype(slot.guest_page)>(page);
+        slot.host_page = backing;
+        slot.perms = static_cast<uint8_t>(perms & mem::Property::RWX);
+        slot.flags = mem::has_property(perms, mem::Property::Dirty) ? X86_PAGE_FLAG_DIRTY : 0;
+        slot.reserved = 0;
+        return count < capacity;
+    });
+    return count;
+}
+#endif
 
 extern "C" {
 
@@ -219,6 +256,7 @@ static void InternalSmcBridge(void* opaque, uint32_t addr) {
     X86_InvalidateCodeCacheByPage(state, addr);
 }
 
+#if FIBERCPU_GUEST_I386
 static bool BlockCrossesPage(const BasicBlock* block) {
     if (!block || block->inst_count() == 0 || block->end_eip <= block->start_eip()) return false;
     return ((block->start_eip() ^ (block->end_eip - 1)) & 0xFFFFF000u) != 0;
@@ -423,6 +461,8 @@ static __attribute__((noinline, cold)) BasicBlock* ResolveBlockForRunSlow(EmuSta
     return CacheDecodedBlock(state, eip, concat_block);
 }
 
+#endif
+
 // Signal Handler for safety
 #if !defined(__EMSCRIPTEN__) && !defined(_WIN32)
 static void SignalHandler(int sig, siginfo_t* info, void* /*ucontext*/) {
@@ -505,6 +545,17 @@ EmuState* X86_Clone(EmuState* parent, int share_mem) {
 
     // 1. Copy Context (Registers, Segments, etc.)
     state->ctx = parent->ctx;
+#if FIBERCPU_GUEST_AARCH64
+    if (parent->arm) {
+        state->arm = std::make_shared<aarch64::State>(*parent->arm);
+        state->arm->active_run = nullptr;  // The invocation frame belongs to the parent's native stack.
+        state->arm->ClearExclusive();
+    }
+    if (parent->arm_mmu) {
+        state->mmu.set_arm_fault_callback(parent->arm_mmu->fault_handler, parent->arm_mmu->fault_userdata);
+        state->mmu.set_arm_mem_hook(parent->arm_mmu->mem_hook, parent->arm_mmu->mem_userdata);
+    }
+#endif
 
     // 2. Memory Handling
     if (share_mem) {
@@ -662,11 +713,98 @@ void X86_SegBaseWrite(EmuState* state, int seg_index, uint32_t base) {
 // Memory Access
 // ----------------------------------------------------------------------------
 
+#if FIBERCPU_GUEST_AARCH64
+static uint64_t CompatRangeSize(uint32_t address, uint32_t size) {
+    return std::min(static_cast<uint64_t>(size), (uint64_t{1} << 32) - address);
+}
+
+int AArch64_MemMapHostPage(EmuState* state, uint64_t address, void* host_page, uint8_t perms) {
+    return state && state->mmu.map_arm_host_page(address, static_cast<mem::HostAddr>(host_page), perms) ? 1 : 0;
+}
+
+void AArch64_MemUnmap(EmuState* state, uint64_t address, uint64_t size) {
+    if (!state) return;
+    state->mmu.enable_arm_address_space();
+    state->mmu.unmap_arm_range(address, size);
+}
+
+void AArch64_MemProtect(EmuState* state, uint64_t address, uint64_t size, uint8_t perms) {
+    if (!state) return;
+    state->mmu.enable_arm_address_space();
+    state->mmu.protect_arm_mapped_range(address, size, perms);
+}
+
+void AArch64_MemWrite(EmuState* state, uint64_t address, const uint8_t* data, uint32_t size) {
+    if (!state || !data || !size || !mem::ArmAddressRangeValid(address, size)) return;
+    state->mmu.enable_arm_address_space();
+    for (uint32_t i = 0; i < size; ++i) (void)state->mmu.write_arm_no_utlb<uint8_t>(address + i, data[i]);
+}
+
+void AArch64_MemRead(EmuState* state, uint64_t address, uint8_t* data, uint32_t size) {
+    if (!state || !data || !size || !mem::ArmAddressRangeValid(address, size)) return;
+    state->mmu.enable_arm_address_space();
+    for (uint32_t i = 0; i < size; ++i) data[i] = state->mmu.read_arm_no_utlb<uint8_t>(address + i).value_or(0);
+}
+
+int AArch64_MemIsDirty(EmuState* state, uint64_t address) {
+    if (!state) return 0;
+    state->mmu.enable_arm_address_space();
+    return mem::has_property(state->mmu.get_arm_property(address), mem::Property::Dirty) ? 1 : 0;
+}
+
+int AArch64_MemHasSlowWrite(EmuState* state, uint64_t address) {
+    if (!state) return 0;
+    state->mmu.enable_arm_address_space();
+    return mem::has_property(state->mmu.get_arm_property(address), mem::Property::ForceWriteSlow) ? 1 : 0;
+}
+
+void* AArch64_ResolvePtrForRead(EmuState* state, uint64_t address) {
+    if (!state) return nullptr;
+    state->mmu.enable_arm_address_space();
+    return state->mmu.resolve_arm_safe_for_read(address);
+}
+
+void* AArch64_ResolvePtrForWrite(EmuState* state, uint64_t address) {
+    if (!state) return nullptr;
+    state->mmu.enable_arm_address_space();
+    return state->mmu.resolve_arm_safe_for_write(address);
+}
+
+size_t AArch64_CollectMappedPages(EmuState* state, uint64_t address, uint64_t size, AArch64_PageMapping* buffer,
+                                  size_t max_count) {
+    if (state) state->mmu.enable_arm_address_space();
+    return CollectArmMappedPages(state, address, size, buffer, max_count);
+}
+
+void AArch64_SetExtendedFaultCallback(EmuState* state, AArch64_FaultHandler handler, void* userdata) {
+    if (state && (handler || state->arm_mmu)) state->mmu.set_arm_fault_callback(handler, userdata);
+}
+
+void AArch64_SetMemHook(EmuState* state, AArch64_MemHook hook, void* userdata) {
+    if (state && (hook || state->arm_mmu)) state->mmu.set_arm_mem_hook(hook, userdata);
+}
+
+uint64_t AArch64_GetFaultAddress(EmuState* state) { return state ? state->arm_fault_address : 0; }
+
+void AArch64_ResetCodeCacheByRange(EmuState* state, uint64_t address, uint64_t size) {
+    if (!state) return;
+    state->mmu.enable_arm_address_space();
+    state->mmu.invalidate_arm_code_cache_range(address, size);
+}
+#endif
+
 int X86_MemMapHostPage(EmuState* state, uint32_t addr, void* host_page, uint8_t perms) {
+#if FIBERCPU_GUEST_AARCH64
+    if (state && state->mmu.has_arm_address_space()) return AArch64_MemMapHostPage(state, addr, host_page, perms);
+#endif
     return state && state->mmu.map_host_page(addr, static_cast<mem::HostAddr>(host_page), perms) ? 1 : 0;
 }
 
 void X86_MemProtect(EmuState* state, uint32_t addr, uint32_t size, uint8_t perms) {
+#if FIBERCPU_GUEST_AARCH64
+    if (state && state->mmu.has_arm_address_space())
+        return AArch64_MemProtect(state, addr, CompatRangeSize(addr, size), perms);
+#endif
     if (state) state->mmu.protect_mapped_range(addr, size, perms);
 }
 
@@ -726,6 +864,9 @@ int X86_EngineAttachMmuForExec(EmuState* state, X86_MmuHandle* mmu) {
 
 void X86_MemUnmap(EmuState* state, uint32_t addr, uint32_t size) {
     if (!state || size == 0) return;
+#if FIBERCPU_GUEST_AARCH64
+    if (state->mmu.has_arm_address_space()) return AArch64_MemUnmap(state, addr, CompatRangeSize(addr, size));
+#endif
     auto host_page_bases = state->mmu.collect_host_page_bases_for_guest_range(addr, size);
     state->mmu.munmap(addr, size);
     state->mmu.invalidate_code_cache_host_pages(host_page_bases);
@@ -733,6 +874,10 @@ void X86_MemUnmap(EmuState* state, uint32_t addr, uint32_t size) {
 
 void X86_MemWrite(EmuState* state, uint32_t addr, const uint8_t* data, uint32_t size) {
     if (!state || !data || size == 0) return;
+#if FIBERCPU_GUEST_AARCH64
+    if (state->mmu.has_arm_address_space())
+        return AArch64_MemWrite(state, addr, data, static_cast<uint32_t>(CompatRangeSize(addr, size)));
+#endif
 
     state->mmu.sync_runtime_tlb_shootdowns();
     [[maybe_unused]] auto runtime_tlb_batch = state->mmu.scoped_runtime_tlb_publish_batch();
@@ -744,6 +889,10 @@ void X86_MemWrite(EmuState* state, uint32_t addr, const uint8_t* data, uint32_t 
 
 void X86_MemRead(EmuState* state, uint32_t addr, uint8_t* val, uint32_t size) {
     if (!state || !val || size == 0) return;
+#if FIBERCPU_GUEST_AARCH64
+    if (state->mmu.has_arm_address_space())
+        return AArch64_MemRead(state, addr, val, static_cast<uint32_t>(CompatRangeSize(addr, size)));
+#endif
 
     state->mmu.sync_runtime_tlb_shootdowns();
     for (uint32_t i = 0; i < size; ++i) {
@@ -754,27 +903,43 @@ void X86_MemRead(EmuState* state, uint32_t addr, uint8_t* val, uint32_t size) {
 }
 
 int X86_MemIsDirty(EmuState* state, uint32_t addr) {
+#if FIBERCPU_GUEST_AARCH64
+    if (state && state->mmu.has_arm_address_space()) return AArch64_MemIsDirty(state, addr);
+#endif
     mem::Property p = state->mmu.get_property(addr);
     return mem::has_property(p, mem::Property::Dirty) ? 1 : 0;
 }
 
 int X86_MemHasSlowWrite(EmuState* state, uint32_t addr) {
+#if FIBERCPU_GUEST_AARCH64
+    if (state && state->mmu.has_arm_address_space()) return AArch64_MemHasSlowWrite(state, addr);
+#endif
     mem::Property p = state->mmu.get_property(addr);
     return mem::has_property(p, mem::Property::ForceWriteSlow) ? 1 : 0;
 }
 
 void* X86_ResolvePtrForRead(EmuState* state, uint32_t addr) {
     if (!state) return nullptr;
+#if FIBERCPU_GUEST_AARCH64
+    if (state->mmu.has_arm_address_space()) return AArch64_ResolvePtrForRead(state, addr);
+#endif
     return state->mmu.resolve_safe_for_read(addr);
 }
 
 void* X86_ResolvePtrForWrite(EmuState* state, uint32_t addr) {
     if (!state) return nullptr;
+#if FIBERCPU_GUEST_AARCH64
+    if (state->mmu.has_arm_address_space()) return AArch64_ResolvePtrForWrite(state, addr);
+#endif
     return state->mmu.resolve_safe_for_write(addr);
 }
 
 size_t X86_CollectMappedPages(EmuState* state, uint32_t addr, uint32_t size, X86_PageMapping* buffer,
                               size_t max_count) {
+#if FIBERCPU_GUEST_AARCH64
+    if (state && state->mmu.has_arm_address_space())
+        return CollectArmMappedPages(state, addr, CompatRangeSize(addr, size), buffer, max_count);
+#endif
     auto* page_dir = state ? state->mmu.page_directory() : nullptr;
     if (!state || !buffer || max_count == 0 || size == 0 || !page_dir) return 0;
 
@@ -820,6 +985,7 @@ size_t X86_CollectMappedPages(EmuState* state, uint32_t addr, uint32_t size, X86
 // Unlike DecodeBlock(..., 1), this has no block-pool allocation. Keep the
 // caller's status, counters, and SMC policy intact (X86_Step resets those at
 // its public API boundary, so it cannot be called from inside X86_Run).
+#if FIBERCPU_GUEST_I386
 static bool ExecuteSingleInstructionOnStack(EmuState* state) {
 #ifdef FIBERCPU_ENABLE_SEQUENCE_PROFILE
     state->sequence_expected_op = nullptr;
@@ -879,6 +1045,10 @@ static bool ExecuteSingleInstructionOnStack(EmuState* state) {
 
 int X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
     if (!state || g_native_execution_active || state->native_execution_active) return 0;
+#if FIBERCPU_GUEST_AARCH64
+    if (state->mmu.has_arm_address_space()) [[unlikely]]
+        state->mmu.enable_i386_address_space();
+#endif
 #if FIBERCPU_LLVM_JIT
     ScopedLLVMJitExecution jit_execution(*state);
 #endif
@@ -1049,6 +1219,10 @@ int X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
 
         BasicBlock* block_ptr = state->mmu.lookup_cached_block(eip);
         bool use_single_step = false;
+#ifdef ENABLE_TLB_STATS
+        auto& dispatch_stats = state->mmu.dispatch_stats;
+        ++(block_ptr && block_ptr->is_valid() ? dispatch_stats.block_lookup_hits : dispatch_stats.block_lookup_misses);
+#endif
         if (!block_ptr || !block_ptr->is_valid()) {
             block_ptr = ResolveBlockForRunSlow(state, eip, end_eip, block_ptr, &use_single_step);
         }
@@ -1087,6 +1261,25 @@ int X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
 #endif
     return 1;
 }
+
+#else
+int X86_Run(EmuState*, uint32_t, uint64_t) { return 0; }
+#endif
+
+#if FIBERCPU_GUEST_AARCH64
+int AArch64_Run(EmuState* state, uint64_t end_pc, uint64_t budget, int step) {
+    if (!state || g_native_execution_active || state->native_execution_active) return step ? -1 : 0;
+    if (!state->mmu.has_arm_address_space()) [[unlikely]]
+        state->mmu.enable_arm_address_space();
+#if FIBERCPU_LLVM_JIT
+    ScopedLLVMJitExecution jit_execution(*state);
+#endif
+    state->mmu.flush_pending_code_cache_before_run();
+    ScopedNativeExecution execution(state);
+    if (!execution) return step ? -1 : 0;
+    return RunArmEngine(*state, end_pc, budget, step != 0);
+}
+#endif
 
 void X86_GetBlockStats(EmuState* state, X86_BlockStats* stats) {
     if (!state || !stats) return;
@@ -1272,9 +1465,16 @@ void X86_EmuYield(EmuState* state) {
     if (state) state->status = EmuStatus::Yield;
 }
 
+#if FIBERCPU_GUEST_I386
 int X86_Step(EmuState* state) {
-#if FIBERCPU_LLVM_JIT
+#if FIBERCPU_LLVM_JIT || FIBERCPU_GUEST_AARCH64
     if (!state || g_native_execution_active || state->native_execution_active) return -1;
+#endif
+#if FIBERCPU_GUEST_AARCH64
+    if (state->mmu.has_arm_address_space()) [[unlikely]]
+        state->mmu.enable_i386_address_space();
+#endif
+#if FIBERCPU_LLVM_JIT
     ScopedLLVMJitExecution jit_execution(*state);
     state->mmu.flush_pending_code_cache_before_run();
 #endif
@@ -1309,6 +1509,10 @@ int X86_Step(EmuState* state) {
     return (int)state->status;
 }
 
+#else
+int X86_Step(EmuState*) { return -1; }
+#endif
+
 int X86_GetStatus(EmuState* state) { return (int)state->status; }
 
 // ----------------------------------------------------------------------------
@@ -1329,6 +1533,9 @@ void X86_SetExtendedFaultCallback(EmuState* state, fiberish::FaultHandler handle
 void X86_SetMemHook(EmuState* state, MemHook hook, void* userdata) {
     state->mem_hook = hook;
     state->mem_userdata = userdata;
+#if FIBERCPU_GUEST_AARCH64
+    state->mmu.flush_arm_tlb_for_hook();
+#endif
 
     if (hook) {
         state->mmu.set_mem_hook(InternalMemHookBridge, state);
@@ -1382,6 +1589,10 @@ int X86_IsExecuting(EmuState* state) { return state && state->native_execution_a
 
 void X86_ResetCodeCacheByRange(EmuState* state, uint32_t addr, uint32_t size) {
     if (!state) return;
+#if FIBERCPU_GUEST_AARCH64
+    if (state->mmu.has_arm_address_space())
+        return AArch64_ResetCodeCacheByRange(state, addr, CompatRangeSize(addr, size));
+#endif
     state->mmu.invalidate_code_cache_range(addr, size);
 }
 
@@ -1463,7 +1674,10 @@ void X86_GetTlbStats(EmuState* state, X86_TlbStats* stats) {
 
 void X86_ResetTlbStats(EmuState* state) {
 #ifdef ENABLE_TLB_STATS
-    if (state) state->mmu.stats.reset();
+    if (state) {
+        state->mmu.stats.reset();
+        state->mmu.dispatch_stats = {};
+    }
 #endif
 }
 
@@ -1481,23 +1695,32 @@ int X86_DumpStats(EmuState* state, char* buffer, size_t buffer_size) {
 #endif
 #ifdef ENABLE_TLB_STATS
     auto& s = state->mmu.stats;
-    int n = snprintf(buffer, buffer_size,
-                     "{\"l1_read_hits\":%llu,\"l1_write_hits\":%llu,"
-                     "\"l2_read_hits\":%llu,\"l2_write_hits\":%llu,"
-                     "\"read_misses\":%llu,\"write_misses\":%llu,"
-                     "\"total_reads\":%llu,\"total_writes\":%llu,"
-                     "\"all_blocks_count\":%zu,\"block_cache_size\":%zu,\"page_to_blocks_size\":%zu,"
-                     "\"code_cache_bytes_requested\":%llu,\"code_cache_limit_bytes\":%llu,"
-                     "\"code_cache_flush_count\":%llu,\"code_cache_generation\":%llu,\"llvm_code_cache_bytes\":%zu,"
-                     "\"jit_arena_used_bytes\":%zu,\"jit_arena_capacity_bytes\":%zu}",
-                     (unsigned long long)s.l1_read_hits, (unsigned long long)s.l1_write_hits,
-                     (unsigned long long)s.l2_read_hits, (unsigned long long)s.l2_write_hits,
-                     (unsigned long long)s.read_misses, (unsigned long long)s.write_misses,
-                     (unsigned long long)s.total_reads, (unsigned long long)s.total_writes,
-                     code_cache.all_blocks.size(), code_cache.CountValidBlocks(), code_cache.page_to_blocks.size(),
-                     (unsigned long long)code_cache.requested_block_bytes,
-                     (unsigned long long)code_cache.block_budget_bytes, (unsigned long long)code_cache.flush_count,
-                     (unsigned long long)code_cache.generation, arena.llvm, arena.total, arena.capacity);
+    const auto& dispatch_stats = state->mmu.dispatch_stats;
+    int n = snprintf(
+        buffer, buffer_size,
+        "{\"l1_read_hits\":%llu,\"l1_write_hits\":%llu,"
+        "\"l2_read_hits\":%llu,\"l2_write_hits\":%llu,"
+        "\"read_misses\":%llu,\"write_misses\":%llu,"
+        "\"total_reads\":%llu,\"total_writes\":%llu,"
+        "\"direct_links\":%llu,\"resolved_links\":%llu,\"cross_page_links\":%llu,\"link_misses\":%llu,"
+        "\"block_lookup_hits\":%llu,\"block_lookup_misses\":%llu,\"block_allocations\":%llu,"
+        "\"block_allocated_bytes\":%llu,\"memory_replays\":%llu,"
+        "\"all_blocks_count\":%zu,\"block_cache_size\":%zu,\"page_to_blocks_size\":%zu,"
+        "\"code_cache_bytes_requested\":%llu,\"code_cache_limit_bytes\":%llu,"
+        "\"code_cache_flush_count\":%llu,\"code_cache_generation\":%llu,\"llvm_code_cache_bytes\":%zu,"
+        "\"jit_arena_used_bytes\":%zu,\"jit_arena_capacity_bytes\":%zu}",
+        (unsigned long long)s.l1_read_hits, (unsigned long long)s.l1_write_hits, (unsigned long long)s.l2_read_hits,
+        (unsigned long long)s.l2_write_hits, (unsigned long long)s.read_misses, (unsigned long long)s.write_misses,
+        (unsigned long long)s.total_reads, (unsigned long long)s.total_writes,
+        (unsigned long long)dispatch_stats.direct_links, (unsigned long long)dispatch_stats.resolved_links,
+        (unsigned long long)dispatch_stats.cross_page_links, (unsigned long long)dispatch_stats.link_misses,
+        (unsigned long long)dispatch_stats.block_lookup_hits, (unsigned long long)dispatch_stats.block_lookup_misses,
+        (unsigned long long)dispatch_stats.block_allocations, (unsigned long long)dispatch_stats.block_allocated_bytes,
+        (unsigned long long)dispatch_stats.memory_replays, code_cache.AllocatedBlockCount(),
+        code_cache.CountValidBlocks(), code_cache.CachedPageCount(),
+        (unsigned long long)code_cache.requested_block_bytes, (unsigned long long)code_cache.block_budget_bytes,
+        (unsigned long long)code_cache.flush_count, (unsigned long long)code_cache.generation, arena.llvm, arena.total,
+        arena.capacity);
     return n;
 #else
     return snprintf(buffer, buffer_size,
@@ -1505,7 +1728,7 @@ int X86_DumpStats(EmuState* state, char* buffer, size_t buffer_size) {
                     "\"code_cache_bytes_requested\":%llu,\"code_cache_limit_bytes\":%llu,"
                     "\"code_cache_flush_count\":%llu,\"code_cache_generation\":%llu,\"llvm_code_cache_bytes\":%zu,"
                     "\"jit_arena_used_bytes\":%zu,\"jit_arena_capacity_bytes\":%zu}",
-                    code_cache.all_blocks.size(), code_cache.CountValidBlocks(), code_cache.page_to_blocks.size(),
+                    code_cache.AllocatedBlockCount(), code_cache.CountValidBlocks(), code_cache.CachedPageCount(),
                     (unsigned long long)code_cache.requested_block_bytes,
                     (unsigned long long)code_cache.block_budget_bytes, (unsigned long long)code_cache.flush_count,
                     (unsigned long long)code_cache.generation, arena.llvm, arena.total, arena.capacity);
@@ -1530,6 +1753,7 @@ size_t X86_GetBlockList(EmuState* state, BasicBlock** buffer, size_t max_count) 
 }
 
 int X86_ReadBlockDump(const BasicBlock* block, X86_BlockDumpHeader* header, X86_BlockDumpOp* ops, uint32_t capacity) {
+#if FIBERCPU_GUEST_I386
     static_assert(sizeof(X86_BlockDumpHeader) == 24);
     static_assert(sizeof(X86_BlockDumpOp) == 32);
     if (!block || !header) return 0;
@@ -1550,8 +1774,12 @@ int X86_ReadBlockDump(const BasicBlock* block, X86_BlockDumpHeader* header, X86_
                   0};
     }
     return 1;
+#else
+    return 0;
+#endif
 }
 
+#if FIBERCPU_GUEST_I386
 int32_t X86_GetOpIdForHandler(void* handler) {
     auto fn = reinterpret_cast<HandlerFunc>(handler);
 #if FIBERCPU_DYNAMIC_OPERANDS
@@ -1576,6 +1804,20 @@ uint32_t X86_GetTrainingHandlerId(void* handler) {
 uint32_t X86_GetTrainingOperationIdAt(uint32_t index) { return TrainingOperationIdAt(index); }
 
 const char* X86_GetTrainingOperationName(uint32_t id) { return FindTrainingOperationName(id); }
+
+#else
+int32_t X86_GetOpIdForHandler(void*) { return -1; }
+uint32_t X86_GetTrainingHandlerId(void*) { return 0; }
+uint32_t X86_GetTrainingOperationIdAt(uint32_t) { return 0; }
+const char* X86_GetTrainingOperationName(uint32_t) { return nullptr; }
+int32_t X86_GetHandlerCount() { return 0; }
+int32_t X86_GetHandlerId(void*) { return -1; }
+void* X86_GetHandlerById(int32_t) { return nullptr; }
+const char* X86_GetHandlerSymbolById(int32_t) { return nullptr; }
+const char* X86_GetInstructionCatalogHash() { return nullptr; }
+int32_t X86_GetInstructionVariantCount() { return 0; }
+int32_t X86_GetInstructionVariant(int32_t, X86_InstructionVariant*) { return 0; }
+#endif
 
 uint64_t X86_GetLLVMJitBlockCount() {
 #if FIBERCPU_LLVM_JIT
@@ -1612,7 +1854,51 @@ uint64_t X86_GetLinkedPageRegionHitCount() {
 int X86_FinishRun(const X86_RunContext* run, char* error, size_t error_size) {
     if (error && error_size) error[0] = '\0';
     if (!run) return 0;
-#if FIBERCPU_LLVM_JIT
+#if FIBERCPU_GUEST_AARCH64
+    if (const auto& profile = run->options->arm_profile) {
+        if (g_native_execution_active) return 0;
+        std::lock_guard guard(profile->mutex);
+        std::ofstream output(profile->path);
+        output << R"({"version":2,"architecture":"aarch64","entries":[)";
+        bool first = true;
+        for (const auto& [word, count] : profile->words) {
+            if (!first) output << ',';
+            first = false;
+            output << R"({"word":)" << word << R"(,"count":)" << count << '}';
+        }
+        output << R"(],"pairs":[)";
+        first = true;
+        for (const auto& [key, count] : profile->pairs) {
+            if (!first) output << ',';
+            first = false;
+            output << R"({"first":)" << (key >> 32) << R"(,"second":)" << static_cast<uint32_t>(key) << R"(,"count":)"
+                   << count << '}';
+        }
+        auto write_sequences = [&](const char* name, const auto& histogram) {
+            output << "],\"" << name << "\":[";
+            bool separator = false;
+            for (const auto& [words, count] : histogram) {
+                if (separator) output << ',';
+                separator = true;
+                output << R"({"words":[)";
+                for (size_t i = 0; i < words.size(); ++i) {
+                    if (i) output << ',';
+                    output << words[i];
+                }
+                output << R"(],"count":)" << count << '}';
+            }
+        };
+        write_sequences("sequences", profile->sequences);
+        write_sequences("blocks", profile->blocks);
+        output << "]}\n";
+        output.close();
+        if (!output) {
+            if (error && error_size) std::snprintf(error, error_size, "Cannot write %s", profile->path.c_str());
+            return 0;
+        }
+    }
+#endif
+#if FIBERCPU_LLVM_JIT && FIBERCPU_GUEST_I386
     if (run->options->profile) {
         std::string diagnostic;
         if (g_native_execution_active) {
@@ -1635,7 +1921,7 @@ int X86_BuildLinkedLLVMBlockCache(const char* profile_path, const char* cache_pa
 
 int X86_BuildLinkedLLVMBlockCacheWithOptions(const char* profile_path, const char* cache_path, uint32_t limit,
                                              const char* opt_level, const char* pass_pipeline) {
-#if FIBERCPU_LLVM_JIT
+#if FIBERCPU_LLVM_JIT && FIBERCPU_GUEST_I386
     return BuildLinkedLLVMBlockCache(profile_path, cache_path, limit, opt_level, pass_pipeline);
 #else
     (void)profile_path;

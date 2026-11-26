@@ -8,13 +8,13 @@ internal static class TbCoh
     private sealed class ScratchState
     {
         public readonly HashSet<IntPtr> HostPages = [];
-        public readonly Dictionary<VMAManager, HashSet<uint>> InvalidationPagesByMm = [];
-        public readonly List<HashSet<uint>> InvalidationPageSetPool = [];
+        public readonly Dictionary<VMAManager, HashSet<ulong>> InvalidationPagesByMm = [];
+        public readonly List<HashSet<ulong>> InvalidationPageSetPool = [];
     }
 
     private struct InvalidationScanState
     {
-        public required Dictionary<VMAManager, HashSet<uint>> InvalidationPagesByMm;
+        public required Dictionary<VMAManager, HashSet<ulong>> InvalidationPagesByMm;
         public required ScratchState Scratch;
         public nuint WriterIdentity;
         public int UsedSetCount;
@@ -32,7 +32,7 @@ internal static class TbCoh
         return _scratch ??= new ScratchState();
     }
 
-    private static HashSet<uint> RentInvalidationPageSet(ScratchState scratch, ref int usedSetCount)
+    private static HashSet<ulong> RentInvalidationPageSet(ScratchState scratch, ref int usedSetCount)
     {
         if (usedSetCount < scratch.InvalidationPageSetPool.Count)
         {
@@ -41,13 +41,13 @@ internal static class TbCoh
             return existing;
         }
 
-        var created = new HashSet<uint>();
+        var created = new HashSet<ulong>();
         scratch.InvalidationPageSetPool.Add(created);
         usedSetCount++;
         return created;
     }
 
-    private static void CollectInvalidations(VMAManager mm, uint guestPageStart, ref InvalidationScanState state)
+    private static void CollectInvalidations(VMAManager mm, ulong guestPageStart, ref InvalidationScanState state)
     {
         if (GetCoherenceIdentity(mm) == state.WriterIdentity)
             return;
@@ -84,7 +84,7 @@ internal static class TbCoh
         }
     }
 
-    internal static void ApplyWxRange(VMAManager mm, uint addr, uint len)
+    internal static void ApplyWxRange(VMAManager mm, ulong addr, ulong len)
     {
         if (len == 0) return;
 
@@ -107,7 +107,7 @@ internal static class TbCoh
         TbCohDiagnosticsScope.Record(result);
     }
 
-    internal static void OnWriteFault(VMAManager writerMm, uint pageStart, IntPtr hostPagePtr)
+    internal static void OnWriteFault(VMAManager writerMm, ulong pageStart, IntPtr hostPagePtr)
     {
         ArgumentNullException.ThrowIfNull(writerMm);
         if (hostPagePtr == IntPtr.Zero)

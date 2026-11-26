@@ -1156,19 +1156,6 @@ DecodedInstruction BasicBlock::ReadOp(size_t slot) const {
     return result;
 }
 
-void BasicBlock::Invalidate() {
-    if (!is_valid()) return;
-#if FIBERCPU_LLVM_JIT
-    if (chain.jit_execution_profile) {
-        TraceLLVMJitRetirement(*this);
-        chain.jit_execution_profile = false;
-    }
-#endif
-    set_valid(false);
-    ++invalidation_revision;
-    // No unlinking needed because chained exits validate the cached block header on dispatch.
-}
-
 void BasicBlock::Revalidate() { set_valid(true); }
 
 }  // namespace fiberish

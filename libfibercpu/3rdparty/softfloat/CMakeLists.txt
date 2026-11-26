@@ -5,6 +5,11 @@ list(FILTER SOURCES EXCLUDE REGEX ".*M(\\.c|To.*\\.c)")
 # slow-memory floating-point API excluded above. binary128 multiplication needs it.
 list(APPEND SOURCES "${CMAKE_CURRENT_SOURCE_DIR}/s_mul128To256M.c")
 
+if(_aarch64_software_fp)
+    file(GLOB BINARY_FP_SOURCES "binary32-64/*.c")
+    list(APPEND SOURCES ${BINARY_FP_SOURCES})
+endif()
+
 # Build as OBJECT + STATIC:
 # - OBJECT lets parent targets embed softfloat objects directly into another static archive.
 # - STATIC keeps standalone usage for non-embedded configurations.

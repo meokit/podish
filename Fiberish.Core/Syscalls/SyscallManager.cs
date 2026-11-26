@@ -6,8 +6,13 @@ using Fiberish.Diagnostics;
 using Fiberish.Memory;
 using Fiberish.Native;
 using Fiberish.VFS;
-using Fiberish.X86.Native;
 using Microsoft.Extensions.Logging;
+
+#if FIBER_GUEST_I386 && FIBER_GUEST_AARCH64
+using SyscallCpu = Fiberish.Core.IGuestCpu;
+#else
+using SyscallCpu = Fiberish.Core.Engine;
+#endif
 
 namespace Fiberish.Syscalls;
 
@@ -44,13 +49,13 @@ public partial class SyscallManager
 
     public bool IsClosed => Volatile.Read(ref _closed) != 0;
 
-    public SyscallManager(Engine engine, VMAManager mem, uint brk, TtyDiscipline? tty = null,
+    public SyscallManager(Engine engine, VMAManager mem, ulong brk, TtyDiscipline? tty = null,
         DeviceNumberManager? deviceNumbers = null)
         : this(engine, mem, brk, tty, deviceNumbers, initializeVdso: true)
     {
     }
 
-    internal SyscallManager(Engine engine, VMAManager mem, uint brk, TtyDiscipline? tty,
+    internal SyscallManager(Engine engine, VMAManager mem, ulong brk, TtyDiscipline? tty,
         DeviceNumberManager? deviceNumbers, bool initializeVdso)
     {
         ArgumentNullException.ThrowIfNull(engine);
@@ -144,8 +149,8 @@ public partial class SyscallManager
         SharedUnixSocketNamespace sharedUnixSocketNamespace,
         SharedFsState sharedFsState,
         FutexManager futex,
-        SysVShmManager sysvShm, SysVSemManager sysvSem, uint brk,
-        uint brkBase,
+        SysVShmManager sysvShm, SysVSemManager sysvSem, ulong brk,
+        ulong brkBase,
         bool strace, Dentry devShmRoot, SuperBlock memfdSuperBlock,
         Mount anonMount,
         TtyDiscipline? tty,
@@ -236,8 +241,8 @@ public partial class SyscallManager
 
     public FutexManager Futex { get; }
 
-    public uint BrkAddr { get; set; }
-    public uint BrkBase { get; }
+    public ulong BrkAddr { get; set; }
+    public ulong BrkBase { get; }
     public bool Strace { get; set; }
     public NetworkMode NetworkMode { get; set; } = NetworkMode.Host;
 
@@ -522,7 +527,7 @@ public partial class SyscallManager
                 LinuxConstants.PageSize);
 
         // Map vDSO page writable for setup first, then reprotect it RX after the trampolines are installed.
-        var vdsoAddr = Mem.Layout?.VdsoBaseHint ?? (LinuxConstants.TaskSize32 - LinuxConstants.PageSize);
+        var vdsoAddr = checked((uint)(Mem.Layout?.VdsoBaseHint ?? LinuxConstants.TaskSize32 - LinuxConstants.PageSize));
         ProcessAddressSpaceSync.Mmap(Mem, CurrentSyscallEngine, vdsoAddr, 4096, Protection.Read | Protection.Write,
             MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, "[vdso]");
 
@@ -530,18 +535,28 @@ public partial class SyscallManager
         if (!Mem.PrefaultRange(vdsoAddr, 4096, CurrentSyscallEngine, true))
             throw new OutOfMemoryException("Failed to allocate vDSO page");
 
-        // Write trampolines
-        // __kernel_sigreturn: pop eax; mov eax, 119; int 0x80
-        ReadOnlySpan<byte> sigret = [0x58, 0xB8, 0x77, 0x00, 0x00, 0x00, 0xCD, 0x80];
-        if (!CurrentSyscallEngine.CopyToUser(vdsoAddr, sigret))
-            Logger.LogError("Failed to write sigreturn trampoline to vDSO");
         SigReturnAddr = vdsoAddr;
+        if (CurrentSyscallEngine.IsAArch64)
+        {
+            // __kernel_rt_sigreturn: mov x8, #139; svc #0
+            ReadOnlySpan<byte> rtSigReturn = [0x68, 0x11, 0x80, 0xd2, 0x01, 0x00, 0x00, 0xd4];
+            if (!CurrentSyscallEngine.CopyToUser(vdsoAddr, rtSigReturn))
+                throw new InvalidOperationException("Failed to write AArch64 signal return trampoline");
+            RtSigReturnAddr = vdsoAddr;
+        }
+        else
+        {
+            // __kernel_sigreturn: pop eax; mov eax, 119; int 0x80
+            ReadOnlySpan<byte> sigret = [0x58, 0xB8, 0x77, 0x00, 0x00, 0x00, 0xCD, 0x80];
+            if (!CurrentSyscallEngine.CopyToUser(vdsoAddr, sigret))
+                Logger.LogError("Failed to write sigreturn trampoline to vDSO");
 
-        // __kernel_rt_sigreturn: mov eax, 173; int 0x80
-        ReadOnlySpan<byte> rtsigret = [0xB8, 0xAD, 0x00, 0x00, 0x00, 0xCD, 0x80];
-        if (!CurrentSyscallEngine.CopyToUser(vdsoAddr + 16, rtsigret))
-            Logger.LogError("Failed to write rt_sigreturn trampoline to vDSO");
-        RtSigReturnAddr = vdsoAddr + 16;
+            // __kernel_rt_sigreturn: mov eax, 173; int 0x80
+            ReadOnlySpan<byte> rtsigret = [0xB8, 0xAD, 0x00, 0x00, 0x00, 0xCD, 0x80];
+            if (!CurrentSyscallEngine.CopyToUser(vdsoAddr + 16, rtsigret))
+                Logger.LogError("Failed to write rt_sigreturn trampoline to vDSO");
+            RtSigReturnAddr = vdsoAddr + 16;
+        }
 
         // Switch to the final RX permissions through mprotect so the VMA metadata stays in sync with the engine.
         var mprotectRc = ProcessAddressSpaceSync.Mprotect(Mem, CurrentSyscallEngine, vdsoAddr, 4096,
@@ -1403,100 +1418,106 @@ public partial class SyscallManager
             // Get current FiberTask (New Model Only) via Engine.Owner
             var fiberTask = engine.Owner as FiberTask;
 
-            // Save EIP for potential SA_RESTART before executing syscall
-            // EIP points after 'int 0x80' (CD 80), so subtract 2 to get the syscall instruction
-            if (fiberTask != null) fiberTask.SyscallEip = engine.Eip - 2;
+            // The CPU has advanced past the syscall instruction.
+            var isAArch64 = engine.IsAArch64;
+            if (fiberTask != null)
+                fiberTask.SyscallEip = engine.InstructionPointer - (isAArch64 ? 4u : 2u);
 
-            var eax = engine.RegRead(Reg.EAX);
-            var ebx = engine.RegRead(Reg.EBX);
-            var ecx = engine.RegRead(Reg.ECX);
-            var edx = engine.RegRead(Reg.EDX);
-            var esi = engine.RegRead(Reg.ESI);
-            var edi = engine.RegRead(Reg.EDI);
-            var ebp = engine.RegRead(Reg.EBP);
+            SyscallCpu cpu = engine;
+            Span<ulong> args = stackalloc ulong[6];
+            var number = cpu.ReadSyscall(args);
+            var (operation, sizes) = isAArch64
+                ? DecodeAArch64Syscall(number)
+                : (number, 0u);
 
+            var a1 = (uint)args[0];
+            var a2 = (uint)args[1];
+            var a3 = (uint)args[2];
+            var tid = fiberTask?.TID ?? 0;
             if (Strace)
-                SyscallTracer.TraceEntry(Logger, this, fiberTask?.TID ?? 0, eax, ebx, ecx, edx, esi, edi, ebp);
+            {
+                if (isAArch64)
+                    SyscallTracer.TraceAArch64Entry(Logger, tid, number, operation, args);
+                else
+                    SyscallTracer.TraceEntry(Logger, this, tid, operation, a1, a2, a3,
+                        (uint)args[3], (uint)args[4], (uint)args[5]);
+            }
 
             ValueTask<int> retTask;
             bool handled;
+            long? wideResult = null;
+            ValueTask<long>? wideTask = null;
             try
             {
-                retTask = DispatchSyscall(eax, engine, ebx, ecx, edx, esi, edi, ebp, out handled);
+                retTask = isAArch64
+                    ? DispatchAArch64Syscall(number, operation, engine, args, sizes, out handled,
+                        out wideResult, out wideTask)
+                    : DispatchSyscall(operation, engine, a1, a2, a3, (uint)args[3], (uint)args[4], (uint)args[5],
+                        out handled);
             }
             catch (Exception ex)
             {
                 var ret = MapSyscallExceptionToErrno(ex);
-                LogDispatchSyscallFailure(ex, eax, fiberTask?.TID ?? 0, ret);
-                engine.RegWrite(Reg.EAX, unchecked((uint)ret));
-                if (Strace)
-                    SyscallTracer.TraceExit(Logger, this, fiberTask?.TID ?? 0, eax, ret, ebx, ecx, edx);
+                LogDispatchSyscallFailure(ex, number, tid, ret);
+                Complete(ret);
                 return true;
             }
 
-            if (!handled && !Strace) LogUnimplementedSyscall(eax);
+            if (!handled && !Strace) LogUnimplementedSyscall(number);
 
-            // --- Handling Async Syscalls ---
-            int completedRet;
-            if (retTask.IsCompleted)
+            var isCompleted = wideTask?.IsCompleted ?? retTask.IsCompleted;
+            long completedRet;
+            if (isCompleted)
                 try
                 {
-                    completedRet = retTask.Result;
+                    completedRet = wideTask?.Result ?? retTask.Result;
                 }
                 catch (Exception ex)
                 {
                     var ret = MapSyscallExceptionToErrno(ex);
-                    LogCompletedSyscallFailure(ex, eax, fiberTask?.TID ?? 0, ret);
-                    engine.RegWrite(Reg.EAX, unchecked((uint)ret));
-                    if (Strace)
-                        SyscallTracer.TraceExit(Logger, this, fiberTask?.TID ?? 0, eax, ret, ebx, ecx, edx);
+                    LogCompletedSyscallFailure(ex, number, tid, ret);
+                    Complete(ret);
                     return true;
                 }
             else
                 completedRet = 0;
 
-            if (retTask.IsCompleted && completedRet != -(int)Errno.ERESTARTSYS)
+            if (isCompleted && completedRet != -(int)Errno.ERESTARTSYS)
             {
-                var ret = completedRet;
-
-                // Special handling for context-restoring syscalls
-                var isSigReturn = eax == X86SyscallNumbers.rt_sigreturn || eax == X86SyscallNumbers.sigreturn;
-
-
-                if (!isSigReturn) engine.RegWrite(Reg.EAX, (uint)ret);
-
+                var ret = wideResult ?? completedRet;
+                var isSigReturn = operation is X86SyscallNumbers.rt_sigreturn or X86SyscallNumbers.sigreturn;
+                if (!isSigReturn || (isAArch64 && ret < 0)) engine.SetSyscallResult(ret);
                 if (Strace)
-                    SyscallTracer.TraceExit(Logger, this, fiberTask?.TID ?? 0, eax, ret, ebx, ecx, edx);
+                    SyscallTracer.TraceExit(Logger, this, tid, operation, ret, a1, a2, a3);
+            }
+            else if (fiberTask != null)
+            {
+                var awaitRestart = isCompleted && completedRet == -(int)Errno.ERESTARTSYS;
+                LogAsyncSyscallSuspend(fiberTask.TID, number, retTask.IsCompleted, awaitRestart);
+
+                fiberTask.SyscallNr = operation;
+                fiberTask.SyscallArg1 = a1;
+                fiberTask.SyscallArg2 = a2;
+                fiberTask.SyscallArg3 = a3;
+                fiberTask.PendingSyscall = retTask;
+                fiberTask.PendingWideSyscall = wideTask;
+                fiberTask.Status = FiberTaskStatus.Waiting;
+
+                if (Strace) LogStraceSuspended();
+                engine.Yield();
+                return true;
             }
             else
             {
-                // Async completion (Blocking) OR requires HandleAsyncSyscall (-ERESTARTSYS handling)
-                if (fiberTask != null)
-                {
-                    var awaitRestart = retTask.IsCompleted && completedRet == -(int)Errno.ERESTARTSYS;
-                    LogAsyncSyscallSuspend(fiberTask.TID, eax, retTask.IsCompleted, awaitRestart);
-
-                    // Save context for TraceExit
-                    fiberTask.SyscallNr = eax;
-                    fiberTask.SyscallArg1 = ebx;
-                    fiberTask.SyscallArg2 = ecx;
-                    fiberTask.SyscallArg3 = edx;
-
-                    // Suspend the task
-                    fiberTask.PendingSyscall = retTask;
-                    fiberTask.Status = FiberTaskStatus.Waiting;
-
-                    // Tracing
-                    if (Strace) LogStraceSuspended();
-
-                    // Force yield
-                    engine.Yield();
-                    return true;
-                }
-
-                // Should not happen in new model
                 LogAsyncSyscallMissingFiberTask();
-                engine.RegWrite(Reg.EAX, unchecked((uint)-(int)Errno.ENOSYS));
+                engine.SetSyscallResult(-(int)Errno.ENOSYS);
+            }
+
+            void Complete(int result)
+            {
+                engine.SetSyscallResult(result);
+                if (Strace)
+                    SyscallTracer.TraceExit(Logger, this, tid, operation, result, a1, a2, a3);
             }
 
             // Determine if we should yield
@@ -1509,7 +1530,7 @@ public partial class SyscallManager
                 if ((fiberTask.GetVisiblePendingSignals() & ~fiberTask.SignalMask) != 0) shouldYield = true;
 
                 // Force Yield if specific syscalls
-                switch ((int)eax)
+                switch (operation)
                 {
                     case X86SyscallNumbers.sched_yield:
                     case X86SyscallNumbers.nanosleep:

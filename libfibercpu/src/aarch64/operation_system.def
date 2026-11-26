@@ -1,0 +1,5 @@
+#define ARM_SYSTEM(Name) ARM_EXTRA(System##Name)
+#include "system_operations.def"
+#undef ARM_SYSTEM
+ARM_EXTRA(LoadStoreExclusive)
+ARM_EXTRA(LoadStoreAtomic)

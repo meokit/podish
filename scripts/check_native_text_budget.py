@@ -35,6 +35,21 @@ def pe_text_size(library):
         return sections
 
 
+def native_text_size(library, macho_size, elf_size):
+    if macho_size:
+        output = size_output(macho_size, ["-m"], library)
+        sections = re.findall(r"^\s*Section __text:\s+(\d+)", output, re.MULTILINE)
+    elif elf_size:
+        output = size_output(elf_size, ["-A", "-d"], library)
+        sections = re.findall(r"^\.text[ \t]+(\d+)", output, re.MULTILINE)
+    else:
+        sections = pe_text_size(library)
+    if not sections:
+        raise ValueError("missing text section")
+    # Report the largest slice in a universal Mach-O.
+    return max(map(int, sections))
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     formats = parser.add_mutually_exclusive_group(required=True)
@@ -44,31 +59,36 @@ def main():
     size = parser.add_mutually_exclusive_group(required=True)
     size.add_argument("--hint", type=int, help="Reference size in bytes for a build report")
     size.add_argument("--limit", type=int, help="Maximum size in bytes for a calibration check")
+    size.add_argument("--growth-hint", type=int, help="Reference number of additional bytes from baking")
+    size.add_argument("--growth-limit", type=int, help="Maximum growth in bytes relative to --baseline")
+    parser.add_argument("--baseline", type=Path, help="Matched unbaked library for --growth-limit")
     parser.add_argument("library", type=Path)
     args = parser.parse_args()
+    if (args.growth_limit is None) != (args.baseline is None):
+        parser.error("--growth-limit and --baseline must be used together")
 
     try:
-        if args.macho_size:
-            output = size_output(args.macho_size, ["-m"], args.library)
-            sections = re.findall(r"^\s*Section __text:\s+(\d+)", output, re.MULTILINE)
-        elif args.elf_size:
-            output = size_output(args.elf_size, ["-A", "-d"], args.library)
-            sections = re.findall(r"^\.text[ \t]+(\d+)", output, re.MULTILINE)
-        else:
-            sections = pe_text_size(args.library)
-        if not sections:
-            raise ValueError("missing text section")
-        # Report the largest slice in a universal Mach-O.
-        text_size = max(map(int, sections))
+        text_size = native_text_size(args.library, args.macho_size, args.elf_size)
+        if args.baseline is not None:
+            baseline_size = native_text_size(args.baseline, args.macho_size, args.elf_size)
     except (OSError, ValueError, struct.error, subprocess.CalledProcessError) as error:
         message = f"{args.library}: unable to measure native text: {error}"
-        if args.hint is not None:
+        if args.hint is not None or args.growth_hint is not None:
             print(message)
             return
         parser.exit(1, message + "\n")
 
     if args.hint is not None:
         print(f"{args.library.name}: native text {text_size} bytes (macOS ARM64 hint {args.hint} bytes)")
+        return
+    if args.growth_hint is not None:
+        print(f"{args.library.name}: native text {text_size} bytes (baking growth budget {args.growth_hint} bytes)")
+        return
+    if args.growth_limit is not None:
+        growth = text_size - baseline_size
+        if growth > args.growth_limit:
+            parser.exit(1, f"{args.library}: native text grew by {growth} bytes, over the {args.growth_limit}-byte growth limit\n")
+        print(f"{args.library.name}: native text {text_size} bytes, grew by {growth} / {args.growth_limit} bytes")
         return
     if text_size > args.limit:
         parser.exit(1, f"{args.library}: native text is {text_size} bytes, over the {args.limit}-byte limit\n")

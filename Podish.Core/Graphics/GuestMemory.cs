@@ -27,7 +27,13 @@ internal sealed class GuestMemory(FiberTask task)
         try
         {
             var area = memory.MapDeviceStaging(task.CPU, aligned, "GLES buffer mapping");
-            return new Staging(task.Process, memory, area, area.Start, aligned);
+            // The graphics command protocol still carries 32-bit pointers.
+            if (area.End > 1UL << 32)
+            {
+                memory.UnmapDeviceStaging(task.CPU, area, area.Start, aligned);
+                throw new GuestTransferException(Errno.E2BIG);
+            }
+            return new Staging(task.Process, memory, area, (uint)area.Start, aligned);
         }
         catch (OutOfMemoryException)
         {

@@ -1,0 +1,17 @@
+    Start 1: aarch64_instructions
+1/4 Test #1: aarch64_instructions .............   Passed    0.28 sec
+    Start 2: aarch64_mmu
+2/4 Test #2: aarch64_mmu ......................   Passed    0.78 sec
+    Start 3: specialization_index
+3/4 Test #3: specialization_index .............   Passed    0.41 sec
+    Start 4: decode_storage
+4/4 Test #4: decode_storage ...................   Passed    0.32 sec
+
+100% tests passed, 0 tests failed out of 4
+
+Total Test time (real) =   1.80 sec
+
+276 AArch64 instructions matched native hardware directly and through block dispatch
+using 80 states per encoding (seed 194629).
+82 baked instructions matched the same reference. 8 invalid encodings trapped in both.
+22 dead-NZCV handlers preserved the input flags and matched all other native outputs.

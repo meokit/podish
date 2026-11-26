@@ -85,7 +85,7 @@ internal sealed unsafe partial class AngleDevice : IDisposable
             base.Release(file);
         }
 
-        public override int Ioctl(LinuxFile file, FiberTask task, uint request, uint arg) =>
+        public override int Ioctl(LinuxFile file, FiberTask task, uint request, ulong arg) =>
             request is RequestV1 or RequestV2 && file.PrivateData is Session session
                 ? _device.Invoke(session, task, arg, request == RequestV2)
                 : -(int)Errno.ENOTTY;
@@ -130,7 +130,7 @@ internal sealed unsafe partial class AngleDevice : IDisposable
 
     private readonly record struct Binding(uint Context, uint Draw, uint Read);
 
-    private int Invoke(Session session, FiberTask task, uint address, bool extended)
+    private int Invoke(Session session, FiberTask task, ulong address, bool extended)
     {
         if (_disposed) return -(int)Errno.ENODEV;
         // Forked guests reopen the device and never reuse the parent's guest addresses.
@@ -141,7 +141,8 @@ internal sealed unsafe partial class AngleDevice : IDisposable
         try
         {
             wire.Clear();
-            guest.Read(address, MemoryMarshal.AsBytes(wire[..(extended ? 12 : 10)]));
+            if (address == 0 || !task.CPU.CopyFromUser(address, MemoryMarshal.AsBytes(wire[..(extended ? 12 : 10)])))
+                return -(int)Errno.EFAULT;
             var op = wire[0];
             var args = wire[1..];
             int value;
@@ -172,8 +173,8 @@ internal sealed unsafe partial class AngleDevice : IDisposable
             else
                 value = DispatchEgl(session, task, op, args, guest);
 
-            guest.Write(address + sizeof(uint), MemoryMarshal.AsBytes(new ReadOnlySpan<int>(in value)));
-            return 0;
+            return task.CPU.CopyToUser(address + sizeof(uint), MemoryMarshal.AsBytes(new ReadOnlySpan<int>(in value)))
+                ? 0 : -(int)Errno.EFAULT;
         }
         catch (GuestTransferException ex)
         {

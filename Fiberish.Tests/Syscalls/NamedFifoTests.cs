@@ -738,8 +738,12 @@ public class NamedFifoTests
             => Call(_open, PathAddr, (uint)flags);
 
         public ValueTask<int> Call(string name, uint a1 = 0, uint a2 = 0, uint a3 = 0, uint a4 = 0, uint a5 = 0)
-            => Call(typeof(SyscallManager).GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic)!
-                .CreateDelegate<Func<Engine, uint, uint, uint, uint, uint, uint, ValueTask<int>>>(Syscalls), a1, a2, a3, a4, a5);
+        {
+            var method = typeof(SyscallManager).GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic)!;
+            return Call((engine, first, second, third, fourth, fifth, sixth) =>
+                (ValueTask<int>)method.Invoke(Syscalls, [engine, first, second, third, fourth, fifth, sixth])!,
+                a1, a2, a3, a4, a5);
+        }
 
         private ValueTask<int> Call(Func<Engine, uint, uint, uint, uint, uint, uint, ValueTask<int>> syscall,
             uint a1, uint a2 = 0, uint a3 = 0, uint a4 = 0, uint a5 = 0)

@@ -133,8 +133,8 @@ public partial class FiberTask
     public ulong SignalMask { get; set; }
     public ulong PendingSignals { get; set; } // Thread-directed bitmask - Access should be synchronized
     public Locked<List<SigInfo>> PendingSignalQueue { get; } = new(new List<SigInfo>());
-    public uint AltStackSp { get; set; }
-    public uint AltStackSize { get; set; }
+    public ulong AltStackSp { get; set; }
+    public ulong AltStackSize { get; set; }
     public int AltStackFlags { get; set; } = LinuxConstants.SS_DISABLE;
 
     public bool Exited { get; set; }
@@ -145,9 +145,9 @@ public partial class FiberTask
 
     public long SystemCpuTimeNs { get; private set; }
 
-    public uint ChildClearTidPtr { get; set; }
+    public ulong ChildClearTidPtr { get; set; }
 
-    public uint RobustListHead { get; set; }
+    public ulong RobustListHead { get; set; }
     public uint RobustListSize { get; set; }
 
     // vfork support: parent awaits this event; child signals it on exec/exit
@@ -183,12 +183,13 @@ public partial class FiberTask
 
     // Syscall restart support (SA_RESTART)
     // Stores the EIP of the syscall instruction for potential restart
-    public uint SyscallEip { get; set; }
+    public ulong SyscallEip { get; set; }
 
     public ILogger Logger { get; }
 
     // Blocking Syscall Support
     public ValueTask<int>? PendingSyscall { get; set; }
+    internal ValueTask<long>? PendingWideSyscall { get; set; }
     public Timer? BlockingTimer { get; set; }
 
     public bool OwnsCPU { get; set; } = true;
@@ -311,6 +312,7 @@ public partial class FiberTask
     internal void CancelAsyncSyscallForRetirement()
     {
         PendingSyscall = null;
+        PendingWideSyscall = null;
         _pendingFilePage = null;
         _failedFilePage = null;
         InterruptingSignal = null;
@@ -562,15 +564,15 @@ public partial class FiberTask
         Logger.Log((LogLevel)level, "[Native] {Message}", msg);
     }
 
-    private sealed record FilePageFault(VMAManager Memory, uint Address, NativeFaultAccess Access,
+    private sealed record FilePageFault(VMAManager Memory, ulong Address, NativeFaultAccess Access,
         VMAManager.FilePageRead Read);
 
     private FilePageFault? _pendingFilePage;
     private (FilePageFault Fault, FaultResult Result)? _failedFilePage;
 
-    private bool HandlePageFault(uint addr, bool isWrite) => HandlePageFaultCore(addr, isWrite, null);
+    private bool HandlePageFault(ulong addr, bool isWrite) => HandlePageFaultCore(addr, isWrite, null);
 
-    private bool HandlePageFaultCore(uint addr, bool isWrite, FaultResult? resolved)
+    private bool HandlePageFaultCore(ulong addr, bool isWrite, FaultResult? resolved)
     {
         var depth = Interlocked.Increment(ref _pageFaultDepth);
         try
@@ -606,7 +608,7 @@ public partial class FiberTask
             var mapped = Process.Mem.FindVmArea(addr) != null;
             Logger.LogInformation("Page Fault at 0x{Addr:X} ({Mode}) could not be resolved. Posting {Signal}.",
                 addr, isWrite ? "Write" : "Read", fatalSignal);
-            Logger.LogInformation("Segment bases: FS=0x{Fs:X} GS=0x{Gs:X}",
+            if (!CPU.IsAArch64) Logger.LogInformation("Segment bases: FS=0x{Fs:X} GS=0x{Gs:X}",
                 CPU.GetSegBase(Seg.FS), CPU.GetSegBase(Seg.GS));
 
             LogGuestExecutionDiagnostics($"page fault at 0x{addr:X8} ({(isWrite ? "write" : "read")})", addr);
@@ -617,11 +619,12 @@ public partial class FiberTask
             {
                 Signo = (int)fatalSignal,
                 Code = faultResult == FaultResult.BusError ? 2 : mapped ? 2 : 1,
-                Addr = addr,
+                Addr = CPU.IsAArch64 ? 0 : (uint)addr,
+                ArmFaultAddress = CPU.IsAArch64 ? addr : null,
                 HasAddr = true,
                 TrapNumber = 14,
                 TrapError = 4u | (isWrite ? 2u : 0u) | (mapped ? 1u : 0u),
-                FaultCr2 = addr
+                FaultCr2 = CPU.IsAArch64 ? 0 : (uint)addr
             });
             _pendingMemoryFaultSignal = fatalSignal;
             _pendingFaultFromInterrupt = true;
@@ -653,7 +656,7 @@ public partial class FiberTask
         return false;
     }
 
-    private bool HandleNativeFault(Engine engine, uint addr, NativeFaultAccess access)
+    private bool HandleNativeFault(Engine engine, ulong addr, NativeFaultAccess access)
     {
         var isWrite = (access & NativeFaultAccess.Write) != 0;
         var memory = Process.Mem;
@@ -1130,27 +1133,30 @@ public partial class FiberTask
 
     // SS_ONSTACK is derived from the current user SP, not stored handler nesting state.
     // AUTODISARM deliberately makes a configured stack appear inactive until delivery.
-    public bool IsOnAltStack(uint sp)
+    public bool IsOnAltStack(ulong sp)
     {
         return ((uint)AltStackFlags & LinuxConstants.SS_AUTODISARM) == 0 &&
-               AltStackSize != 0 && sp > AltStackSp && (ulong)sp - AltStackSp <= AltStackSize;
+               AltStackSize != 0 && sp > AltStackSp && sp - AltStackSp <= AltStackSize;
     }
 
-    public int GetAltStackFlags(uint sp)
+    public int GetAltStackFlags(ulong sp)
     {
         var mode = AltStackSize == 0 ? LinuxConstants.SS_DISABLE
             : IsOnAltStack(sp) ? LinuxConstants.SS_ONSTACK : 0;
         return mode | (AltStackFlags & unchecked((int)LinuxConstants.SS_AUTODISARM));
     }
 
-    internal int SetAltStack(uint sp, uint size, uint flags)
+    internal int SetAltStack(ulong sp, ulong size, uint flags)
     {
-        if (IsOnAltStack(CPU.RegRead(Reg.ESP))) return -(int)Errno.EPERM;
+        if (IsOnAltStack(CPU.StackPointer)) return -(int)Errno.EPERM;
         var mode = flags & ~LinuxConstants.SS_AUTODISARM;
         if (mode != 0 && mode != LinuxConstants.SS_ONSTACK && mode != LinuxConstants.SS_DISABLE)
             return -(int)Errno.EINVAL;
-        if (mode != LinuxConstants.SS_DISABLE && size < LinuxConstants.MINSIGSTKSZ)
-            return -(int)Errno.ENOMEM;
+        if (mode != LinuxConstants.SS_DISABLE)
+        {
+            if (size < (CPU.IsAArch64 ? 5120UL : (ulong)LinuxConstants.MINSIGSTKSZ)) return -(int)Errno.ENOMEM;
+            if (CPU.IsAArch64 && !CPU.IsUserRange(sp, size)) return -(int)Errno.EFAULT;
+        }
 
         AltStackSp = mode == LinuxConstants.SS_DISABLE ? 0 : sp;
         AltStackSize = mode == LinuxConstants.SS_DISABLE ? 0 : size;
@@ -1168,8 +1174,8 @@ public partial class FiberTask
     // Prepare stack frame for signal handler
     private void DeliverSignal(int sig, SigAction action, bool hasAction, ulong oldMask, SigInfo info)
     {
-        Logger.LogInformation("[DeliverSignal] Delivering Signal {Sig}, EIP=0x{Eip:X}, ESP=0x{Esp:X}", sig, CPU.Eip,
-            CPU.RegRead(Reg.ESP));
+        Logger.LogInformation("[DeliverSignal] Delivering Signal {Sig}, EIP=0x{Eip:X}, ESP=0x{Esp:X}", sig, CPU.InstructionPointer,
+            CPU.StackPointer);
 
         // 1. Check if ignored
         if (hasAction)
@@ -1191,6 +1197,11 @@ public partial class FiberTask
                 sig, action.Handler);
 
             // Push SigContext/StackFrame
+            if (CPU.IsAArch64)
+            {
+                if (!DeliverAArch64Signal(sig, action, oldMask, info)) FailSignalFrame();
+                return;
+            }
             var sp = CPU.RegRead(Reg.ESP);
 
             // Check altstack
@@ -1198,7 +1209,7 @@ public partial class FiberTask
             {
                 Logger.LogInformation("[DeliverSignal] Using altstack: sp=0x{AltStackSp:X}+0x{AltStackSize:X}",
                     AltStackSp, AltStackSize);
-                sp = AltStackSp + AltStackSize;
+                sp = (uint)(AltStackSp + AltStackSize);
             }
             // If SA_ONSTACK is requested but sigaltstack(2) has not installed an alternate
             // stack, Linux falls back to the current user stack. Leaving sp unchanged matches that.
@@ -1206,7 +1217,7 @@ public partial class FiberTask
             // Return address (restorer or some trampoline)
             var retAddr = Process.Syscalls.RtSigReturnAddr;
             if ((action.Flags & LinuxConstants.SA_RESTORER) != 0 && action.Restorer != 0)
-                retAddr = action.Restorer;
+                retAddr = (uint)action.Restorer;
 
             var frameEsp = sp;
 
@@ -1246,7 +1257,7 @@ public partial class FiberTask
                 "[DeliverSignal] Signal frame setup complete: ESP changed from 0x{OldSp:X} to 0x{NewSp:X}, EIP set to 0x{Handler:X}",
                 sp, frameEsp, action.Handler);
             CPU.RegWrite(Reg.ESP, frameEsp);
-            CPU.Eip = action.Handler;
+            CPU.Eip = (uint)action.Handler;
         }
         else
         {
@@ -1586,9 +1597,9 @@ public partial class FiberTask
         uint mcontextOffset = 4 + 4 + 12;
 
         var header = new byte[20]; // uc_flags, uc_link, uc_stack (i386 stack_t)
-        BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(8), AltStackSp);
+        BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(8), (uint)AltStackSp);
         BinaryPrimitives.WriteInt32LittleEndian(header.AsSpan(12), AltStackFlags);
-        BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(16), AltStackSize);
+        BinaryPrimitives.WriteUInt32LittleEndian(header.AsSpan(16), (uint)AltStackSize);
         if (!CPU.CopyToUser(ucontextAddr, header)) return false;
 
         if (!WriteSigContext(ucontextAddr + mcontextOffset, oldMask, fpstateAddr, info)) return false;
@@ -1863,7 +1874,7 @@ public partial class FiberTask
 
             // ── Phase 4: Execute guest instructions ───────────────────────────────────
             if (Process.Syscalls?.Strace == true)
-                Logger.LogTrace("[RunSlice] Enter Run, EIP=0x{Eip:X} EAX=0x{Eax:X}", CPU.Eip, CPU.RegRead(Reg.EAX));
+                Logger.LogTrace("[RunSlice] Enter Run, PC=0x{Pc:X} result=0x{Result:X}", CPU.InstructionPointer, CPU.ReturnValue);
 
             BeginGuestCpuAccounting();
             try
@@ -1877,7 +1888,7 @@ public partial class FiberTask
             }
 
             if (Process.Syscalls?.Strace == true)
-                Logger.LogTrace("[RunSlice] Exit Run, EIP=0x{Eip:X} EAX=0x{Eax:X}", CPU.Eip, CPU.RegRead(Reg.EAX));
+                Logger.LogTrace("[RunSlice] Exit Run, PC=0x{Pc:X} result=0x{Result:X}", CPU.InstructionPointer, CPU.ReturnValue);
 
             if (Exited)
             {
@@ -1976,6 +1987,7 @@ public partial class FiberTask
         var sig = vector switch
         {
             0 => Signal.SIGFPE,
+            3 => Signal.SIGTRAP,
             6 => Signal.SIGILL,
             11 => Signal.SIGBUS,
             12 => Signal.SIGBUS,
@@ -1984,7 +1996,11 @@ public partial class FiberTask
             _ => Signal.SIGILL
         };
 
-        var faultName = vector switch
+        var faultName = CPU.IsAArch64 ? vector switch
+        {
+            3 => "BRK", 6 => "undefined instruction", 11 => "alignment fault",
+            14 => "memory fault", _ => $"exception {vector}"
+        } : vector switch
         {
             0 => "#DE (Divide Error)",
             6 => "#UD (Invalid Opcode)",
@@ -1993,8 +2009,8 @@ public partial class FiberTask
             _ => $"Vector {vector}"
         };
 
-        Logger.LogWarning("CPU Fault detected: {FaultName} at EIP=0x{EIP:X}. Delivering {Sig}.",
-            faultName, CPU.Eip, sig);
+        Logger.LogWarning("CPU Fault detected: {FaultName} at PC=0x{EIP:X}. Delivering {Sig}.",
+            faultName, CPU.InstructionPointer, sig);
         LogGuestExecutionDiagnostics($"cpu fault {faultName}");
 
         if (MustForceDefaultForSynchronousFault((int)sig))
@@ -2006,9 +2022,9 @@ public partial class FiberTask
             return;
         }
 
-        if (vector == 6)
+        if (vector == 6 && CPU.InstructionPointer <= uint.MaxValue)
         {
-            var ip = CPU.Eip;
+            var ip = (uint)CPU.InstructionPointer;
             var bytes = new byte[16];
             if (CPU.CopyFromUser(ip, bytes))
             {
@@ -2027,9 +2043,10 @@ public partial class FiberTask
         PostSignalInfo(new SigInfo
         {
             Signo = (int)sig,
-            Code = vector switch { 0 => 1, 6 => 2, 13 => 128, _ => 2 },
+            Code = CPU.IsAArch64 ? 1 : vector switch { 0 => 1, 6 => 2, 13 => 128, _ => 2 },
             HasAddr = true,
-            Addr = vector is 0 or 6 ? CPU.Eip : vector == 14 ? X86Native.GetFaultAddress(CPU.State) : 0,
+            Addr = CPU.IsAArch64 ? 0 : vector is 0 or 6 ? CPU.Eip : vector == 14 ? X86Native.GetFaultAddress(CPU.State) : 0,
+            ArmFaultAddress = CPU.IsAArch64 ? (vector is 11 or 14 ? CPU.ReadArmRegister(37) : CPU.InstructionPointer) : null,
             TrapNumber = (uint)vector,
             FaultCr2 = vector == 14 ? X86Native.GetFaultAddress(CPU.State) : 0
         });
@@ -2057,7 +2074,7 @@ public partial class FiberTask
         return false;
     }
 
-    internal void LogGuestExecutionDiagnostics(string reason, uint? focusAddr = null)
+    internal void LogGuestExecutionDiagnostics(string reason, ulong? focusAddr = null)
     {
         var depth = Interlocked.Increment(ref _faultDiagnosticsDepth);
         try
@@ -2068,6 +2085,13 @@ public partial class FiberTask
                 return;
             }
 
+            if (CPU.IsAArch64)
+            {
+                Logger.LogInformation("[FaultDiag] TID={Tid} {Reason} PC={Pc:X} SP={Sp:X} LR={Lr:X}",
+                    TID, reason, CPU.InstructionPointer, CPU.StackPointer, CPU.ReadArmRegister(30));
+                LogInstructionBytes(CPU.InstructionPointer);
+                return;
+            }
             var eip = CPU.Eip;
             var esp = CPU.RegRead(Reg.ESP);
             var ebp = CPU.RegRead(Reg.EBP);
@@ -2094,7 +2118,7 @@ public partial class FiberTask
         }
     }
 
-    private void LogInstructionBytes(uint eip)
+    private void LogInstructionBytes(ulong eip)
     {
         var bytes = new byte[16];
         var copied = CPU.CopyFromUserNoFault(eip, bytes);
@@ -2259,7 +2283,7 @@ public partial class FiberTask
     }
 
 #pragma warning disable CS1998 // Async method lacks await operators
-    public async ValueTask<FiberTask> Clone(int flags, uint stackPtr, uint ptidPtr, uint tlsPtr, uint ctidPtr)
+    public async ValueTask<FiberTask> Clone(int flags, ulong stackPtr, ulong ptidPtr, ulong tlsPtr, ulong ctidPtr)
     {
         const int CLONE_VM = 0x00000100;
         const int CLONE_FS = (int)LinuxConstants.CLONE_FS;
@@ -2391,14 +2415,15 @@ public partial class FiberTask
                 Process.Syscalls.RegisterEngine(newCpu);
 
             // 3. Setup Child State
-            if (stackPtr != 0) child.CPU.RegWrite(Reg.ESP, stackPtr);
-            child.CPU.RegWrite(Reg.EAX, 0); // Return 0 to child
+            if (stackPtr != 0) child.CPU.StackPointer = stackPtr;
+            child.CPU.SetSyscallResult(0); // Return 0 to child
 
             // TLS
-            if (cloneSetTls && tlsPtr != 0)
+            if (cloneSetTls && child.CPU.IsAArch64) child.CPU.WriteArmRegister(33, tlsPtr);
+            else if (cloneSetTls && tlsPtr != 0)
             {
                 var tlsBuf = new byte[4];
-                if (!child.CPU.CopyFromUser(tlsPtr + 4, tlsBuf))
+                if (tlsPtr > uint.MaxValue - 7 || !child.CPU.CopyFromUser((uint)tlsPtr + 4, tlsBuf))
                     throw new InvalidOperationException("Failed to read TLS base from child address space");
                 var baseAddr = BinaryPrimitives.ReadUInt32LittleEndian(tlsBuf);
                 child.CPU.SetSegBase(Seg.GS, baseAddr);
@@ -2540,16 +2565,16 @@ public partial class FiberTask
 
         // Keep PendingSyscall set until completion is finalized on scheduler thread.
         var pending = PendingSyscall;
-        return HandleAsyncSyscallBackgroundAsync(pending!.Value);
+        return HandleAsyncSyscallBackgroundAsync(pending!.Value, PendingWideSyscall);
     }
 
-    private async ValueTask HandleAsyncSyscallBackgroundAsync(ValueTask<int> pending)
+    private async ValueTask HandleAsyncSyscallBackgroundAsync(ValueTask<int> pending, ValueTask<long>? wide)
     {
-        var result = 0;
+        long result = 0;
         Exception? error = null;
         try
         {
-            result = await pending;
+            result = wide.HasValue ? await wide.Value : await pending;
         }
         catch (Exception ex)
         {
@@ -2560,8 +2585,9 @@ public partial class FiberTask
     }
 
     // Runs on scheduler thread; all mutable task/signal/cpu state transitions happen here.
-    private void FinalizeAsyncSyscall(int result, Exception? error)
+    private void FinalizeAsyncSyscall(long result, Exception? error)
     {
+        PendingWideSyscall = null;
         try
         {
             if (IsRetiring || Status == FiberTaskStatus.Terminated || Exited)
@@ -2576,7 +2602,7 @@ public partial class FiberTask
             {
                 var ret = SyscallManager.MapSyscallExceptionToErrno(error);
                 FiberTaskLog.HandleAsyncSyscallUnhandled(Logger, error, TID, PendingSyscall != null, ret);
-                CPU.RegWrite(Reg.EAX, unchecked((uint)ret));
+                CPU.SetSyscallResult(ret);
                 PendingSyscall = null;
                 InterruptingSignal = null;
                 if (!Exited)
@@ -2642,13 +2668,13 @@ public partial class FiberTask
                     if (hasRestart)
                     {
                         // SA_RESTART: rewind so sigreturn will re-execute syscall
-                        CPU.Eip = SyscallEip;
-                        CPU.RegWrite(Reg.EAX, SyscallNr);
+                        CPU.InstructionPointer = SyscallEip;
+                        if (!CPU.IsAArch64) CPU.RegWrite(Reg.EAX, SyscallNr);
                     }
                     else
                     {
                         // No restart: userspace will see -EINTR after handler
-                        CPU.RegWrite(Reg.EAX, unchecked((uint)-(int)Errno.EINTR));
+                        CPU.SetSyscallResult(-(int)Errno.EINTR);
                     }
 
                     // Step 2: Deliver the signal (sets up frame with adjusted registers)
@@ -2668,7 +2694,7 @@ public partial class FiberTask
                     IsStopSignal(sig.Value) &&
                     IsSyscallInterruptedByStopSignal(this, SyscallNr, SyscallArg1))
                 {
-                    CPU.RegWrite(Reg.EAX, unchecked((uint)-(int)Errno.EINTR));
+                    CPU.SetSyscallResult(-(int)Errno.EINTR);
                     ConsumePendingSignalForDefaultAction(sig.Value);
 
                     PendingSyscall = null;
@@ -2682,8 +2708,8 @@ public partial class FiberTask
                 }
 
                 RestoreDeferredSignalMaskIfAny();
-                CPU.Eip = SyscallEip;
-                CPU.RegWrite(Reg.EAX, SyscallNr);
+                CPU.InstructionPointer = SyscallEip;
+                if (!CPU.IsAArch64) CPU.RegWrite(Reg.EAX, SyscallNr);
 
                 PendingSyscall = null;
                 PrepareFreshWakeAfterAsyncWait();
@@ -2701,7 +2727,7 @@ public partial class FiberTask
             PendingSyscall = null;
 
             // Resume: write result to EAX
-            CPU.RegWrite(Reg.EAX, (uint)result);
+            CPU.SetSyscallResult(result);
 
             if (Process.Syscalls.Strace)
                 SyscallTracer.TraceExit(Logger, Process.Syscalls, TID, SyscallNr, result, SyscallArg1, SyscallArg2,
@@ -2970,7 +2996,12 @@ public partial class FiberTask
     {
         if (RobustListHead == 0) return;
 
-        var head = RobustListHead;
+        if (CPU.IsAArch64)
+        {
+            ExitArmRobustList(RobustListHead);
+            return;
+        }
+        var head = (uint)RobustListHead;
         var limit = 2048; // ROBUST_LIST_LIMIT
 
         // read futex_offset
@@ -3013,7 +3044,7 @@ public partial class FiberTask
         }
     }
 
-    private void HandleFutexDeath(SyscallManager sm, uint uaddr, bool pendingOp)
+    private void HandleFutexDeath(SyscallManager sm, ulong uaddr, bool pendingOp)
     {
         var uvalBuf = new byte[4];
         if (!CPU.CopyFromUser(uaddr, uvalBuf)) return;

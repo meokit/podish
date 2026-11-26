@@ -1,16 +1,28 @@
 <Project>
   <PropertyGroup>
-    <!-- Resolve the Wasm preset before applying the managed/native host default. -->
-    <FibercpuWasmBakingPreset Condition="'$(FibercpuWasmBakingPreset)' == '' And '$(FibercpuBakingPreset)' != ''">$(FibercpuBakingPreset)</FibercpuWasmBakingPreset>
-    <FibercpuWasmBakingPreset Condition="'$(FibercpuWasmBakingPreset)' == ''">1.75m</FibercpuWasmBakingPreset>
-    <WasmHotDispatchHandlers Condition="'$(WasmHotDispatchHandlers)' == '' And '$(FibercpuWasmBakingPreset)' == '1.75m'">1040</WasmHotDispatchHandlers>
-    <WasmHotDispatchHandlers Condition="'$(WasmHotDispatchHandlers)' == '' And '$(FibercpuWasmBakingPreset)' == '3.5m'">1225</WasmHotDispatchHandlers>
+    <FiberGuestI386 Condition="'$(FiberGuestI386)' == ''">true</FiberGuestI386>
+    <FiberGuestAArch64 Condition="'$(FiberGuestAArch64)' == ''">true</FiberGuestAArch64>
+    <DefineConstants Condition="'$(FiberGuestI386)' == 'true'">$(DefineConstants);FIBER_GUEST_I386</DefineConstants>
+    <DefineConstants Condition="'$(FiberGuestAArch64)' == 'true'">$(DefineConstants);FIBER_GUEST_AARCH64</DefineConstants>
+    <FibercpuGuestSuffix Condition="'$(FiberGuestI386)' == 'true' And '$(FiberGuestAArch64)' != 'true'">/i386</FibercpuGuestSuffix>
+    <FibercpuGuestSuffix Condition="'$(FiberGuestAArch64)' == 'true' And '$(FiberGuestI386)' != 'true'">/aarch64</FibercpuGuestSuffix>
+    <FibercpuBakingPreset Condition="'$(FibercpuBakingPreset)' == ''">3m</FibercpuBakingPreset>
+    <FibercpuWasmBakingPreset Condition="'$(FibercpuWasmBakingPreset)' == ''">$(FibercpuBakingPreset)</FibercpuWasmBakingPreset>
+    <FibercpuResolvedWasmBakingPreset>$(FibercpuWasmBakingPreset)</FibercpuResolvedWasmBakingPreset>
+    <FibercpuResolvedWasmBakingPreset Condition="'$(FibercpuWasmBakingPreset)' == '1.75m'">1.5m</FibercpuResolvedWasmBakingPreset>
+    <FibercpuResolvedWasmBakingPreset Condition="'$(FibercpuWasmBakingPreset)' == '3.5m'">3m</FibercpuResolvedWasmBakingPreset>
+    <WasmHotDispatchHandlers Condition="'$(WasmHotDispatchHandlers)' == '' And '$(FiberGuestI386)' != 'true'">0</WasmHotDispatchHandlers>
+    <WasmHotDispatchHandlers Condition="'$(WasmHotDispatchHandlers)' == '' And '$(FibercpuResolvedWasmBakingPreset)' == '1.5m'">850</WasmHotDispatchHandlers>
+    <WasmHotDispatchHandlers Condition="'$(WasmHotDispatchHandlers)' == '' And '$(FibercpuResolvedWasmBakingPreset)' == '3m'">913</WasmHotDispatchHandlers>
     <WasmHotDispatchHandlers Condition="'$(WasmHotDispatchHandlers)' == ''">0</WasmHotDispatchHandlers>
     <FibercpuWasmNativeBuildDir>build_native/browser-wasm/net11.0</FibercpuWasmNativeBuildDir>
     <FibercpuWasmNativeBuildDir Condition="'$(WasmHotDispatchHandlers)' != '0'">$(FibercpuWasmNativeBuildDir)/hot-dispatch</FibercpuWasmNativeBuildDir>
-    <FibercpuWasmNativeBuildDir Condition="'$(FibercpuWasmBakingPreset)' == '1.75m' Or '$(FibercpuWasmBakingPreset)' == '10m'">$(FibercpuWasmNativeBuildDir)/$(FibercpuWasmBakingPreset)</FibercpuWasmNativeBuildDir>
-    <FibercpuBakingPreset Condition="'$(FibercpuBakingPreset)' == ''">3.5m</FibercpuBakingPreset>
-    <FibercpuIsolatedPreset Condition="'$(FibercpuBakingPreset)' == '1.75m' Or '$(FibercpuBakingPreset)' == '10m'">true</FibercpuIsolatedPreset>
+    <FibercpuWasmNativeBuildDir Condition="'$(FibercpuResolvedWasmBakingPreset)' == '1.5m' Or '$(FibercpuResolvedWasmBakingPreset)' == '10m'">$(FibercpuWasmNativeBuildDir)/$(FibercpuResolvedWasmBakingPreset)</FibercpuWasmNativeBuildDir>
+    <FibercpuWasmNativeBuildDir>$(FibercpuWasmNativeBuildDir)$(FibercpuGuestSuffix)</FibercpuWasmNativeBuildDir>
+    <FibercpuResolvedBakingPreset>$(FibercpuBakingPreset)</FibercpuResolvedBakingPreset>
+    <FibercpuResolvedBakingPreset Condition="'$(FibercpuBakingPreset)' == '1.75m'">1.5m</FibercpuResolvedBakingPreset>
+    <FibercpuResolvedBakingPreset Condition="'$(FibercpuBakingPreset)' == '3.5m'">3m</FibercpuResolvedBakingPreset>
+    <FibercpuIsolatedPreset Condition="'$(FibercpuResolvedBakingPreset)' == '1.5m' Or '$(FibercpuResolvedBakingPreset)' == '10m'">true</FibercpuIsolatedPreset>
   </PropertyGroup>
 
   <!-- Opt-in isolation for the training orchestrator, not a global output-policy change. -->
@@ -24,8 +36,8 @@
   <PropertyGroup Condition="'$(FibercpuIsolatedPreset)' == 'true'">
     <BaseOutputPath Condition="'$(BaseOutputPath)' == ''">bin/</BaseOutputPath>
     <BaseIntermediateOutputPath Condition="'$(BaseIntermediateOutputPath)' == ''">obj/</BaseIntermediateOutputPath>
-    <BaseOutputPath>$(BaseOutputPath)$(FibercpuBakingPreset)/</BaseOutputPath>
-    <BaseIntermediateOutputPath>$(BaseIntermediateOutputPath)$(FibercpuBakingPreset)/</BaseIntermediateOutputPath>
+    <BaseOutputPath>$(BaseOutputPath)$(FibercpuResolvedBakingPreset)/</BaseOutputPath>
+    <BaseIntermediateOutputPath>$(BaseIntermediateOutputPath)$(FibercpuResolvedBakingPreset)/</BaseIntermediateOutputPath>
     <DefaultItemExcludes>$(DefaultItemExcludes);**/bin/**;**/obj/**</DefaultItemExcludes>
   </PropertyGroup>
 

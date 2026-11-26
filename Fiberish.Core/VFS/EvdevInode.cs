@@ -8,10 +8,11 @@ using Fiberish.Native;
 
 namespace Fiberish.VFS;
 
-/// <summary>An IA-32 evdev keyboard or absolute pointer with an independent queue per open.</summary>
+/// <summary>An evdev keyboard or absolute pointer with an independent queue per open.</summary>
 internal sealed class EvdevInode : Inode, ITaskWaitSource, IPollNotificationSource
 {
-    private const int EventSize = 16, QueueLimit = 256 * EventSize;
+    private const int EventSize32 = 16, EventSize64 = 24, MaxQueuedEvents = 256;
+    private const int QueueLimit = MaxQueuedEvents * EventSize64;
     private const ushort Synchronize = 0, Key = 1, Relative = 2, Absolute = 3;
     internal const int AbsoluteMaximum = 32767;
     private readonly KernelScheduler _scheduler;
@@ -121,33 +122,34 @@ internal sealed class EvdevInode : Inode, ITaskWaitSource, IPollNotificationSour
             var time = client.Clock == 0
                 ? (DateTime.UtcNow - DateTime.UnixEpoch).Ticks / 10
                 : Stopwatch.GetTimestamp() * (Int128)1_000_000 / Stopwatch.Frequency;
-            int seconds = (int)(time / 1_000_000), micros = (int)(time % 1_000_000);
-            var overflow = queue.Count + events.Length * EventSize > QueueLimit;
-            var packet = new byte[(events.Length + (overflow ? 1 : 0)) * EventSize];
+            var seconds = (long)(time / 1_000_000);
+            var micros = (long)(time % 1_000_000);
+            var overflow = queue.Count + events.Length * EventSize64 > QueueLimit;
+            var packet = new byte[(events.Length + (overflow ? 1 : 0)) * EventSize64];
             var offset = 0;
             if (overflow)
             {
                 queue.Clear();
                 WriteEvent(packet, seconds, micros, Synchronize, 3, 0); // SYN_DROPPED
-                offset = EventSize;
+                offset = EventSize64;
             }
             foreach (var (type, code, value) in events)
             {
-                WriteEvent(packet.AsSpan(offset, EventSize), seconds, micros, type, code, value);
-                offset += EventSize;
+                WriteEvent(packet.AsSpan(offset, EventSize64), seconds, micros, type, code, value);
+                offset += EventSize64;
             }
             queue.Write(packet);
             file.NotifyAsyncReadable(_scheduler);
         }
     }
 
-    private static void WriteEvent(Span<byte> record, int seconds, int micros, ushort type, ushort code, int value)
+    private static void WriteEvent(Span<byte> record, long seconds, long micros, ushort type, ushort code, int value)
     {
-        BinaryPrimitives.WriteInt32LittleEndian(record, seconds);
-        BinaryPrimitives.WriteInt32LittleEndian(record[4..], micros);
-        BinaryPrimitives.WriteUInt16LittleEndian(record[8..], type);
-        BinaryPrimitives.WriteUInt16LittleEndian(record[10..], code);
-        BinaryPrimitives.WriteInt32LittleEndian(record[12..], value);
+        BinaryPrimitives.WriteInt64LittleEndian(record, seconds);
+        BinaryPrimitives.WriteInt64LittleEndian(record[8..], micros);
+        BinaryPrimitives.WriteUInt16LittleEndian(record[16..], type);
+        BinaryPrimitives.WriteUInt16LittleEndian(record[18..], code);
+        BinaryPrimitives.WriteInt32LittleEndian(record[20..], value);
     }
 
     private static bool HasBit(byte[] bits, int n) => (bits[n / 8] & (1 << (n % 8))) != 0;
@@ -159,7 +161,7 @@ internal sealed class EvdevInode : Inode, ITaskWaitSource, IPollNotificationSour
         else bits[n / 8] &= (byte)~mask;
     }
 
-    public override int Ioctl(LinuxFile file, FiberTask task, uint request, uint address)
+    public override int Ioctl(LinuxFile file, FiberTask task, uint request, ulong address)
     {
         if ((request >> 8 & 0xff) != 0x45) return -(int)Errno.ENOTTY;
         var size = (int)(request >> 16 & 0x3fff);
@@ -228,6 +230,16 @@ internal sealed class EvdevInode : Inode, ITaskWaitSource, IPollNotificationSour
             _ => []
         };
         if (data.IsEmpty) return number == 8 ? -(int)Errno.ENOENT : -(int)Errno.ENOTTY;
+        if (task.CPU.IsAArch64 && data.Length < 8 && (number is 0x09 or >= 0x18 and <= 0x3f))
+        {
+            // EVIOCGBIT and the state queries return an array of unsigned long.
+            Span<byte> bits = stackalloc byte[8];
+            bits.Clear();
+            data.CopyTo(bits);
+            var bitLength = Math.Min(size, bits.Length);
+            return task.CPU.CopyToUser(address, bits[..bitLength]) ? bitLength : -(int)Errno.EFAULT;
+        }
+
         var length = Math.Min(size, data.Length);
         return task.CPU.CopyToUser(address, data[..length]) ? (number <= 2 ? 0 : length) : -(int)Errno.EFAULT;
     }
@@ -236,13 +248,70 @@ internal sealed class EvdevInode : Inode, ITaskWaitSource, IPollNotificationSour
     {
         var client = State(file);
         if (client.Revoked) return -(int)Errno.ENODEV;
-        var length = buffer.Length / EventSize * EventSize;
         if (buffer.IsEmpty) return 0;
-        return length == 0 ? -(int)Errno.EINVAL : client.Queue.Read(buffer[..length], file.Flags);
+        var isAArch64 = task?.CPU.IsAArch64 == true;
+        var eventSize = isAArch64 ? EventSize64 : EventSize32;
+        var count = Math.Min(MaxQueuedEvents, buffer.Length / eventSize);
+        if (count == 0) return -(int)Errno.EINVAL;
+        if (isAArch64) return client.Queue.Read(buffer[..(count * EventSize64)], file.Flags);
+
+        // Keep the queue independent of the reader's architecture. An open file
+        // descriptor can survive an exec into a different ABI.
+        Span<byte> events = stackalloc byte[count * EventSize64];
+        var read = client.Queue.Read(events, file.Flags);
+        if (read <= 0) return read;
+        var records = read / EventSize64;
+        for (var i = 0; i < records; i++)
+        {
+            var source = events.Slice(i * EventSize64, EventSize64);
+            var target = buffer.Slice(i * EventSize32, EventSize32);
+            source[..4].CopyTo(target);
+            source.Slice(8, 4).CopyTo(target[4..]);
+            source[16..].CopyTo(target[8..]);
+        }
+        return records * EventSize32;
     }
 
-    public override ValueTask<int> ReadV(Engine engine, LinuxFile file, FiberTask? task,
-        ArraySegment<Iovec> iovs, long offset, int flags) => ReadVViaHostBuffer(engine, file, task, iovs, offset, flags);
+    public override async ValueTask<int> ReadV(Engine engine, LinuxFile file, FiberTask? task,
+        ArraySegment<Iovec> iovs, long offset, int flags)
+    {
+        if (!engine.IsAArch64) return await ReadVViaHostBuffer(engine, file, task, iovs, offset, flags);
+
+        // A 24-byte input_event can straddle pages. Copy each event through
+        // the user-memory API so page boundaries do not truncate records.
+        var client = State(file);
+        var nonBlocking = task == null || (file.Flags & FileFlags.O_NONBLOCK) != 0 || (flags & 8) != 0;
+        var record = new byte[EventSize64];
+        var total = 0;
+        for (var i = 0; i < iovs.Count; i++)
+        {
+            var iov = iovs[i];
+            if (iov.Len == 0) continue;
+            if (iov.Len < EventSize64) return total > 0 ? total : -(int)Errno.EINVAL;
+
+            var cursor = 0u;
+            while (cursor <= iov.Len - EventSize64)
+            {
+                if (client.Revoked) return total > 0 ? total : -(int)Errno.ENODEV;
+
+                var read = client.Queue.Read(record, file.Flags);
+                if (read == -(int)Errno.EAGAIN && !nonBlocking && total == 0)
+                {
+                    if (await WaitForRead(file, task!) == AwaitResult.Interrupted)
+                        return -(int)Errno.ERESTARTSYS;
+                    continue;
+                }
+                if (read <= 0) return total > 0 ? total : read;
+
+                var rc = await engine.CopyUserIoAsync(iov.BaseAddr + cursor, record, write: true);
+                if (rc < 0) return rc;
+                total += read;
+                cursor += EventSize64;
+            }
+        }
+
+        return total;
+    }
 
     public override short Poll(LinuxFile file, short events)
     {

@@ -218,7 +218,7 @@ public class SysVSemManager
         return semid;
     }
 
-    public async ValueTask<int> SemOp(int semid, uint sopsPtr, uint nsops, Engine engine, long? timeoutMs = null)
+    public async ValueTask<int> SemOp(int semid, ulong sopsPtr, uint nsops, Engine engine, long? timeoutMs = null)
     {
         var task = engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
@@ -347,7 +347,7 @@ public class SysVSemManager
         }
     }
 
-    public int SemCtl(int semid, int semnum, int cmd, uint arg, Engine engine, int uid, int gid,
+    public int SemCtl(int semid, int semnum, int cmd, ulong arg, Engine engine, int uid, int gid,
         Process? process = null)
     {
         var actualCmd = cmd & ~LinuxConstants.IPC_64;
@@ -576,11 +576,13 @@ public class SysVSemManager
             proc.SemUndo.Remove((semid, semnum));
     }
 
-    private static int WriteSemidDs(SemaphoreSet set, uint buf, Engine engine)
+    private static int WriteSemidDs(SemaphoreSet set, ulong buf, Engine engine)
     {
         if (buf == 0) return -(int)Errno.EFAULT;
 
-        Span<byte> data = stackalloc byte[64];
+        var isAArch64 = engine.IsAArch64;
+        Span<byte> data = stackalloc byte[isAArch64 ? 88 : 64];
+        data.Clear();
         BinaryPrimitives.WriteInt32LittleEndian(data[..4], set.Key);
         BinaryPrimitives.WriteUInt32LittleEndian(data.Slice(4, 4), (uint)set.Uid);
         BinaryPrimitives.WriteUInt32LittleEndian(data.Slice(8, 4), (uint)set.Gid);
@@ -589,13 +591,20 @@ public class SysVSemManager
         BinaryPrimitives.WriteUInt32LittleEndian(data.Slice(20, 4), (uint)(set.Mode & 0x1FF));
         BinaryPrimitives.WriteUInt16LittleEndian(data.Slice(24, 2), (ushort)set.Semid);
 
-        var otimeSec = set.OTime == DateTime.UnixEpoch ? 0 : (int)(set.OTime - DateTime.UnixEpoch).TotalSeconds;
-        BinaryPrimitives.WriteInt32LittleEndian(data.Slice(36, 4), otimeSec);
-
-        var ctimeSec = set.CTime == DateTime.UnixEpoch ? 0 : (int)(set.CTime - DateTime.UnixEpoch).TotalSeconds;
-        BinaryPrimitives.WriteInt32LittleEndian(data.Slice(44, 4), ctimeSec);
-
-        BinaryPrimitives.WriteUInt32LittleEndian(data.Slice(52, 4), (uint)set.Values.Length);
+        var otimeSec = new DateTimeOffset(set.OTime).ToUnixTimeSeconds();
+        var ctimeSec = new DateTimeOffset(set.CTime).ToUnixTimeSeconds();
+        if (isAArch64)
+        {
+            BinaryPrimitives.WriteInt64LittleEndian(data[48..], otimeSec);
+            BinaryPrimitives.WriteInt64LittleEndian(data[56..], ctimeSec);
+            BinaryPrimitives.WriteUInt64LittleEndian(data[64..], (ulong)set.Values.Length);
+        }
+        else
+        {
+            BinaryPrimitives.WriteInt64LittleEndian(data[36..], otimeSec);
+            BinaryPrimitives.WriteInt64LittleEndian(data[44..], ctimeSec);
+            BinaryPrimitives.WriteUInt32LittleEndian(data[52..], (uint)set.Values.Length);
+        }
 
         if (!engine.CopyToUser(buf, data))
             return -(int)Errno.EFAULT;
@@ -603,11 +612,11 @@ public class SysVSemManager
         return 0;
     }
 
-    private static int ReadSemidDsForSet(SemaphoreSet set, uint buf, Engine engine)
+    private static int ReadSemidDsForSet(SemaphoreSet set, ulong buf, Engine engine)
     {
         if (buf == 0) return -(int)Errno.EFAULT;
 
-        Span<byte> data = stackalloc byte[36];
+        Span<byte> data = stackalloc byte[engine.IsAArch64 ? 48 : 36];
         if (!engine.CopyFromUser(buf, data))
             return -(int)Errno.EFAULT;
 
@@ -622,7 +631,7 @@ public class SysVSemManager
         return 0;
     }
 
-    private int WriteSemInfo(uint buf, Engine engine, bool semInfo)
+    private int WriteSemInfo(ulong buf, Engine engine, bool semInfo)
     {
         if (buf == 0) return -(int)Errno.EFAULT;
 

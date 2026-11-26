@@ -5,11 +5,12 @@ const webpack = require("webpack");
 const TerserPlugin = require("terser-webpack-plugin");
 
 const output = path.resolve(__dirname, "../out");
+const hashOptions = process.argv.includes("--native-md4") ? { hashFunction: "native-md4" } : {};
 webpack({
     mode: "production",
     context: __dirname,
     entry: "./src/entry.js",
-    output: { path: output, filename: "bundle.js" },
+    output: { path: output, filename: "bundle.js", ...hashOptions },
     cache: false,
     optimization: { minimizer: [new TerserPlugin({ parallel: false })] }
 }, (error, stats) => {

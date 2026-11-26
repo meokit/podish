@@ -296,14 +296,14 @@ public sealed class MemoryRuntimeContext : IDisposable
         }
     }
 
-    internal LinuxFile CreateSharedAnonymousMappingFile(uint length)
+    internal LinuxFile CreateSharedAnonymousMappingFile(ulong length)
     {
         var name = $".map_shared_anon.{Interlocked.Increment(ref _nextSharedAnonymousBackingId)}";
         return CreateUnlinkedShmFile(name, length, 0x180, 0, 0, FileFlags.O_RDWR, null!,
             LinuxFile.ReferenceKind.MmapHold);
     }
 
-    internal LinuxFile CreateSysVSharedMemoryFile(int shmid, uint length, int uid, int gid)
+    internal LinuxFile CreateSysVSharedMemoryFile(int shmid, ulong length, int uid, int gid)
     {
         return CreateUnlinkedShmFile($".sysvshm.{shmid}", length, 0x1B6, uid, gid, FileFlags.O_RDWR, null!,
             LinuxFile.ReferenceKind.MmapHold);
@@ -359,7 +359,7 @@ public sealed class MemoryRuntimeContext : IDisposable
         _zeroInode = new ZeroInode(this);
     }
 
-    private LinuxFile CreateUnlinkedShmFile(string name, uint length, int mode, int uid, int gid, FileFlags fileFlags,
+    private LinuxFile CreateUnlinkedShmFile(string name, ulong length, int mode, int uid, int gid, FileFlags fileFlags,
         Mount mount, LinuxFile.ReferenceKind referenceKind, Action<TmpfsInode>? configureTmpfsInode = null)
     {
         lock (_shmGate)
@@ -379,7 +379,7 @@ public sealed class MemoryRuntimeContext : IDisposable
 
                 if (length != 0)
                 {
-                    var truncateRc = dentry.Inode!.Truncate(length);
+                    var truncateRc = dentry.Inode!.Truncate(checked((long)length));
                     if (truncateRc < 0)
                         throw new InvalidOperationException(
                             $"Failed to size shm_mnt backing inode '{name}' to {length} bytes: rc={truncateRc}.");

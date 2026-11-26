@@ -281,7 +281,7 @@ public class ConsoleInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDisp
         return null;
     }
 
-    public override int Ioctl(LinuxFile linuxFile, FiberTask task, uint request, uint arg)
+    public override int Ioctl(LinuxFile linuxFile, FiberTask task, uint request, ulong arg)
     {
         if (_discipline != null)
             return _discipline.Ioctl(task, request, arg);
@@ -489,7 +489,7 @@ public class ControllingTtyInode : Inode, ITaskWaitSource, ITaskPollSource, IDis
         return null;
     }
 
-    public override int Ioctl(LinuxFile linuxFile, FiberTask task, uint request, uint arg)
+    public override int Ioctl(LinuxFile linuxFile, FiberTask task, uint request, ulong arg)
     {
         if (ResolveDiscipline(task, linuxFile) is not { } tty)
             return -(int)Errno.ENXIO;

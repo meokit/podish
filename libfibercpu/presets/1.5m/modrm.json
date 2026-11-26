@@ -1,0 +1,830 @@
+{
+  "schema_version": 1,
+  "entries": [
+    {
+      "training_id": 390197144,
+      "slots": 1,
+      "modrm": 0,
+      "estimated_visits": 56076192,
+      "active_groups": [
+        "coreutils",
+        "gzip",
+        "sed",
+        "tar"
+      ]
+    },
+    {
+      "training_id": 458250018,
+      "slots": 1,
+      "modrm": 0,
+      "estimated_visits": 34962304,
+      "active_groups": [
+        "coreutils",
+        "gzip",
+        "sed",
+        "tar"
+      ]
+    },
+    {
+      "training_id": 390197144,
+      "slots": 1,
+      "modrm": 16,
+      "estimated_visits": 21774739,
+      "active_groups": [
+        "coreutils",
+        "gzip",
+        "sed",
+        "tar"
+      ]
+    },
+    {
+      "training_id": 390197144,
+      "slots": 1,
+      "modrm": 8,
+      "estimated_visits": 16848573,
+      "active_groups": [
+        "coreutils",
+        "gzip",
+        "sed",
+        "tar"
+      ]
+    },
+    {
+      "training_id": 390197144,
+      "slots": 1,
+      "modrm": 48,
+      "estimated_visits": 19663567,
+      "active_groups": [
+        "coreutils",
+        "gzip",
+        "sed",
+        "tar"
+      ]
+    },
+    {
+      "training_id": 390197144,
+      "slots": 1,
+      "modrm": 24,
+      "estimated_visits": 20008607,
+      "active_groups": [
+        "coreutils",
+        "gzip",
+        "sed",
+        "tar"
+      ]
+    },
+    {
+      "training_id": 390197144,
+      "slots": 1,
+      "modrm": 56,
+      "estimated_visits": 9019942,
+      "active_groups": [
+        "coreutils",
+        "gzip",
+        "sed",
+        "tar"
+      ]
+    },
+    {
+      "training_id": 334966128,
+      "slots": 1,
+      "modrm": 56,
+      "estimated_visits": 9254810,
+      "active_groups": [
+        "coreutils",
+        "gzip",
+        "sed",
+        "tar"
+      ]
+    },
+    {
+      "training_id": 390197144,
+      "slots": 1,
+      "modrm": 40,
+      "estimated_visits": 17767923,
+      "active_groups": [
+        "coreutils",
+        "gzip",
+        "sed",
+        "tar"
+      ]
+    },
+    {
+      "training_id": 458250018,
+      "slots": 1,
+      "modrm": 16,
+      "estimated_visits": 16531063,
+      "active_groups": [
+        "coreutils",
+        "gzip",
+        "sed",
+        "tar"
+      ]
+    },
+    {
+      "training_id": 145248965,
+      "slots": 1,
+      "modrm": 0,
+      "estimated_visits": 13780109,
+      "active_groups": [
+        "coreutils",
+        "gzip",
+        "sed",
+        "tar"
+      ]
+    },
+    {
+      "training_id": 23935879,
+      "slots": 1,
+      "modrm": 0,
+      "estimated_visits": 5370458,
+      "active_groups": [
+        "coreutils",
+        "gzip",
+        "sed",
+        "tar"
+      ]
+    },
+    {
+      "training_id": 458250018,
+      "slots": 1,
+      "modrm": 48,
+      "estimated_visits": 13856317,
+      "active_groups": [
+        "coreutils",
+        "gzip",
+        "sed",
+        "tar"
+      ]
+    },
+    {
+      "training_id": 145248965,
+      "slots": 1,
+      "modrm": 16,
+      "estimated_visits": 8631054,
+      "active_groups": [
+        "coreutils",
+        "gzip",
+        "sed",
+        "tar"
+      ]
+    },
+    {
+      "training_id": 458250018,
+      "slots": 1,
+      "modrm": 8,
+      "estimated_visits": 7623542,
+      "active_groups": [
+        "coreutils",
+        "gzip",
+        "sed",
+        "tar"
+      ]
+    },
+    {
+      "training_id": 458250018,
+      "slots": 1,
+      "modrm": 56,
+      "estimated_visits": 5103397,
+      "active_groups": [
+        "coreutils",
+        "gzip",
+        "sed",
+        "tar"
+      ]
+    },
+    {
+      "training_id": 169874903,
+      "slots": 1,
+      "modrm": 0,
+      "estimated_visits": 11124238,
+      "active_groups": [
+        "coreutils",
+        "gzip",
+        "sed",
+        "tar"
+      ]
+    },
+    {
+      "training_id": 226531909,
+      "slots": 1,
+      "modrm": 0,
+      "estimated_visits": 5529176,
+      "active_groups": [
+        "coreutils",
+        "gzip",
+        "sed",
+        "tar"
+      ]
+    },
+    {
+      "training_id": 458250018,
+      "slots": 1,
+      "modrm": 24,
+      "estimated_visits": 7868818,
+      "active_groups": [
+        "coreutils",
+        "gzip",
+        "sed",
+        "tar"
+      ]
+    },
+    {
+      "training_id": 997519433,
+      "slots": 1,
+      "modrm": 56,
+      "estimated_visits": 3483351,
+      "active_groups": [
+        "coreutils",
+        "gzip",
+        "sed",
+        "tar"
+      ]
+    },
+    {
+      "training_id": 402407924,
+      "slots": 1,
+      "modrm": 0,
+      "estimated_visits": 3069800,
+      "active_groups": [
+        "coreutils",
+        "gzip",
+        "sed",
+        "tar"
+      ]
+    },
+    {
+      "training_id": 458250018,
+      "slots": 1,
+      "modrm": 40,
+      "estimated_visits": 4382677,
+      "active_groups": [
+        "coreutils",
+        "gzip",
+        "sed",
+        "tar"
+      ]
+    },
+    {
+      "training_id": 997519433,
+      "slots": 1,
+      "modrm": 0,
+      "estimated_visits": 1730965,
+      "active_groups": [
+        "coreutils",
+        "gzip",
+        "sed",
+        "tar"
+      ]
+    },
+    {
+      "training_id": 740577346,
+      "slots": 1,
+      "modrm": 0,
+      "estimated_visits": 6739285,
+      "active_groups": [
+        "coreutils",
+        "gzip",
+        "sed",
+        "tar"
+      ]
+    },
+    {
+      "training_id": 82857278,
+      "slots": 1,
+      "modrm": 0,
+      "estimated_visits": 2981701,
+      "active_groups": [
+        "coreutils",
+        "gzip",
+        "sed",
+        "tar"
+      ]
+    },
+    {
+      "training_id": 226531909,
+      "slots": 1,
+      "modrm": 16,
+      "estimated_visits": 4152830,
+      "active_groups": [
+        "coreutils",
+        "gzip",
+        "sed",
+        "tar"
+      ]
+    },
+    {
+      "training_id": 169874903,
+      "slots": 1,
+      "modrm": 16,
+      "estimated_visits": 3568496,
+      "active_groups": [
+        "coreutils",
+        "gzip",
+        "tar"
+      ]
+    },
+    {
+      "training_id": 402407924,
+      "slots": 1,
+      "modrm": 16,
+      "estimated_visits": 1061720,
+      "active_groups": [
+        "coreutils",
+        "gzip",
+        "sed",
+        "tar"
+      ]
+    },
+    {
+      "training_id": 197030475,
+      "slots": 1,
+      "modrm": 68,
+      "estimated_visits": 2017827,
+      "active_groups": [
+        "coreutils",
+        "gzip",
+        "tar"
+      ]
+    },
+    {
+      "training_id": 997519433,
+      "slots": 1,
+      "modrm": 40,
+      "estimated_visits": 642631,
+      "active_groups": [
+        "coreutils",
+        "tar"
+      ]
+    },
+    {
+      "training_id": 68047131,
+      "slots": 1,
+      "modrm": 0,
+      "estimated_visits": 2053661,
+      "active_groups": [
+        "coreutils",
+        "gzip",
+        "sed"
+      ]
+    },
+    {
+      "training_id": 226531909,
+      "slots": 1,
+      "modrm": 8,
+      "estimated_visits": 272695,
+      "active_groups": [
+        "coreutils",
+        "sed",
+        "tar"
+      ]
+    },
+    {
+      "training_id": 870708234,
+      "slots": 1,
+      "modrm": 48,
+      "estimated_visits": 279080,
+      "active_groups": [
+        "coreutils",
+        "sed",
+        "tar"
+      ]
+    },
+    {
+      "training_id": 402407924,
+      "slots": 1,
+      "modrm": 56,
+      "estimated_visits": 69157,
+      "active_groups": [
+        "coreutils",
+        "sed",
+        "tar"
+      ]
+    },
+    {
+      "training_id": 997519433,
+      "slots": 1,
+      "modrm": 16,
+      "estimated_visits": 4588,
+      "active_groups": [
+        "coreutils",
+        "tar"
+      ]
+    },
+    {
+      "training_id": 490593483,
+      "slots": 1,
+      "modrm": 10,
+      "estimated_visits": 35381,
+      "active_groups": [
+        "coreutils",
+        "sed"
+      ]
+    },
+    {
+      "training_id": 334966128,
+      "slots": 2,
+      "modrm": 56,
+      "estimated_visits": 4202,
+      "active_groups": [
+        "coreutils"
+      ]
+    },
+    {
+      "training_id": 490593483,
+      "slots": 1,
+      "modrm": 85,
+      "estimated_visits": 2941,
+      "active_groups": [
+        "coreutils"
+      ]
+    },
+    {
+      "training_id": 997519433,
+      "slots": 2,
+      "modrm": 56,
+      "estimated_visits": 716,
+      "active_groups": []
+    },
+    {
+      "training_id": 334966128,
+      "slots": 1,
+      "modrm": 8,
+      "estimated_visits": 454,
+      "active_groups": []
+    },
+    {
+      "training_id": 334966128,
+      "slots": 2,
+      "modrm": 32,
+      "estimated_visits": 376,
+      "active_groups": []
+    },
+    {
+      "training_id": 997519433,
+      "slots": 1,
+      "modrm": 8,
+      "estimated_visits": 481,
+      "active_groups": []
+    },
+    {
+      "training_id": 490593483,
+      "slots": 1,
+      "modrm": 147,
+      "estimated_visits": 62,
+      "active_groups": []
+    },
+    {
+      "training_id": 490593483,
+      "slots": 1,
+      "modrm": 15,
+      "estimated_visits": 45,
+      "active_groups": []
+    },
+    {
+      "training_id": 490593483,
+      "slots": 1,
+      "modrm": 17,
+      "estimated_visits": 47,
+      "active_groups": []
+    },
+    {
+      "training_id": 490593483,
+      "slots": 1,
+      "modrm": 125,
+      "estimated_visits": 9,
+      "active_groups": []
+    },
+    {
+      "training_id": 5912171,
+      "slots": 1,
+      "modrm": 69,
+      "estimated_visits": 9,
+      "active_groups": []
+    },
+    {
+      "training_id": 490593483,
+      "slots": 1,
+      "modrm": 23,
+      "estimated_visits": 39,
+      "active_groups": []
+    },
+    {
+      "training_id": 490593483,
+      "slots": 1,
+      "modrm": 151,
+      "estimated_visits": 24,
+      "active_groups": []
+    },
+    {
+      "training_id": 490593483,
+      "slots": 1,
+      "modrm": 22,
+      "estimated_visits": 24,
+      "active_groups": []
+    },
+    {
+      "training_id": 490593483,
+      "slots": 1,
+      "modrm": 139,
+      "estimated_visits": 14,
+      "active_groups": []
+    },
+    {
+      "training_id": 997519433,
+      "slots": 2,
+      "modrm": 40,
+      "estimated_visits": 18,
+      "active_groups": []
+    },
+    {
+      "training_id": 490593483,
+      "slots": 1,
+      "modrm": 19,
+      "estimated_visits": 4,
+      "active_groups": []
+    },
+    {
+      "training_id": 490593483,
+      "slots": 1,
+      "modrm": 30,
+      "estimated_visits": 4,
+      "active_groups": []
+    },
+    {
+      "training_id": 997519433,
+      "slots": 2,
+      "modrm": 0,
+      "estimated_visits": 16,
+      "active_groups": []
+    },
+    {
+      "training_id": 490593483,
+      "slots": 1,
+      "modrm": 150,
+      "estimated_visits": 9,
+      "active_groups": []
+    }
+  ],
+  "scalar_policies": [
+    {
+      "training_id": 390197144,
+      "slots": 1,
+      "modrm": 0,
+      "estimated_visits": 56073888,
+      "active_groups": [
+        "coreutils",
+        "gzip",
+        "sed",
+        "tar"
+      ],
+      "width": 32,
+      "flags": null
+    },
+    {
+      "training_id": 458250018,
+      "slots": 1,
+      "modrm": 0,
+      "estimated_visits": 31065566,
+      "active_groups": [
+        "coreutils",
+        "gzip",
+        "sed",
+        "tar"
+      ],
+      "width": 32,
+      "flags": null
+    },
+    {
+      "training_id": 390197144,
+      "slots": 1,
+      "modrm": 16,
+      "estimated_visits": 21774739,
+      "active_groups": [
+        "coreutils",
+        "gzip",
+        "sed",
+        "tar"
+      ],
+      "width": 32,
+      "flags": null
+    },
+    {
+      "training_id": 390197144,
+      "slots": 1,
+      "modrm": 8,
+      "estimated_visits": 16848573,
+      "active_groups": [
+        "coreutils",
+        "gzip",
+        "sed",
+        "tar"
+      ],
+      "width": 32,
+      "flags": null
+    },
+    {
+      "training_id": 390197144,
+      "slots": 1,
+      "modrm": 48,
+      "estimated_visits": 19663567,
+      "active_groups": [
+        "coreutils",
+        "gzip",
+        "sed",
+        "tar"
+      ],
+      "width": 32,
+      "flags": null
+    },
+    {
+      "training_id": 390197144,
+      "slots": 1,
+      "modrm": 24,
+      "estimated_visits": 20008607,
+      "active_groups": [
+        "coreutils",
+        "gzip",
+        "sed",
+        "tar"
+      ],
+      "width": 32,
+      "flags": null
+    },
+    {
+      "training_id": 390197144,
+      "slots": 1,
+      "modrm": 56,
+      "estimated_visits": 9019942,
+      "active_groups": [
+        "coreutils",
+        "gzip",
+        "sed",
+        "tar"
+      ],
+      "width": 32,
+      "flags": null
+    },
+    {
+      "training_id": 390197144,
+      "slots": 1,
+      "modrm": 40,
+      "estimated_visits": 17767923,
+      "active_groups": [
+        "coreutils",
+        "gzip",
+        "sed",
+        "tar"
+      ],
+      "width": 32,
+      "flags": null
+    },
+    {
+      "training_id": 458250018,
+      "slots": 1,
+      "modrm": 16,
+      "estimated_visits": 10298228,
+      "active_groups": [
+        "coreutils",
+        "gzip",
+        "sed",
+        "tar"
+      ],
+      "width": 32,
+      "flags": null
+    },
+    {
+      "training_id": 458250018,
+      "slots": 1,
+      "modrm": 48,
+      "estimated_visits": 11927783,
+      "active_groups": [
+        "coreutils",
+        "gzip",
+        "sed",
+        "tar"
+      ],
+      "width": 32,
+      "flags": null
+    },
+    {
+      "training_id": 458250018,
+      "slots": 1,
+      "modrm": 8,
+      "estimated_visits": 5416980,
+      "active_groups": [
+        "coreutils",
+        "gzip",
+        "sed",
+        "tar"
+      ],
+      "width": 32,
+      "flags": null
+    },
+    {
+      "training_id": 458250018,
+      "slots": 1,
+      "modrm": 56,
+      "estimated_visits": 5086886,
+      "active_groups": [
+        "coreutils",
+        "gzip",
+        "sed",
+        "tar"
+      ],
+      "width": 32,
+      "flags": null
+    },
+    {
+      "training_id": 458250018,
+      "slots": 1,
+      "modrm": 24,
+      "estimated_visits": 6648480,
+      "active_groups": [
+        "coreutils",
+        "gzip",
+        "sed",
+        "tar"
+      ],
+      "width": 32,
+      "flags": null
+    },
+    {
+      "training_id": 458250018,
+      "slots": 1,
+      "modrm": 40,
+      "estimated_visits": 4364262,
+      "active_groups": [
+        "coreutils",
+        "gzip",
+        "sed",
+        "tar"
+      ],
+      "width": 32,
+      "flags": null
+    },
+    {
+      "training_id": 458250018,
+      "slots": 1,
+      "modrm": 0,
+      "estimated_visits": 3896738,
+      "active_groups": [
+        "coreutils",
+        "gzip",
+        "tar"
+      ],
+      "width": 16,
+      "flags": null
+    },
+    {
+      "training_id": 458250018,
+      "slots": 1,
+      "modrm": 8,
+      "estimated_visits": 2206562,
+      "active_groups": [
+        "coreutils",
+        "gzip",
+        "sed",
+        "tar"
+      ],
+      "width": 16,
+      "flags": null
+    },
+    {
+      "training_id": 870708234,
+      "slots": 1,
+      "modrm": 48,
+      "estimated_visits": 244274,
+      "active_groups": [
+        "coreutils",
+        "sed",
+        "tar"
+      ],
+      "width": 32,
+      "flags": "live"
+    },
+    {
+      "training_id": 458250018,
+      "slots": 1,
+      "modrm": 24,
+      "estimated_visits": 1220338,
+      "active_groups": [
+        "gzip"
+      ],
+      "width": 16,
+      "flags": null
+    },
+    {
+      "training_id": 458250018,
+      "slots": 1,
+      "modrm": 56,
+      "estimated_visits": 16511,
+      "active_groups": [
+        "coreutils",
+        "tar"
+      ],
+      "width": 16,
+      "flags": null
+    }
+  ]
+}

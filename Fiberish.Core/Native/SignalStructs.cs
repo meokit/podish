@@ -30,6 +30,7 @@ public struct SigInfo
 
     // Fault signals (SIGSEGV/SIGBUS): siginfo_t.si_addr at offset 12.
     public uint Addr;
+    internal ulong? ArmFaultAddress;
 
     // True when Addr is meaningful, including a fault at address 0. Internal
     // bookkeeping, never serialized as a separate field.

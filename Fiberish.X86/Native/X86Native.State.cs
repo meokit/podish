@@ -5,6 +5,16 @@ namespace Fiberish.X86.Native;
 public unsafe partial class X86Native
 {
     [StructLayout(LayoutKind.Sequential)]
+    public struct PageMapping64
+    {
+        public ulong GuestPage;
+        public byte Perms;
+        public PageMappingFlags Flags;
+        public ushort Reserved;
+        public IntPtr HostPage;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
     public struct BlockDumpHeader
     {
         public ulong ExecCount;

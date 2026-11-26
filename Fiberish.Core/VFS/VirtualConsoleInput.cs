@@ -189,7 +189,7 @@ public sealed class VirtualConsoleInput
             file.PrivateData = tty;
         }
 
-        public override int Ioctl(LinuxFile file, FiberTask task, uint request, uint arg)
+        public override int Ioctl(LinuxFile file, FiberTask task, uint request, ulong arg)
         {
             var cpu = task.CPU;
             const int fault = -(int)Errno.EFAULT;

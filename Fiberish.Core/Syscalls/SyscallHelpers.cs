@@ -1,5 +1,4 @@
 using System.Buffers;
-using System.Buffers.Binary;
 using System.Runtime.CompilerServices;
 using System.Text;
 using Fiberish.Core;
@@ -90,7 +89,7 @@ public partial class SyscallManager
     /// </summary>
     public PathWalker PathWalker => _pathWalker ??= new PathWalker(this);
 
-    public string ReadString(uint addr)
+    public string ReadString(ulong addr)
     {
         if (addr == 0)
             return "";
@@ -108,7 +107,7 @@ public partial class SyscallManager
         }
     }
 
-    public UserStringReadResult ReadUserString(uint addr, int maxLength = LinuxConstants.PathMax)
+    public UserStringReadResult ReadUserString(ulong addr, int maxLength = LinuxConstants.PathMax)
     {
         if (addr == 0)
             return new UserStringReadResult("", -(int)Errno.EFAULT);
@@ -136,7 +135,7 @@ public partial class SyscallManager
         }
     }
 
-    public int ReadUserBytes(uint addr, out RentedUserBytes value, int maxLength = LinuxConstants.PathMax)
+    public int ReadUserBytes(ulong addr, out RentedUserBytes value, int maxLength = LinuxConstants.PathMax)
     {
         value = default;
         if (addr == 0)
@@ -167,7 +166,7 @@ public partial class SyscallManager
         }
     }
 
-    public int ReadPathArgument(uint addr, out string path, bool allowEmpty = false)
+    public int ReadPathArgument(ulong addr, out string path, bool allowEmpty = false)
     {
         var result = ReadUserString(addr);
         path = result.Success ? result.Value : "";
@@ -176,7 +175,7 @@ public partial class SyscallManager
         return 0;
     }
 
-    public int ReadPathArgumentBytes(uint addr, out RentedUserBytes path, bool allowEmpty = false)
+    public int ReadPathArgumentBytes(ulong addr, out RentedUserBytes path, bool allowEmpty = false)
     {
         var rc = ReadUserBytes(addr, out path);
         if (rc != 0)
@@ -190,14 +189,14 @@ public partial class SyscallManager
         return 0;
     }
 
-    public (byte[][] Values, int Error) ReadUserCStringVectorBytes(uint vectorPtr,
+    public (byte[][] Values, int Error) ReadUserCStringVectorBytes(ulong vectorPtr,
         int maxStringLength = LinuxConstants.MaxArgStrlen)
     {
         var remaining = GetExecArgMaxBytes();
         return ReadUserCStringVectorBytes(vectorPtr, ref remaining, maxStringLength);
     }
 
-    private (byte[][] Values, int Error) ReadUserCStringVectorBytes(uint vectorPtr,
+    private (byte[][] Values, int Error) ReadUserCStringVectorBytes(ulong vectorPtr,
         ref int remaining, int maxStringLength = LinuxConstants.MaxArgStrlen)
     {
         if (vectorPtr == 0)
@@ -206,7 +205,8 @@ public partial class SyscallManager
             return ([], -(int)Errno.EINVAL);
 
         List<byte[]>? result = null;
-        Span<byte> ptrBuf = stackalloc byte[4];
+        var wordSize = GuestWordSize(CurrentSyscallEngine);
+        Span<byte> ptrBuf = stackalloc byte[wordSize];
         var curr = vectorPtr;
 
         while (true)
@@ -214,23 +214,21 @@ public partial class SyscallManager
             if (!CurrentSyscallEngine.CopyFromUser(curr, ptrBuf))
                 return ([], -(int)Errno.EFAULT);
 
-            var strPtr = BinaryPrimitives.ReadUInt32LittleEndian(ptrBuf);
+            var strPtr = ReadGuestWord(ptrBuf, wordSize);
             if (strPtr == 0)
                 break;
 
-            if (remaining <= 4)
+            if (remaining <= wordSize)
                 return ([], -(int)Errno.E2BIG);
             // Bound the read before materializing a string that cannot fit.
-            var rc = ReadUserCStringBytes(strPtr, Math.Min(maxStringLength, remaining - 4), out var value);
+            var rc = ReadUserCStringBytes(strPtr, Math.Min(maxStringLength, remaining - wordSize), out var value);
             if (rc != 0)
                 return ([], rc);
 
-            remaining -= value.Length + 1 + 4;
+            remaining -= value.Length + 1 + wordSize;
             (result ??= new List<byte[]>()).Add(value);
 
-            if (curr > uint.MaxValue - 4)
-                return ([], -(int)Errno.EFAULT);
-            curr += 4;
+            curr += (uint)wordSize;
         }
 
         return (result?.ToArray() ?? [], 0);
@@ -242,7 +240,7 @@ public partial class SyscallManager
     ///     string does not fit.
     /// </summary>
     [SkipLocalsInit] // Every consumed probe byte was written by a successful CopyFromUser.
-    private int ReadUserCStringBytes(uint addr, int maxLength, out byte[] value)
+    private int ReadUserCStringBytes(ulong addr, int maxLength, out byte[] value)
     {
         value = [];
         var probeLength = Math.Min(256, maxLength);
@@ -325,7 +323,7 @@ public partial class SyscallManager
         return PathWalker.PathWalk(path, flags);
     }
 
-    private bool ReadNullTerminatedUserBytes(uint addr, Span<byte> destination, out int length, out bool terminated)
+    private bool ReadNullTerminatedUserBytes(ulong addr, Span<byte> destination, out int length, out bool terminated)
     {
         length = 0;
         terminated = false;

@@ -11,33 +11,7 @@
 #include "common.h"
 #include "handler_abi.h"
 #include "mem/tlb.h"
-
-#if __has_cpp_attribute(clang::musttail)
-#define ATTR_MUSTTAIL [[clang::musttail]]
-#elif __has_cpp_attribute(gnu::musttail)
-#define ATTR_MUSTTAIL [[gnu::musttail]]
-#elif __has_cpp_attribute(msvc::musttail)
-#define ATTR_MUSTTAIL [[msvc::musttail]]
-#else
-#define ATTR_MUSTTAIL
-#endif
-
-// Probe the GNU spelling used below. Clang also recognizes the namespaced
-// C++ attribute clang::preserve_none, but the unqualified C++ attribute probe
-// silently selected the platform ABI and its nonvolatile register saves.
-// Use the GNU probe on x64 and ARM64: Apple Clang supports preserve_none on
-// AArch64 but reports 0 for the unqualified C++ attribute probe.
-#if defined(__clang__) && (defined(__x86_64__) || defined(_M_X64) || defined(__aarch64__) || defined(_M_ARM64))
-#if __has_attribute(preserve_none)
-#define ATTR_PRESERVE_NONE __attribute__((preserve_none))
-#else
-#define ATTR_PRESERVE_NONE
-#endif
-#elif __has_cpp_attribute(preserve_none)
-#define ATTR_PRESERVE_NONE __attribute__((preserve_none))
-#else
-#define ATTR_PRESERVE_NONE
-#endif
+#include "musttail.h"
 
 #if defined(_MSC_VER)
 #define FORCE_INLINE __forceinline

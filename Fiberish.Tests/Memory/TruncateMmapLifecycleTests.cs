@@ -705,14 +705,14 @@ public class TruncateMmapLifecycleTests
 
         public uint MapShared(uint addr, uint len)
         {
-            return Mm.Mmap(addr, len, Protection.Read | Protection.Write, MapFlags.Shared, File.Handle, 0, "test-map",
-                Engine);
+            return checked((uint)Mm.Mmap(addr, len, Protection.Read | Protection.Write, MapFlags.Shared, File.Handle,
+                0, "test-map", Engine));
         }
 
         public uint MapPrivate(uint addr, uint len)
         {
-            return Mm.Mmap(addr, len, Protection.Read | Protection.Write, MapFlags.Private, File.Handle, 0,
-                "test-map-private", Engine);
+            return checked((uint)Mm.Mmap(addr, len, Protection.Read | Protection.Write, MapFlags.Private, File.Handle,
+                0, "test-map-private", Engine));
         }
     }
 
@@ -761,10 +761,10 @@ public class TruncateMmapLifecycleTests
             payload.AsSpan(LinuxConstants.PageSize, 4).Fill((byte)'B');
             Assert.Equal(payload.Length, Inode.WriteFromHost(null, File1, payload, 0));
 
-            Map1 = Mm1.Mmap(0x42000000, LinuxConstants.PageSize * 2, Protection.Read | Protection.Write,
-                MapFlags.Shared, File1, 0, "p1-map", Engine1);
-            Map2 = Mm2.Mmap(0x43000000, LinuxConstants.PageSize * 2, Protection.Read | Protection.Write,
-                MapFlags.Shared, File2, 0, "p2-map", Engine2);
+            Map1 = checked((uint)Mm1.Mmap(0x42000000, LinuxConstants.PageSize * 2, Protection.Read | Protection.Write,
+                MapFlags.Shared, File1, 0, "p1-map", Engine1));
+            Map2 = checked((uint)Mm2.Mmap(0x43000000, LinuxConstants.PageSize * 2, Protection.Read | Protection.Write,
+                MapFlags.Shared, File2, 0, "p2-map", Engine2));
         }
 
         public KernelScheduler Scheduler { get; }
@@ -834,10 +834,10 @@ public class TruncateMmapLifecycleTests
             File2 = new LinuxFile(dentry, FileFlags.O_RDWR, mount);
             Assert.Equal(1, Inode.WriteFromHost(null, File1, new[] { (byte)'A' }, 0));
 
-            Map1 = Mm1.Mmap(0x46000000, LinuxConstants.PageSize, Protection.Read | Protection.Write, flags1, File1, 0,
-                "map1", Engine1);
-            Map2 = Mm2.Mmap(0x46100000, LinuxConstants.PageSize, Protection.Read | Protection.Write, flags2, File2, 0,
-                "map2", Engine2);
+            Map1 = checked((uint)Mm1.Mmap(0x46000000, LinuxConstants.PageSize, Protection.Read | Protection.Write, flags1,
+                File1, 0, "map1", Engine1));
+            Map2 = checked((uint)Mm2.Mmap(0x46100000, LinuxConstants.PageSize, Protection.Read | Protection.Write, flags2,
+                File2, 0, "map2", Engine2));
         }
 
         public KernelScheduler Scheduler { get; }

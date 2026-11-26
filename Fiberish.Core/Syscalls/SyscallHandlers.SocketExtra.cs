@@ -17,7 +17,7 @@ public partial class SyscallManager
     // Returning success for unsupported options makes socket behavior impossible
     // to reason about, especially for raw sockets.
 
-    private async ValueTask<int> SysSetSockOpt(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysSetSockOpt(Engine engine, uint a1, uint a2, uint a3, ulong a4, uint a5,
         uint a6)
     {
         var task = engine.Owner as FiberTask;
@@ -51,7 +51,7 @@ public partial class SyscallManager
         return -(int)Errno.ENOTSOCK;
     }
 
-    private async ValueTask<int> SysGetSockOpt(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysGetSockOpt(Engine engine, uint a1, uint a2, uint a3, ulong a4, ulong a5,
         uint a6)
     {
         var task = engine.Owner as FiberTask;
@@ -106,7 +106,7 @@ public partial class SyscallManager
     // struct mmsghdr { struct msghdr msg_hdr; unsigned int msg_len; }
     // We reuse SysSendMsg for each element and write back msg_len.
 
-    private async ValueTask<int> SysSendMMsg(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysSendMMsg(Engine engine, uint a1, ulong a2, uint a3, uint a4, uint a5, uint a6)
     {
         var task = engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
@@ -118,15 +118,15 @@ public partial class SyscallManager
 
         if (vlen <= 0) return 0;
 
-        // struct mmsghdr is 28+4 = 32 bytes on i386 (msghdr=28 + msg_len u32)
-        const int mmsgHdrSize = 32;
+        var msgHdrSize = MessageHeaderSize(engine);
+        var mmsgHdrSize = msgHdrSize + GuestWordSize(engine);
 
+        if (!engine.IsUserRange(msgvec, (ulong)vlen * (uint)mmsgHdrSize))
+            return -(int)Errno.EFAULT;
         var sent = 0;
         for (var i = 0; i < vlen; i++)
         {
-            var mmsgPtr = msgvec + (uint)(i * mmsgHdrSize);
-            // SysSendMsg reads a struct msghdr at msgPtr.
-            // We pass mmsgPtr directly — it starts with struct msghdr (28 bytes).
+            var mmsgPtr = msgvec + (ulong)i * (uint)mmsgHdrSize;
             var result = await SysSendMsg(engine, (uint)fd, mmsgPtr, (uint)flags, 0, 0, 0);
             if (result < 0)
             {
@@ -134,10 +134,9 @@ public partial class SyscallManager
                 break;
             }
 
-            // Write back msg_len (offset 28 in mmsghdr)
             var lenBuf = new byte[4];
             BinaryPrimitives.WriteUInt32LittleEndian(lenBuf, (uint)result);
-            task.CPU.CopyToUser(mmsgPtr + 28, lenBuf);
+            task.CPU.CopyToUser(mmsgPtr + (uint)msgHdrSize, lenBuf);
 
             sent++;
         }
@@ -152,7 +151,7 @@ public partial class SyscallManager
     //
     // We receive up to vlen messages via SysRecvMsg, writing msg_len per entry.
 
-    private async ValueTask<int> SysRecvMMsg(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysRecvMMsg(Engine engine, uint a1, ulong a2, uint a3, uint a4, ulong a5, uint a6)
     {
         var task = engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
@@ -165,12 +164,15 @@ public partial class SyscallManager
 
         if (vlen <= 0) return 0;
 
-        const int mmsgHdrSize = 32;
+        var msgHdrSize = MessageHeaderSize(engine);
+        var mmsgHdrSize = msgHdrSize + GuestWordSize(engine);
 
+        if (!engine.IsUserRange(msgvec, (ulong)vlen * (uint)mmsgHdrSize))
+            return -(int)Errno.EFAULT;
         var received = 0;
         for (var i = 0; i < vlen; i++)
         {
-            var mmsgPtr = msgvec + (uint)(i * mmsgHdrSize);
+            var mmsgPtr = msgvec + (ulong)i * (uint)mmsgHdrSize;
             var result = await SysRecvMsg(engine, (uint)fd, mmsgPtr, (uint)flags, 0, 0, 0);
             if (result < 0)
             {
@@ -181,10 +183,9 @@ public partial class SyscallManager
                 break;
             }
 
-            // Write msg_len at offset 28
             var lenBuf = new byte[4];
             BinaryPrimitives.WriteUInt32LittleEndian(lenBuf, (uint)result);
-            task.CPU.CopyToUser(mmsgPtr + 28, lenBuf);
+            task.CPU.CopyToUser(mmsgPtr + (uint)msgHdrSize, lenBuf);
 
             received++;
 
@@ -205,7 +206,7 @@ public partial class SyscallManager
     // Buffered emulation; pipe-to-pipe transfers must not consume input until
     // output has accepted it (including nonblocking/backpressure failure).
 
-    private ValueTask<int> SysSplice(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private ValueTask<int> SysSplice(Engine engine, uint a1, ulong a2, uint a3, ulong a4, uint a5, uint a6)
     {
         var task = engine.Owner as FiberTask;
         if (task == null) return ValueTask.FromResult(-(int)Errno.EPERM);
@@ -228,7 +229,7 @@ public partial class SyscallManager
     }
 
     private static async ValueTask<int> DoSplice(Engine engine, FiberTask task, LinuxFile fileIn,
-        LinuxFile fileOut, uint offIn, uint offOut, int len, int flags)
+        LinuxFile fileOut, ulong offIn, ulong offOut, int len, int flags)
     {
         // At least one FD must be a pipe (enforced by Linux; we relax here for compatibility)
         var inIsPipe = fileIn.IoInode is PipeInode;

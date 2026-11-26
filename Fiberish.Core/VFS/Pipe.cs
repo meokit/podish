@@ -414,7 +414,7 @@ public class PipeInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
         }
     }
 
-    public override int Ioctl(LinuxFile linuxFile, FiberTask task, uint request, uint arg)
+    public override int Ioctl(LinuxFile linuxFile, FiberTask task, uint request, ulong arg)
     {
         if (request == LinuxConstants.FIONREAD)
         {

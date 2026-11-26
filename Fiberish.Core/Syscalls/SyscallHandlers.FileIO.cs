@@ -40,7 +40,7 @@ public partial class SyscallManager
         return result;
     }
 
-    internal async ValueTask<int> SysSendfile64(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+    internal async ValueTask<int> SysSendfile64(Engine engine, uint a1, uint a2, ulong a3, uint a4, uint a5,
         uint a6)
     {
         // ssize_t sendfile64(int out_fd, int in_fd, off64_t *offset, size_t count);
@@ -269,10 +269,10 @@ public partial class SyscallManager
         }
     }
 
-    private async ValueTask<int> SysPipe2(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysPipe2(Engine engine, ulong a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var fdsAddr = a1;
-        var flags = (FileFlags)a2;
+        var flags = (FileFlags)(engine.IsAArch64 ? TranslateAArch64OpenFlags(a2) : a2);
 
         const FileFlags SupportedFlags = FileFlags.O_CLOEXEC | FileFlags.O_NONBLOCK | FileFlags.O_DIRECT;
         if ((flags & ~SupportedFlags) != 0)
@@ -354,7 +354,7 @@ public partial class SyscallManager
             a6);
     }
 
-    private async ValueTask<int> SysMemfdCreate(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysMemfdCreate(Engine engine, ulong a1, uint a2, uint a3, uint a4, uint a5,
         uint a6)
     {
         const uint MFD_CLOEXEC = 0x0001;
@@ -682,7 +682,7 @@ public partial class SyscallManager
         return ImplOpen(this, path, a2, a3);
     }
 
-    private ValueTask<int> SysOpenAt(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private ValueTask<int> SysOpenAt(Engine engine, uint a1, ulong a2, uint a3, uint a4, uint a5, uint a6)
     {
         var dfd = (int)a1;
         var pathErr = ReadPathArgumentBytes(a2, out var path);
@@ -703,10 +703,11 @@ public partial class SyscallManager
             startLoc = f.LivePath;
         }
 
-        return ImplOpen(this, path, a3, a4, startLoc);
+        var flags = engine.IsAArch64 ? TranslateAArch64OpenFlags(a3) : a3;
+        return ImplOpen(this, path, flags, a4, startLoc);
     }
 
-    private ValueTask<int> SysOpenAt2(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private ValueTask<int> SysOpenAt2(Engine engine, uint a1, ulong a2, ulong a3, uint a4, uint a5, uint a6)
     {
         var dirfd = (int)a1;
         var pathErr = ReadPathArgumentBytes(a2, out var path);
@@ -734,6 +735,11 @@ public partial class SyscallManager
             startAt = fdir.LivePath;
         }
 
+        if (engine.IsAArch64)
+        {
+            if (flags > uint.MaxValue || mode > uint.MaxValue) return ValueTask.FromResult(-(int)Errno.EINVAL);
+            flags = TranslateAArch64OpenFlags((uint)flags);
+        }
         return ImplOpen(this, path, (uint)flags, (uint)mode, startAt);
     }
 
@@ -922,20 +928,22 @@ public partial class SyscallManager
         return 0;
     }
 
-    private static async ValueTask<(Iovec[]? Iovs, int Error)> ReadFileIovecsAsync(Engine engine, uint iovAddr,
+    private static async ValueTask<(Iovec[]? Iovs, int Error)> ReadFileIovecsAsync(Engine engine, ulong iovAddr,
         int iovCnt)
     {
         if (iovCnt < 0 || iovCnt > 1024) return (null, -(int)Errno.EINVAL);
 
-        var iovecBytes = ArrayPool<byte>.Shared.Rent(iovCnt * 8);
+        var wordSize = GuestWordSize(engine);
+        var byteCount = iovCnt * 2 * wordSize;
+        var iovecBytes = ArrayPool<byte>.Shared.Rent(byteCount);
         var rented = new TaskIoBuffer<byte>(iovecBytes);
         try
         {
             var error = await rented.Track(
-                engine.CopyUserIoAsync(iovAddr, iovecBytes.AsMemory(0, iovCnt * 8), write: false),
+                engine.CopyUserIoAsync(iovAddr, iovecBytes.AsMemory(0, byteCount), write: false),
                 engine.Owner as FiberTask);
             if (error != 0) return (null, error);
-            return ParseFileIovecs(iovecBytes, iovCnt);
+            return ParseFileIovecs(iovecBytes, iovCnt, wordSize, engine.UserAddressLimit);
         }
         finally
         {
@@ -943,30 +951,37 @@ public partial class SyscallManager
         }
     }
 
-    private static (Iovec[]? Iovs, int Error) ParseFileIovecs(byte[] iovecBytes, int iovCnt)
+    private static (Iovec[]? Iovs, int Error) ParseFileIovecs(byte[] iovecBytes, int iovCnt, int wordSize,
+        ulong addressLimit)
     {
         var iovs = ArrayPool<Iovec>.Shared.Rent(iovCnt);
         const uint MaxRwCount = 0x7FFFF000; // Linux's INT_MAX rounded down to a guest page.
         uint total = 0;
         for (var i = 0; i < iovCnt; i++)
         {
-            var length = BinaryPrimitives.ReadUInt32LittleEndian(iovecBytes.AsSpan(i * 8 + 4, 4));
-            if (length > int.MaxValue)
+            var entry = iovecBytes.AsSpan(i * 2 * wordSize, 2 * wordSize);
+            var address = ReadGuestWord(entry, wordSize);
+            var length = ReadGuestWord(entry[wordSize..], wordSize);
+            if (length > (wordSize == 8 ? (ulong)long.MaxValue : int.MaxValue))
             {
                 ArrayPool<Iovec>.Shared.Return(iovs);
                 return (null, -(int)Errno.EINVAL);
             }
-            iovs[i] = new Iovec
+
+            var count = (uint)Math.Min(length, MaxRwCount - total);
+            if (address >= addressLimit || count > addressLimit - address)
             {
-                BaseAddr = BinaryPrimitives.ReadUInt32LittleEndian(iovecBytes.AsSpan(i * 8, 4)),
-                Len = Math.Min(length, MaxRwCount - total)
-            };
+                ArrayPool<Iovec>.Shared.Return(iovs);
+                return (null, -(int)Errno.EFAULT);
+            }
+
+            iovs[i] = new Iovec { BaseAddr = address, Len = count };
             total += iovs[i].Len;
         }
         return (iovs, 0);
     }
 
-    internal async ValueTask<int> SysRead(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    internal async ValueTask<int> SysRead(Engine engine, uint a1, ulong a2, uint a3, uint a4, uint a5, uint a6)
     {
         var iovs = ArrayPool<Iovec>.Shared.Rent(1);
         var rented = new TaskIoBuffer<Iovec>(iovs);
@@ -981,7 +996,7 @@ public partial class SyscallManager
         }
     }
 
-    internal async ValueTask<int> SysWrite(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    internal async ValueTask<int> SysWrite(Engine engine, uint a1, ulong a2, uint a3, uint a4, uint a5, uint a6)
     {
         var iovs = ArrayPool<Iovec>.Shared.Rent(1);
         var rented = new TaskIoBuffer<Iovec>(iovs);
@@ -996,7 +1011,7 @@ public partial class SyscallManager
         }
     }
 
-    private async ValueTask<int> SysPRead(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysPRead(Engine engine, uint a1, ulong a2, uint a3, uint a4, uint a5, uint a6)
     {
         var offset = a4 | ((long)a5 << 32);
         var error = ValidatePositionedIo((int)a1, offset);
@@ -1014,7 +1029,7 @@ public partial class SyscallManager
         }
     }
 
-    private async ValueTask<int> SysPWrite(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysPWrite(Engine engine, uint a1, ulong a2, uint a3, uint a4, uint a5, uint a6)
     {
         var offset = a4 | ((long)a5 << 32);
         var error = ValidatePositionedIo((int)a1, offset);
@@ -1032,7 +1047,7 @@ public partial class SyscallManager
         }
     }
 
-    private async ValueTask<int> SysReadV(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysReadV(Engine engine, uint a1, ulong a2, uint a3, uint a4, uint a5, uint a6)
     {
         var (iovs, error) = await ReadFileIovecsAsync(engine, a2, (int)a3);
         if (iovs == null) return error;
@@ -1047,7 +1062,7 @@ public partial class SyscallManager
         }
     }
 
-    private async ValueTask<int> SysWriteV(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysWriteV(Engine engine, uint a1, ulong a2, uint a3, uint a4, uint a5, uint a6)
     {
         var (iovs, error) = await ReadFileIovecsAsync(engine, a2, (int)a3);
         if (iovs == null) return error;
@@ -1062,7 +1077,7 @@ public partial class SyscallManager
         }
     }
 
-    private async ValueTask<int> SysPReadV(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysPReadV(Engine engine, uint a1, ulong a2, uint a3, uint a4, uint a5, uint a6)
     {
         var offset = a4 | ((long)a5 << 32);
         var positionError = ValidatePositionedIo((int)a1, offset);
@@ -1080,7 +1095,7 @@ public partial class SyscallManager
         }
     }
 
-    private async ValueTask<int> SysPWriteV(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysPWriteV(Engine engine, uint a1, ulong a2, uint a3, uint a4, uint a5, uint a6)
     {
         var offset = a4 | ((long)a5 << 32);
         var positionError = ValidatePositionedIo((int)a1, offset);
@@ -1098,7 +1113,7 @@ public partial class SyscallManager
         }
     }
 
-    private async ValueTask<int> SysPReadV2(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysPReadV2(Engine engine, uint a1, ulong a2, uint a3, uint a4, uint a5, uint a6)
     {
         var offset = a4 | ((long)a5 << 32);
         var flags = (int)a6;
@@ -1119,7 +1134,7 @@ public partial class SyscallManager
         }
     }
 
-    private async ValueTask<int> SysPWriteV2(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysPWriteV2(Engine engine, uint a1, ulong a2, uint a3, uint a4, uint a5, uint a6)
     {
         var offset = a4 | ((long)a5 << 32);
         var flags = (int)a6;
@@ -1140,59 +1155,41 @@ public partial class SyscallManager
         }
     }
 
-    private async ValueTask<int> SysLseek(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private ValueTask<int> SysLseek(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+        => ValueTask.FromResult((int)SeekFile((int)a1, (int)a2, (int)a3));
+
+    private ValueTask<int> SysLlseek(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
-        var fd = (int)a1;
-        var offset = (long)(int)a2; // signed offset
-        var whence = (int)a3;
-
-        var f = GetIoFD(fd);
-        if (f == null) return -(int)Errno.EBADF;
-        var inode = f.OpenedInode;
-        if (inode == null) return -(int)Errno.EBADF;
-        if (inode.Type is InodeType.Fifo or InodeType.Socket) return -(int)Errno.ESPIPE;
-
-        var newPos = whence switch
-        {
-            0 => offset, // SEEK_SET
-            1 => f.Position + offset, // SEEK_CUR
-            2 => (long)inode.Size + offset, // SEEK_END
-            _ => -1
-        };
-
-        if (newPos < 0) return -(int)Errno.EINVAL;
-        f.Position = newPos;
-        return (int)newPos;
+        var position = SeekFile((int)a1, ((long)a2 << 32) | a3, (int)a5);
+        if (position < 0) return ValueTask.FromResult((int)position);
+        return ValueTask.FromResult(engine.CopyToUser(a4, BitConverter.GetBytes(position)) ? 0 : -(int)Errno.EFAULT);
     }
 
-    private async ValueTask<int> SysLlseek(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private long SeekFile(int fd, long offset, int whence)
     {
-        var fd = (int)a1;
-        var offset = ((long)a2 << 32) | a3;
-        var resultPtr = a4;
-        var whence = (int)a5;
-
-        var f = GetIoFD(fd);
-        if (f == null) return -(int)Errno.EBADF;
-        var inode = f.OpenedInode;
-        if (inode == null) return -(int)Errno.EBADF;
+        var file = GetIoFD(fd);
+        if (file?.OpenedInode is not { } inode) return -(int)Errno.EBADF;
         if (inode.Type is InodeType.Fifo or InodeType.Socket) return -(int)Errno.ESPIPE;
 
-        var newPos = whence switch
+        long position;
+        try
         {
-            0 => offset, // SEEK_SET
-            1 => f.Position + offset, // SEEK_CUR
-            2 => (long)inode.Size + offset, // SEEK_END
-            _ => -1
-        };
+            position = whence switch
+            {
+                0 => offset,
+                1 => checked(file.Position + offset),
+                2 => checked((long)inode.Size + offset),
+                _ => -1
+            };
+        }
+        catch (OverflowException)
+        {
+            return -(int)Errno.EINVAL;
+        }
 
-        if (newPos < 0) return -(int)Errno.EINVAL;
-        f.Position = newPos;
-
-        if (!engine.CopyToUser(resultPtr, BitConverter.GetBytes(newPos)))
-            return -(int)Errno.EFAULT;
-
-        return 0;
+        if (position < 0) return -(int)Errno.EINVAL;
+        file.Position = position;
+        return position;
     }
 
     private async ValueTask<int> SysClose(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)

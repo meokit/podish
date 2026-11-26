@@ -37,8 +37,8 @@ dotnet build Podish.Cli/Podish.Cli.csproj -c Debug -r win-x64 -m:1
 ```
 
 The CLI build calls CMake through `Fiberish.X86` and Cargo through
-`Fiberish.Core`. The default baking preset is `3.5m`. Set
-`-p:FibercpuBakingPreset=1.75m` or `-p:FibercpuBakingPreset=10m` to select
+`Fiberish.Core`. Both guests default to the `3m` preset trained with generalization weight 0.5. Set
+`-p:FibercpuBakingPreset=1.5m` or `-p:FibercpuBakingPreset=10m` to select
 a different set of instruction tables. The names are size hints calibrated
 on macOS ARM64. See [native build presets](docs/build-presets.md).
 
@@ -202,9 +202,9 @@ document earlier builds and test setups.
 
 ### CoreMark interpreter specialization
 
-We profile GNU utilities and a Node.js minification task. We use block
-execution counts to rank operand forms and short instruction sequences, then
-time candidate tables within code-size budgets. We ship `3.5m` for general
+We rank operand forms and instruction sequences from GNU workload profiles,
+using a generalization weight of 0.5. The Node.js minification workload is
+part of the held-out performance suite. We ship `3m` for general
 terminal workloads and check performance on a separate set of applications.
 [Baking strategy](docs/baked-instruction-variants.md)
 
