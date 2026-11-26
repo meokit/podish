@@ -1,7 +1,6 @@
 """Run and verify the guest workload suites used in the baking study."""
 
 from contextlib import contextmanager
-import fcntl
 import gzip
 import hashlib
 import io
@@ -67,6 +66,8 @@ def canonical_output(data, mode):
 
 @contextmanager
 def benchmark_lock(path):
+    import fcntl
+
     with Path(path).open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         try:
