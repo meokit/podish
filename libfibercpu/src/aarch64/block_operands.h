@@ -7,12 +7,12 @@ namespace fiberish::aarch64::detail {
 
 constexpr uint32_t NopWord = 0xd503201f;
 
-constexpr bool HasWideOperands(Kind kind) {
+constexpr bool HasExtraOperandSlot(Kind kind) {
     return HasBlockTarget(kind) || kind == Kind::BranchRegister || kind == Kind::LogicalImmediate ||
            kind == Kind::MoveWide || kind == Kind::Bitfield || kind == Kind::LoadStorePair;
 }
 
-inline uint64_t PackOperands(const DecodedInstruction& op) {
+inline uint64_t PackOpOperands(const DecodedInstruction& op) {
     // The two common immediate forms have room for the sign-extended or
     // scaled byte value. A hot handler never unscales and rescales an offset.
     if (op.kind == Kind::AddSubImmediate)
@@ -41,7 +41,7 @@ inline uint64_t PackOperands(const DecodedInstruction& op) {
 #endif
 
 template <Kind kind>
-A64_OPERANDS_INLINE DecodedInstruction SlotOperands(const DispatchSlot& slot) {
+A64_OPERANDS_INLINE DecodedInstruction GetOpOperands(const DecodedOp& slot) {
     const auto bits = slot.Operands();
     DecodedInstruction op;
     op.kind = kind;
@@ -75,10 +75,10 @@ A64_OPERANDS_INLINE DecodedInstruction SlotOperands(const DispatchSlot& slot) {
             op.mode = Field(bits, 26, 3);
         op.width = 8 << Field(bits, 29, 3);
         if constexpr (transfer) op.word = Field(bits, 25, 1) << 26;
-        if constexpr (HasWideOperands(kind)) {
-            const auto& wide = WideOperands(slot);
+        if constexpr (HasExtraOperandSlot(kind)) {
+            const auto& wide = GetExtraOperands(slot);
             if constexpr (HasBlockTarget(kind))
-                op.pc_target = wide.primary;
+                op.target_pc = wide.primary;
             else
                 op.immediate = wide.primary;
             if constexpr (kind == Kind::Bitfield) op.mask = wide.secondary;

@@ -16,9 +16,9 @@
 #endif
 
 #ifdef FIBERCPU_AARCH64_STANDARD_THREAD_ABI
-#define FIBERCPU_AARCH64_THREAD_ABI
+#define FIBERCPU_AARCH64_HANDLER_ABI
 #else
-#define FIBERCPU_AARCH64_THREAD_ABI ATTR_PRESERVE_NONE
+#define FIBERCPU_AARCH64_HANDLER_ABI ATTR_PRESERVE_NONE
 #endif
 
 #ifndef FIBERCPU_AARCH64_PIN_REG
@@ -36,7 +36,7 @@ namespace fiberish::aarch64 {
 
 namespace detail {
 struct RunFrame;
-struct Block;
+struct BasicBlock;
 }  // namespace detail
 
 struct Vector128 {
@@ -77,10 +77,10 @@ struct Memory {
     // Live entries owned and invalidated by the guest MMU, including hook installation.
     const mem::SoftTlb* data_tlb = nullptr;
     // An MMU owns its blocks across Run calls and invalidates links on mapping changes.
-    // A null backing asks find_block to probe the executable mapping without invoking callbacks.
-    detail::Block* (*find_block)(void*, uint64_t, const uint8_t*) = nullptr;
+    // A null backing asks lookup_cached_block to probe the executable mapping without invoking callbacks.
+    detail::BasicBlock* (*lookup_cached_block)(void*, uint64_t, const uint8_t*) = nullptr;
     void* (*allocate_block)(void*, size_t, uint64_t) = nullptr;
-    void (*cache_block)(void*, detail::Block*) = nullptr;
+    void (*cache_block)(void*, detail::BasicBlock*) = nullptr;
 #ifdef ENABLE_TLB_STATS
     mem::TlbStats* stats = nullptr;
     mem::DispatchStats* dispatch_stats = nullptr;
@@ -109,25 +109,25 @@ struct StepResult {
 };
 
 struct DecodedInstruction;
-using Handler = StepResult (*)(State&, const Memory&, const DecodedInstruction&);
+using ScalarHandlerFunc = StepResult (*)(State&, const Memory&, const DecodedInstruction&);
 
 namespace detail {
-struct DispatchSlot;
+struct DecodedOp;
 #if FIBERCPU_AARCH64_PIN_REG >= 0
-#define A64_THREAD_PIN_PARAM , [[maybe_unused]] uint64_t pinned
-#define A64_THREAD_PIN_PASS , pinned
+#define A64_HANDLER_PIN_PARAMS , [[maybe_unused]] uint64_t pinned
+#define A64_HANDLER_PIN_ARGS , pinned
 #else
-#define A64_THREAD_PIN_PARAM
-#define A64_THREAD_PIN_PASS
+#define A64_HANDLER_PIN_PARAMS
+#define A64_HANDLER_PIN_ARGS
 #endif
 
-#define A64_THREAD_PARAMS                                                                                   \
-    State &state, const ::fiberish::aarch64::detail::DispatchSlot *current, uint64_t remaining_after_block, \
-        [[maybe_unused]] const mem::SoftTlb *data_tlb, [[maybe_unused]] uint64_t tlb_tags,                  \
-        [[maybe_unused]] uintptr_t tlb_addend, uint32_t nzcv A64_THREAD_PIN_PARAM
-#define A64_THREAD_ARGS state, current, remaining_after_block, data_tlb, tlb_tags, tlb_addend, nzcv A64_THREAD_PIN_PASS
+#define A64_HANDLER_PARAMS                                                                     \
+    State &state, const ::fiberish::aarch64::detail::DecodedOp *current, uint64_t instr_limit, \
+        [[maybe_unused]] const mem::SoftTlb *data_tlb, [[maybe_unused]] uint64_t utlb_tags,    \
+        [[maybe_unused]] uintptr_t utlb_addend, uint32_t flags_cache A64_HANDLER_PIN_PARAMS
+#define A64_HANDLER_ARGS state, current, instr_limit, data_tlb, utlb_tags, utlb_addend, flags_cache A64_HANDLER_PIN_ARGS
 
-using ThreadHandler = uint64_t(FIBERCPU_AARCH64_THREAD_ABI*)(A64_THREAD_PARAMS);
+using HandlerFunc = uint64_t(FIBERCPU_AARCH64_HANDLER_ABI*)(A64_HANDLER_PARAMS);
 }  // namespace detail
 
 enum class Kind : uint8_t {
@@ -167,11 +167,11 @@ enum class Kind : uint8_t {
 };
 
 struct DecodedInstruction {
-    Handler handler = nullptr;
+    ScalarHandlerFunc scalar_handler = nullptr;
     uint64_t immediate = 0;
     union {
         uint64_t mask = 0;
-        uint64_t pc_target;
+        uint64_t target_pc;
     };
     uint32_t word = 0;
     Kind kind = Kind::Undefined;
@@ -187,8 +187,8 @@ struct DecodedInstruction {
 
 namespace detail {
 struct HandlerBinding {
-    Handler scalar = nullptr;
-    ThreadHandler threaded = nullptr;
+    ScalarHandlerFunc scalar_handler = nullptr;
+    HandlerFunc handler = nullptr;
 };
 }  // namespace detail
 
@@ -196,9 +196,10 @@ struct Profile {
     void* context = nullptr;
     void (*record)(void*, const DecodedInstruction&) = nullptr;
     detail::HandlerBinding (*resolve)(const DecodedInstruction&, bool omit_nzcv) = nullptr;
-    Handler (*resolve_pair)(uint32_t first, uint32_t second, uint32_t dead, detail::ThreadHandler& threaded) = nullptr;
-    Handler (*resolve_sequence)(const uint32_t* words, unsigned count, unsigned* matched, uint32_t dead,
-                                detail::ThreadHandler& threaded) = nullptr;
+    ScalarHandlerFunc (*resolve_pair)(uint32_t first, uint32_t second, uint32_t dead,
+                                      detail::HandlerFunc& handler) = nullptr;
+    ScalarHandlerFunc (*resolve_sequence)(const uint32_t* words, unsigned count, unsigned* matched, uint32_t dead,
+                                          detail::HandlerFunc& handler) = nullptr;
     // Scalar bindings have the same callback and refetch behavior as decoded instructions.
     bool trusted_baking = false;
 };

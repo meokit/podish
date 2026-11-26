@@ -130,7 +130,7 @@ const uint8_t* ExecutablePage(void* opaque, uint64_t address) {
     return reinterpret_cast<const uint8_t*>(engine.mmu.try_executable_page(static_cast<uint32_t>(address)));
 }
 
-aarch64::detail::Block* FindBlock(void* opaque, uint64_t pc, const uint8_t* executable) {
+aarch64::detail::BasicBlock* LookupCachedBlock(void* opaque, uint64_t pc, const uint8_t* executable) {
     if (!executable) executable = ExecutablePage(opaque, pc & ~aarch64::detail::PageMask);
     if (!executable) return nullptr;
     return static_cast<EmuState*>(opaque)->mmu.lookup_arm_block(static_cast<uint32_t>(pc), executable);
@@ -140,7 +140,7 @@ void* AllocateBlock(void* opaque, size_t size, uint64_t pc) {
     return static_cast<EmuState*>(opaque)->mmu.try_allocate_block_bytes(size, uint32_t(pc));
 }
 
-void CacheBlock(void* opaque, aarch64::detail::Block* block) {
+void CacheBlock(void* opaque, aarch64::detail::BasicBlock* block) {
     static_cast<EmuState*>(opaque)->mmu.cache_arm_block(block);
 }
 
@@ -168,9 +168,10 @@ uint64_t* ArmSlot(aarch64::State& cpu, int index) {
 
 #if FIBERCPU_AARCH64_BAKED
 aarch64::detail::HandlerBinding FindBakedArmHandler(const aarch64::DecodedInstruction&, bool omit_nzcv);
-aarch64::Handler FindBakedArmPair(uint32_t first, uint32_t second, uint32_t dead, aarch64::detail::ThreadHandler&);
-aarch64::Handler FindBakedArmSequence(const uint32_t* words, unsigned count, unsigned* matched, uint32_t dead,
-                                      aarch64::detail::ThreadHandler&);
+aarch64::ScalarHandlerFunc FindBakedArmPair(uint32_t first, uint32_t second, uint32_t dead,
+                                            aarch64::detail::HandlerFunc&);
+aarch64::ScalarHandlerFunc FindBakedArmSequence(const uint32_t* words, unsigned count, unsigned* matched, uint32_t dead,
+                                                aarch64::detail::HandlerFunc&);
 #endif
 
 int RunArmEngine(EmuState& engine, uint64_t end_pc, uint64_t budget, bool step) {
@@ -184,8 +185,8 @@ int RunArmEngine(EmuState& engine, uint64_t end_pc, uint64_t budget, bool step) 
     RestartableMemoryFaultScope restartable(&engine);
     if (!step) cpu.ClearExclusive();
     aarch64::Memory memory{
-        &engine,   Read,          Write,     ExecutablePage, ReadFast, WriteFast, engine.mmu.data_tlb(),
-        FindBlock, AllocateBlock, CacheBlock};
+        &engine,           Read,          Write,     ExecutablePage, ReadFast, WriteFast, engine.mmu.data_tlb(),
+        LookupCachedBlock, AllocateBlock, CacheBlock};
 #ifdef ENABLE_TLB_STATS
     memory.stats = &engine.mmu.stats;
     memory.dispatch_stats = &engine.mmu.dispatch_stats;

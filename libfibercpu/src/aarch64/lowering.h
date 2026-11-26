@@ -4,9 +4,9 @@
 #include <utility>
 
 #include "block_operands.h"
+#include "dispatch.h"
 #include "floating.h"
 #include "memory.h"
-#include "threading.h"
 #include "vector.h"
 
 namespace fiberish::aarch64::detail {
@@ -106,16 +106,18 @@ inline StepResult SystemInstruction(State& state, const Memory& memory, const De
 inline StepResult NopInstruction(State&, const Memory&, const DecodedInstruction&) { return {}; }
 
 #if FIBERCPU_AARCH64_TAIL_DISPATCH
-FIBERCPU_AARCH64_THREAD_ABI inline uint64_t NopThread(A64_THREAD_PARAMS) { A64_THREAD_NEXT(current->Next<false>()); }
+FIBERCPU_AARCH64_HANDLER_ABI inline uint64_t NopHandler(A64_HANDLER_PARAMS) {
+    A64_DISPATCH_NEXT(current->NextOp<false>());
+}
 
 template <Kind kind, unsigned width, int operation, int mode, int shift, int vector>
-FIBERCPU_AARCH64_THREAD_ABI uint64_t DispatchMemory(A64_THREAD_PARAMS) {
-    const auto op = SlotOperands<kind>(*current);
+FIBERCPU_AARCH64_HANDLER_ABI uint64_t LoadStoreHandler(A64_HANDLER_PARAMS) {
+    const auto op = GetOpOperands<kind>(*current);
     if (!ProbeLoadStore<kind, width, operation, mode, shift, vector>(
-            state, op, BlockTarget<kind>(op), data_tlb, tlb_tags, tlb_addend A64_THREAD_PIN_PASS)) [[unlikely]] {
-        A64_THREAD_REPLAY(current);
+            state, op, BlockTarget<kind>(op), data_tlb, utlb_tags, utlb_addend A64_HANDLER_PIN_ARGS)) [[unlikely]] {
+        A64_MEMORY_OP_GENERIC(current);
     }
-    A64_THREAD_NEXT(current->Next<HasWideOperands(kind)>());
+    A64_DISPATCH_NEXT(current->NextOp<HasExtraOperandSlot(kind)>());
 }
 #endif
 
@@ -123,7 +125,7 @@ template <Kind kind, unsigned width = 0, int operation = -1, int mode = -1, int 
 constexpr HandlerBinding BindMemoryHandler() {
     constexpr auto scalar = LoadStore<kind, width, operation, mode, shift, vector>;
 #if FIBERCPU_AARCH64_TAIL_DISPATCH
-    return {scalar, &DispatchMemory<kind, width, operation, mode, shift, vector>};
+    return {scalar, &LoadStoreHandler<kind, width, operation, mode, shift, vector>};
 #else
     return {scalar, nullptr};
 #endif
@@ -131,22 +133,23 @@ constexpr HandlerBinding BindMemoryHandler() {
 
 #if FIBERCPU_AARCH64_TAIL_DISPATCH
 template <Kind kind, unsigned width, int operation, int shift, bool write_nzcv>
-FIBERCPU_AARCH64_THREAD_ABI uint64_t IntegerThread(A64_THREAD_PARAMS) {
-    const auto op = SlotOperands<kind>(*current);
+FIBERCPU_AARCH64_HANDLER_ABI uint64_t IntegerHandler(A64_HANDLER_PARAMS) {
+    const auto op = GetOpOperands<kind>(*current);
     uint64_t pc = 0;
-    if constexpr (kind == Kind::BranchImmediate || kind == Kind::BranchRegister) pc = WideOperands(*current).secondary;
+    if constexpr (kind == Kind::BranchImmediate || kind == Kind::BranchRegister)
+        pc = GetExtraOperands(*current).secondary;
     const auto result = HotInteger<kind, width, operation, shift, write_nzcv>(state, op, pc, BlockTarget<kind>(op),
-                                                                              nzcv A64_THREAD_PIN_PASS);
+                                                                              flags_cache A64_HANDLER_PIN_ARGS);
     if constexpr (kind >= Kind::BranchImmediate && kind <= Kind::TestBranch) {
         if (result.reason == Stop::Branch) {
             if constexpr (kind == Kind::BranchRegister) {
-                A64_THREAD_LINK(current->Next<true>(), result.address == pc + 4, result.address);
+                A64_RESOLVE_BRANCH_TARGET_INLINE(current->NextOp<true>(), result.address == pc + 4, result.address);
             } else {
-                A64_THREAD_DIRECT();
+                A64_RESOLVE_DIRECT_BRANCH_TARGET();
             }
         }
     }
-    A64_THREAD_NEXT(current->Next<HasWideOperands(kind)>());
+    A64_DISPATCH_NEXT(current->NextOp<HasExtraOperandSlot(kind)>());
 }
 #endif
 
@@ -154,7 +157,7 @@ template <Kind kind, unsigned width = 0, int operation = -1, int shift = -1, boo
 constexpr HandlerBinding BindIntegerKernel() {
     constexpr auto scalar = Integer<kind, width, operation, shift, write_nzcv>;
 #if FIBERCPU_AARCH64_TAIL_DISPATCH
-    return {scalar, &IntegerThread<kind, width, operation, shift, write_nzcv>};
+    return {scalar, &IntegerHandler<kind, width, operation, shift, write_nzcv>};
 #else
     return {scalar, nullptr};
 #endif
@@ -224,7 +227,7 @@ constexpr auto RegisterMemoryVariants(std::index_sequence<index...>) {
 inline HandlerBinding Lower(const DecodedInstruction& op) {
     if (op.word == NopWord) {
 #if FIBERCPU_AARCH64_TAIL_DISPATCH
-        return {&NopInstruction, &NopThread};
+        return {&NopInstruction, &NopHandler};
 #else
         return {&NopInstruction, nullptr};
 #endif

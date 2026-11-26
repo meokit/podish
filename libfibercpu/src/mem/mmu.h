@@ -286,17 +286,17 @@ struct CodeCacheState {
 
 #if FIBERCPU_GUEST_AARCH64
     struct ArmBlocks {
-        using Block = aarch64::detail::Block;
+        using BasicBlock = aarch64::detail::BasicBlock;
         BlockPageHashIndex<BlockCacheKey> index;
-        std::vector<Block*> entries;
-        ankerl::unordered_dense::map<uintptr_t, std::vector<Block*>> pages;
+        std::vector<BasicBlock*> entries;
+        ankerl::unordered_dense::map<uintptr_t, std::vector<BasicBlock*>> pages;
         struct RecentEntry {
             BlockCacheKey key{};
-            Block* block = nullptr;
+            BasicBlock* block = nullptr;
         };
         mutable std::array<RecentEntry, BlockLookupCacheSize> recent{};
 
-        Block* Find(const BlockCacheKey& key) const {
+        BasicBlock* Find(const BlockCacheKey& key) const {
             auto& cached = recent[BlockLookupCacheSlot(key.host_page_base, key.guest_eip)];
             if (cached.block && cached.key == key) return cached.block;
             const auto* entry = index.find(key);
@@ -306,7 +306,7 @@ struct CodeCacheState {
             return block;
         }
 
-        void Insert(Block* block, const BlockCacheKey& key) {
+        void Insert(BasicBlock* block, const BlockCacheKey& key) {
             auto [entry, inserted] = index.try_emplace(key, static_cast<uint32_t>(entries.size()));
             if (inserted)
                 entries.push_back(block);
@@ -1873,17 +1873,17 @@ public:
     }
 
 #if FIBERCPU_GUEST_AARCH64
-    [[nodiscard]] aarch64::detail::Block* lookup_arm_block(uint32_t pc, const uint8_t* executable) const {
+    [[nodiscard]] aarch64::detail::BasicBlock* lookup_arm_block(uint32_t pc, const uint8_t* executable) const {
         const auto& cache = code_cache();
         const auto base = reinterpret_cast<uintptr_t>(executable);
         return cache.arm_blocks ? cache.arm_blocks->Find({base, pc}) : nullptr;
     }
 
-    void cache_arm_block(aarch64::detail::Block* block) {
+    void cache_arm_block(aarch64::detail::BasicBlock* block) {
         auto& cache = code_cache();
         if (!cache.arm_blocks) cache.arm_blocks = std::make_unique<CodeCacheState::ArmBlocks>();
         const auto base = reinterpret_cast<uintptr_t>(block->executable_page);
-        const auto pc = static_cast<uint32_t>(block->pc);
+        const auto pc = static_cast<uint32_t>(block->start_pc);
         cache.arm_blocks->Insert(block, {base, pc});
         ++cache.arm_block_allocations;
         refresh_smc_armed_for_host_page(reinterpret_cast<HostAddr>(base));

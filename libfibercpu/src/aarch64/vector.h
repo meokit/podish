@@ -794,7 +794,7 @@ inline StepResult Vector(State& state, const Memory& memory, const DecodedInstru
     return valid ? StepResult{} : Undefined(state.pc);
 }
 
-inline Handler LowerVector(uint32_t word) {
+inline ScalarHandlerFunc LowerVector(uint32_t word) {
     if ((word & 0xbe000000) == 0x0c000000) return Vector<VectorFamily::Structure>;
     if ((word & 0x8f200400) == 0x0e200400) return Vector<VectorFamily::Three>;
     if ((word & 0x9f200c00) == 0x0e200000) return Vector<VectorFamily::Widen>;

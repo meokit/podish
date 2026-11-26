@@ -1,13 +1,13 @@
 #pragma once
 
 #include "block_operands.h"
+#include "dispatch.h"
 #include "flag_liveness.h"
 #include "memory.h"
-#include "threading.h"
 
 namespace fiberish::aarch64 {
 
-// Keep a trained sequence in its threaded entry. In particular, crossing a
+// Keep a trained sequence in its handler entry. In particular, crossing a
 // platform-ABI function boundary forces live dispatch registers onto the stack.
 #if defined(_MSC_VER)
 #define A64_BAKED_INLINE __forceinline
@@ -59,7 +59,7 @@ A64_BAKED_INLINE StepResult Baked(State& state, const Memory& memory, const Deco
 }
 
 template <uint32_t Word>
-constexpr Handler BakedHandler() {
+constexpr ScalarHandlerFunc BakedScalarHandler() {
     if constexpr (CanBake(Word)) return &Baked<Word>;
     return nullptr;
 }
@@ -74,47 +74,48 @@ constexpr bool CanFollowInBakedSequence(uint32_t word) {
 namespace detail {
 
 struct BakedStop {
-    const detail::DispatchSlot* member;
+    const detail::DecodedOp* member;
     StepResult step;
 };
 
 template <uint32_t dead, bool dynamic_imm12, uint32_t Word, uint32_t... Rest>
-A64_BAKED_INLINE BakedStop ExecuteBakedThread(State& state, const detail::DispatchSlot* member,
-                                              const mem::SoftTlb* data_tlb, uint64_t& tlb_tags, uintptr_t& tlb_addend,
-                                              uint32_t& nzcv A64_HOT_PIN_REF) {
+A64_BAKED_INLINE BakedStop ExecuteBakedOps(State& state, const detail::DecodedOp* member, const mem::SoftTlb* data_tlb,
+                                           uint64_t& utlb_tags, uintptr_t& utlb_addend,
+                                           uint32_t& flags_cache A64_HOT_PIN_REF) {
     constexpr auto op = detail::DecodeFields(Word);
     auto operands = op;
-    if constexpr (dynamic_imm12) operands = BakedOperands<Word, true>(SlotOperands<op.kind>(*member));
+    if constexpr (dynamic_imm12) operands = BakedOperands<Word, true>(GetOpOperands<op.kind>(*member));
     uint64_t target = 0;
-    if constexpr (HasBlockTarget(op.kind)) target = WideOperands(*member).primary;
+    if constexpr (HasBlockTarget(op.kind)) target = GetExtraOperands(*member).primary;
     if constexpr (IsBakedTransfer(op.kind)) {
         if (!detail::ProbeLoadStore<op.kind, op.width, op.operation, op.mode, op.shift, detail::Field(Word, 26, 1)>(
-                state, operands, target, data_tlb, tlb_tags, tlb_addend A64_THREAD_PIN_PASS))
+                state, operands, target, data_tlb, utlb_tags, utlb_addend A64_HANDLER_PIN_ARGS))
             return {member, {Stop::Replay}};
     } else {
         uint64_t pc = 0;
         if constexpr ((op.kind == Kind::BranchImmediate || op.kind == Kind::BranchRegister) && op.operation != 0)
-            pc = WideOperands(*member).secondary;
+            pc = GetExtraOperands(*member).secondary;
         const auto step = detail::HotInteger<op.kind, op.width, op.operation, op.shift, !(dead & 1)>(
-            state, operands, pc, target, nzcv A64_THREAD_PIN_PASS);
+            state, operands, pc, target, flags_cache A64_HANDLER_PIN_ARGS);
         if constexpr (op.kind >= Kind::BranchImmediate && op.kind <= Kind::TestBranch) return {member, step};
     }
     if constexpr (sizeof...(Rest) == 0) {
         return {member, {}};
     } else {
         static_assert(!dynamic_imm12 && CanFollowInBakedSequence(Word));
-        return ExecuteBakedThread<(dead >> 1), false, Rest...>(
-            state, member->Next<HasWideOperands(op.kind)>(), data_tlb, tlb_tags, tlb_addend, nzcv A64_THREAD_PIN_PASS);
+        return ExecuteBakedOps<(dead >> 1), false, Rest...>(state, member->NextOp<HasExtraOperandSlot(op.kind)>(),
+                                                            data_tlb, utlb_tags, utlb_addend,
+                                                            flags_cache A64_HANDLER_PIN_ARGS);
     }
 }
 
 template <uint32_t dead, bool dynamic_imm12, uint32_t... Words>
-FIBERCPU_AARCH64_THREAD_ABI uint64_t BakedThreadRun(A64_THREAD_PARAMS) {
-    const auto result = ExecuteBakedThread<dead, dynamic_imm12, Words...>(state, current, data_tlb, tlb_tags,
-                                                                          tlb_addend, nzcv A64_THREAD_PIN_PASS);
+FIBERCPU_AARCH64_HANDLER_ABI uint64_t BakedHandler(A64_HANDLER_PARAMS) {
+    const auto result = ExecuteBakedOps<dead, dynamic_imm12, Words...>(state, current, data_tlb, utlb_tags, utlb_addend,
+                                                                       flags_cache A64_HANDLER_PIN_ARGS);
     if constexpr ((IsBakedTransfer(detail::DecodeFields(Words).kind) || ...)) {
         if (result.step.reason == Stop::Replay) [[unlikely]] {
-            A64_THREAD_REPLAY(result.member);
+            A64_MEMORY_OP_GENERIC(result.member);
         }
     }
     constexpr auto terminal = std::array{detail::DecodeFields(Words).kind...}.back();
@@ -122,23 +123,24 @@ FIBERCPU_AARCH64_THREAD_ABI uint64_t BakedThreadRun(A64_THREAD_PARAMS) {
         if (result.step.reason == Stop::Branch) {
             current = result.member;
             if constexpr (terminal == Kind::BranchRegister) {
-                A64_THREAD_LINK(current->Next<true>(), result.step.address == WideOperands(*current).secondary + 4,
-                                result.step.address);
+                A64_RESOLVE_BRANCH_TARGET_INLINE(current->NextOp<true>(),
+                                                 result.step.address == GetExtraOperands(*current).secondary + 4,
+                                                 result.step.address);
             } else {
-                A64_THREAD_DIRECT();
+                A64_RESOLVE_DIRECT_BRANCH_TARGET();
             }
         }
     }
-    A64_THREAD_NEXT(result.member->template Next<HasWideOperands(terminal)>());
+    A64_DISPATCH_NEXT(result.member->template NextOp<HasExtraOperandSlot(terminal)>());
 }
 
 }  // namespace detail
 #endif
 
 template <uint32_t Word, bool dynamic_imm12 = false>
-constexpr detail::ThreadHandler BakedThreadHandler() {
+constexpr detail::HandlerFunc GetBakedHandler() {
 #if FIBERCPU_AARCH64_TAIL_DISPATCH
-    if constexpr (CanBake(Word)) return &detail::BakedThreadRun<0, dynamic_imm12, Word>;
+    if constexpr (CanBake(Word)) return &detail::BakedHandler<0, dynamic_imm12, Word>;
 #endif
     return nullptr;
 }
@@ -157,7 +159,7 @@ A64_BAKED_INLINE StepResult BakedSequenceWithFlags(State& state, const Memory& m
 }
 
 template <uint32_t... Words>
-constexpr Handler BakedSequenceHandler() {
+constexpr ScalarHandlerFunc BakedSequenceHandler() {
     constexpr std::array words{Words...};
     constexpr bool valid = [](const auto& sequence) {
         for (size_t i = 0; i + 1 < sequence.size(); ++i)
@@ -169,7 +171,7 @@ constexpr Handler BakedSequenceHandler() {
 }
 
 // The dispatcher validates both slots and the remaining instruction budget before entry.
-// The second instruction sees its own PC, including on a restartable memory fault.
+// The second instruction sees its own GetStartPc, including on a restartable memory fault.
 template <uint32_t First, uint32_t Second>
 A64_BAKED_INLINE StepResult BakedPair(State& state, const Memory& memory, const DecodedInstruction& slot) {
     static_assert(detail::DecodeFields(First).kind <= Kind::Multiply);
@@ -180,18 +182,18 @@ A64_BAKED_INLINE StepResult BakedPair(State& state, const Memory& memory, const 
 }
 
 template <uint32_t First, uint32_t Second>
-constexpr Handler BakedPairHandler() {
+constexpr ScalarHandlerFunc BakedPairHandler() {
     if constexpr (CanBake(First) && CanBake(Second) && detail::DecodeFields(First).kind <= Kind::Multiply)
         return &BakedPair<First, Second>;
     return nullptr;
 }
 
-template <Handler execute, unsigned length>
-constexpr Handler BindBakedFusion(detail::ThreadHandler& threaded) {
+template <ScalarHandlerFunc execute, unsigned length>
+constexpr ScalarHandlerFunc BindBakedScalarFusion(detail::HandlerFunc& handler) {
 #if FIBERCPU_AARCH64_TAIL_DISPATCH
-    if constexpr (execute != nullptr) threaded = detail::SafeScalar<execute, length>;
+    if constexpr (execute != nullptr) handler = detail::RunScalarHandler<execute, length>;
 #else
-    (void)threaded;
+    (void)handler;
 #endif
     return execute;
 }
@@ -202,14 +204,14 @@ constexpr detail::HandlerBinding BakedBinding(bool omit_nzcv) {
     if (omit_nzcv) {
         if constexpr (detail::WritesIntegerNZCV(op)) {
 #if FIBERCPU_AARCH64_TAIL_DISPATCH
-            return {Baked<Word, false, dynamic_imm12>, &detail::BakedThreadRun<1, dynamic_imm12, Word>};
+            return {Baked<Word, false, dynamic_imm12>, &detail::BakedHandler<1, dynamic_imm12, Word>};
 #else
             return {Baked<Word, false, dynamic_imm12>, nullptr};
 #endif
         }
         return {};
     }
-    if constexpr (CanBake(Word)) return {Baked<Word, true, dynamic_imm12>, BakedThreadHandler<Word, dynamic_imm12>()};
+    if constexpr (CanBake(Word)) return {Baked<Word, true, dynamic_imm12>, GetBakedHandler<Word, dynamic_imm12>()};
     return {};
 }
 
@@ -223,18 +225,18 @@ constexpr uint32_t DeadSequenceFlags(uint32_t live) {
 }
 
 template <uint32_t dead, uint32_t... Words>
-constexpr Handler BindBakedSequence(detail::ThreadHandler& threaded) {
+constexpr ScalarHandlerFunc BindBakedSequence(detail::HandlerFunc& handler) {
     constexpr auto scalar = BakedSequenceWithFlags<dead, Words...>;
 #if FIBERCPU_AARCH64_TAIL_DISPATCH
-    threaded = &detail::BakedThreadRun<dead, false, Words...>;
+    handler = &detail::BakedHandler<dead, false, Words...>;
 #else
-    (void)threaded;
+    (void)handler;
 #endif
     return scalar;
 }
 
 template <uint32_t... Words>
-Handler BindBakedRun(uint32_t block_dead, detail::ThreadHandler& threaded) {
+ScalarHandlerFunc BindBakedFusion(uint32_t block_dead, detail::HandlerFunc& handler) {
     constexpr unsigned length = sizeof...(Words);
     static_assert(length >= 2 && length <= 24);
     if constexpr (BakedSequenceHandler<Words...>() != nullptr) {
@@ -244,12 +246,12 @@ Handler BindBakedRun(uint32_t block_dead, detail::ThreadHandler& threaded) {
         constexpr auto dead_out = DeadSequenceFlags<Words...>(0);
         const uint32_t dead = block_dead & ((1u << length) - 1);
         if constexpr (live_out != 0) {
-            if (dead == live_out) return BindBakedSequence<live_out, Words...>(threaded);
+            if (dead == live_out) return BindBakedSequence<live_out, Words...>(handler);
         }
         if constexpr (dead_out != 0 && dead_out != live_out) {
-            if (dead == dead_out) return BindBakedSequence<dead_out, Words...>(threaded);
+            if (dead == dead_out) return BindBakedSequence<dead_out, Words...>(handler);
         }
-        return BindBakedSequence<0, Words...>(threaded);
+        return BindBakedSequence<0, Words...>(handler);
     }
     return nullptr;
 }

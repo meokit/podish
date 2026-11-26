@@ -13,7 +13,7 @@ constexpr uint64_t PageMask = PageBytes - 1;
 static_assert(BlockMax <= 32);
 
 enum SlotFlag : uint8_t {
-    Wide = 1,
+    HasDataSlot = 1,
     RetainsPage = 2,
     OmitsFlags = 4,
     UntrustedScalar = 8,
@@ -22,74 +22,76 @@ enum SlotFlag : uint8_t {
     Fused = 64,
 };
 
-struct alignas(16) DispatchSlot {
-    ThreadHandler thread = nullptr;
+struct alignas(16) DecodedOp {
+    HandlerFunc handler = nullptr;
 #if INTPTR_MAX == INT32_MAX
     uint32_t thread_padding = 0;
 #endif
     // Low 40 bits hold the operands. The upper bytes locate the guest
     // instruction and block sentinel independently of the physical stride.
-    uint64_t data = 0;
+    uint64_t payload = 0;
 
     static constexpr uint64_t OperandMask = (uint64_t{1} << 40) - 1;
     static constexpr uint64_t Pack(uint64_t operands, unsigned ordinal, unsigned sentinel_units, uint8_t flags) {
         return operands | (uint64_t{ordinal} << 40) | (uint64_t{sentinel_units} << 48) | (uint64_t{flags} << 56);
     }
 
-    uint64_t Operands() const { return data & OperandMask; }
-    unsigned Ordinal() const { return (data >> 40) & 0xff; }
-    unsigned SentinelUnits() const { return (data >> 48) & 0xff; }
-    bool Has(SlotFlag flag) const { return (data >> 56) & flag; }
+    uint64_t Operands() const { return payload & OperandMask; }
+    unsigned GuestIndex() const { return (payload >> 40) & 0xff; }
+    unsigned SentinelUnits() const { return (payload >> 48) & 0xff; }
+    bool Has(SlotFlag flag) const { return (payload >> 56) & flag; }
 
-    const DispatchSlot* Advance(unsigned units) const {
-        return std::launder(reinterpret_cast<const DispatchSlot*>(reinterpret_cast<const std::byte*>(this) +
-                                                                  units * sizeof(DispatchSlot)));
+    const DecodedOp* Advance(unsigned units) const {
+        return std::launder(
+            reinterpret_cast<const DecodedOp*>(reinterpret_cast<const std::byte*>(this) + units * sizeof(DecodedOp)));
     }
 
     template <bool wide>
-    const DispatchSlot* Next() const {
+    const DecodedOp* NextOp() const {
         return Advance(1 + wide);
     }
 
-    const DispatchSlot* Next() const { return Advance(1 + Has(Wide)); }
-    const DispatchSlot* Sentinel() const { return Advance(SentinelUnits()); }
+    const DecodedOp* NextOp() const { return Advance(1 + Has(HasDataSlot)); }
+    const DecodedOp* Sentinel() const { return Advance(SentinelUnits()); }
 
-    const DispatchSlot* Last(unsigned length) const {
+    const DecodedOp* LastOp(unsigned length) const {
         auto* slot = this;
-        for (unsigned i = 1; i < length; ++i) slot = slot->Next();
+        for (unsigned i = 1; i < length; ++i) slot = slot->NextOp();
         return slot;
     }
 
-    const Block* Owner() const;
-    uint64_t PC() const;
+    const BasicBlock* OwningBlock() const;
+    uint64_t GetStartPc() const;
     uint32_t Word() const;
 };
 
-struct WideSlot {
-    DispatchSlot head;
+struct DecodedOpWithDataSlot {
+    DecodedOp head;
     uint64_t primary = 0;
     uint64_t secondary = 0;
 };
 
-inline const WideSlot& WideOperands(const DispatchSlot& slot) { return *reinterpret_cast<const WideSlot*>(&slot); }
-
-struct SentinelSlot {
-    DispatchSlot head;
-    mutable const Block* links[2];
-
-    // On the sentinel the top byte points back to the owner, in slot units.
-    unsigned OwnerUnits() const { return head.data >> 56; }
-};
-
-inline const SentinelSlot& SentinelData(const DispatchSlot& slot) {
-    return *reinterpret_cast<const SentinelSlot*>(&slot);
+inline const DecodedOpWithDataSlot& GetExtraOperands(const DecodedOp& slot) {
+    return *reinterpret_cast<const DecodedOpWithDataSlot*>(&slot);
 }
 
-static_assert(sizeof(DispatchSlot) == 16 && offsetof(DispatchSlot, thread) == 0);
-static_assert(sizeof(WideSlot) == 32 && sizeof(SentinelSlot) == 32);
+struct BlockSentinel {
+    DecodedOp head;
+    mutable const BasicBlock* links[2];
 
-struct alignas(16) BlockHeader {
-    ThreadHandler entry = nullptr;
+    // On the sentinel the top byte points back to the owner, in slot units.
+    unsigned OwnerUnits() const { return head.payload >> 56; }
+};
+
+inline const BlockSentinel& GetBlockSentinel(const DecodedOp& slot) {
+    return *reinterpret_cast<const BlockSentinel*>(&slot);
+}
+
+static_assert(sizeof(DecodedOp) == 16 && offsetof(DecodedOp, handler) == 0);
+static_assert(sizeof(DecodedOpWithDataSlot) == 32 && sizeof(BlockSentinel) == 32);
+
+struct alignas(16) BasicBlockHeader {
+    HandlerFunc entry = nullptr;
 #if INTPTR_MAX == INT32_MAX
     uint32_t entry_padding = 0;
 #endif
@@ -97,37 +99,38 @@ struct alignas(16) BlockHeader {
 
     static constexpr uint64_t Valid = uint64_t{1} << 63;
     static constexpr uint64_t HasBindings = uint64_t{1} << 48;
-    uint32_t Start() const { return static_cast<uint32_t>(chain); }
-    unsigned Count() const { return (chain >> 32) & 0xff; }
-    unsigned SlotUnits() const { return (chain >> 40) & 0xff; }
+    uint32_t start_pc() const { return static_cast<uint32_t>(chain); }
+    unsigned inst_count() const { return (chain >> 32) & 0xff; }
+    unsigned SentinelSlotIndex() const { return (chain >> 40) & 0xff; }
     bool IsValid() const { return (chain & Valid) != 0; }
 };
 
-struct alignas(16) Block {
-    static const Block Invalid;
+struct alignas(16) BasicBlock {
+    static const BasicBlock Invalid;
 
-    BlockHeader header;
-    uint64_t pc = 0;
+    BasicBlockHeader header;
+    uint64_t start_pc = 0;
     const uint8_t* executable_page = nullptr;
 
-    unsigned Count() const { return header.Count(); }
+    unsigned inst_count() const { return header.inst_count(); }
     bool IsValid() const { return header.IsValid(); }
-    bool HasBindings() const { return (header.chain & BlockHeader::HasBindings) != 0; }
-    void Invalidate() { header.chain &= ~BlockHeader::Valid; }
+    bool HasBindings() const { return (header.chain & BasicBlockHeader::HasBindings) != 0; }
+    void Invalidate() { header.chain &= ~BasicBlockHeader::Valid; }
 
     static constexpr size_t BindingsOffset(unsigned count) { return (count * sizeof(uint32_t) + 7) & ~size_t{7}; }
 
-    static size_t Size(unsigned units, unsigned count, unsigned bindings, unsigned fusions) {
-        const auto code_size = sizeof(Block) + units * sizeof(DispatchSlot) + sizeof(SentinelSlot);
+    static size_t CalculateSize(unsigned units, unsigned count, unsigned bindings, unsigned fusions) {
+        const auto code_size = sizeof(BasicBlock) + units * sizeof(DecodedOp) + sizeof(BlockSentinel);
         if (!bindings) return code_size + count * sizeof(uint32_t);
-        return code_size + BindingsOffset(count) + 2 * sizeof(uint32_t) + bindings * sizeof(Handler) + fusions;
+        return code_size + BindingsOffset(count) + 2 * sizeof(uint32_t) + bindings * sizeof(ScalarHandlerFunc) +
+               fusions;
     }
 
-    const DispatchSlot* Slots() const { return reinterpret_cast<const DispatchSlot*>(this + 1); }
-    const DispatchSlot* Sentinel() const { return Slots()->Advance(header.SlotUnits()); }
+    const DecodedOp* FirstOp() const { return reinterpret_cast<const DecodedOp*>(this + 1); }
+    const DecodedOp* Sentinel() const { return FirstOp()->Advance(header.SentinelSlotIndex()); }
 
     // The footer uses guest ordinals, so it includes instructions with no slot.
-    const uint32_t* Words() const { return reinterpret_cast<const uint32_t*>(&SentinelData(*Sentinel()) + 1); }
+    const uint32_t* Words() const { return reinterpret_cast<const uint32_t*>(&GetBlockSentinel(*Sentinel()) + 1); }
 
     uint32_t Word(unsigned ordinal) const {
         const auto word = Words()[ordinal];
@@ -137,21 +140,22 @@ struct alignas(16) Block {
 
     // Two masks index the optional scalar and fused handlers, followed by fusion lengths.
     const uint32_t* BindingMasks() const {
-        return reinterpret_cast<const uint32_t*>(reinterpret_cast<const std::byte*>(Words()) + BindingsOffset(Count()));
+        return reinterpret_cast<const uint32_t*>(reinterpret_cast<const std::byte*>(Words()) +
+                                                 BindingsOffset(inst_count()));
     }
 
-    Handler ScalarBinding(unsigned ordinal) const {
+    ScalarHandlerFunc ScalarBinding(unsigned ordinal) const {
         if (!HasBindings()) return nullptr;
         const auto* masks = BindingMasks();
         const auto mask = masks[0];
         const auto bit = uint32_t{1} << ordinal;
         if (!(mask & bit)) return nullptr;
-        const auto* bindings = reinterpret_cast<const Handler*>(masks + 2);
+        const auto* bindings = reinterpret_cast<const ScalarHandlerFunc*>(masks + 2);
         return bindings[std::popcount(mask & (bit - 1))];
     }
 
     struct Fusion {
-        Handler handler = nullptr;
+        ScalarHandlerFunc handler = nullptr;
         unsigned length = 1;
     };
 
@@ -160,24 +164,24 @@ struct alignas(16) Block {
         const auto count = std::popcount(masks[0]);
         const auto mask = masks[1];
         const auto index = std::popcount(mask & ((uint32_t{1} << ordinal) - 1));
-        const auto* bindings = reinterpret_cast<const Handler*>(masks + 2);
+        const auto* bindings = reinterpret_cast<const ScalarHandlerFunc*>(masks + 2);
         const auto* lengths = reinterpret_cast<const uint8_t*>(bindings + count + std::popcount(mask));
         return {bindings[count + index], lengths[index]};
     }
 };
 
-inline const Block* DispatchSlot::Owner() const {
-    const auto& sentinel = SentinelData(*Sentinel());
-    return reinterpret_cast<const Block*>(reinterpret_cast<const std::byte*>(&sentinel) -
-                                          sentinel.OwnerUnits() * sizeof(DispatchSlot));
+inline const BasicBlock* DecodedOp::OwningBlock() const {
+    const auto& sentinel = GetBlockSentinel(*Sentinel());
+    return reinterpret_cast<const BasicBlock*>(reinterpret_cast<const std::byte*>(&sentinel) -
+                                               sentinel.OwnerUnits() * sizeof(DecodedOp));
 }
 
-inline uint64_t DispatchSlot::PC() const { return Owner()->pc + uint64_t{Ordinal()} * 4; }
+inline uint64_t DecodedOp::GetStartPc() const { return OwningBlock()->start_pc + uint64_t{GuestIndex()} * 4; }
 
-inline uint32_t DispatchSlot::Word() const { return Owner()->Word(Ordinal()); }
+inline uint32_t DecodedOp::Word() const { return OwningBlock()->Word(GuestIndex()); }
 
-static_assert(alignof(Block) >= alignof(DispatchSlot));
-static_assert(sizeof(BlockHeader) == 16);
-static_assert(offsetof(Block, header) == 0);
+static_assert(alignof(BasicBlock) >= alignof(DecodedOp));
+static_assert(sizeof(BasicBlockHeader) == 16);
+static_assert(offsetof(BasicBlock, header) == 0);
 
 }  // namespace fiberish::aarch64::detail

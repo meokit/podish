@@ -571,7 +571,7 @@ inline StepResult ScalarFloat(State& state, const Memory&, const DecodedInstruct
     return {};
 }
 
-inline Handler LowerFloat(uint32_t word) {
+inline ScalarHandlerFunc LowerFloat(uint32_t word) {
     const auto type = Field(word, 22, 2);
     if ((word & 0xff207c00) == 0x1e204000) {
         const auto operation = Field(word, 15, 6);

@@ -2,7 +2,7 @@
 
 #include <limits>
 
-#include "decode.h"
+#include "decoder.h"
 
 #if FIBERCPU_AARCH64_PIN_REG >= 0
 #define A64_HOT_PIN_REF , uint64_t& pinned
@@ -379,12 +379,12 @@ constexpr bool HasBlockTarget(Kind kind) {
 inline void BindBlockOperands(DecodedInstruction& op, uint64_t pc) {
     if (!HasBlockTarget(op.kind)) return;
     const auto base = op.kind == Kind::Address && op.operation ? pc & ~uint64_t{4095} : pc;
-    op.pc_target = base + op.immediate;
+    op.target_pc = base + op.immediate;
 }
 
 template <Kind kind>
 A64_INTEGER_INLINE uint64_t BlockTarget(const DecodedInstruction& op) {
-    if constexpr (HasBlockTarget(kind)) return op.pc_target;
+    if constexpr (HasBlockTarget(kind)) return op.target_pc;
     return 0;
 }
 

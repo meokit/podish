@@ -340,17 +340,18 @@ bool TruncatedBlocks() {
     constexpr uint32_t Add = 0x91000421; // add x1, x1, #1
     Profile profile;
     profile.trusted_baking = true;
-    profile.resolve_pair = [](uint32_t first, uint32_t second, uint32_t, detail::ThreadHandler& threaded) -> Handler {
+    profile.resolve_pair = [](uint32_t first, uint32_t second, uint32_t,
+                              detail::HandlerFunc& handler) -> ScalarHandlerFunc {
         if (first != Add || second != Add)
             return nullptr;
-        return BindBakedFusion<BakedPairHandler<Add, Add>(), 2>(threaded);
+        return BindBakedScalarFusion<BakedPairHandler<Add, Add>(), 2>(handler);
     };
     profile.resolve_sequence = [](const uint32_t* words, unsigned count, unsigned* matched, uint32_t,
-                                  detail::ThreadHandler& threaded) -> Handler {
+                                  detail::HandlerFunc& handler) -> ScalarHandlerFunc {
         if (count < 4 || !std::all_of(words, words + 4, [](uint32_t word) { return word == Add; }))
             return nullptr;
         *matched = 4;
-        return BindBakedFusion<BakedSequenceHandler<Add, Add, Add, Add>(), 4>(threaded);
+        return BindBakedScalarFusion<BakedSequenceHandler<Add, Add, Add, Add>(), 4>(handler);
     };
     for (const auto start : {Base, Base + Page - Words * 4}) {
         Backing backing;
@@ -376,7 +377,7 @@ bool BakedDispatch() {
     constexpr uint32_t Add2 = 0x91000800;
     static_assert(CanBake(Add1));
     static_assert(!CanBake(0xd4000001));
-    static_assert(BakedHandler<0xd4000001>() == nullptr);
+    static_assert(BakedScalarHandler<0xd4000001>() == nullptr);
     Backing backing;
     backing.Code(Base, {Add1, Add2});
     State state;
@@ -448,7 +449,7 @@ bool FusedDispatch() {
     state.pc = Base;
     Profile profile;
     profile.trusted_baking = true;
-    profile.resolve_pair = [](uint32_t first, uint32_t second, uint32_t, detail::ThreadHandler&) -> Handler {
+    profile.resolve_pair = [](uint32_t first, uint32_t second, uint32_t, detail::HandlerFunc&) -> ScalarHandlerFunc {
         if (first != Add)
             return nullptr;
         if (second == Load)
@@ -479,16 +480,16 @@ bool FusedPCRelativeMembers() {
     constexpr uint32_t Equal = 0x54000040;                           // b.eq +8
     constexpr uint32_t ZAndC = 0x60000000;
     const Profile profile{.resolve_sequence = [](const uint32_t* words, unsigned count, unsigned* matched,
-                                                 uint32_t dead, detail::ThreadHandler& threaded) -> Handler {
+                                                 uint32_t dead, detail::HandlerFunc& handler) -> ScalarHandlerFunc {
                               if (count != 3 || words[0] != Adds || words[1] != Address)
                                   return nullptr;
                               if (words[2] == Link) {
                                   *matched = 3;
-                                  return BindBakedRun<Adds, Address, Link>(dead, threaded);
+                                  return BindBakedFusion<Adds, Address, Link>(dead, handler);
                               }
                               if (words[2] == Equal) {
                                   *matched = 3;
-                                  return BindBakedRun<Adds, Address, Equal>(dead, threaded);
+                                  return BindBakedFusion<Adds, Address, Equal>(dead, handler);
                               }
                               return nullptr;
                           },
@@ -522,7 +523,7 @@ bool FusedLoadRefetch() {
     backing.Code(Base, {Add1, Load, Add2});
     Profile profile;
     profile.resolve_sequence = [](const uint32_t* words, unsigned count, unsigned* matched, uint32_t,
-                                  detail::ThreadHandler&) -> Handler {
+                                  detail::HandlerFunc&) -> ScalarHandlerFunc {
         if (count < 3 || words[0] != Add1 || words[1] != Load || words[2] != Add2)
             return nullptr;
         *matched = 3;
@@ -591,11 +592,11 @@ bool FusedLoadReplay() {
     Profile profile;
     profile.trusted_baking = true;
     profile.resolve_sequence = [](const uint32_t* words, unsigned count, unsigned* matched, uint32_t dead,
-                                  detail::ThreadHandler& threaded) -> Handler {
+                                  detail::HandlerFunc& handler) -> ScalarHandlerFunc {
         if (count < 3 || words[0] != Prefix || words[1] != Load || words[2] != Observe)
             return nullptr;
         *matched = 3;
-        return BindBakedRun<Prefix, Load, Observe>(dead, threaded);
+        return BindBakedFusion<Prefix, Load, Observe>(dead, handler);
     };
 
     State state;
@@ -689,11 +690,11 @@ bool FusedStoreReplay() {
     Profile profile;
     profile.trusted_baking = true;
     profile.resolve_sequence = [](const uint32_t* words, unsigned count, unsigned* matched, uint32_t dead,
-                                  detail::ThreadHandler& threaded) -> Handler {
+                                  detail::HandlerFunc& handler) -> ScalarHandlerFunc {
         if (count < 3 || words[0] != Prefix || words[1] != Store || words[2] != Suffix)
             return nullptr;
         *matched = 3;
-        return BindBakedRun<Prefix, Store, Suffix>(dead, threaded);
+        return BindBakedFusion<Prefix, Store, Suffix>(dead, handler);
     };
     state.pc = Start;
     state.nzcv = detail::FlagMask;
@@ -725,11 +726,11 @@ bool FusedStorePromotesReadWriteMicroTlb() {
     memory.data_tlb = &tlb;
     Profile profile{.trusted_baking = true};
     profile.resolve_sequence = [](const uint32_t*, unsigned count, unsigned* length, uint32_t dead,
-                                  detail::ThreadHandler& threaded) -> Handler {
+                                  detail::HandlerFunc& handler) -> ScalarHandlerFunc {
         if (count != 3)
             return nullptr;
         *length = 3;
-        return BindBakedRun<Store, Load, Branch>(dead, threaded);
+        return BindBakedFusion<Store, Load, Branch>(dead, handler);
     };
     for (const auto& bindings : {Profile{}, profile}) {
         State state{};
@@ -769,11 +770,11 @@ bool BoundLiteralAddress() {
     Profile fused;
     fused.trusted_baking = true;
     fused.resolve_sequence = [](const uint32_t* words, unsigned count, unsigned* length, uint32_t dead,
-                                detail::ThreadHandler& threaded) -> Handler {
+                                detail::HandlerFunc& handler) -> ScalarHandlerFunc {
         if (count < 3 || words[0] != Add || words[1] != Load || words[2] != Branch)
             return nullptr;
         *length = 3;
-        return BindBakedRun<Add, Load, Branch>(dead, threaded);
+        return BindBakedFusion<Add, Load, Branch>(dead, handler);
     };
     for (const auto& profile : {Profile{}, fused}) {
         for (const unsigned budget : {2u, 3u}) {
@@ -862,15 +863,15 @@ bool FlagElisionBudgets() {
     Profile baked;
     baked.trusted_baking = true;
     baked.resolve_sequence = [](const uint32_t* words, unsigned count, unsigned* matched, uint32_t dead_mask,
-                                detail::ThreadHandler& threaded) -> Handler {
+                                detail::HandlerFunc& handler) -> ScalarHandlerFunc {
         constexpr std::array Prefix{AddsX0, AddX4, AdcsX1, AddsX2};
         if (count < Prefix.size() || !std::equal(Prefix.begin(), Prefix.end(), words))
             return nullptr;
         *matched = Prefix.size();
         fused_dead_mask = dead_mask & ((1u << Prefix.size()) - 1);
-        const auto handler = BindBakedRun<AddsX0, AddX4, AdcsX1, AddsX2>(dead_mask, threaded);
-        bound_fusion = handler != nullptr;
-        return handler;
+        const auto scalar_handler = BindBakedFusion<AddsX0, AddX4, AdcsX1, AddsX2>(dead_mask, handler);
+        bound_fusion = scalar_handler != nullptr;
+        return scalar_handler;
     };
 
     for (const auto& profile : {Profile{}, baked}) {
@@ -949,14 +950,14 @@ bool FlagElisionEvents() {
     constexpr uint32_t Svc = 0xd4000841;  // svc #0x42
     static uint32_t fused_dead_mask = UINT32_MAX;
     const Profile baked{.resolve_sequence = [](const uint32_t* words, unsigned count, unsigned* matched,
-                                               uint32_t dead_mask, detail::ThreadHandler& threaded) -> Handler {
+                                               uint32_t dead_mask, detail::HandlerFunc& handler) -> ScalarHandlerFunc {
                             if (count < 3 || words[0] != AddsX0 || words[1] != Load || words[2] != CmpX3)
                                 return nullptr;
                             *matched = 3;
-                            const auto handler = BindBakedRun<AddsX0, Load, CmpX3>(dead_mask, threaded);
-                            if (handler)
+                            const auto scalar_handler = BindBakedFusion<AddsX0, Load, CmpX3>(dead_mask, handler);
+                            if (scalar_handler)
                                 fused_dead_mask = dead_mask & 0b111;
-                            return handler;
+                            return scalar_handler;
                         },
                         .trusted_baking = true};
     const Profile generic;
@@ -1048,8 +1049,8 @@ bool CompactSlotsAndFoldedNopBudgets() {
     constexpr auto FaultAddress = Base + 2 * Page;
 
     struct CachedBacking : Backing {
-        alignas(detail::Block) std::array<std::array<std::byte, 1024>, 4> storage;
-        std::array<detail::Block*, 4> blocks{};
+        alignas(detail::BasicBlock) std::array<std::array<std::byte, 1024>, 4> storage;
+        std::array<detail::BasicBlock*, 4> blocks{};
         unsigned allocations = 0;
         size_t initial_size = 0;
     } backing;
@@ -1057,11 +1058,11 @@ bool CompactSlotsAndFoldedNopBudgets() {
     backing.Code(Branch, {0x17ffffe1}); // b Base + 4
 
     auto memory = backing.Callbacks();
-    memory.find_block = [](void* context, uint64_t pc, const uint8_t*) -> detail::Block* {
+    memory.lookup_cached_block = [](void* context, uint64_t pc, const uint8_t*) -> detail::BasicBlock* {
         const auto& backing = static_cast<const CachedBacking&>(*static_cast<const Backing*>(context));
         for (const auto* block : backing.blocks)
-            if (block && block->pc == pc)
-                return const_cast<detail::Block*>(block);
+            if (block && block->start_pc == pc)
+                return const_cast<detail::BasicBlock*>(block);
         return nullptr;
     };
     memory.allocate_block = [](void* context, size_t size, uint64_t) -> void* {
@@ -1072,7 +1073,7 @@ bool CompactSlotsAndFoldedNopBudgets() {
             backing.initial_size = size;
         return backing.storage[backing.allocations].data();
     };
-    memory.cache_block = [](void* context, detail::Block* block) {
+    memory.cache_block = [](void* context, detail::BasicBlock* block) {
         auto& backing = static_cast<CachedBacking&>(*static_cast<Backing*>(context));
         backing.blocks[backing.allocations++] = block;
     };
@@ -1094,24 +1095,26 @@ bool CompactSlotsAndFoldedNopBudgets() {
     }
 
     const auto& block = *backing.blocks.front();
-    if (backing.allocations != 1 || block.Count() != 8 || block.header.SlotUnits() != 5 ||
+    if (backing.allocations != 1 || block.inst_count() != 8 || block.header.SentinelSlotIndex() != 5 ||
         backing.initial_size != 176 || block.Word(1) != Nop || block.Word(2) != Nop || block.Word(4) != Nop ||
         block.Word(6) != Nop)
         return false;
-    const auto* slot = block.Slots();
+    const auto* slot = block.FirstOp();
     for (const unsigned ordinal : {0u, 3u, 5u, 7u}) {
-        if (slot->Ordinal() != ordinal || slot->PC() != Base + 4 * ordinal || slot->Has(detail::Wide) != (ordinal == 3))
+        if (slot->GuestIndex() != ordinal || slot->GetStartPc() != Base + 4 * ordinal ||
+            slot->Has(detail::HasDataSlot) != (ordinal == 3))
             return false;
-        slot = slot->Next();
+        slot = slot->NextOp();
     }
-    if (slot != block.Sentinel() || slot->PC() != Base + 32)
+    if (slot != block.Sentinel() || slot->GetStartPc() != Base + 32)
         return false;
 
     State state;
     state.pc = Branch;
     const auto result = Run(state, memory, 2);
     return result.reason == Stop::Budget && result.executed == 2 && state.pc == Base + 8 && state.x[1] == 0 &&
-           backing.allocations == 3 && backing.blocks[2]->pc == Base + 4 && backing.blocks[2]->Slots()->Word() == Nop;
+           backing.allocations == 3 && backing.blocks[2]->start_pc == Base + 4 &&
+           backing.blocks[2]->FirstOp()->Word() == Nop;
 }
 
 bool RefetchChangedFoldedNop() {
