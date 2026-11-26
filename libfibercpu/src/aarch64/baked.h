@@ -51,11 +51,11 @@ A64_BAKED_INLINE StepResult Baked(State& state, const Memory& memory, const Deco
         return detail::LoadStore<op.kind, op.width, op.operation, op.mode, op.shift, detail::Field(Word, 26, 1)>(
             state, memory, operands);
     } else {
+        constexpr auto form =
+            detail::IsRotateImmediate(op) ? detail::IntegerForm::RotateRight : detail::IntegerForm::Default;
 #if defined(__clang__)
         [[clang::always_inline]]
 #endif
-        constexpr auto form =
-            detail::IsRotateImmediate(op) ? detail::IntegerForm::RotateRight : detail::IntegerForm::Default;
         return detail::Integer<op.kind, op.width, op.operation, op.shift, write_nzcv, form>(state, memory, operands);
     }
 }
