@@ -125,17 +125,30 @@ HandlerBinding BindInteger(const DecodedInstruction& op) {
     return variants[(op.width == 64 ? operations : 0) + op.operation];
 }
 
-template <size_t... index>
+template <int mode, unsigned operations, size_t... index>
 constexpr auto ImmediateMemoryVariants(std::index_sequence<index...>) {
     return std::array<HandlerBinding, sizeof...(index)>{
-        BindMemoryHandler<Kind::LoadStoreImmediate, 8u << (index / 4), index % 4, Offset, -1, 0>()...};
+        BindMemoryHandler<Kind::LoadStoreImmediate, 8u << (index / operations), index % operations, mode, -1, 0>()...};
 }
 
-template <size_t... index>
+template <int mode, unsigned operations>
+HandlerBinding BindImmediateMemory(const DecodedInstruction& op) {
+    constexpr auto variants = ImmediateMemoryVariants<mode, operations>(std::make_index_sequence<4 * operations>{});
+    return variants[operations * Field(op.word, 30, 2) + op.operation];
+}
+
+template <int extension, unsigned operations, size_t... index>
 constexpr auto RegisterMemoryVariants(std::index_sequence<index...>) {
+    constexpr auto stride = 2 * operations;
     return std::array<HandlerBinding, sizeof...(index)>{
-        BindMemoryHandler<Kind::LoadStoreRegister, 8u << (index / 16), index % 4, 2 + (index / 4) % 2,
-                          (index / 8) % 2 ? index / 16 : 0, 0>()...};
+        BindMemoryHandler<Kind::LoadStoreRegister, 8u << (index / stride), index % operations, extension,
+                          (index / operations) % 2 ? index / stride : 0, 0>()...};
+}
+
+template <int extension, unsigned operations>
+HandlerBinding BindRegisterMemory(const DecodedInstruction& op) {
+    constexpr auto variants = RegisterMemoryVariants<extension, operations>(std::make_index_sequence<8 * operations>{});
+    return variants[operations * (2 * Field(op.word, 30, 2) + Field(op.word, 12, 1)) + op.operation];
 }
 
 template <size_t... index>
@@ -183,9 +196,11 @@ inline HandlerBinding Lower(const DecodedInstruction& op) {
         case Kind::CompareBranch:
             return BindInteger<Kind::CompareBranch, 2>(op);
         case Kind::LoadStoreImmediate:
-            if (!Field(op.word, 26, 1) && op.operation < Prefetch && op.mode == Offset) {
-                constexpr auto variants = ImmediateMemoryVariants(std::make_index_sequence<16>{});
-                return variants[4 * Field(op.word, 30, 2) + op.operation];
+            if (Field(op.word, 26, 1)) break;
+            if (op.mode == Offset && op.operation < Prefetch) return BindImmediateMemory<Offset, 4>(op);
+            if (op.operation == Load || op.operation == Store) {
+                if (op.mode == PostIndex) return BindImmediateMemory<PostIndex, 2>(op);
+                if (op.mode == PreIndex) return BindImmediateMemory<PreIndex, 2>(op);
             }
             break;
         case Kind::LoadStorePair:
@@ -199,11 +214,11 @@ inline HandlerBinding Lower(const DecodedInstruction& op) {
             if (op.width == 128) return BindMemoryHandler<Kind::LoadStorePair, 128>();
             break;
         case Kind::LoadStoreRegister:
-            if (!Field(op.word, 26, 1) && op.operation < Prefetch && (op.mode == 2 || op.mode == 3)) {
-                constexpr auto variants = RegisterMemoryVariants(std::make_index_sequence<64>{});
-                return variants[16 * Field(op.word, 30, 2) + 8 * Field(op.word, 12, 1) + 4 * (op.mode - 2) +
-                                op.operation];
-            }
+            if (Field(op.word, 26, 1) || op.operation >= Prefetch) break;
+            if (op.mode == 2) return BindRegisterMemory<2, 4>(op);  // UXTW
+            if (op.mode == 3) return BindRegisterMemory<3, 4>(op);  // LSL
+            if (op.mode == 6 && (op.operation == Load || op.operation == Store))
+                return BindRegisterMemory<6, 2>(op);  // SXTW
             break;
         default:
             break;
