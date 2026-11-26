@@ -1,20 +1,32 @@
 # Native build presets
 
-Standalone CMake and native Podish builds default to `3.5m`. Podish.Browser
-defaults to `1.75m` with a multi-workload hot dispatch plan. The three presets
-select instruction tables calibrated on macOS ARM64.
+Standalone CMake, native Podish and Podish.Browser default to `3m` for both guests. Wasm also uses a multi-workload hot dispatch plan. The three presets
+select i386 and AArch64 instruction tables calibrated on macOS ARM64.
 
-| Preset | Text size hint | Native text on macOS ARM64 with Clang 21 |
+| Preset | Text growth limit per guest | Text growth limit with both guests |
 | --- | ---: | ---: |
-| `1.75m` | 1,835,008 B | 1,756,056 B |
-| `3.5m` | 3,670,016 B | 3,603,680 B |
-| `10m` | 10,485,760 B | 9,387,872 B |
+| `1.5m` | 1,572,864 B | 3,145,728 B |
+| `3m` | 3,145,728 B | 6,291,456 B |
+| `10m` | 10,485,760 B | 20,971,520 B |
 
-The names use MiB. Every target uses the same trained tables, which form
-strict supersets from `1.75m` through `3.5m` to `10m`. Each tier includes
-ModRM, width and flags, exact and
-partial scalar bindings, and SuperOpcodes. The two smaller tiers use measured
-points from the size scan. The largest extends the same training pool.
+The names use MiB of growth relative to an unbaked library with the same
+guest selection, compiler, and optimization flags. The trainer measures each
+guest against its own unbaked build. Both guests use generalization-aware marginal ranking with risk 0.5. Larger tiers retain every binding in smaller tiers. The i386 ranking exhausts its positive-gain candidates at 3 MiB, so its 3 and 10 MiB presets contain the same bindings. i386 tiers include ModRM,
+width and flags, exact and partial scalar bindings, and SuperOpcodes.
+AArch64 tiers include exact words, partial operand shapes, pairs, and longer
+fused sequences. Both guests train against the same workloads.
+
+The macOS ARM64 Release calibration used Apple Clang 21 and LTO. Sizes
+and increases below are in bytes, measured with one guest per build.
+
+| Preset | i386 native text | i386 growth | AArch64 native text | AArch64 growth |
+| --- | ---: | ---: | ---: | ---: |
+| Unbaked | 531,496 | 0 | 308,812 | 0 |
+| `1.5m` | 2,057,612 | 1,526,116 | 1,841,092 | 1,532,280 |
+| `3m` | 2,269,488 | 1,737,992 | 3,317,944 | 3,009,132 |
+| `10m` | 2,269,488 | 1,737,992 | 10,446,444 | 10,137,632 |
+
+In a fresh Release build with both guests enabled, the default `3m` shared library measured 5,518,208 B of native text. The matched unbaked build measured 771,084 B, giving 4,747,124 B of combined growth. The [default-preset workload comparison](../benchmark/optimization/results/20261126-default-3m/README.md) measures both guests with the same packaged native library.
 
 ## Build libfibercpu
 
@@ -22,11 +34,11 @@ Use Clang and Ninja. From the repository root:
 
 ```sh
 cmake -S libfibercpu --list-presets
-cmake -S libfibercpu --preset 1.75m
-(cd libfibercpu && cmake --build --preset 1.75m)
+cmake -S libfibercpu --preset 1.5m
+(cd libfibercpu && cmake --build --preset 1.5m)
 ```
 
-Substitute `3.5m` or `10m` in both commands for a larger preset. Each writes
+Substitute `3m` or `10m` in both commands for a larger preset. Each writes
 to `build/native/<preset>/`. These CMake presets use Release and disable
 Host LLVM JIT and runtime specialization.
 
@@ -35,12 +47,12 @@ set the selector directly:
 
 ```sh
 cmake -S libfibercpu -B build/native/my-build -DCMAKE_BUILD_TYPE=Release \
-  -DFIBERCPU_BAKING_PRESET=3.5m
+  -DFIBERCPU_BAKING_PRESET=3m
 cmake --build build/native/my-build --config Release --target fibercpu
 ```
 
 Use `FIBERCPU_BAKING_PRESET=custom` to set the baking options individually.
-Its default inputs are the `3.5m` tables. The explicit `BASE` fusion strategy
+Its default inputs are the `3m` tables. The explicit `BASE` fusion strategy
 selects the legacy 32-sequence table.
 The GPR pin, instrumentation, JIT, and dynamic specialization settings
 remain independent. `X86_GetOptimizationConfig()` reports the selected
@@ -54,38 +66,44 @@ count (1,048,576). The software instruction TLB has 256 entries.
 
 Named native shared-library builds report the linked text size where the
 format can be measured. They use `__text` on macOS and `.text` on Linux and
-Windows, and report the largest slice of a universal Mach-O. The preset
-size is a reference. Builds can exceed it because toolchains and architectures
-emit different code. Static archives and browser Wasm builds can use the same
-tables, with final code size determined by the application link.
+Windows, and report the largest slice of a universal Mach-O. Training enforces
+the growth limit against the measured baseline. Ordinary builds report total
+native text and the applicable growth budget. Other toolchains can produce
+different sizes from the same tables. Static archives and browser Wasm builds
+use the same tables, with final code size determined by the application link.
+
+Existing CMake cache values and MSBuild properties using `1.75m` or `3.5m`
+resolve to `1.5m` or `3m` respectively.
 
 ## Build Podish with a preset
 
 ```sh
-dotnet build Podish.Cli/Podish.Cli.csproj -c Release -p:FibercpuBakingPreset=1.75m
+dotnet build Podish.Cli/Podish.Cli.csproj -c Release -p:FibercpuBakingPreset=1.5m
 ```
 
 For Windows x64 add `-r win-x64 -m:1` as in the ordinary CLI build. The
-`1.75m` and `10m` choices use `Fiberish.X86/build_native/<rid-or-host>/<preset>/`
+`1.5m` and `10m` choices use `Fiberish.X86/build_native/<rid-or-host>/<preset>/`
 for the native build and `bin/<preset>/` and `obj/<preset>/` for managed outputs.
-The `3.5m` and `custom` selections use the ordinary output locations. Select
+The `3m` and `custom` selections use the ordinary output locations. Select
 `-p:FibercpuBakingPreset=custom` when supplying individual baking options.
 
 ## Update the baked inputs
 
-Each [preset directory](../libfibercpu/presets/) holds `modrm.json`,
+Each [i386 preset directory](../libfibercpu/presets/) holds `modrm.json`,
 `scalar.json`, `fusion-operands.json`, and the fusion recipes in
 `recipes.json`. Regenerate `superopcodes.generated.cpp` from `recipes.json`
 using `Podish.PerfTools gen-superopcodes` with `--top` set to the number
 of recipes. CMake consumes the checked-in source and generates the operand
-bindings from JSON during the build.
+bindings from JSON during the build. The corresponding AArch64 plan lives
+in `presets/aarch64/<tier>/scalar.json`.
 
 Use the [training workflow](baked-instruction-variants.md) for new candidates.
-Check strict containment and calibrate each tier on macOS ARM64 before
-replacing the shipped tables. Use the standalone checker with `--limit`
-when you need a strict calibration check:
+Check binding containment and calibrate each tier on macOS ARM64 before
+replacing the shipped tables. Use the standalone checker with a matched
+unbaked library when checking growth. This example uses i386-only builds:
 
 ```sh
 python3 scripts/check_native_text_budget.py --macho-size /usr/bin/size \
-  --limit 1835008 build/native/1.75m/libfibercpu.dylib
+  --baseline build/native/unbaked/libfibercpu.dylib \
+  --growth-limit 1572864 build/native/1.5m/libfibercpu.dylib
 ```

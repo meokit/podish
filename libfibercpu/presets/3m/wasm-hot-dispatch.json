@@ -66,52 +66,6 @@
     ],
     [
       [
-        "op::OpMov_Sse_Store",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 0, 0u>"
-      ],
-      [
-        "op::OpMov_Sse_Store",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 131, 0u>"
-      ],
-      [
-        "op::OpMov_Sse_Store",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 133, 0u>"
-      ],
-      [
-        "op::OpMov_Sse_Store",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 1, 0u>"
-      ],
-      [
-        "op::OpMov_Sse_Store",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 4, 0u>"
-      ],
-      [
-        "op::OpMov_Sse_Store",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 64, 0u>"
-      ],
-      [
-        "op::OpMov_Sse_Store",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 66, 0u>"
-      ],
-      [
-        "op::OpMov_Sse_Store",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 67, 0u>"
-      ],
-      [
-        "op::OpMov_Sse_Store",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 69, 0u>"
-      ],
-      [
-        "op::OpMov_Sse_Store",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 70, 0u>"
-      ],
-      [
-        "op::OpMov_Sse_Store",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 7, 0u>"
-      ]
-    ],
-    [
-      [
         "op::OpGroup5_Ev_Generic",
         "OperandSpec::SlotBound<1u, false>"
       ]
@@ -120,58 +74,6 @@
       [
         "baked_operand::OpRet",
         "OperandSpec::Profile<DecodedOperandShape{25690115u}, 0u>"
-      ],
-      [
-        "baked_operand::OpRet",
-        "OperandSpec::Profile<DecodedOperandShape{42467843u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpCmp_EvGv",
-        "OperandSpec::Profile<DecodedOperandShape{50528325u, 395284u, 4294967260u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "op::OpMov_Sse_Load",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 0, 0u>"
-      ],
-      [
-        "op::OpMov_Sse_Load",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 133, 0u>"
-      ],
-      [
-        "op::OpMov_Sse_Load",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 2, 0u>"
-      ],
-      [
-        "op::OpMov_Sse_Load",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 5, 0u>"
-      ],
-      [
-        "op::OpMov_Sse_Load",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 64, 0u>"
-      ],
-      [
-        "op::OpMov_Sse_Load",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 66, 0u>"
-      ],
-      [
-        "op::OpMov_Sse_Load",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 69, 0u>"
-      ],
-      [
-        "op::OpMov_Sse_Load",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 6, 0u>"
-      ],
-      [
-        "op::OpMov_Sse_Load",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 70, 0u>"
-      ],
-      [
-        "op::OpMov_Sse_Load",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 71, 0u>"
       ]
     ],
     [
@@ -184,20 +86,12 @@
       [
         "baked_operand::OpCmp_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620167u}, 0u>"
-      ],
-      [
-        "baked_operand::OpCmp_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{33620216u}, 0u>"
       ]
     ],
     [
       [
         "baked_operand::OpCmp_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620215u}, 0u>"
-      ],
-      [
-        "baked_operand::OpCmp_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{33620222u}, 0u>"
       ]
     ],
     [
@@ -209,12 +103,6 @@
     [
       [
         "op::OpCmp_EbGb",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 0, 0u>"
-      ]
-    ],
-    [
-      [
-        "op::OpMov_GbEb",
         "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 0, 0u>"
       ]
     ],
@@ -238,21 +126,11 @@
       [
         "baked_operand::OpGroup1_EbIb_Generic",
         "OperandSpec::PartialProfile<DecodedOperandShape{50659578u}, 0u, 1u, 2u>"
-      ],
-      [
-        "op::OpGroup1_EbIb_Generic",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 250, 0u>"
       ]
     ],
     [
       [
-        "op::OpSub_Sse",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 193, 0u>"
-      ]
-    ],
-    [
-      [
-        "OperandClone_014_SuperOpcode_2_011_OpTest_EvGv__OpJcc_NE_Rel8"
+        "OperandClone_689_SuperOpcode_2_030_OpTest_EvGv__OpJcc_NE_Rel8"
       ]
     ],
     [
@@ -263,16 +141,6 @@
       [
         "baked_operand::OpMov_GvEv",
         "OperandSpec::PartialProfile<DecodedOperandShape{50528349u, 395284u}, 0u, 1u, 1u>"
-      ],
-      [
-        "baked_operand::OpMov_GvEv",
-        "OperandSpec::PartialProfile<DecodedOperandShape{67305565u, 395284u}, 0u, 1u, 1u>"
-      ]
-    ],
-    [
-      [
-        "op::OpMovsx_Word",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 16, 0u>"
       ]
     ],
     [
@@ -289,10 +157,6 @@
       [
         "baked_operand::OpCmp_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620168u}, 0u>"
-      ],
-      [
-        "baked_operand::OpCmp_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{33620161u}, 0u>"
       ]
     ],
     [
@@ -315,24 +179,6 @@
       [
         "baked_operand::OpMov_GvEv",
         "OperandSpec::Profile<DecodedOperandShape{33751040u, 526336u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpAnd_EaxImm",
-        "OperandSpec::PartialProfile<DecodedOperandShape{68435973u}, 0u, 1u, 2u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMovzx_Word",
-        "OperandSpec::Profile<DecodedOperandShape{67305476u, 529152u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMovzx_Word",
-        "OperandSpec::PartialProfile<DecodedOperandShape{67305546u, 526344u}, 0u, 1u, 1u>"
       ]
     ],
     [
@@ -364,18 +210,6 @@
     ],
     [
       [
-        "op::OpLea_Impl<(OpsizeSpec)2, (RmOperandSpec)0>",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 16, 0u>"
-      ]
-    ],
-    [
-      [
-        "OpAdd_GvEv_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 24, 0u>"
-      ]
-    ],
-    [
-      [
         "op::OpGroup1_EvIb_Generic",
         "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 0, 0u>"
       ]
@@ -388,48 +222,14 @@
     ],
     [
       [
-        "baked_operand::OpMovzx_Byte",
-        "OperandSpec::PartialProfile<DecodedOperandShape{117637265u, 526340u}, 0u, 1u, 1u>"
-      ],
-      [
-        "baked_operand::OpMovzx_Byte",
-        "OperandSpec::PartialProfile<DecodedOperandShape{67305553u, 526340u}, 0u, 1u, 1u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpGroup1_EvIb_Generic",
         "OperandSpec::Profile<DecodedOperandShape{51708096u, 0u, 0u, 8u}, 0u>"
       ]
     ],
     [
       [
-        "op::OpMovsx_Word",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 0, 0u>"
-      ]
-    ],
-    [
-      [
-        "op::OpMovsx_Word",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 48, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpCmp_EvGv",
         "OperandSpec::PartialProfile<DecodedOperandShape{67305580u, 395280u}, 0u, 1u, 1u>"
-      ]
-    ],
-    [
-      [
-        "op::OpImul_GvEv",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 208, 0u>"
-      ]
-    ],
-    [
-      [
-        "op::OpMovzx_Byte",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 8, 0u>"
       ]
     ],
     [
@@ -442,10 +242,6 @@
       [
         "baked_operand::OpOr_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{34668744u}, 0u>"
-      ],
-      [
-        "OpOr_EvGv_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 200, 0u>"
       ]
     ],
     [
@@ -504,25 +300,13 @@
     ],
     [
       [
-        "op::OpCmp_EvGv",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 211, 0u>"
-      ]
-    ],
-    [
-      [
-        "OperandClone_023_SuperOpcode_4_020_OpPush_Reg__OpPush_Reg__OpPush_Reg__OpPush_Reg"
+        "OperandClone_024_SuperOpcode_4_022_OpPush_Reg__OpPush_Reg__OpPush_Reg__OpPush_Reg"
       ]
     ],
     [
       [
         "baked_operand::OpMov_GvEv",
         "OperandSpec::Profile<DecodedOperandShape{67305540u, 395280u, 24u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMov_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{50528325u, 395284u, 4294967276u}, 0u>"
       ]
     ],
     [
@@ -543,24 +327,12 @@
     ],
     [
       [
-        "op::OpCmp_EbGb",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 24, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpJcc_G_Rel8",
         "OperandSpec::Profile<DecodedOperandShape{42729479u}, 0u>"
       ],
       [
         "baked_operand::OpJcc_G_Rel32",
         "OperandSpec::Profile<DecodedOperandShape{109838343u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "op::OpGroup1_EvIz_Generic",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 225, 0u>"
       ]
     ],
     [
@@ -593,20 +365,8 @@
     ],
     [
       [
-        "op::OpGroup2_EvIb",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 192, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpMov_GvEv",
         "OperandSpec::Profile<DecodedOperandShape{33751063u, 526364u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpGroup1_EvIb_Generic",
-        "OperandSpec::Profile<DecodedOperandShape{51708128u, 0u, 0u, 127u}, 0u>"
       ]
     ],
     [
@@ -629,10 +389,6 @@
       [
         "baked_operand::OpMov_EvGv",
         "OperandSpec::PartialProfile<DecodedOperandShape{50528349u, 395284u}, 0u, 1u, 1u>"
-      ],
-      [
-        "baked_operand::OpMov_EvGv",
-        "OperandSpec::PartialProfile<DecodedOperandShape{67305565u, 395284u}, 0u, 1u, 1u>"
       ]
     ],
     [
@@ -659,18 +415,6 @@
     [
       [
         "baked_operand::OpMov_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{50528321u, 526340u, 4294967292u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "op::OpMov_GbEb",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 8, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMov_GvEv",
         "OperandSpec::Profile<DecodedOperandShape{50528344u, 526336u, 4u}, 0u>"
       ]
     ],
@@ -678,16 +422,6 @@
       [
         "baked_operand::OpCmp_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620216u}, 0u>"
-      ],
-      [
-        "baked_operand::OpCmp_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{33620167u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "OpOr_GvEv_Baked16_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 0, 0u>"
       ]
     ],
     [
@@ -700,25 +434,11 @@
       [
         "baked_operand::OpMov_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620162u}, 0u>"
-      ],
-      [
-        "baked_operand::OpMov_EvGv",
-        "OperandSpec::Profile<DecodedOperandShape{50397378u}, 0u>"
-      ],
-      [
-        "OpMov_EvGv_Baked32",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 194, 0u>"
       ]
     ],
     [
       [
-        "OpMov_EvGv_Baked16",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 16, 0u>"
-      ]
-    ],
-    [
-      [
-        "OperandClone_122_SuperOpcode_2_063_OpMov_GvEv__OpRet"
+        "OperandClone_083_SuperOpcode_2_048_OpMov_GvEv__OpRet"
       ]
     ],
     [
@@ -731,10 +451,6 @@
       [
         "baked_operand::OpOr_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{34668746u}, 0u>"
-      ],
-      [
-        "OpOr_EvGv_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 202, 0u>"
       ]
     ],
     [
@@ -747,12 +463,6 @@
       [
         "baked_operand::OpGroup1_EbIb_Generic",
         "OperandSpec::Profile<DecodedOperandShape{50790456u, 526336u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "op::OpCmp_GvEv",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 8, 0u>"
       ]
     ],
     [
@@ -795,38 +505,12 @@
       [
         "baked_operand::OpGroup1_EbIb_Generic",
         "OperandSpec::PartialProfile<DecodedOperandShape{50659579u}, 0u, 1u, 2u>"
-      ],
-      [
-        "op::OpGroup1_EbIb_Generic",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 251, 0u>"
-      ]
-    ],
-    [
-      [
-        "OpXor_GvEv_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 0, 0u>"
       ]
     ],
     [
       [
         "baked_operand::OpPxor_Sse",
         "OperandSpec::Profile<DecodedOperandShape{67190985u}, 0u>"
-      ],
-      [
-        "op::OpPxor_Sse",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 201, 0u>"
-      ]
-    ],
-    [
-      [
-        "op::OpAdd_EvGv",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 24, 0u>"
-      ]
-    ],
-    [
-      [
-        "OpMov_EvGv_Baked16",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 48, 0u>"
       ]
     ],
     [
@@ -837,64 +521,8 @@
     ],
     [
       [
-        "op::OpCmp_EvGv",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 209, 0u>"
-      ],
-      [
-        "op::OpCmp_GvEv",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 202, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpGroup1_EvIb_Generic",
         "OperandSpec::Profile<DecodedOperandShape{50659564u, 0u, 0u, 12u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "op::OpMov_Sse_Load",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 12, 0u>"
-      ],
-      [
-        "op::OpMov_Sse_Load",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 136, 0u>"
-      ],
-      [
-        "op::OpMov_Sse_Load",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 13, 0u>"
-      ],
-      [
-        "op::OpMov_Sse_Load",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 141, 0u>"
-      ],
-      [
-        "op::OpMov_Sse_Load",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 72, 0u>"
-      ],
-      [
-        "op::OpMov_Sse_Load",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 73, 0u>"
-      ],
-      [
-        "op::OpMov_Sse_Load",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 74, 0u>"
-      ],
-      [
-        "op::OpMov_Sse_Load",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 76, 0u>"
-      ],
-      [
-        "op::OpMov_Sse_Load",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 77, 0u>"
-      ],
-      [
-        "op::OpMov_Sse_Load",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 78, 0u>"
-      ],
-      [
-        "op::OpMov_Sse_Load",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 79, 0u>"
       ]
     ],
     [
@@ -907,10 +535,6 @@
       [
         "baked_operand::OpMov_EvGv",
         "OperandSpec::PartialProfile<DecodedOperandShape{117653635u, 526348u}, 0u, 1u, 1u>"
-      ],
-      [
-        "baked_operand::OpMov_EvGv",
-        "OperandSpec::PartialProfile<DecodedOperandShape{67321923u, 526348u}, 0u, 1u, 1u>"
       ]
     ],
     [
@@ -937,28 +561,14 @@
     ],
     [
       [
-        "baked_operand::OpMov_EvGv",
-        "OperandSpec::Profile<DecodedOperandShape{50528381u, 395284u, 4294967276u}, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpCmp_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620209u}, 0u>"
-      ],
-      [
-        "baked_operand::OpCmp_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{33620174u}, 0u>"
       ]
     ],
     [
       [
         "baked_operand::OpCmp_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620166u}, 0u>"
-      ],
-      [
-        "baked_operand::OpCmp_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{33620208u}, 0u>"
       ]
     ],
     [
@@ -985,20 +595,8 @@
     ],
     [
       [
-        "OpSub_GvEv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 16, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpMov_GvEv",
         "OperandSpec::Profile<DecodedOperandShape{50528268u, 395280u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMov_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{50528333u, 395284u, 4294967232u}, 0u>"
       ]
     ],
     [
@@ -1009,28 +607,14 @@
       [
         "baked_operand::OpMov_GvEv",
         "OperandSpec::PartialProfile<DecodedOperandShape{50528336u, 526336u}, 0u, 1u, 1u>"
-      ],
-      [
-        "baked_operand::OpMov_GvEv",
-        "OperandSpec::PartialProfile<DecodedOperandShape{67305552u, 526336u}, 0u, 1u, 1u>"
       ]
     ],
     [
       [
-        "OperandClone_121_SuperOpcode_2_034_OpTest_EvGv__OpJcc_E_Rel8"
+        "OperandClone_218_SuperOpcode_2_034_OpTest_EvGv__OpJcc_E_Rel8"
       ],
       [
-        "OperandClone_078_SuperOpcode_2_033_OpTest_EvGv__OpJcc_E_Rel32"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpCmp_GvEv",
-        "OperandSpec::PartialProfile<DecodedOperandShape{100860037u, 395284u}, 0u, 1u, 1u>"
-      ],
-      [
-        "baked_operand::OpCmp_GvEv",
-        "OperandSpec::PartialProfile<DecodedOperandShape{50528325u, 395284u}, 0u, 1u, 1u>"
+        "OperandClone_110_SuperOpcode_2_021_OpTest_EvGv__OpJcc_E_Rel32"
       ]
     ],
     [
@@ -1045,26 +629,12 @@
       [
         "baked_operand::OpGroup1_EbIb_Generic",
         "OperandSpec::Profile<DecodedOperandShape{50659577u}, 0u>"
-      ],
-      [
-        "op::OpTest_EbGb",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 201, 0u>"
-      ]
-    ],
-    [
-      [
-        "op::OpLea_Impl<(OpsizeSpec)2, (RmOperandSpec)0>",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 8, 0u>"
       ]
     ],
     [
       [
         "baked_operand::OpMov_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620179u}, 0u>"
-      ],
-      [
-        "OpMov_EvGv_Baked32",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 211, 0u>"
       ]
     ],
     [
@@ -1077,18 +647,14 @@
       [
         "baked_operand::OpOr_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{34668752u}, 0u>"
-      ],
-      [
-        "OpOr_EvGv_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 208, 0u>"
       ]
     ],
     [
       [
-        "OperandClone_151_SuperOpcode_2_034_OpTest_EvGv__OpJcc_E_Rel8"
+        "OperandClone_094_SuperOpcode_2_034_OpTest_EvGv__OpJcc_E_Rel8"
       ],
       [
-        "OperandClone_176_SuperOpcode_2_033_OpTest_EvGv__OpJcc_E_Rel32"
+        "OperandClone_078_SuperOpcode_2_021_OpTest_EvGv__OpJcc_E_Rel32"
       ]
     ],
     [
@@ -1163,26 +729,8 @@
     ],
     [
       [
-        "baked_operand::OpMov_Sse_Store",
-        "OperandSpec::PartialProfile<DecodedOperandShape{84608077u, 395284u}, 0u, 1u, 1u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpGroup1_EvIb_Generic",
         "OperandSpec::Profile<DecodedOperandShape{51708100u, 0u, 0u, 16u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "op::OpGroup2_Ev1",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 232, 0u>"
-      ]
-    ],
-    [
-      [
-        "op::OpGroup1_EvIz_Generic",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 193, 0u>"
       ]
     ],
     [
@@ -1197,17 +745,13 @@
     ],
     [
       [
-        "OperandClone_072_SuperOpcode_2_063_OpMov_GvEv__OpRet"
+        "OperandClone_053_SuperOpcode_2_048_OpMov_GvEv__OpRet"
       ]
     ],
     [
       [
         "baked_operand::OpAdd_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{34668777u}, 0u>"
-      ],
-      [
-        "OpAdd_EvGv_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 233, 0u>"
       ]
     ],
     [
@@ -1226,25 +770,6 @@
       [
         "baked_operand::OpSub_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620177u}, 0u>"
-      ],
-      [
-        "OpSub_EvGv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 209, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMov_EvGv",
-        "OperandSpec::PartialProfile<DecodedOperandShape{117653645u, 395284u}, 0u, 1u, 1u>"
-      ],
-      [
-        "baked_operand::OpMov_EvGv",
-        "OperandSpec::PartialProfile<DecodedOperandShape{67321933u, 395284u}, 0u, 1u, 1u>"
-      ]
-    ],
-    [
-      [
-        "OperandClone_065_SuperOpcode_4_056_OpMov_EvGv__OpPush_Reg__OpPush_Reg__OpPush_Reg"
       ]
     ],
     [
@@ -1291,10 +816,6 @@
       [
         "baked_operand::OpMov_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620216u}, 0u>"
-      ],
-      [
-        "OpMov_EvGv_Baked32",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 248, 0u>"
       ]
     ],
     [
@@ -1313,26 +834,12 @@
       [
         "baked_operand::OpCmp_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620182u}, 0u>"
-      ],
-      [
-        "baked_operand::OpCmp_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{33620210u}, 0u>"
       ]
     ],
     [
       [
         "baked_operand::OpMov_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620163u}, 0u>"
-      ],
-      [
-        "OpMov_EvGv_Baked32",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 195, 0u>"
-      ]
-    ],
-    [
-      [
-        "op::OpGroup1_EvIz_Generic",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 226, 0u>"
       ]
     ],
     [
@@ -1359,12 +866,6 @@
     ],
     [
       [
-        "op::OpXor_GvEv",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 0, 0u>"
-      ]
-    ],
-    [
-      [
         "op::OpComis_Unified",
         "OperandSpec::SlotBound<1u, false>"
       ],
@@ -1375,25 +876,13 @@
     ],
     [
       [
-        "OperandClone_015_SuperOpcode_3_012_OpPush_Reg__OpPush_Reg__OpPush_Reg"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpFpu_DD",
-        "OperandSpec::PartialProfile<DecodedOperandShape{67305564u, 395280u}, 0u, 1u, 1u>"
+        "OperandClone_022_SuperOpcode_3_020_OpPush_Reg__OpPush_Reg__OpPush_Reg"
       ]
     ],
     [
       [
         "baked_operand::OpGroup2_EvIb",
         "OperandSpec::Profile<DecodedOperandShape{51708129u, 0u, 0u, 4u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "OpGroup2_EvIb_Baked16_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 232, 0u>"
       ]
     ],
     [
@@ -1406,22 +895,6 @@
       [
         "baked_operand::OpGroup1_EvIz_Generic",
         "OperandSpec::PartialProfile<DecodedOperandShape{100991169u}, 0u, 1u, 2u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpCmp_GvEv",
-        "OperandSpec::PartialProfile<DecodedOperandShape{100860091u, 526348u}, 0u, 1u, 1u>"
-      ],
-      [
-        "baked_operand::OpCmp_GvEv",
-        "OperandSpec::PartialProfile<DecodedOperandShape{50528379u, 526348u}, 0u, 1u, 1u>"
-      ]
-    ],
-    [
-      [
-        "op::OpMovzx_Word",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 8, 0u>"
       ]
     ],
     [
@@ -1454,22 +927,10 @@
     ],
     [
       [
-        "OperandClone_039_SuperOpcode_2_034_OpTest_EvGv__OpJcc_E_Rel8"
+        "OperandClone_037_SuperOpcode_2_034_OpTest_EvGv__OpJcc_E_Rel8"
       ],
       [
-        "OperandClone_038_SuperOpcode_2_033_OpTest_EvGv__OpJcc_E_Rel32"
-      ]
-    ],
-    [
-      [
-        "op::OpMovzx_Byte",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 48, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpGroup2_EvIb",
-        "OperandSpec::Profile<DecodedOperandShape{51708152u, 0u, 0u, 5u}, 0u>"
+        "OperandClone_023_SuperOpcode_2_021_OpTest_EvGv__OpJcc_E_Rel32"
       ]
     ],
     [
@@ -1486,49 +947,19 @@
     ],
     [
       [
-        "baked_operand::OpGroup2_EvIb",
-        "OperandSpec::Profile<DecodedOperandShape{51708136u, 0u, 0u, 4u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMov_EvGv",
-        "OperandSpec::Profile<DecodedOperandShape{50528341u, 395284u, 4294967264u}, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpLea",
         "OperandSpec::PartialProfile<DecodedOperandShape{100860057u, 526340u}, 0u, 1u, 1u>"
-      ],
-      [
-        "baked_operand::OpLea",
-        "OperandSpec::PartialProfile<DecodedOperandShape{50528345u, 526340u}, 0u, 1u, 1u>"
       ]
     ],
     [
       [
-        "OperandClone_154_SuperOpcode_4_001_OpPop_Reg__OpPop_Reg__OpPop_Reg__OpRet"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMovq_Store",
-        "OperandSpec::PartialProfile<DecodedOperandShape{84099144u, 526336u}, 0u, 1u, 1u>"
-      ],
-      [
-        "baked_operand::OpMov_Sse_Store",
-        "OperandSpec::PartialProfile<DecodedOperandShape{84608072u, 526336u}, 0u, 1u, 1u>"
+        "OperandClone_099_SuperOpcode_4_001_OpPop_Reg__OpPop_Reg__OpPop_Reg__OpRet"
       ]
     ],
     [
       [
         "baked_operand::OpMov_EbGb",
         "OperandSpec::PartialProfile<DecodedOperandShape{100860061u, 395284u}, 0u, 1u, 1u>"
-      ],
-      [
-        "baked_operand::OpMov_EbGb",
-        "OperandSpec::PartialProfile<DecodedOperandShape{50528349u, 395284u}, 0u, 1u, 1u>"
       ]
     ],
     [
@@ -1541,10 +972,6 @@
       [
         "baked_operand::OpGroup1_EbIb_Generic",
         "OperandSpec::PartialProfile<DecodedOperandShape{50659577u}, 0u, 1u, 2u>"
-      ],
-      [
-        "op::OpGroup1_EbIb_Generic",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 249, 0u>"
       ]
     ],
     [
@@ -1565,18 +992,8 @@
     ],
     [
       [
-        "op::OpGroup2_EvIb",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 235, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpTest_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620187u}, 0u>"
-      ],
-      [
-        "baked_operand::OpGroup1_EvIb_Generic",
-        "OperandSpec::Profile<DecodedOperandShape{50659579u}, 0u>"
       ]
     ],
     [
@@ -1587,29 +1004,7 @@
     ],
     [
       [
-        "op::OpMovzx_Word",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 48, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpGroup1_EvIz_Generic",
-        "OperandSpec::PartialProfile<DecodedOperandShape{117899387u, 526348u}, 0u, 2u, 3u>"
-      ],
-      [
-        "baked_operand::OpGroup1_EvIz_Generic",
-        "OperandSpec::PartialProfile<DecodedOperandShape{168231099u, 526348u}, 0u, 2u, 3u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpGroup1_EvIb_Generic",
-        "OperandSpec::Profile<DecodedOperandShape{50659555u, 0u, 0u, 15u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "OperandClone_215_SuperOpcode_2_070_OpCmp_EvGv__OpJcc_NE_Rel8"
+        "OperandClone_142_SuperOpcode_2_053_OpCmp_EvGv__OpJcc_NE_Rel8"
       ]
     ],
     [
@@ -1642,12 +1037,6 @@
     ],
     [
       [
-        "op::OpLea_Impl<(OpsizeSpec)2, (RmOperandSpec)0>",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 48, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpMov_GvEv",
         "OperandSpec::Profile<DecodedOperandShape{50528325u, 395284u, 4294967240u}, 0u>"
       ]
@@ -1656,28 +1045,12 @@
       [
         "baked_operand::OpMov_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620217u}, 0u>"
-      ],
-      [
-        "OpMov_EvGv_Baked32",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 249, 0u>"
       ]
     ],
     [
       [
         "baked_operand::OpMov_GvEv",
         "OperandSpec::Profile<DecodedOperandShape{67305540u, 395280u, 32u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMov_EvGv",
-        "OperandSpec::Profile<DecodedOperandShape{50528333u, 395284u, 4294967256u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "op::OpMovzx_Byte",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 24, 0u>"
       ]
     ],
     [
@@ -1692,13 +1065,7 @@
     ],
     [
       [
-        "op::OpMov_EbGb",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 24, 0u>"
-      ]
-    ],
-    [
-      [
-        "OperandClone_056_SuperOpcode_2_048_OpPush_Reg__OpCall_Rel"
+        "OperandClone_065_SuperOpcode_2_049_OpPush_Reg__OpCall_Rel"
       ]
     ],
     [
@@ -1737,12 +1104,6 @@
     ],
     [
       [
-        "baked_operand::OpGroup1_EvIb_Generic",
-        "OperandSpec::Profile<DecodedOperandShape{51708143u, 0u, 0u, 4u}, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpPush_Reg",
         "OperandSpec::Profile<DecodedOperandShape{16777219u}, 0u>"
       ]
@@ -1751,16 +1112,6 @@
       [
         "baked_operand::OpAdd_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620174u}, 0u>"
-      ],
-      [
-        "OpAdd_EvGv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 206, 0u>"
-      ]
-    ],
-    [
-      [
-        "op::OpGroup1_EvIz_Generic",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 194, 0u>"
       ]
     ],
     [
@@ -1793,35 +1144,13 @@
     ],
     [
       [
-        "OperandClone_125_SuperOpcode_2_106_OpPush_Reg__OpGroup1_EvIb_Generic"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMov_EbGb",
-        "OperandSpec::Profile<DecodedOperandShape{50528333u, 395284u, 4294967270u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMov_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{50528333u, 395284u, 4294967280u}, 0u>"
+        "OperandClone_126_SuperOpcode_2_108_OpPush_Reg__OpGroup1_EvIb_Generic"
       ]
     ],
     [
       [
         "baked_operand::OpCmp_EbGb",
         "OperandSpec::Profile<DecodedOperandShape{33751088u, 526336u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "op::OpGroup5_Ev_Generic",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 65, 0u>"
-      ],
-      [
-        "op::OpGroup5_Ev_Generic",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 69, 0u>"
       ]
     ],
     [
@@ -1838,21 +1167,6 @@
       [
         "baked_operand::OpGroup2_EvCl",
         "OperandSpec::Profile<DecodedOperandShape{33620192u}, 0u>"
-      ],
-      [
-        "OpGroup2_EvCl_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 224, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMov_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{50528341u, 395284u, 4294967264u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "OperandClone_112_SuperOpcode_3_097_OpMov_EvGv__OpPush_Reg__OpPush_Reg"
       ]
     ],
     [
@@ -1887,10 +1201,6 @@
       [
         "baked_operand::OpMov_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620167u}, 0u>"
-      ],
-      [
-        "OpMov_EvGv_Baked32",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 199, 0u>"
       ]
     ],
     [
@@ -1905,30 +1215,14 @@
     ],
     [
       [
-        "op::OpSub_Sse",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 209, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpOr_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620168u}, 0u>"
-      ],
-      [
-        "OpOr_EvGv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 200, 0u>"
       ]
     ],
     [
       [
         "baked_operand::OpGroup1_EvIb_Generic",
         "OperandSpec::Profile<DecodedOperandShape{50659564u, 0u, 0u, 4u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMov_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{50528333u, 395284u, 4294967248u}, 0u>"
       ]
     ],
     [
@@ -1953,10 +1247,6 @@
       [
         "baked_operand::OpMov_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620208u}, 0u>"
-      ],
-      [
-        "OpMov_EvGv_Baked32",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 240, 0u>"
       ]
     ],
     [
@@ -1975,74 +1265,24 @@
       [
         "baked_operand::OpTest_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620223u}, 0u>"
-      ],
-      [
-        "baked_operand::OpGroup1_EvIb_Generic",
-        "OperandSpec::Profile<DecodedOperandShape{50659583u}, 0u>"
       ]
     ],
     [
       [
         "baked_operand::OpCmp_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620162u}, 0u>"
-      ],
-      [
-        "baked_operand::OpCmp_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{33620176u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "op::OpCmp_EvGv",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 215, 0u>"
-      ],
-      [
-        "op::OpCmp_GvEv",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 250, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpGroup1_EvIz_Generic",
-        "OperandSpec::Profile<DecodedOperandShape{100991201u, 0u, 0u, 32767u}, 0u>"
       ]
     ],
     [
       [
         "baked_operand::OpMov_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620166u}, 0u>"
-      ],
-      [
-        "OpMov_EvGv_Baked32",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 198, 0u>"
-      ]
-    ],
-    [
-      [
-        "op::OpGroup1_EvIb_Generic",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 223, 0u>"
       ]
     ],
     [
       [
         "baked_operand::OpPop_Reg",
         "OperandSpec::Profile<DecodedOperandShape{16777218u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpGroup2_EbIb",
-        "OperandSpec::PartialProfile<DecodedOperandShape{51708137u}, 0u, 1u, 2u>"
-      ],
-      [
-        "OpGroup2_EbIb_Baked_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 233, 0u>"
-      ]
-    ],
-    [
-      [
-        "op::OpMovAp_Load",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 202, 0u>"
       ]
     ],
     [
@@ -2065,7 +1305,7 @@
     ],
     [
       [
-        "OperandClone_027_SuperOpcode_2_019_OpPush_Reg__OpPush_Reg"
+        "OperandClone_040_SuperOpcode_2_037_OpPush_Reg__OpPush_Reg"
       ]
     ],
     [
@@ -2102,39 +1342,6 @@
       [
         "baked_operand::OpTest_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620214u}, 0u>"
-      ],
-      [
-        "baked_operand::OpGroup1_EvIb_Generic",
-        "OperandSpec::Profile<DecodedOperandShape{50659582u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpGroup1_EvIb_Generic",
-        "OperandSpec::PartialProfile<DecodedOperandShape{50790462u, 526360u}, 0u, 1u, 2u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMov_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{50528381u, 395284u, 4294967252u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "OperandClone_132_SuperOpcode_2_112_OpTest_EbGb__OpJcc_E_Rel32"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpSub_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{50528341u, 395284u, 12u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "op::OpCmov_AE",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 208, 0u>"
       ]
     ],
     [
@@ -2147,10 +1354,6 @@
       [
         "baked_operand::OpXor_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{34668746u}, 0u>"
-      ],
-      [
-        "OpXor_EvGv_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 202, 0u>"
       ]
     ],
     [
@@ -2163,10 +1366,6 @@
       [
         "baked_operand::OpCmp_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620161u}, 0u>"
-      ],
-      [
-        "baked_operand::OpCmp_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{33620168u}, 0u>"
       ]
     ],
     [
@@ -2183,24 +1382,8 @@
     ],
     [
       [
-        "baked_operand::OpMov_EvGv",
-        "OperandSpec::Profile<DecodedOperandShape{50528373u, 395284u, 4294967252u}, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpAdd_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{34668760u}, 0u>"
-      ],
-      [
-        "OpAdd_EvGv_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 216, 0u>"
-      ]
-    ],
-    [
-      [
-        "OpXor_GvEv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 48, 0u>"
       ]
     ],
     [
@@ -2233,40 +1416,8 @@
     ],
     [
       [
-        "baked_operand::OpGroup1_EvIb_Generic",
-        "OperandSpec::Profile<DecodedOperandShape{51708137u, 0u, 0u, 4u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpCmp_EvGv",
-        "OperandSpec::PartialProfile<DecodedOperandShape{100860038u, 526360u}, 0u, 1u, 1u>"
-      ],
-      [
-        "baked_operand::OpCmp_EvGv",
-        "OperandSpec::PartialProfile<DecodedOperandShape{50528326u, 526360u}, 0u, 1u, 1u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpMov_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620170u}, 0u>"
-      ],
-      [
-        "OpMov_EvGv_Baked32",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 202, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMov_EvGv",
-        "OperandSpec::Profile<DecodedOperandShape{50528349u, 395284u, 4294967260u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMov_EbGb",
-        "OperandSpec::Profile<DecodedOperandShape{50528325u, 395284u, 4294967271u}, 0u>"
       ]
     ],
     [
@@ -2277,13 +1428,7 @@
     ],
     [
       [
-        "OperandClone_203_SuperOpcode_2_034_OpTest_EvGv__OpJcc_E_Rel8"
-      ]
-    ],
-    [
-      [
-        "op::OpGroup1_EvIz_Generic",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<2u, true>, 56, 0u>"
+        "OperandClone_151_SuperOpcode_2_034_OpTest_EvGv__OpJcc_E_Rel8"
       ]
     ],
     [
@@ -2294,18 +1439,8 @@
     ],
     [
       [
-        "op::OpFpu_D9",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 229, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpAdd_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{34668762u}, 0u>"
-      ],
-      [
-        "OpAdd_EvGv_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 218, 0u>"
       ]
     ],
     [
@@ -2316,13 +1451,7 @@
     ],
     [
       [
-        "baked_operand::OpGroup1_EvIb_Generic",
-        "OperandSpec::Profile<DecodedOperandShape{51708101u, 0u, 0u, 8u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "OperandClone_055_SuperOpcode_2_047_OpGroup1_EvIb_Generic__OpTest_EvGv"
+        "OperandClone_041_SuperOpcode_2_038_OpGroup1_EvIb_Generic__OpTest_EvGv"
       ]
     ],
     [
@@ -2339,14 +1468,6 @@
       [
         "baked_operand::OpMov_RegImm",
         "OperandSpec::Profile<DecodedOperandShape{84148224u}, 0u>"
-      ],
-      [
-        "OpXor_EvGv_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 192, 0u>"
-      ],
-      [
-        "OpXor_GvEv_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 192, 0u>"
       ]
     ],
     [
@@ -2367,28 +1488,18 @@
     ],
     [
       [
-        "baked_operand::OpGroup2_EvIb",
-        "OperandSpec::Profile<DecodedOperandShape{51708130u, 0u, 0u, 2u}, 0u>"
+        "OperandClone_004_SuperOpcode_3_004_OpPop_Reg__OpPop_Reg__OpRet"
       ]
     ],
     [
       [
-        "OperandClone_004_SuperOpcode_3_003_OpPop_Reg__OpPop_Reg__OpRet"
-      ]
-    ],
-    [
-      [
-        "OperandClone_108_SuperOpcode_4_025_OpPush_Reg__OpPush_Reg__OpPush_Reg__OpCall_Rel"
+        "OperandClone_063_SuperOpcode_4_028_OpPush_Reg__OpPush_Reg__OpPush_Reg__OpCall_Rel"
       ]
     ],
     [
       [
         "baked_operand::OpGroup2_EvIb",
         "OperandSpec::PartialProfile<DecodedOperandShape{51708129u}, 0u, 1u, 2u>"
-      ],
-      [
-        "OpGroup2_EvIb_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 225, 0u>"
       ]
     ],
     [
@@ -2399,28 +1510,8 @@
     ],
     [
       [
-        "op::OpGroup1_EvIz_Generic",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 231, 0u>"
-      ]
-    ],
-    [
-      [
-        "OpSub_GvEv_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 0, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpAdd_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{34668754u}, 0u>"
-      ],
-      [
-        "OpAdd_EvGv_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 210, 0u>"
-      ],
-      [
-        "OpGroup2_Ev1_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 226, 0u>"
       ]
     ],
     [
@@ -2437,12 +1528,6 @@
     ],
     [
       [
-        "baked_operand::OpMov_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{50528381u, 395284u, 4294967256u}, 0u>"
-      ]
-    ],
-    [
-      [
         "op::OpAdd_EvGv",
         "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 0, 0u>"
       ]
@@ -2451,38 +1536,18 @@
       [
         "baked_operand::OpGroup2_EvIb",
         "OperandSpec::PartialProfile<DecodedOperandShape{51708128u}, 0u, 1u, 2u>"
-      ],
-      [
-        "OpGroup2_EvIb_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 224, 0u>"
       ]
     ],
     [
       [
         "baked_operand::OpOr_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{34668761u}, 0u>"
-      ],
-      [
-        "OpOr_EvGv_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 217, 0u>"
       ]
     ],
     [
       [
         "baked_operand::OpMov_GvEv",
         "OperandSpec::Profile<DecodedOperandShape{50528320u, 526336u, 8u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMov_EvGv",
-        "OperandSpec::Profile<DecodedOperandShape{50528373u, 395284u, 4294967264u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMovzx_Word",
-        "OperandSpec::Profile<DecodedOperandShape{50528274u, 526344u}, 0u>"
       ]
     ],
     [
@@ -2495,10 +1560,6 @@
       [
         "baked_operand::OpMov_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620219u}, 0u>"
-      ],
-      [
-        "OpMov_EvGv_Baked32",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 251, 0u>"
       ]
     ],
     [
@@ -2527,24 +1588,6 @@
       [
         "baked_operand::OpSub_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620208u}, 0u>"
-      ],
-      [
-        "baked_operand::OpSub_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{33620166u}, 0u>"
-      ],
-      [
-        "OpSub_EvGv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 240, 0u>"
-      ],
-      [
-        "OpSub_GvEv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 198, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMov_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{117637252u, 395280u, 1288u}, 0u>"
       ]
     ],
     [
@@ -2557,14 +1600,6 @@
       [
         "baked_operand::OpGroup1_EvIz_Generic",
         "OperandSpec::PartialProfile<DecodedOperandShape{102039747u}, 0u, 1u, 2u>"
-      ],
-      [
-        "baked_operand::OpLea",
-        "OperandSpec::PartialProfile<DecodedOperandShape{100860059u, 526348u}, 0u, 1u, 1u>"
-      ],
-      [
-        "baked_operand::OpLea",
-        "OperandSpec::PartialProfile<DecodedOperandShape{50528347u, 526348u}, 0u, 1u, 1u>"
       ]
     ],
     [
@@ -2577,10 +1612,6 @@
       [
         "baked_operand::OpLea",
         "OperandSpec::PartialProfile<DecodedOperandShape{117637252u, 525056u}, 0u, 1u, 1u>"
-      ],
-      [
-        "baked_operand::OpLea",
-        "OperandSpec::PartialProfile<DecodedOperandShape{67305540u, 525056u}, 0u, 1u, 1u>"
       ]
     ],
     [
@@ -2597,26 +1628,8 @@
     ],
     [
       [
-        "baked_operand::OpGroup3_Eb_Generic",
-        "OperandSpec::PartialProfile<DecodedOperandShape{67567685u, 395284u, 0u, 7u}, 0u, 1u, 1u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpXor_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620169u}, 0u>"
-      ],
-      [
-        "baked_operand::OpXor_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{33620169u}, 0u>"
-      ],
-      [
-        "OpXor_EvGv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 201, 0u>"
-      ],
-      [
-        "OpXor_GvEv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 201, 0u>"
       ]
     ],
     [
@@ -2647,16 +1660,8 @@
     ],
     [
       [
-        "baked_operand::OpMov_EvGv",
-        "OperandSpec::Profile<DecodedOperandShape{33620214u}, 0u>"
-      ],
-      [
         "baked_operand::OpPrefetch",
         "OperandSpec::PartialProfile<DecodedOperandShape{117637258u, 526344u}, 0u, 1u, 1u>"
-      ],
-      [
-        "baked_operand::OpPrefetch",
-        "OperandSpec::Profile<DecodedOperandShape{50528270u, 526360u}, 0u>"
       ],
       [
         "baked_operand::OpLea",
@@ -2665,10 +1670,6 @@
       [
         "baked_operand::OpLea",
         "OperandSpec::Profile<DecodedOperandShape{117637300u, 526360u}, 0u>"
-      ],
-      [
-        "baked_operand::OpLea",
-        "OperandSpec::Profile<DecodedOperandShape{117637308u, 526364u}, 0u>"
       ],
       [
         "baked_operand::OpLea",
@@ -2699,36 +1700,8 @@
         "OperandSpec::Profile<DecodedOperandShape{33570816u}, 0u>"
       ],
       [
-        "OpMov_EvGv_Baked32",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 246, 0u>"
-      ],
-      [
-        "op::OpMov_EvGv",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 246, 0u>"
-      ],
-      [
         "op::OpPrefetch",
         "OperandSpec::SlotBound<1u, false>"
-      ],
-      [
-        "op::OpPrefetch",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 138, 0u>"
-      ],
-      [
-        "op::OpPrefetch",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 14, 0u>"
-      ],
-      [
-        "op::OpXchg_EvGv",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 219, 0u>"
-      ],
-      [
-        "op::OpGroup_0FAE",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 240, 0u>"
-      ],
-      [
-        "op::OpMov_Sreg_Rm",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 232, 0u>"
       ],
       [
         "op::OpNop",
@@ -2771,26 +1744,8 @@
     ],
     [
       [
-        "baked_operand::OpMov_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{50528381u, 395284u, 4294967260u}, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpMovs_Word",
         "OperandSpec::Profile<DecodedOperandShape{34079237u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMov_EvIz",
-        "OperandSpec::Profile<DecodedOperandShape{117899333u, 395284u, 4294967264u, 1u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMov_EbGb",
-        "OperandSpec::Profile<DecodedOperandShape{50528333u, 395284u, 4294967271u}, 0u>"
       ]
     ],
     [
@@ -2815,26 +1770,12 @@
       [
         "baked_operand::OpMov_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620174u}, 0u>"
-      ],
-      [
-        "OpMov_EvGv_Baked32",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 206, 0u>"
       ]
     ],
     [
       [
         "baked_operand::OpOr_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{34668760u}, 0u>"
-      ],
-      [
-        "OpOr_EvGv_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 216, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMovzx_Byte",
-        "OperandSpec::PartialProfile<DecodedOperandShape{67305561u, 526340u}, 0u, 1u, 1u>"
       ]
     ],
     [
@@ -2865,16 +1806,6 @@
       [
         "baked_operand::OpXor_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{34668742u}, 0u>"
-      ],
-      [
-        "OpXor_EvGv_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 198, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpGroup1_EvIz_Generic",
-        "OperandSpec::Profile<DecodedOperandShape{100991212u, 0u, 0u, 1260u}, 0u>"
       ]
     ],
     [
@@ -2887,12 +1818,6 @@
       [
         "baked_operand::OpPush_Imm8",
         "OperandSpec::Profile<DecodedOperandShape{33816578u, 0u, 0u, 16u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "op::OpMovzx_Byte",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 56, 0u>"
       ]
     ],
     [
@@ -2921,16 +1846,6 @@
       [
         "baked_operand::OpMov_EvGv",
         "OperandSpec::PartialProfile<DecodedOperandShape{50528333u, 395284u}, 0u, 1u, 1u>"
-      ],
-      [
-        "baked_operand::OpMov_EvGv",
-        "OperandSpec::PartialProfile<DecodedOperandShape{67305549u, 395284u}, 0u, 1u, 1u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpGroup1_EvIb_Generic",
-        "OperandSpec::PartialProfile<DecodedOperandShape{67567736u, 526336u}, 0u, 2u, 3u>"
       ]
     ],
     [
@@ -2984,45 +1899,13 @@
     [
       [
         "baked_operand::OpMovzx_Word",
-        "OperandSpec::PartialProfile<DecodedOperandShape{117637253u, 395284u}, 0u, 1u, 1u>"
-      ],
-      [
-        "baked_operand::OpMovzx_Word",
         "OperandSpec::PartialProfile<DecodedOperandShape{67305541u, 395284u}, 0u, 1u, 1u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpAdd_EvGv",
-        "OperandSpec::Profile<DecodedOperandShape{34668745u}, 0u>"
-      ],
-      [
-        "baked_operand::OpGroup2_Ev1",
-        "OperandSpec::Profile<DecodedOperandShape{34668769u}, 0u>"
-      ],
-      [
-        "OpAdd_EvGv_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 201, 0u>"
-      ],
-      [
-        "OpGroup2_Ev1_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 225, 0u>"
       ]
     ],
     [
       [
         "baked_operand::OpMov_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620161u}, 0u>"
-      ],
-      [
-        "OpMov_EvGv_Baked32",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 193, 0u>"
-      ]
-    ],
-    [
-      [
-        "OpGroup2_Eb1_Baked_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 234, 0u>"
       ]
     ],
     [
@@ -3047,10 +1930,6 @@
       [
         "baked_operand::OpMov_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620168u}, 0u>"
-      ],
-      [
-        "OpMov_EvGv_Baked32",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 200, 0u>"
       ]
     ],
     [
@@ -3061,30 +1940,14 @@
     ],
     [
       [
-        "baked_operand::OpMov_Sse_Load",
-        "OperandSpec::PartialProfile<DecodedOperandShape{84608080u, 526336u}, 0u, 1u, 1u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpMov_GvEv",
         "OperandSpec::Profile<DecodedOperandShape{67305556u, 395280u, 12u}, 0u>"
       ]
     ],
     [
       [
-        "op::OpGroup1_EvIz_Generic",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 227, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpXor_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620170u}, 0u>"
-      ],
-      [
-        "OpXor_EvGv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 202, 0u>"
       ]
     ],
     [
@@ -3125,33 +1988,11 @@
     ],
     [
       [
-        "baked_operand::OpMov_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{50528341u, 395284u, 4294967256u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "op::OpMov_EbGb",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 32, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpGroup1_EvIb_Generic",
         "OperandSpec::Profile<DecodedOperandShape{50659583u, 0u, 0u, 3u}, 0u>"
       ]
     ],
     [
-      [
-        "baked_operand::OpLea",
-        "OperandSpec::PartialProfile<DecodedOperandShape{67305556u, 525824u}, 0u, 1u, 1u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpGroup1_EbIb_Generic",
-        "OperandSpec::PartialProfile<DecodedOperandShape{134676668u, 395280u}, 0u, 1u, 1u>"
-      ],
       [
         "baked_operand::OpGroup1_EbIb_Generic",
         "OperandSpec::PartialProfile<DecodedOperandShape{84344956u, 395280u}, 0u, 1u, 1u>"
@@ -3161,10 +2002,6 @@
       [
         "baked_operand::OpCmp_EbGb",
         "OperandSpec::Profile<DecodedOperandShape{33620177u}, 0u>"
-      ],
-      [
-        "op::OpCmp_EbGb",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 209, 0u>"
       ]
     ],
     [
@@ -3181,10 +2018,6 @@
       [
         "baked_operand::OpXor_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{34668763u}, 0u>"
-      ],
-      [
-        "OpXor_EvGv_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 219, 0u>"
       ]
     ],
     [
@@ -3195,10 +2028,6 @@
       [
         "baked_operand::OpMov_EvGv",
         "OperandSpec::PartialProfile<DecodedOperandShape{67305588u, 395280u}, 0u, 1u, 1u>"
-      ],
-      [
-        "baked_operand::OpMov_EvGv",
-        "OperandSpec::PartialProfile<DecodedOperandShape{84082804u, 395280u}, 0u, 1u, 1u>"
       ]
     ],
     [
@@ -3229,10 +2058,6 @@
       [
         "baked_operand::OpOr_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620184u}, 0u>"
-      ],
-      [
-        "OpOr_EvGv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 216, 0u>"
       ]
     ],
     [
@@ -3277,10 +2102,6 @@
       [
         "baked_operand::OpAdd_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620175u}, 0u>"
-      ],
-      [
-        "OpAdd_EvGv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 207, 0u>"
       ]
     ],
     [
@@ -3297,10 +2118,6 @@
       [
         "baked_operand::OpCmp_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620177u}, 0u>"
-      ],
-      [
-        "baked_operand::OpCmp_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{33620170u}, 0u>"
       ]
     ],
     [
@@ -3317,22 +2134,13 @@
     ],
     [
       [
-        "OperandClone_030_SuperOpcode_4_025_OpPush_Reg__OpPush_Reg__OpPush_Reg__OpCall_Rel"
-      ]
-    ],
-    [
-      [
-        "OperandClone_111_SuperOpcode_3_096_OpPush_Reg__OpMov_EvGv__OpPush_Reg"
+        "OperandClone_031_SuperOpcode_4_028_OpPush_Reg__OpPush_Reg__OpPush_Reg__OpCall_Rel"
       ]
     ],
     [
       [
         "baked_operand::OpCmp_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620218u}, 0u>"
-      ],
-      [
-        "baked_operand::OpCmp_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{33620183u}, 0u>"
       ]
     ],
     [
@@ -3361,10 +2169,6 @@
       [
         "baked_operand::OpMov_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{50397381u}, 0u>"
-      ],
-      [
-        "OpMov_EvGv_Baked32",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 197, 0u>"
       ]
     ],
     [
@@ -3385,26 +2189,8 @@
     ],
     [
       [
-        "baked_operand::OpGroup1_EvIb_Generic",
-        "OperandSpec::Profile<DecodedOperandShape{67567680u, 526336u, 16u, 1u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "op::OpCmp_EvGv",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 56, 0u>"
-      ]
-    ],
-    [
-      [
         "op::OpGroup_Sse_Shift_Imm_Q",
         "OperandSpec::SlotBound<1u, false>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMov_EvGv",
-        "OperandSpec::Profile<DecodedOperandShape{50528325u, 395284u, 4294967280u}, 0u>"
       ]
     ],
     [
@@ -3415,47 +2201,19 @@
     ],
     [
       [
-        "baked_operand::OpMov_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{50528333u, 395284u, 4294967252u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "OpSub_GvEv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 56, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpMov_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620184u}, 0u>"
-      ],
-      [
-        "OpMov_EvGv_Baked32",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 216, 0u>"
       ]
     ],
     [
       [
-        "OperandClone_214_SuperOpcode_2_034_OpTest_EvGv__OpJcc_E_Rel8"
+        "OperandClone_176_SuperOpcode_2_034_OpTest_EvGv__OpJcc_E_Rel8"
       ]
     ],
     [
       [
         "baked_operand::OpXor_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620160u}, 0u>"
-      ],
-      [
-        "baked_operand::OpXor_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{33620160u}, 0u>"
-      ],
-      [
-        "OpXor_EvGv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 192, 0u>"
-      ],
-      [
-        "OpXor_GvEv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 192, 0u>"
       ]
     ],
     [
@@ -3468,16 +2226,6 @@
       [
         "baked_operand::OpAdd_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{34668785u}, 0u>"
-      ],
-      [
-        "OpAdd_EvGv_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 241, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpGroup1_EvIb_Generic",
-        "OperandSpec::Profile<DecodedOperandShape{51708137u, 0u, 0u, 48u}, 0u>"
       ]
     ],
     [
@@ -3488,22 +2236,8 @@
     ],
     [
       [
-        "baked_operand::OpMovzx_Byte",
-        "OperandSpec::PartialProfile<DecodedOperandShape{117637266u, 526344u}, 0u, 1u, 1u>"
-      ],
-      [
-        "baked_operand::OpMovzx_Byte",
-        "OperandSpec::PartialProfile<DecodedOperandShape{67305554u, 526344u}, 0u, 1u, 1u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpGroup2_EbIb",
         "OperandSpec::PartialProfile<DecodedOperandShape{51708138u}, 0u, 1u, 2u>"
-      ],
-      [
-        "OpGroup2_EbIb_Baked_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 234, 0u>"
       ]
     ],
     [
@@ -3520,10 +2254,10 @@
     ],
     [
       [
-        "OperandClone_048_SuperOpcode_2_011_OpTest_EvGv__OpJcc_NE_Rel8"
+        "OperandClone_033_SuperOpcode_2_030_OpTest_EvGv__OpJcc_NE_Rel8"
       ],
       [
-        "OperandClone_073_SuperOpcode_2_064_OpTest_EvGv__OpJcc_NE_Rel32"
+        "OperandClone_070_SuperOpcode_2_060_OpTest_EvGv__OpJcc_NE_Rel32"
       ]
     ],
     [
@@ -3536,18 +2270,6 @@
       [
         "baked_operand::OpXor_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620178u}, 0u>"
-      ],
-      [
-        "baked_operand::OpXor_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{33620178u}, 0u>"
-      ],
-      [
-        "OpXor_EvGv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 210, 0u>"
-      ],
-      [
-        "OpXor_GvEv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 210, 0u>"
       ]
     ],
     [
@@ -3584,10 +2306,6 @@
       [
         "baked_operand::OpMov_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620215u}, 0u>"
-      ],
-      [
-        "OpMov_EvGv_Baked32",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 247, 0u>"
       ]
     ],
     [
@@ -3616,16 +2334,6 @@
       [
         "baked_operand::OpMov_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620191u}, 0u>"
-      ],
-      [
-        "OpMov_EvGv_Baked32",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 223, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMov_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{50528276u, 533016u}, 0u>"
       ]
     ],
     [
@@ -3689,10 +2397,6 @@
     [
       [
         "baked_operand::OpMovzx_Byte",
-        "OperandSpec::PartialProfile<DecodedOperandShape{134414492u, 395280u}, 0u, 1u, 1u>"
-      ],
-      [
-        "baked_operand::OpMovzx_Byte",
         "OperandSpec::PartialProfile<DecodedOperandShape{84082780u, 395280u}, 0u, 1u, 1u>"
       ]
     ],
@@ -3714,7 +2418,7 @@
     ],
     [
       [
-        "OperandClone_017_SuperOpcode_3_014_OpGroup1_EvIb_Generic__OpPop_Reg__OpPop_Reg"
+        "OperandClone_025_SuperOpcode_3_023_OpGroup1_EvIb_Generic__OpPop_Reg__OpPop_Reg"
       ]
     ],
     [
@@ -3729,13 +2433,7 @@
     ],
     [
       [
-        "OperandClone_079_SuperOpcode_2_048_OpPush_Reg__OpCall_Rel"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpGroup1_EvIb_Generic",
-        "OperandSpec::Profile<DecodedOperandShape{50659526u, 0u, 0u, 2u}, 0u>"
+        "OperandClone_067_SuperOpcode_2_049_OpPush_Reg__OpCall_Rel"
       ]
     ],
     [
@@ -3748,10 +2446,6 @@
       [
         "baked_operand::OpTest_EbGb",
         "OperandSpec::Profile<DecodedOperandShape{33620160u}, 0u>"
-      ],
-      [
-        "op::OpTest_EbGb",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 192, 0u>"
       ]
     ],
     [
@@ -3793,10 +2487,6 @@
     [
       [
         "baked_operand::OpMov_EvGv",
-        "OperandSpec::PartialProfile<DecodedOperandShape{100859972u, 395280u}, 0u, 1u, 1u>"
-      ],
-      [
-        "baked_operand::OpMov_EvGv",
         "OperandSpec::PartialProfile<DecodedOperandShape{117637252u, 395280u}, 0u, 1u, 1u>"
       ],
       [
@@ -3818,10 +2508,6 @@
       [
         "baked_operand::OpTest_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620169u}, 0u>"
-      ],
-      [
-        "baked_operand::OpGroup1_EvIb_Generic",
-        "OperandSpec::Profile<DecodedOperandShape{50659577u}, 0u>"
       ]
     ],
     [
@@ -3838,10 +2524,6 @@
       [
         "baked_operand::OpMov_GvEv",
         "OperandSpec::PartialProfile<DecodedOperandShape{50528325u, 395284u}, 0u, 1u, 1u>"
-      ],
-      [
-        "baked_operand::OpMov_GvEv",
-        "OperandSpec::PartialProfile<DecodedOperandShape{67305541u, 395284u}, 0u, 1u, 1u>"
       ]
     ],
     [
@@ -3878,20 +2560,8 @@
     ],
     [
       [
-        "baked_operand::OpMovzx_Word",
-        "OperandSpec::Profile<DecodedOperandShape{50528262u, 526360u}, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpMov_GvEv",
         "OperandSpec::Profile<DecodedOperandShape{50528365u, 395284u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "op::OpGroup2_EvIb",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 248, 0u>"
       ]
     ],
     [
@@ -3910,22 +2580,12 @@
       [
         "baked_operand::OpOr_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620176u}, 0u>"
-      ],
-      [
-        "OpOr_EvGv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 208, 0u>"
       ]
     ],
     [
       [
         "baked_operand::OpGroup1_EvIz_Generic",
         "OperandSpec::PartialProfile<DecodedOperandShape{100991212u}, 0u, 1u, 2u>"
-      ]
-    ],
-    [
-      [
-        "op::OpMovAp_Load",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 203, 0u>"
       ]
     ],
     [
@@ -3944,17 +2604,9 @@
       [
         "baked_operand::OpAdd_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620178u}, 0u>"
-      ],
-      [
-        "OpAdd_EvGv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 210, 0u>"
       ]
     ],
     [
-      [
-        "baked_operand::OpGroup3_Eb_Generic",
-        "OperandSpec::PartialProfile<DecodedOperandShape{117899397u, 395284u, 0u, 1u}, 0u, 1u, 1u>"
-      ],
       [
         "baked_operand::OpGroup3_Eb_Generic",
         "OperandSpec::PartialProfile<DecodedOperandShape{67567685u, 395284u, 0u, 1u}, 0u, 1u, 1u>"
@@ -3964,12 +2616,6 @@
       [
         "baked_operand::OpGroup1_EvIz_Generic",
         "OperandSpec::Profile<DecodedOperandShape{100991230u, 0u, 0u, 255u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "op::OpOr_EbGb",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 8, 0u>"
       ]
     ],
     [
@@ -3992,40 +2638,14 @@
     ],
     [
       [
-        "baked_operand::OpGroup2_EvIb",
-        "OperandSpec::PartialProfile<DecodedOperandShape{67453161u}, 0u, 1u, 2u>"
-      ],
-      [
-        "OpGroup2_EvIb_Baked16_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 233, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpMov_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620201u}, 0u>"
-      ],
-      [
-        "OpMov_EvGv_Baked32",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 233, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMov_EvGv",
-        "OperandSpec::Profile<DecodedOperandShape{50528325u, 395284u, 4294967252u}, 0u>"
       ]
     ],
     [
       [
         "baked_operand::OpCmp_EaxImm",
         "OperandSpec::Profile<DecodedOperandShape{84148229u, 0u, 0u, 4294963200u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpGroup3_Ev_Generic",
-        "OperandSpec::Profile<DecodedOperandShape{100991175u, 0u, 0u, 64u}, 0u>"
       ]
     ],
     [
@@ -4038,30 +2658,12 @@
       [
         "baked_operand::OpXor_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{34668751u}, 0u>"
-      ],
-      [
-        "OpXor_EvGv_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 207, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMov_EvGv",
-        "OperandSpec::Profile<DecodedOperandShape{50528341u, 395284u, 20u}, 0u>"
       ]
     ],
     [
       [
         "baked_operand::OpAdd_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{34668736u}, 0u>"
-      ],
-      [
-        "OpAdd_EvGv_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 192, 0u>"
-      ],
-      [
-        "OpGroup2_Ev1_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 224, 0u>"
       ]
     ],
     [
@@ -4092,16 +2694,6 @@
       [
         "baked_operand::OpCmp_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620210u}, 0u>"
-      ],
-      [
-        "baked_operand::OpCmp_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{33620182u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMov_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{117637252u, 395280u, 1244u}, 0u>"
       ]
     ],
     [
@@ -4112,26 +2704,8 @@
     ],
     [
       [
-        "baked_operand::OpMov_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{50528325u, 395284u, 56u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMov_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{117637308u, 395280u, 1280u}, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpGroup3_Ev_Generic",
         "OperandSpec::Profile<DecodedOperandShape{100991174u, 0u, 0u, 2u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpGroup1_EvIz_Generic",
-        "OperandSpec::Profile<DecodedOperandShape{100991172u, 0u, 0u, 1260u}, 0u>"
       ]
     ],
     [
@@ -4156,28 +2730,12 @@
     ],
     [
       [
-        "baked_operand::OpMov_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{117649421u, 886816u, 120u}, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpGroup1_EvIb_Generic",
         "OperandSpec::Profile<DecodedOperandShape{51708137u, 0u, 0u, 1u}, 0u>"
       ],
       [
         "baked_operand::OpDec_Reg",
         "OperandSpec::Profile<DecodedOperandShape{17825793u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpGroup5_Ev_Generic",
-        "OperandSpec::PartialProfile<DecodedOperandShape{101384337u, 526340u}, 0u, 1u, 1u>"
-      ],
-      [
-        "baked_operand::OpGroup5_Ev_Generic",
-        "OperandSpec::PartialProfile<DecodedOperandShape{51052625u, 526340u}, 0u, 1u, 1u>"
       ]
     ],
     [
@@ -4200,29 +2758,7 @@
     ],
     [
       [
-        "baked_operand::OpGroup2_EbIb",
-        "OperandSpec::PartialProfile<DecodedOperandShape{51708139u}, 0u, 1u, 2u>"
-      ],
-      [
-        "OpGroup2_EbIb_Baked_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 235, 0u>"
-      ]
-    ],
-    [
-      [
-        "op::OpMovzx_Word",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 40, 0u>"
-      ]
-    ],
-    [
-      [
-        "op::OpLea_Impl<(OpsizeSpec)2, (RmOperandSpec)0>",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 24, 0u>"
-      ]
-    ],
-    [
-      [
-        "OperandClone_010_SuperOpcode_2_008_OpPop_Reg__OpPop_Reg"
+        "OperandClone_018_SuperOpcode_2_017_OpPop_Reg__OpPop_Reg"
       ]
     ],
     [
@@ -4235,10 +2771,6 @@
       [
         "baked_operand::OpTest_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620178u}, 0u>"
-      ],
-      [
-        "baked_operand::OpGroup1_EvIb_Generic",
-        "OperandSpec::Profile<DecodedOperandShape{50659578u}, 0u>"
       ]
     ],
     [
@@ -4249,7 +2781,7 @@
     ],
     [
       [
-        "OperandClone_168_SuperOpcode_4_141_OpMovzx_Word__OpPush_Reg__OpMovzx_Word__OpPush_Reg"
+        "OperandClone_096_SuperOpcode_4_080_OpMovzx_Word__OpPush_Reg__OpMovzx_Word__OpPush_Reg"
       ]
     ],
     [
@@ -4267,10 +2799,6 @@
     [
       [
         "baked_operand::OpMov_EvGv",
-        "OperandSpec::PartialProfile<DecodedOperandShape{100860080u, 526336u}, 0u, 1u, 1u>"
-      ],
-      [
-        "baked_operand::OpMov_EvGv",
         "OperandSpec::PartialProfile<DecodedOperandShape{50528368u, 526336u}, 0u, 1u, 1u>"
       ]
     ],
@@ -4278,12 +2806,6 @@
       [
         "baked_operand::OpMov_GvEv",
         "OperandSpec::Profile<DecodedOperandShape{67305588u, 395280u, 24u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "OpAdd_EvGv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 16, 0u>"
       ]
     ],
     [
@@ -4296,20 +2818,12 @@
       [
         "baked_operand::OpSub_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{34668752u}, 0u>"
-      ],
-      [
-        "OpSub_EvGv_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 208, 0u>"
       ]
     ],
     [
       [
         "baked_operand::OpCmp_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620176u}, 0u>"
-      ],
-      [
-        "baked_operand::OpCmp_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{33620162u}, 0u>"
       ]
     ],
     [
@@ -4322,20 +2836,12 @@
       [
         "baked_operand::OpMov_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620176u}, 0u>"
-      ],
-      [
-        "OpMov_EvGv_Baked32",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 208, 0u>"
       ]
     ],
     [
       [
         "baked_operand::OpCmp_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620183u}, 0u>"
-      ],
-      [
-        "baked_operand::OpCmp_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{33620218u}, 0u>"
       ]
     ],
     [
@@ -4348,12 +2854,6 @@
       [
         "baked_operand::OpMov_GvEv",
         "OperandSpec::Profile<DecodedOperandShape{50528321u, 526340u, 4u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMov_Sse_Load",
-        "OperandSpec::PartialProfile<DecodedOperandShape{84608074u, 526344u}, 0u, 1u, 1u>"
       ]
     ],
     [
@@ -4392,12 +2892,6 @@
     ],
     [
       [
-        "op::OpGroup2_EvIb",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 250, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpMov_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{50528325u, 395284u, 4294967268u}, 0u>"
       ]
@@ -4417,10 +2911,6 @@
     [
       [
         "baked_operand::OpGroup1_EvIb_Generic",
-        "OperandSpec::PartialProfile<DecodedOperandShape{134676668u, 395280u, 0u, 1u}, 0u, 1u, 1u>"
-      ],
-      [
-        "baked_operand::OpGroup1_EvIb_Generic",
         "OperandSpec::PartialProfile<DecodedOperandShape{84344956u, 395280u, 0u, 1u}, 0u, 1u, 1u>"
       ]
     ],
@@ -4434,10 +2924,6 @@
       [
         "baked_operand::OpSub_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{34668793u}, 0u>"
-      ],
-      [
-        "OpSub_EvGv_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 249, 0u>"
       ]
     ],
     [
@@ -4454,18 +2940,6 @@
     ],
     [
       [
-        "baked_operand::OpCmp_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{67305556u, 395280u, 16u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpGroup1_EvIb_Generic",
-        "OperandSpec::Profile<DecodedOperandShape{51708131u, 0u, 0u, 127u}, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpCmp_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{67305564u, 395280u, 4u}, 0u>"
       ]
@@ -4474,12 +2948,6 @@
       [
         "OpMov_EvGv_Baked32",
         "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 48, 0u>"
-      ]
-    ],
-    [
-      [
-        "op::OpGroup2_EvIb",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 233, 0u>"
       ]
     ],
     [
@@ -4496,7 +2964,7 @@
     ],
     [
       [
-        "OperandClone_026_SuperOpcode_3_012_OpPush_Reg__OpPush_Reg__OpPush_Reg"
+        "OperandClone_027_SuperOpcode_3_020_OpPush_Reg__OpPush_Reg__OpPush_Reg"
       ]
     ],
     [
@@ -4507,30 +2975,8 @@
     ],
     [
       [
-        "baked_operand::OpMov_EvGv",
-        "OperandSpec::Profile<DecodedOperandShape{67305548u, 395280u, 72u}, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpAdd_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620219u}, 0u>"
-      ],
-      [
-        "OpAdd_EvGv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 251, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMov_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{50528342u, 526360u, 24u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "op::OpCmov_LE",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 198, 0u>"
       ]
     ],
     [
@@ -4541,32 +2987,14 @@
     ],
     [
       [
-        "baked_operand::OpPush_Imm8",
-        "OperandSpec::Profile<DecodedOperandShape{33816578u, 0u, 0u, 37u}, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpMov_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{67305588u, 395280u, 40u}, 0u>"
       ]
     ],
     [
       [
-        "baked_operand::OpMov_EvGv",
-        "OperandSpec::Profile<DecodedOperandShape{117637252u, 395280u, 160u}, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpMov_GvEv",
         "OperandSpec::Profile<DecodedOperandShape{50528327u, 526364u, 104u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMov_EvGv",
-        "OperandSpec::Profile<DecodedOperandShape{117637252u, 395280u, 1244u}, 0u>"
       ]
     ],
     [
@@ -4593,7 +3021,7 @@
     ],
     [
       [
-        "OperandClone_062_SuperOpcode_2_048_OpPush_Reg__OpCall_Rel"
+        "OperandClone_054_SuperOpcode_2_049_OpPush_Reg__OpCall_Rel"
       ]
     ],
     [
@@ -4606,16 +3034,6 @@
       [
         "baked_operand::OpMov_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620218u}, 0u>"
-      ],
-      [
-        "OpMov_EvGv_Baked32",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 250, 0u>"
-      ]
-    ],
-    [
-      [
-        "OpSub_EvGv_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 0, 0u>"
       ]
     ],
     [
@@ -4632,12 +3050,6 @@
     ],
     [
       [
-        "baked_operand::OpMov_EvIz",
-        "OperandSpec::Profile<DecodedOperandShape{134676548u, 395280u, 108u}, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpLea",
         "OperandSpec::Profile<DecodedOperandShape{50528328u, 526336u, 1u}, 0u>"
       ]
@@ -4646,12 +3058,6 @@
       [
         "baked_operand::OpGroup1_EvIb_Generic",
         "OperandSpec::Profile<DecodedOperandShape{50659564u, 0u, 0u, 16u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpFpu_DD",
-        "OperandSpec::PartialProfile<DecodedOperandShape{67305556u, 395280u}, 0u, 1u, 1u>"
       ]
     ],
     [
@@ -4684,12 +3090,6 @@
     ],
     [
       [
-        "baked_operand::OpSub_GvEv",
-        "OperandSpec::PartialProfile<DecodedOperandShape{51576910u, 526360u}, 0u, 1u, 1u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpGroup1_EvIb_Generic",
         "OperandSpec::Profile<DecodedOperandShape{50659524u, 0u, 0u, 60u}, 0u>"
       ]
@@ -4710,38 +3110,18 @@
       [
         "baked_operand::OpSub_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{34668760u}, 0u>"
-      ],
-      [
-        "OpSub_EvGv_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 216, 0u>"
-      ]
-    ],
-    [
-      [
-        "op::OpSub_EvGv",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 233, 0u>"
       ]
     ],
     [
       [
         "baked_operand::OpMov_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620177u}, 0u>"
-      ],
-      [
-        "OpMov_EvGv_Baked32",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 209, 0u>"
       ]
     ],
     [
       [
         "baked_operand::OpGroup1_EvIb_Generic",
         "OperandSpec::Profile<DecodedOperandShape{50659527u, 0u, 0u, 1u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "op::OpLea_Impl<(OpsizeSpec)2, (RmOperandSpec)0>",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 0, 0u>"
       ]
     ],
     [
@@ -4758,18 +3138,6 @@
       [
         "baked_operand::OpSub_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{34668738u}, 0u>"
-      ],
-      [
-        "baked_operand::OpSub_EvGv",
-        "OperandSpec::Profile<DecodedOperandShape{68223170u}, 0u>"
-      ],
-      [
-        "OpSub_EvGv_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 194, 0u>"
-      ],
-      [
-        "OpSub_GvEv_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 208, 0u>"
       ]
     ],
     [
@@ -4782,16 +3150,6 @@
       [
         "baked_operand::OpSetcc_4",
         "OperandSpec::Profile<DecodedOperandShape{50397376u}, 0u>"
-      ],
-      [
-        "op::OpSetcc_4",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 192, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMovzx_Word",
-        "OperandSpec::Profile<DecodedOperandShape{50528280u, 526336u}, 0u>"
       ]
     ],
     [
@@ -4814,32 +3172,14 @@
     ],
     [
       [
-        "op::OpCmov_A",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 251, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpLea",
         "OperandSpec::Profile<DecodedOperandShape{50528276u, 526080u}, 0u>"
       ]
     ],
     [
       [
-        "op::OpMovAp_Load",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 205, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpGroup1_EvIb_Generic",
         "OperandSpec::Profile<DecodedOperandShape{51708100u, 0u, 0u, 32u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpGroup1_EvIb_Generic",
-        "OperandSpec::Profile<DecodedOperandShape{50659521u, 0u, 0u, 16u}, 0u>"
       ]
     ],
     [
@@ -4852,10 +3192,6 @@
       [
         "baked_operand::OpSub_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620161u}, 0u>"
-      ],
-      [
-        "OpSub_EvGv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 193, 0u>"
       ]
     ],
     [
@@ -4908,16 +3244,6 @@
     ],
     [
       [
-        "baked_operand::OpGroup2_EvIb",
-        "OperandSpec::PartialProfile<DecodedOperandShape{50659579u}, 0u, 1u, 2u>"
-      ],
-      [
-        "OpGroup2_EvIb_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 251, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpCmp_GvEv",
         "OperandSpec::PartialProfile<DecodedOperandShape{100860035u, 526348u}, 0u, 1u, 1u>"
       ],
@@ -4928,76 +3254,8 @@
     ],
     [
       [
-        "baked_operand::OpMov_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{50528333u, 395284u, 4294967256u}, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpGroup3_Ev_Generic",
         "OperandSpec::PartialProfile<DecodedOperandShape{100991170u}, 0u, 1u, 2u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpGroup2_EvIb",
-        "OperandSpec::Profile<DecodedOperandShape{51708131u, 0u, 0u, 2u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMov_RegImm",
-        "OperandSpec::Profile<DecodedOperandShape{84148231u, 0u, 0u, 2u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "op::OpAdd_EvGv",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 246, 0u>"
-      ]
-    ],
-    [
-      [
-        "op::OpMul_Sse",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 203, 0u>"
-      ]
-    ],
-    [
-      [
-        "op::OpMov_Sse_Store",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 149, 0u>"
-      ],
-      [
-        "op::OpMov_Sse_Store",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 80, 0u>"
-      ],
-      [
-        "op::OpMov_Sse_Store",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 82, 0u>"
-      ],
-      [
-        "op::OpMov_Sse_Store",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 83, 0u>"
-      ],
-      [
-        "op::OpMov_Sse_Store",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 84, 0u>"
-      ],
-      [
-        "op::OpMov_Sse_Store",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 85, 0u>"
-      ]
-    ],
-    [
-      [
-        "op::OpMul_Sse",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 221, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpGroup1_EvIz_Generic",
-        "OperandSpec::Profile<DecodedOperandShape{100991207u, 0u, 0u, 2047u}, 0u>"
       ]
     ],
     [
@@ -5016,10 +3274,6 @@
       [
         "baked_operand::OpSub_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620162u}, 0u>"
-      ],
-      [
-        "OpSub_EvGv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 194, 0u>"
       ]
     ],
     [
@@ -5058,20 +3312,12 @@
       [
         "baked_operand::OpMov_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620175u}, 0u>"
-      ],
-      [
-        "OpMov_EvGv_Baked32",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 207, 0u>"
       ]
     ],
     [
       [
         "baked_operand::OpAdd_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{34668743u}, 0u>"
-      ],
-      [
-        "OpAdd_EvGv_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 199, 0u>"
       ]
     ],
     [
@@ -5090,10 +3336,6 @@
       [
         "baked_operand::OpGroup1_EvIb_Generic",
         "OperandSpec::Profile<DecodedOperandShape{51708103u, 0u, 0u, 1u}, 0u>"
-      ],
-      [
-        "baked_operand::OpLea",
-        "OperandSpec::Profile<DecodedOperandShape{50528383u, 526364u, 1u}, 0u>"
       ]
     ],
     [
@@ -5106,24 +3348,6 @@
       [
         "baked_operand::OpGroup1_EvIb_Generic",
         "OperandSpec::PartialProfile<DecodedOperandShape{50659554u}, 0u, 1u, 2u>"
-      ]
-    ],
-    [
-      [
-        "op::OpOr_EbGb",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 211, 0u>"
-      ]
-    ],
-    [
-      [
-        "op::OpFpu_D9",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 201, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMov_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{67305564u, 395280u, 76u}, 0u>"
       ]
     ],
     [
@@ -5160,20 +3384,6 @@
       [
         "baked_operand::OpSub_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{34668742u}, 0u>"
-      ],
-      [
-        "OpSub_EvGv_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 198, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMov_GvEv",
-        "OperandSpec::PartialProfile<DecodedOperandShape{100860074u, 526344u}, 0u, 1u, 1u>"
-      ],
-      [
-        "baked_operand::OpMov_GvEv",
-        "OperandSpec::PartialProfile<DecodedOperandShape{50528362u, 526344u}, 0u, 1u, 1u>"
       ]
     ],
     [
@@ -5192,20 +3402,12 @@
       [
         "baked_operand::OpSub_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{34668765u}, 0u>"
-      ],
-      [
-        "OpSub_EvGv_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 221, 0u>"
       ]
     ],
     [
       [
         "baked_operand::OpAnd_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620162u}, 0u>"
-      ],
-      [
-        "OpAnd_EvGv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 194, 0u>"
       ]
     ],
     [
@@ -5216,7 +3418,7 @@
     ],
     [
       [
-        "OperandClone_163_SuperOpcode_2_009_OpPop_Reg__OpRet"
+        "OperandClone_165_SuperOpcode_2_141_OpPop_Reg__OpRet"
       ]
     ],
     [
@@ -5231,20 +3433,8 @@
     ],
     [
       [
-        "op::OpGroup3_Ev_Generic",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 254, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpMov_GvEv",
         "OperandSpec::Profile<DecodedOperandShape{67305596u, 395280u, 80u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMov_EvGv",
-        "OperandSpec::Profile<DecodedOperandShape{67305564u, 395280u, 76u}, 0u>"
       ]
     ],
     [
@@ -5267,20 +3457,8 @@
     ],
     [
       [
-        "op::OpCmp_EvGv",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 40, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpMov_GvEv",
         "OperandSpec::Profile<DecodedOperandShape{33751070u, 526360u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMov_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{100860038u, 526360u, 148u}, 0u>"
       ]
     ],
     [
@@ -5299,17 +3477,9 @@
       [
         "baked_operand::OpXor_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{34668753u}, 0u>"
-      ],
-      [
-        "OpXor_EvGv_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 209, 0u>"
       ]
     ],
     [
-      [
-        "baked_operand::OpGroup5_Ev_Generic",
-        "OperandSpec::PartialProfile<DecodedOperandShape{101384343u, 526364u}, 0u, 1u, 1u>"
-      ],
       [
         "baked_operand::OpGroup5_Ev_Generic",
         "OperandSpec::PartialProfile<DecodedOperandShape{51052631u, 526364u}, 0u, 1u, 1u>"
@@ -5319,23 +3489,6 @@
       [
         "baked_operand::OpMov_GvEv",
         "OperandSpec::Profile<DecodedOperandShape{67305596u, 395280u, 36u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMov_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{100860032u, 526336u, 128u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpFpu_DD",
-        "OperandSpec::PartialProfile<DecodedOperandShape{67305540u, 395280u}, 0u, 1u, 1u>"
-      ]
-    ],
-    [
-      [
-        "OperandClone_022_SuperOpcode_2_019_OpPush_Reg__OpPush_Reg"
       ]
     ],
     [
@@ -5353,10 +3506,6 @@
       ],
       [
         "op::OpCmpxchg_EvGv",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 14, 0u>"
-      ],
-      [
-        "op::OpCmpxchg_EvGv",
         "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 15, 0u>"
       ]
     ],
@@ -5371,10 +3520,6 @@
       ]
     ],
     [
-      [
-        "baked_operand::OpLea",
-        "OperandSpec::PartialProfile<DecodedOperandShape{100860045u, 395284u}, 0u, 1u, 1u>"
-      ],
       [
         "baked_operand::OpLea",
         "OperandSpec::PartialProfile<DecodedOperandShape{50528333u, 395284u}, 0u, 1u, 1u>"
@@ -5414,16 +3559,6 @@
       [
         "baked_operand::OpMov_GvEv",
         "OperandSpec::Profile<DecodedOperandShape{67305580u, 395280u, 32u}, 0u>"
-      ],
-      [
-        "baked_operand::OpMov_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{84082796u, 395280u, 32u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "op::OpFpu_DF",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 233, 0u>"
       ]
     ],
     [
@@ -5433,10 +3568,6 @@
       ]
     ],
     [
-      [
-        "baked_operand::OpMovzx_Word",
-        "OperandSpec::PartialProfile<DecodedOperandShape{117637254u, 526360u}, 0u, 1u, 1u>"
-      ],
       [
         "baked_operand::OpMovzx_Word",
         "OperandSpec::PartialProfile<DecodedOperandShape{67305542u, 526360u}, 0u, 1u, 1u>"
@@ -5474,32 +3605,12 @@
       [
         "baked_operand::OpSub_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{34668739u}, 0u>"
-      ],
-      [
-        "OpSub_EvGv_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 195, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpGroup3_Ev_Generic",
-        "OperandSpec::PartialProfile<DecodedOperandShape{101122054u, 526360u}, 0u, 2u, 2u>"
       ]
     ],
     [
       [
         "baked_operand::OpXor_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620205u}, 0u>"
-      ],
-      [
-        "OpXor_EvGv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 237, 0u>"
-      ]
-    ],
-    [
-      [
-        "op::OpMovsx_Word",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 198, 0u>"
       ]
     ],
     [
@@ -5528,24 +3639,12 @@
       [
         "baked_operand::OpSetcc_5",
         "OperandSpec::Profile<DecodedOperandShape{50397376u}, 0u>"
-      ],
-      [
-        "op::OpSetcc_5",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 192, 0u>"
       ]
     ],
     [
       [
         "baked_operand::OpAdd_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620169u}, 0u>"
-      ],
-      [
-        "OpAdd_EvGv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 201, 0u>"
-      ],
-      [
-        "OpAdd_GvEv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 201, 0u>"
       ]
     ],
     [
@@ -5563,16 +3662,6 @@
       ]
     ],
     [
-      [
-        "baked_operand::OpInc_Reg",
-        "OperandSpec::Profile<DecodedOperandShape{16777223u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpGroup1_EvIb_Generic",
-        "OperandSpec::PartialProfile<DecodedOperandShape{134676668u, 395280u}, 0u, 1u, 3u>"
-      ],
       [
         "baked_operand::OpGroup1_EvIb_Generic",
         "OperandSpec::PartialProfile<DecodedOperandShape{84344956u, 395280u}, 0u, 1u, 3u>"
@@ -5598,20 +3687,12 @@
       [
         "baked_operand::OpCmp_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620208u}, 0u>"
-      ],
-      [
-        "baked_operand::OpCmp_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{33620166u}, 0u>"
       ]
     ],
     [
       [
         "baked_operand::OpTest_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620160u}, 0u>"
-      ],
-      [
-        "baked_operand::OpGroup1_EvIb_Generic",
-        "OperandSpec::Profile<DecodedOperandShape{50659576u}, 0u>"
       ]
     ],
     [
@@ -5646,12 +3727,6 @@
     ],
     [
       [
-        "OpAdd_EvGv_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 24, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpMovzx_Byte",
         "OperandSpec::Profile<DecodedOperandShape{50528264u, 526336u}, 0u>"
       ]
@@ -5676,117 +3751,13 @@
     ],
     [
       [
-        "op::OpGroup5_Ev_Generic",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 112, 0u>"
-      ],
-      [
-        "op::OpGroup5_Ev_Generic",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 113, 0u>"
-      ],
-      [
-        "op::OpGroup5_Ev_Generic",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 114, 0u>"
-      ],
-      [
-        "op::OpGroup5_Ev_Generic",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 115, 0u>"
-      ],
-      [
-        "op::OpGroup5_Ev_Generic",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 116, 0u>"
-      ],
-      [
-        "op::OpGroup5_Ev_Generic",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 117, 0u>"
-      ],
-      [
-        "op::OpGroup5_Ev_Generic",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 118, 0u>"
-      ],
-      [
-        "op::OpGroup5_Ev_Generic",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 119, 0u>"
-      ],
-      [
-        "op::OpGroup5_Ev_Generic",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 176, 0u>"
-      ],
-      [
-        "op::OpGroup5_Ev_Generic",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 177, 0u>"
-      ],
-      [
-        "op::OpGroup5_Ev_Generic",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 178, 0u>"
-      ],
-      [
-        "op::OpGroup5_Ev_Generic",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 179, 0u>"
-      ],
-      [
-        "op::OpGroup5_Ev_Generic",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 180, 0u>"
-      ],
-      [
-        "op::OpGroup5_Ev_Generic",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 181, 0u>"
-      ],
-      [
-        "op::OpGroup5_Ev_Generic",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 182, 0u>"
-      ],
-      [
-        "op::OpGroup5_Ev_Generic",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 183, 0u>"
-      ],
-      [
-        "op::OpGroup5_Ev_Generic",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 48, 0u>"
-      ],
-      [
-        "op::OpGroup5_Ev_Generic",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 49, 0u>"
-      ],
-      [
-        "op::OpGroup5_Ev_Generic",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 50, 0u>"
-      ],
-      [
-        "op::OpGroup5_Ev_Generic",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 51, 0u>"
-      ],
-      [
-        "op::OpGroup5_Ev_Generic",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 52, 0u>"
-      ],
-      [
-        "op::OpGroup5_Ev_Generic",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 53, 0u>"
-      ],
-      [
-        "op::OpGroup5_Ev_Generic",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 54, 0u>"
-      ],
-      [
-        "op::OpGroup5_Ev_Generic",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 55, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpMov_GvEv",
         "OperandSpec::Profile<DecodedOperandShape{67305548u, 395280u, 4u}, 0u>"
       ]
     ],
     [
       [
-        "OperandClone_011_SuperOpcode_2_008_OpPop_Reg__OpPop_Reg"
-      ]
-    ],
-    [
-      [
-        "OpAdd_EvGv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 8, 0u>"
+        "OperandClone_019_SuperOpcode_2_017_OpPop_Reg__OpPop_Reg"
       ]
     ],
     [
@@ -5809,11 +3780,6 @@
     ],
     [
       [
-        "OperandClone_012_SuperOpcode_2_009_OpPop_Reg__OpRet"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpMov_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{67305540u, 395280u, 64u}, 0u>"
       ]
@@ -5822,15 +3788,6 @@
       [
         "baked_operand::OpAdd_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620208u}, 0u>"
-      ],
-      [
-        "OpAdd_EvGv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 240, 0u>"
-      ]
-    ],
-    [
-      [
-        "OperandClone_076_SuperOpcode_4_067_OpMov_EvGv__OpPop_Reg__OpPop_Reg__OpPop_Reg"
       ]
     ],
     [
@@ -5864,29 +3821,13 @@
     [
       [
         "baked_operand::OpMov_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{50528341u, 395284u, 4294967248u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMov_GvEv",
         "OperandSpec::Profile<DecodedOperandShape{50528325u, 395284u, 4294967260u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpGroup2_EvIb",
-        "OperandSpec::Profile<DecodedOperandShape{50659560u, 0u, 0u, 7u}, 0u>"
       ]
     ],
     [
       [
         "baked_operand::OpSub_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620216u}, 0u>"
-      ],
-      [
-        "OpSub_EvGv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 248, 0u>"
       ]
     ],
     [
@@ -5913,18 +3854,8 @@
     ],
     [
       [
-        "baked_operand::OpMovzx_Byte",
-        "OperandSpec::PartialProfile<DecodedOperandShape{84082756u, 524296u}, 0u, 1u, 1u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpAdd_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620202u}, 0u>"
-      ],
-      [
-        "OpAdd_EvGv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 234, 0u>"
       ]
     ],
     [
@@ -5965,28 +3896,12 @@
       [
         "baked_operand::OpSub_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620176u}, 0u>"
-      ],
-      [
-        "OpSub_EvGv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 208, 0u>"
       ]
     ],
     [
       [
         "baked_operand::OpMov_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33751062u, 526360u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "op::OpGroup2_EvIb",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 238, 0u>"
-      ]
-    ],
-    [
-      [
-        "op::OpMovzx_Byte",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 216, 0u>"
       ]
     ],
     [
@@ -6003,12 +3918,6 @@
     ],
     [
       [
-        "baked_operand::OpMov_Sse_Store",
-        "OperandSpec::PartialProfile<DecodedOperandShape{67305536u, 526336u}, 0u, 1u, 1u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpMov_GvEv",
         "OperandSpec::Profile<DecodedOperandShape{67305588u, 395280u, 28u}, 0u>"
       ]
@@ -6017,20 +3926,12 @@
       [
         "baked_operand::OpMov_EbGb",
         "OperandSpec::Profile<DecodedOperandShape{33620182u}, 0u>"
-      ],
-      [
-        "op::OpMov_EbGb",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 214, 0u>"
       ]
     ],
     [
       [
         "baked_operand::OpMov_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620222u}, 0u>"
-      ],
-      [
-        "OpMov_EvGv_Baked32",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 254, 0u>"
       ]
     ],
     [
@@ -6082,32 +3983,6 @@
     [
       [
         "baked_operand::OpMov_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{100860034u, 526344u, 128u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpLea",
-        "OperandSpec::PartialProfile<DecodedOperandShape{117637252u, 524300u}, 0u, 1u, 1u>"
-      ],
-      [
-        "baked_operand::OpLea",
-        "OperandSpec::PartialProfile<DecodedOperandShape{67305540u, 524300u}, 0u, 1u, 1u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpGroup3_Eb_Generic",
-        "OperandSpec::PartialProfile<DecodedOperandShape{117899392u, 526336u, 0u, 32u}, 0u, 1u, 1u>"
-      ],
-      [
-        "baked_operand::OpGroup3_Eb_Generic",
-        "OperandSpec::PartialProfile<DecodedOperandShape{67567680u, 526336u, 0u, 32u}, 0u, 1u, 1u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMov_GvEv",
         "OperandSpec::Profile<DecodedOperandShape{67305588u, 395280u, 52u}, 0u>"
       ]
     ],
@@ -6127,18 +4002,6 @@
       [
         "baked_operand::OpMov_GvEv",
         "OperandSpec::Profile<DecodedOperandShape{67305540u, 395280u, 72u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpGroup5_Ev_Generic",
-        "OperandSpec::Profile<DecodedOperandShape{51052627u, 526348u, 28u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "op::OpMovzx_Byte",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 40, 0u>"
       ]
     ],
     [
@@ -6191,26 +4054,8 @@
     ],
     [
       [
-        "baked_operand::OpGroup1_EvIb_Generic",
-        "OperandSpec::Profile<DecodedOperandShape{51708131u, 0u, 0u, 1u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "op::OpFpu_DD",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 156, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpMov_GvEv",
         "OperandSpec::Profile<DecodedOperandShape{67305564u, 395280u, 48u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMov_EvGv",
-        "OperandSpec::Profile<DecodedOperandShape{50528333u, 395284u, 4294967268u}, 0u>"
       ]
     ],
     [
@@ -6265,38 +4110,18 @@
       [
         "baked_operand::OpSub_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{34668785u}, 0u>"
-      ],
-      [
-        "OpSub_EvGv_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 241, 0u>"
-      ],
-      [
-        "OpSub_GvEv_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 206, 0u>"
       ]
     ],
     [
       [
-        "baked_operand::OpGroup1_EvIz_Generic",
-        "OperandSpec::PartialProfile<DecodedOperandShape{102039750u}, 0u, 1u, 2u>"
-      ],
-      [
         "baked_operand::OpLea",
         "OperandSpec::PartialProfile<DecodedOperandShape{100860086u, 526360u}, 0u, 1u, 1u>"
-      ],
-      [
-        "baked_operand::OpLea",
-        "OperandSpec::PartialProfile<DecodedOperandShape{50528374u, 526360u}, 0u, 1u, 1u>"
       ]
     ],
     [
       [
         "baked_operand::OpSub_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{34668786u}, 0u>"
-      ],
-      [
-        "OpSub_EvGv_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 242, 0u>"
       ]
     ],
     [
@@ -6355,17 +4180,13 @@
     ],
     [
       [
-        "OperandClone_167_SuperOpcode_2_140_OpMov_GvEv__OpCall_Rel"
+        "OperandClone_055_SuperOpcode_2_050_OpMov_GvEv__OpCall_Rel"
       ]
     ],
     [
       [
         "baked_operand::OpSub_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620166u}, 0u>"
-      ],
-      [
-        "OpSub_EvGv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 198, 0u>"
       ]
     ],
     [
@@ -6413,19 +4234,7 @@
     [
       [
         "baked_operand::OpMov_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{67305548u, 395280u, 96u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMov_GvEv",
         "OperandSpec::Profile<DecodedOperandShape{117649429u, 886816u, 8u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMov_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{117637252u, 395280u, 1292u}, 0u>"
       ]
     ],
     [
@@ -6442,42 +4251,8 @@
     ],
     [
       [
-        "baked_operand::OpGroup1_EvIz_Generic",
-        "OperandSpec::Profile<DecodedOperandShape{102039778u, 0u, 0u, 2560u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpGroup1_EvIb_Generic",
-        "OperandSpec::Profile<DecodedOperandShape{51708097u, 0u, 0u, 8u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpGroup1_EvIb_Generic",
-        "OperandSpec::Profile<DecodedOperandShape{50659520u, 0u, 0u, 15u}, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpCmp_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620213u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMovzx_Byte",
-        "OperandSpec::PartialProfile<DecodedOperandShape{117637263u, 526364u}, 0u, 1u, 1u>"
-      ],
-      [
-        "baked_operand::OpMovzx_Byte",
-        "OperandSpec::PartialProfile<DecodedOperandShape{67305551u, 526364u}, 0u, 1u, 1u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMovzx_Byte",
-        "OperandSpec::Profile<DecodedOperandShape{67305484u, 526080u}, 0u>"
       ]
     ],
     [
@@ -6490,12 +4265,6 @@
       [
         "baked_operand::OpMov_EvIz",
         "OperandSpec::Profile<DecodedOperandShape{134676548u, 395280u, 72u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpGroup3_Eb_Generic",
-        "OperandSpec::Profile<DecodedOperandShape{67567685u, 395284u, 60u, 2u}, 0u>"
       ]
     ],
     [
@@ -6524,28 +4293,14 @@
     ],
     [
       [
-        "baked_operand::OpGroup1_EvIz_Generic",
-        "OperandSpec::Profile<DecodedOperandShape{100991183u, 0u, 0u, 4278124287u}, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpGroup2_Ev1",
         "OperandSpec::Profile<DecodedOperandShape{34668792u}, 0u>"
-      ],
-      [
-        "OpGroup2_Ev1_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 248, 0u>"
       ]
     ],
     [
       [
         "baked_operand::OpMov_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620206u}, 0u>"
-      ],
-      [
-        "OpMov_EvGv_Baked32",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 238, 0u>"
       ]
     ],
     [
@@ -6566,7 +4321,7 @@
     ],
     [
       [
-        "OperandClone_051_SuperOpcode_3_044_OpPush_Reg__OpPush_Reg__OpCall_Rel"
+        "OperandClone_047_SuperOpcode_3_039_OpPush_Reg__OpPush_Reg__OpCall_Rel"
       ]
     ],
     [
@@ -6577,44 +4332,8 @@
     ],
     [
       [
-        "baked_operand::OpGroup1_EvIb_Generic",
-        "OperandSpec::Profile<DecodedOperandShape{50659578u, 0u, 0u, 8u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "op::OpAdd_EvGv",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 235, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpCmp_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620202u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMov_EvGv",
-        "OperandSpec::PartialProfile<DecodedOperandShape{84099156u, 395280u}, 0u, 1u, 1u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpGroup1_EvIz_Generic",
-        "OperandSpec::Profile<DecodedOperandShape{100991226u, 0u, 0u, 2560u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "op::OpCmp_GbEb",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 8, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpLea",
-        "OperandSpec::PartialProfile<DecodedOperandShape{67305540u, 524316u}, 0u, 1u, 1u>"
       ]
     ],
     [
@@ -6626,10 +4345,6 @@
     [
       [
         "baked_operand::OpLea",
-        "OperandSpec::PartialProfile<DecodedOperandShape{100860090u, 526344u}, 0u, 1u, 1u>"
-      ],
-      [
-        "baked_operand::OpLea",
         "OperandSpec::PartialProfile<DecodedOperandShape{50528378u, 526344u}, 0u, 1u, 1u>"
       ]
     ],
@@ -6637,20 +4352,12 @@
       [
         "baked_operand::OpMov_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620202u}, 0u>"
-      ],
-      [
-        "OpMov_EvGv_Baked32",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 234, 0u>"
       ]
     ],
     [
       [
         "baked_operand::OpAdd_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{34668752u}, 0u>"
-      ],
-      [
-        "OpAdd_EvGv_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 208, 0u>"
       ]
     ],
     [
@@ -6673,60 +4380,20 @@
     ],
     [
       [
-        "baked_operand::OpMovzx_Word",
-        "OperandSpec::PartialProfile<DecodedOperandShape{67305559u, 526364u}, 0u, 1u, 1u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpGroup2_EvIb",
         "OperandSpec::Profile<DecodedOperandShape{51708131u, 0u, 0u, 4u}, 0u>"
       ]
     ],
     [
       [
-        "op::OpMov_Sse_Store",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 89, 0u>"
-      ],
-      [
-        "op::OpMov_Sse_Store",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 90, 0u>"
-      ],
-      [
-        "op::OpMov_Sse_Store",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 92, 0u>"
-      ],
-      [
-        "op::OpMov_Sse_Store",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 93, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpMov_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620207u}, 0u>"
-      ],
-      [
-        "OpMov_EvGv_Baked32",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 239, 0u>"
-      ]
-    ],
-    [
-      [
-        "op::OpGroup2_EvIb",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 234, 0u>"
       ]
     ],
     [
       [
         "op::OpPunpcklwd_Sse",
         "OperandSpec::SlotBound<1u, false>"
-      ]
-    ],
-    [
-      [
-        "OpAdd_EvGv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 219, 0u>"
       ]
     ],
     [
@@ -6759,16 +4426,6 @@
     ],
     [
       [
-        "baked_operand::OpGroup2_EvIb",
-        "OperandSpec::PartialProfile<DecodedOperandShape{50659555u}, 0u, 1u, 2u>"
-      ],
-      [
-        "OpGroup2_EvIb_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 227, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpGroup1_EvIb_Generic",
         "OperandSpec::Profile<DecodedOperandShape{50659527u, 0u, 0u, 16u}, 0u>"
       ],
@@ -6781,16 +4438,6 @@
       [
         "baked_operand::OpMov_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{67305540u, 395280u, 24u}, 0u>"
-      ],
-      [
-        "baked_operand::OpMov_EvGv",
-        "OperandSpec::Profile<DecodedOperandShape{84082756u, 395280u, 24u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMov_Sse_Load",
-        "OperandSpec::PartialProfile<DecodedOperandShape{84608064u, 526336u}, 0u, 1u, 1u>"
       ]
     ],
     [
@@ -6836,18 +4483,6 @@
     [
       [
         "baked_operand::OpMov_EvGv",
-        "OperandSpec::Profile<DecodedOperandShape{50528276u, 532760u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpAdd_GvEv",
-        "OperandSpec::PartialProfile<DecodedOperandShape{67305596u, 395280u}, 0u, 1u, 1u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMov_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{67305540u, 395280u, 12u}, 0u>"
       ]
     ],
@@ -6871,12 +4506,6 @@
     ],
     [
       [
-        "op::OpMovsx_Word",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 56, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpGroup1_EvIb_Generic",
         "OperandSpec::Profile<DecodedOperandShape{50659576u, 0u, 0u, 1u}, 0u>"
       ]
@@ -6889,18 +4518,6 @@
     ],
     [
       [
-        "baked_operand::OpMov_EvGv",
-        "OperandSpec::PartialProfile<DecodedOperandShape{67321927u, 526364u}, 0u, 1u, 1u>"
-      ]
-    ],
-    [
-      [
-        "op::OpOr_EvGv",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 243, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpGroup1_EvIb_Generic",
         "OperandSpec::Profile<DecodedOperandShape{50659565u, 0u, 0u, 1u}, 0u>"
       ]
@@ -6909,10 +4526,6 @@
       [
         "baked_operand::OpFpu_DD",
         "OperandSpec::Profile<DecodedOperandShape{33620184u}, 0u>"
-      ],
-      [
-        "op::OpFpu_DD",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 216, 0u>"
       ]
     ],
     [
@@ -6923,36 +4536,14 @@
     ],
     [
       [
-        "op::OpCmov_E",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 148, 0u>"
-      ],
-      [
-        "op::OpCmov_E",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 84, 0u>"
-      ],
-      [
-        "op::OpCmov_E",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 85, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpAdd_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620161u}, 0u>"
-      ],
-      [
-        "OpAdd_EvGv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 193, 0u>"
       ]
     ],
     [
       [
         "baked_operand::OpAdd_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620203u}, 0u>"
-      ],
-      [
-        "OpAdd_EvGv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 235, 0u>"
       ]
     ],
     [
@@ -6965,20 +4556,6 @@
       [
         "baked_operand::OpMov_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620203u}, 0u>"
-      ],
-      [
-        "OpMov_EvGv_Baked32",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 235, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpGroup2_EvIb",
-        "OperandSpec::PartialProfile<DecodedOperandShape{51708143u}, 0u, 1u, 2u>"
-      ],
-      [
-        "OpGroup2_EvIb_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 239, 0u>"
       ]
     ],
     [
@@ -6999,38 +4576,8 @@
     ],
     [
       [
-        "baked_operand::OpMovzx_Byte",
-        "OperandSpec::PartialProfile<DecodedOperandShape{117637309u, 395284u}, 0u, 1u, 1u>"
-      ],
-      [
-        "baked_operand::OpMovzx_Byte",
-        "OperandSpec::PartialProfile<DecodedOperandShape{67305597u, 395284u}, 0u, 1u, 1u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpXor_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620162u}, 0u>"
-      ],
-      [
-        "OpXor_EvGv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 194, 0u>"
-      ]
-    ],
-    [
-      [
-        "op::OpXor_GvEv",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 48, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpGroup1_EvIb_Generic",
-        "OperandSpec::PartialProfile<DecodedOperandShape{117899397u, 395284u}, 0u, 1u, 3u>"
-      ],
-      [
-        "baked_operand::OpGroup1_EvIb_Generic",
-        "OperandSpec::PartialProfile<DecodedOperandShape{67567685u, 395284u}, 0u, 1u, 3u>"
       ]
     ],
     [
@@ -7042,10 +4589,6 @@
     [
       [
         "baked_operand::OpMov_EbIb",
-        "OperandSpec::PartialProfile<DecodedOperandShape{117899392u, 526336u, 0u, 1u}, 0u, 1u, 1u>"
-      ],
-      [
-        "baked_operand::OpMov_EbIb",
         "OperandSpec::PartialProfile<DecodedOperandShape{67567680u, 526336u, 0u, 1u}, 0u, 1u, 1u>"
       ]
     ],
@@ -7053,18 +4596,6 @@
       [
         "baked_operand::OpXor_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620214u}, 0u>"
-      ],
-      [
-        "baked_operand::OpXor_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{33620214u}, 0u>"
-      ],
-      [
-        "OpXor_EvGv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 246, 0u>"
-      ],
-      [
-        "OpXor_GvEv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 246, 0u>"
       ]
     ],
     [
@@ -7076,23 +4607,7 @@
     [
       [
         "baked_operand::OpMov_GvEv",
-        "OperandSpec::PartialProfile<DecodedOperandShape{100860090u, 526344u}, 0u, 1u, 1u>"
-      ],
-      [
-        "baked_operand::OpMov_GvEv",
         "OperandSpec::PartialProfile<DecodedOperandShape{50528378u, 526344u}, 0u, 1u, 1u>"
-      ]
-    ],
-    [
-      [
-        "op::OpLea_Impl<(OpsizeSpec)2, (RmOperandSpec)0>",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 56, 0u>"
-      ]
-    ],
-    [
-      [
-        "op::OpTest_EvGv",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 210, 0u>"
       ]
     ],
     [
@@ -7127,50 +4642,20 @@
     ],
     [
       [
-        "OpGroup2_EvIb_Baked16_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 235, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpMov_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620185u}, 0u>"
-      ],
-      [
-        "OpMov_EvGv_Baked32",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 217, 0u>"
       ]
     ],
     [
       [
         "baked_operand::OpSub_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{34668737u}, 0u>"
-      ],
-      [
-        "OpSub_EvGv_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 193, 0u>"
-      ],
-      [
-        "OpSub_GvEv_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 200, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpGroup2_EvIb",
-        "OperandSpec::Profile<DecodedOperandShape{51708138u, 0u, 0u, 16u}, 0u>"
       ]
     ],
     [
       [
         "baked_operand::OpGroup1_EvIb_Generic",
         "OperandSpec::Profile<DecodedOperandShape{51708096u, 0u, 0u, 16u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "op::OpMovzx_Word",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 248, 0u>"
       ]
     ],
     [
@@ -7187,18 +4672,6 @@
     ],
     [
       [
-        "op::OpSub_EvGv",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 8, 0u>"
-      ]
-    ],
-    [
-      [
-        "OpAdd_GvEv_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 56, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpGroup1_EvIb_Generic",
         "OperandSpec::Profile<DecodedOperandShape{51708130u, 0u, 0u, 240u}, 0u>"
       ]
@@ -7207,16 +4680,6 @@
       [
         "baked_operand::OpMov_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620213u}, 0u>"
-      ],
-      [
-        "OpMov_EvGv_Baked32",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 245, 0u>"
-      ]
-    ],
-    [
-      [
-        "op::OpAdd_EvGv",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 40, 0u>"
       ]
     ],
     [
@@ -7271,20 +4734,12 @@
       [
         "baked_operand::OpMov_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620171u}, 0u>"
-      ],
-      [
-        "OpMov_EvGv_Baked32",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 203, 0u>"
       ]
     ],
     [
       [
         "baked_operand::OpXor_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620187u}, 0u>"
-      ],
-      [
-        "OpXor_EvGv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 219, 0u>"
       ]
     ],
     [
@@ -7329,69 +4784,19 @@
     ],
     [
       [
-        "op::OpGroup1_EvIz_Generic",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 239, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpGroup1_EvIb_Generic",
-        "OperandSpec::Profile<DecodedOperandShape{51708098u, 0u, 0u, 16u}, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpMov_EbIb",
         "OperandSpec::PartialProfile<DecodedOperandShape{84344900u, 395280u}, 0u, 1u, 1u>"
       ]
     ],
     [
       [
-        "baked_operand::OpGroup1_EvIb_Generic",
-        "OperandSpec::Profile<DecodedOperandShape{50659581u, 0u, 0u, 20u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "OperandClone_063_SuperOpcode_4_054_OpPush_Reg__OpPush_Reg__OpPush_Reg__OpGroup1_EvIb_Generic"
+        "OperandClone_175_SuperOpcode_4_147_OpPush_Reg__OpPush_Reg__OpPush_Reg__OpGroup1_EvIb_Generic"
       ]
     ],
     [
       [
         "baked_operand::OpMov_EvIz",
         "OperandSpec::PartialProfile<DecodedOperandShape{134676548u, 395280u, 0u, 1u}, 0u, 1u, 1u>"
-      ],
-      [
-        "baked_operand::OpMov_EvIz",
-        "OperandSpec::PartialProfile<DecodedOperandShape{185008260u, 395280u, 0u, 1u}, 0u, 1u, 1u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpCmp_GvEv",
-        "OperandSpec::PartialProfile<DecodedOperandShape{100860053u, 395284u}, 0u, 1u, 1u>"
-      ],
-      [
-        "baked_operand::OpCmp_GvEv",
-        "OperandSpec::PartialProfile<DecodedOperandShape{50528341u, 395284u}, 0u, 1u, 1u>"
-      ]
-    ],
-    [
-      [
-        "op::OpMovsx_Byte",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 209, 0u>"
-      ]
-    ],
-    [
-      [
-        "op::OpFpu_DF",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 224, 0u>"
-      ]
-    ],
-    [
-      [
-        "OpAdd_EvGv_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 16, 0u>"
       ]
     ],
     [
@@ -7402,28 +4807,14 @@
     ],
     [
       [
-        "baked_operand::OpLea",
-        "OperandSpec::PartialProfile<DecodedOperandShape{117637132u, 533280u}, 0u, 1u, 1u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpMov_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620221u}, 0u>"
-      ],
-      [
-        "OpMov_EvGv_Baked32",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 253, 0u>"
       ]
     ],
     [
       [
         "baked_operand::OpMov_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620183u}, 0u>"
-      ],
-      [
-        "OpMov_EvGv_Baked32",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 215, 0u>"
       ]
     ],
     [
@@ -7444,12 +4835,6 @@
     ],
     [
       [
-        "OpSub_GvEv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 40, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpMov_Moffs_Load_Word",
         "OperandSpec::Profile<DecodedOperandShape{100937729u, 0u, 0u, 8u}, 0u>"
       ]
@@ -7458,12 +4843,6 @@
       [
         "baked_operand::OpMov_GvEv",
         "OperandSpec::Profile<DecodedOperandShape{50540553u, 886788u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMov_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{117637252u, 395280u, 1284u}, 0u>"
       ]
     ],
     [
@@ -7488,12 +4867,6 @@
       [
         "baked_operand::OpMov_EbGb",
         "OperandSpec::Profile<DecodedOperandShape{33751042u, 526344u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpGroup5_Ev_Generic",
-        "OperandSpec::Profile<DecodedOperandShape{51052624u, 526336u, 12u}, 0u>"
       ]
     ],
     [
@@ -7528,57 +4901,25 @@
     ],
     [
       [
-        "OperandClone_152_SuperOpcode_2_128_OpMov_EvGv__OpXor_EvGv"
+        "OperandClone_046_SuperOpcode_2_042_OpMov_EvGv__OpXor_EvGv"
       ]
     ],
     [
       [
         "baked_operand::OpCmp_EbGb",
         "OperandSpec::Profile<DecodedOperandShape{33620170u}, 0u>"
-      ],
-      [
-        "op::OpCmp_EbGb",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 202, 0u>"
       ]
     ],
     [
       [
         "baked_operand::OpSub_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620165u}, 0u>"
-      ],
-      [
-        "OpSub_EvGv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 197, 0u>"
       ]
     ],
     [
       [
         "baked_operand::OpMov_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620173u}, 0u>"
-      ],
-      [
-        "OpMov_EvGv_Baked32",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 205, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMov_EvGv",
-        "OperandSpec::Profile<DecodedOperandShape{50413770u}, 0u>"
-      ],
-      [
-        "OpMov_EvGv_Baked16",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 202, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMovzx_Byte",
-        "OperandSpec::PartialProfile<DecodedOperandShape{117637271u, 526364u}, 0u, 1u, 1u>"
-      ],
-      [
-        "baked_operand::OpMovzx_Byte",
-        "OperandSpec::PartialProfile<DecodedOperandShape{67305559u, 526364u}, 0u, 1u, 1u>"
       ]
     ],
     [
@@ -7604,10 +4945,6 @@
     [
       [
         "baked_operand::OpLea",
-        "OperandSpec::PartialProfile<DecodedOperandShape{117637300u, 395280u}, 0u, 1u, 1u>"
-      ],
-      [
-        "baked_operand::OpLea",
         "OperandSpec::PartialProfile<DecodedOperandShape{67305588u, 395280u}, 0u, 1u, 1u>"
       ]
     ],
@@ -7615,22 +4952,12 @@
       [
         "baked_operand::OpCmp_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620175u}, 0u>"
-      ],
-      [
-        "baked_operand::OpCmp_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{33620217u}, 0u>"
       ]
     ],
     [
       [
         "OpMov_GvEv_Baked32",
         "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 0, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMov_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{67305580u, 395280u, 88u}, 0u>"
       ]
     ],
     [
@@ -7671,26 +4998,8 @@
     ],
     [
       [
-        "baked_operand::OpLea",
-        "OperandSpec::Profile<DecodedOperandShape{50528325u, 395284u, 4294967264u}, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpGroup1_EvIz_Generic",
         "OperandSpec::PartialProfile<DecodedOperandShape{100991173u}, 0u, 1u, 2u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpGroup1_EvIb_Generic",
-        "OperandSpec::Profile<DecodedOperandShape{50659577u, 0u, 0u, 127u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpGroup1_EvIb_Generic",
-        "OperandSpec::PartialProfile<DecodedOperandShape{67567736u, 526336u, 8u}, 0u, 1u, 2u>"
       ]
     ],
     [
@@ -7703,48 +5012,24 @@
       [
         "baked_operand::OpSub_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620168u}, 0u>"
-      ],
-      [
-        "baked_operand::OpSub_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{33620161u}, 0u>"
-      ],
-      [
-        "OpSub_EvGv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 200, 0u>"
-      ],
-      [
-        "OpSub_GvEv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 193, 0u>"
       ]
     ],
     [
       [
         "baked_operand::OpSub_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620184u}, 0u>"
-      ],
-      [
-        "OpSub_EvGv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 216, 0u>"
       ]
     ],
     [
       [
         "baked_operand::OpAdd_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620213u}, 0u>"
-      ],
-      [
-        "OpAdd_EvGv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 245, 0u>"
       ]
     ],
     [
       [
         "baked_operand::OpCmp_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620174u}, 0u>"
-      ],
-      [
-        "baked_operand::OpCmp_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{33620209u}, 0u>"
       ]
     ],
     [
@@ -7762,25 +5047,7 @@
     [
       [
         "baked_operand::OpMov_EvGv",
-        "OperandSpec::Profile<DecodedOperandShape{67305556u, 395280u, 56u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMov_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{117649429u, 886816u, 120u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpGroup3_Eb_Generic",
-        "OperandSpec::Profile<DecodedOperandShape{50659526u, 0u, 0u, 8u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpGroup3_Eb_Generic",
-        "OperandSpec::Profile<DecodedOperandShape{50659521u, 0u, 0u, 1u}, 0u>"
       ]
     ],
     [
@@ -7793,10 +5060,6 @@
       [
         "baked_operand::OpMov_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620189u}, 0u>"
-      ],
-      [
-        "OpMov_EvGv_Baked32",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 221, 0u>"
       ]
     ],
     [
@@ -7835,11 +5098,6 @@
     ],
     [
       [
-        "OperandClone_032_SuperOpcode_4_027_OpGroup1_EvIb_Generic__OpPop_Reg__OpPop_Reg__OpPop_Reg"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpMov_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{50528330u, 526344u, 12u}, 0u>"
       ]
@@ -7866,12 +5124,6 @@
       [
         "op::OpBswap_Reg",
         "OperandSpec::SlotBound<1u, false>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpGroup1_EvIb_Generic",
-        "OperandSpec::Profile<DecodedOperandShape{50659562u, 0u, 0u, 3u}, 0u>"
       ]
     ],
     [
@@ -7918,18 +5170,6 @@
     ],
     [
       [
-        "baked_operand::OpGroup2_EvIb",
-        "OperandSpec::PartialProfile<DecodedOperandShape{50659562u}, 0u, 1u, 2u>"
-      ]
-    ],
-    [
-      [
-        "op::OpMovzx_Byte",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 196, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpGroup1_EvIb_Generic",
         "OperandSpec::Profile<DecodedOperandShape{50659520u, 0u, 0u, 7u}, 0u>"
       ]
@@ -7954,20 +5194,8 @@
     ],
     [
       [
-        "baked_operand::OpMov_EbGb",
-        "OperandSpec::Profile<DecodedOperandShape{50528325u, 395284u, 4294967263u}, 0u>"
-      ]
-    ],
-    [
-      [
         "op::OpMax_Sse",
         "OperandSpec::SlotBound<1u, false>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMov_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{50528349u, 395284u, 8u}, 0u>"
       ]
     ],
     [
@@ -7980,22 +5208,6 @@
       [
         "baked_operand::OpMov_GvEv",
         "OperandSpec::Profile<DecodedOperandShape{50528341u, 395284u, 4u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpGroup2_Ev1",
-        "OperandSpec::Profile<DecodedOperandShape{34668794u}, 0u>"
-      ],
-      [
-        "OpGroup2_Ev1_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 250, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpGroup1_EvIb_Generic",
-        "OperandSpec::Profile<DecodedOperandShape{51708098u, 0u, 0u, 32u}, 0u>"
       ]
     ],
     [
@@ -8026,10 +5238,6 @@
       [
         "baked_operand::OpMov_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620209u}, 0u>"
-      ],
-      [
-        "OpMov_EvGv_Baked32",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 241, 0u>"
       ]
     ],
     [
@@ -8052,38 +5260,12 @@
       [
         "baked_operand::OpMov_RegImm",
         "OperandSpec::Profile<DecodedOperandShape{84148225u}, 0u>"
-      ],
-      [
-        "OpXor_EvGv_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 201, 0u>"
-      ],
-      [
-        "OpXor_GvEv_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 201, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpLea",
-        "OperandSpec::Profile<DecodedOperandShape{50528337u, 526340u, 3u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "OpMov_EvGv_Baked16",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 40, 0u>"
       ]
     ],
     [
       [
         "baked_operand::OpGroup1_EvIb_Generic",
         "OperandSpec::PartialProfile<DecodedOperandShape{84344900u, 395280u, 0u, 1u}, 0u, 1u, 1u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpGroup1_EvIb_Generic",
-        "OperandSpec::Profile<DecodedOperandShape{51708135u, 0u, 0u, 7u}, 0u>"
       ]
     ],
     [
@@ -8130,24 +5312,8 @@
     ],
     [
       [
-        "baked_operand::OpGroup1_EvIb_Generic",
-        "OperandSpec::Profile<DecodedOperandShape{50659582u, 0u, 0u, 8u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpGroup1_EvIb_Generic",
-        "OperandSpec::Profile<DecodedOperandShape{50659522u, 0u, 0u, 32u}, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpAdd_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620206u}, 0u>"
-      ],
-      [
-        "OpAdd_EvGv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 238, 0u>"
       ]
     ],
     [
@@ -8176,7 +5342,7 @@
     ],
     [
       [
-        "OperandClone_075_SuperOpcode_2_066_OpGroup5_Ev_Generic__OpCall_Rel"
+        "OperandClone_056_SuperOpcode_2_051_OpGroup5_Ev_Generic__OpCall_Rel"
       ]
     ],
     [
@@ -8205,18 +5371,6 @@
     ],
     [
       [
-        "op::OpGroup1_EvIb_Generic",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 225, 0u>"
-      ]
-    ],
-    [
-      [
-        "op::OpAdd_EvGv",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 234, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpGroup1_EvIb_Generic",
         "OperandSpec::Profile<DecodedOperandShape{50659577u, 0u, 0u, 1u}, 0u>"
       ]
@@ -8241,24 +5395,8 @@
     ],
     [
       [
-        "op::OpCmp_EvGv",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 233, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpMov_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620200u}, 0u>"
-      ],
-      [
-        "OpMov_EvGv_Baked32",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 232, 0u>"
-      ]
-    ],
-    [
-      [
-        "OpSub_GvEv_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 8, 0u>"
       ]
     ],
     [
@@ -8279,12 +5417,6 @@
     ],
     [
       [
-        "OpAdd_EvGv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 24, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpCmov_B",
         "OperandSpec::Profile<DecodedOperandShape{50397386u}, 0u>"
       ]
@@ -8299,32 +5431,12 @@
       [
         "baked_operand::OpAdd_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620210u}, 0u>"
-      ],
-      [
-        "OpAdd_EvGv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 242, 0u>"
       ]
     ],
     [
       [
         "baked_operand::OpCmp_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620170u}, 0u>"
-      ],
-      [
-        "baked_operand::OpCmp_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{33620177u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "op::OpAdd_GvEv",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 16, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMov_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{50528381u, 395284u, 4294967268u}, 0u>"
       ]
     ],
     [
@@ -8347,12 +5459,6 @@
     ],
     [
       [
-        "baked_operand::OpMov_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{50528373u, 395284u, 4294967256u}, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpGroup5_Ev_Generic",
         "OperandSpec::Profile<DecodedOperandShape{67305588u, 395280u, 24u}, 0u>"
       ]
@@ -8365,34 +5471,14 @@
     ],
     [
       [
-        "baked_operand::OpGroup1_EvIb_Generic",
-        "OperandSpec::Profile<DecodedOperandShape{50659520u, 0u, 0u, 5u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpCmp_EvGv",
-        "OperandSpec::Profile<DecodedOperandShape{50528325u, 395284u, 4294967264u}, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpGroup2_Ev1",
         "OperandSpec::Profile<DecodedOperandShape{34668777u}, 0u>"
-      ],
-      [
-        "OpGroup2_Ev1_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 233, 0u>"
       ]
     ],
     [
       [
         "baked_operand::OpAdd_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{34668747u}, 0u>"
-      ],
-      [
-        "OpAdd_EvGv_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 203, 0u>"
       ]
     ],
     [
@@ -8415,24 +5501,6 @@
     ],
     [
       [
-        "baked_operand::OpMov_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{50528373u, 395284u, 4294967268u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMov_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{50528349u, 395284u, 4294967264u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMov_EvGv",
-        "OperandSpec::Profile<DecodedOperandShape{50528341u, 395284u, 4294967280u}, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpMov_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{50528341u, 395284u, 4294967252u}, 0u>"
       ]
@@ -8451,13 +5519,7 @@
     ],
     [
       [
-        "baked_operand::OpCmp_EvGv",
-        "OperandSpec::Profile<DecodedOperandShape{50528349u, 395284u, 4294967268u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "OperandClone_047_SuperOpcode_2_019_OpPush_Reg__OpPush_Reg"
+        "OperandClone_042_SuperOpcode_2_037_OpPush_Reg__OpPush_Reg"
       ]
     ],
     [
@@ -8467,15 +5529,7 @@
       ],
       [
         "baked_operand::OpMov_EvGv",
-        "OperandSpec::PartialProfile<DecodedOperandShape{117637253u, 395284u}, 0u, 1u, 1u>"
-      ],
-      [
-        "baked_operand::OpMov_EvGv",
         "OperandSpec::PartialProfile<DecodedOperandShape{50528325u, 395284u}, 0u, 1u, 1u>"
-      ],
-      [
-        "baked_operand::OpMov_EvGv",
-        "OperandSpec::PartialProfile<DecodedOperandShape{67305541u, 395284u}, 0u, 1u, 1u>"
       ]
     ],
     [
@@ -8486,56 +5540,14 @@
     ],
     [
       [
-        "OpAnd_GvEv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 8, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMovzx_Byte",
-        "OperandSpec::PartialProfile<DecodedOperandShape{84082764u, 524572u}, 0u, 1u, 1u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMov_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{50528349u, 395284u, 4294967260u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMov_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{50528343u, 526364u, 40u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMov_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{50528333u, 395284u, 4294967276u}, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpMov_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{67305588u, 395280u, 8u}, 0u>"
       ]
     ],
     [
       [
-        "baked_operand::OpMov_EvGv",
-        "OperandSpec::Profile<DecodedOperandShape{50528325u, 395284u, 4294967272u}, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpLea",
         "OperandSpec::Profile<DecodedOperandShape{50528345u, 526340u, 1u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "OpAdd_EvGv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 56, 0u>"
       ]
     ],
     [
@@ -8554,12 +5566,6 @@
       [
         "baked_operand::OpMov_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{50528325u, 395284u, 4294967208u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpLea",
-        "OperandSpec::Profile<DecodedOperandShape{50528375u, 526364u, 4294967295u}, 0u>"
       ]
     ],
     [
@@ -8588,24 +5594,8 @@
     ],
     [
       [
-        "baked_operand::OpFpu_DC",
-        "OperandSpec::PartialProfile<DecodedOperandShape{100860035u, 526348u}, 0u, 1u, 1u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpAdd_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620162u}, 0u>"
-      ],
-      [
-        "OpAdd_EvGv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 194, 0u>"
-      ]
-    ],
-    [
-      [
-        "op::OpFpu_D8",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 202, 0u>"
       ]
     ],
     [
@@ -8630,10 +5620,6 @@
       [
         "baked_operand::OpFpu_D9",
         "OperandSpec::Profile<DecodedOperandShape{33620170u}, 0u>"
-      ],
-      [
-        "op::OpFpu_D9",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 202, 0u>"
       ]
     ],
     [
@@ -8648,12 +5634,6 @@
     ],
     [
       [
-        "op::OpFpu_D9",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 225, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpCmp_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620191u}, 0u>"
       ]
@@ -8662,16 +5642,6 @@
       [
         "baked_operand::OpAdd_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620218u}, 0u>"
-      ],
-      [
-        "OpAdd_EvGv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 250, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpMov_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{50528268u, 533248u}, 0u>"
       ]
     ],
     [
@@ -8690,10 +5660,6 @@
       [
         "baked_operand::OpMov_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620210u}, 0u>"
-      ],
-      [
-        "OpMov_EvGv_Baked32",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 242, 0u>"
       ]
     ],
     [
@@ -8710,24 +5676,8 @@
     ],
     [
       [
-        "baked_operand::OpCmp_EvGv",
-        "OperandSpec::PartialProfile<DecodedOperandShape{100860061u, 395284u}, 0u, 1u, 1u>"
-      ],
-      [
-        "baked_operand::OpCmp_EvGv",
-        "OperandSpec::PartialProfile<DecodedOperandShape{50528349u, 395284u}, 0u, 1u, 1u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpGroup1_EvIb_Generic",
         "OperandSpec::Profile<DecodedOperandShape{50659525u, 0u, 0u, 1u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpAnd_EaxImm",
-        "OperandSpec::Profile<DecodedOperandShape{85196805u, 0u, 0u, 2147483647u}, 0u>"
       ]
     ],
     [
@@ -8737,10 +5687,6 @@
       ]
     ],
     [
-      [
-        "baked_operand::OpCmp_EvGv",
-        "OperandSpec::PartialProfile<DecodedOperandShape{100860062u, 526360u}, 0u, 1u, 1u>"
-      ],
       [
         "baked_operand::OpCmp_EvGv",
         "OperandSpec::PartialProfile<DecodedOperandShape{50528350u, 526360u}, 0u, 1u, 1u>"
@@ -8756,12 +5702,6 @@
       [
         "baked_operand::OpMov_GvEv",
         "OperandSpec::Profile<DecodedOperandShape{67305540u, 395280u, 92u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpLea",
-        "OperandSpec::Profile<DecodedOperandShape{50528327u, 526364u, 40u}, 0u>"
       ]
     ],
     [
@@ -8786,12 +5726,6 @@
       [
         "op::OpPmulhw_Sse",
         "OperandSpec::SlotBound<1u, false>"
-      ]
-    ],
-    [
-      [
-        "op::OpCmp_EvGv",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 24, 0u>"
       ]
     ],
     [
@@ -8828,10 +5762,6 @@
       [
         "baked_operand::OpXor_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620201u}, 0u>"
-      ],
-      [
-        "OpXor_EvGv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 233, 0u>"
       ]
     ],
     [
@@ -8848,22 +5778,12 @@
       [
         "baked_operand::OpCmp_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620222u}, 0u>"
-      ],
-      [
-        "baked_operand::OpCmp_GvEv",
-        "OperandSpec::Profile<DecodedOperandShape{33620215u}, 0u>"
       ]
     ],
     [
       [
         "op::OpGroup2_Ev1",
         "OperandSpec::SlotBound<1u, false>"
-      ]
-    ],
-    [
-      [
-        "op::OpGroup1_EbIb_Generic",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 203, 0u>"
       ]
     ],
     [
@@ -8887,12 +5807,6 @@
     [
       [
         "baked_operand::OpLea",
-        "OperandSpec::Profile<DecodedOperandShape{50528337u, 526340u, 2u}, 0u>"
-      ]
-    ],
-    [
-      [
-        "baked_operand::OpLea",
         "OperandSpec::Profile<DecodedOperandShape{50528327u, 526364u, 4u}, 0u>"
       ]
     ],
@@ -8904,28 +5818,12 @@
     ],
     [
       [
-        "baked_operand::OpGroup1_EvIb_Generic",
-        "OperandSpec::PartialProfile<DecodedOperandShape{67453177u}, 0u, 1u, 2u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpMov_EvGv",
         "OperandSpec::PartialProfile<DecodedOperandShape{100860053u, 395284u}, 0u, 1u, 1u>"
       ],
       [
         "baked_operand::OpMov_EvGv",
         "OperandSpec::PartialProfile<DecodedOperandShape{50528341u, 395284u}, 0u, 1u, 1u>"
-      ],
-      [
-        "baked_operand::OpMov_EvGv",
-        "OperandSpec::PartialProfile<DecodedOperandShape{67305557u, 395284u}, 0u, 1u, 1u>"
-      ]
-    ],
-    [
-      [
-        "OpAdd_GvEv_Baked16_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 16, 0u>"
       ]
     ],
     [
@@ -8956,22 +5854,12 @@
       [
         "baked_operand::OpAdd_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{33620176u}, 0u>"
-      ],
-      [
-        "OpAdd_EvGv_Baked32_Live",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 208, 0u>"
       ]
     ],
     [
       [
         "op::OpXor_EbGb",
         "OperandSpec::SlotBound<1u, false>"
-      ]
-    ],
-    [
-      [
-        "op::OpCmp_EvGv",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 195, 0u>"
       ]
     ],
     [
@@ -8994,37 +5882,19 @@
     ],
     [
       [
-        "baked_operand::OpGroup5_Ev_Generic",
-        "OperandSpec::Profile<DecodedOperandShape{50528375u, 526364u, 20u}, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpGroup1_EvIb_Generic",
         "OperandSpec::Profile<DecodedOperandShape{50659564u, 0u, 0u, 20u}, 0u>"
       ]
     ],
     [
       [
-        "OperandClone_052_SuperOpcode_3_044_OpPush_Reg__OpPush_Reg__OpCall_Rel"
+        "OperandClone_043_SuperOpcode_3_039_OpPush_Reg__OpPush_Reg__OpCall_Rel"
       ]
     ],
     [
       [
         "baked_operand::OpXor_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{34668790u}, 0u>"
-      ],
-      [
-        "baked_operand::OpMov_RegImm",
-        "OperandSpec::Profile<DecodedOperandShape{84148230u}, 0u>"
-      ],
-      [
-        "OpXor_EvGv_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 246, 0u>"
-      ],
-      [
-        "OpXor_GvEv_Baked32_Dead",
-        "OperandSpec::WithModRM<OperandSpec::SlotBound<1u, false>, 246, 0u>"
       ]
     ],
     [
@@ -9047,12 +5917,6 @@
     ],
     [
       [
-        "baked_operand::OpGroup3_Eb_Generic",
-        "OperandSpec::Profile<DecodedOperandShape{50659522u, 0u, 0u, 7u}, 0u>"
-      ]
-    ],
-    [
-      [
         "baked_operand::OpMov_EvGv",
         "OperandSpec::Profile<DecodedOperandShape{67305540u, 395280u, 56u}, 0u>"
       ]
@@ -9063,5 +5927,8 @@
         "OperandSpec::Profile<DecodedOperandShape{50659524u, 0u, 0u, 108u}, 0u>"
       ]
     ]
-  ]
+  ],
+  "fusionPlanSha256": "e235a7b32c73f19f9e6c7566a1eb1dc9f2da02a4c277b45a5b8a1039d922529a",
+  "scalarPlanSha256": "ffbc29b14db610d0374f96e26408f464d72de64538396576803e544277726ecb",
+  "modrmPlanSha256": "5728a945f3263d7ee5a688fba2fb77a7921112b4c2d541951bf45e2b663689c9"
 }

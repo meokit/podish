@@ -1,18 +1,25 @@
-set(FIBERCPU_BAKING_PRESET "3.5m" CACHE STRING "Native instruction baking preset (custom, 1.75m, 3.5m, 10m)")
-set_property(CACHE FIBERCPU_BAKING_PRESET PROPERTY STRINGS custom 1.75m 3.5m 10m)
+set(FIBERCPU_BAKING_PRESET "3m" CACHE STRING "Native instruction baking preset (custom, 1.5m, 3m, 10m)")
+set_property(CACHE FIBERCPU_BAKING_PRESET PROPERTY STRINGS custom 1.5m 3m 10m)
 string(TOLOWER "${FIBERCPU_BAKING_PRESET}" FIBERCPU_BAKING_PRESET)
+if(FIBERCPU_BAKING_PRESET STREQUAL "1.75m")
+    set(FIBERCPU_BAKING_PRESET "1.5m")
+elseif(FIBERCPU_BAKING_PRESET STREQUAL "3.5m")
+    set(FIBERCPU_BAKING_PRESET "3m")
+endif()
 
-set(_default_baking_directory "${CMAKE_CURRENT_SOURCE_DIR}/presets/3.5m")
+set(_default_baking_directory "${CMAKE_CURRENT_SOURCE_DIR}/presets/3m")
 
 option(FIBERCPU_STATIC_SPECIALIZATION "Build profile-baked native instruction variants" ON)
 option(FIBERCPU_ENABLE_SUPEROPCODES "Enable generated SuperOpcode matching and handlers" ON)
 set(FIBERCPU_MODRM_PLAN_FILE "${_default_baking_directory}/modrm.json" CACHE FILEPATH "Profile-baked ModRM specialization table")
 set(FIBERCPU_STATIC_OPERAND_PLAN_FILE "${_default_baking_directory}/scalar.json" CACHE FILEPATH "Profile-baked scalar operand plan")
 # Refresh the two previous stock defaults in existing build directories.
-if(FIBERCPU_MODRM_PLAN_FILE STREQUAL "${CMAKE_CURRENT_SOURCE_DIR}/src/generated/modrm-specializations.json")
+if(FIBERCPU_MODRM_PLAN_FILE STREQUAL "${CMAKE_CURRENT_SOURCE_DIR}/src/generated/modrm-specializations.json" OR
+   FIBERCPU_MODRM_PLAN_FILE STREQUAL "${CMAKE_CURRENT_SOURCE_DIR}/presets/3.5m/modrm.json")
     set(FIBERCPU_MODRM_PLAN_FILE "${_default_baking_directory}/modrm.json" CACHE FILEPATH "Profile-baked ModRM specialization table" FORCE)
 endif()
-if(FIBERCPU_STATIC_OPERAND_PLAN_FILE STREQUAL "${CMAKE_CURRENT_SOURCE_DIR}/../benchmark/optimization/manifests/baked-scalar-operands-v3.json")
+if(FIBERCPU_STATIC_OPERAND_PLAN_FILE STREQUAL "${CMAKE_CURRENT_SOURCE_DIR}/../benchmark/optimization/manifests/baked-scalar-operands-v3.json" OR
+   FIBERCPU_STATIC_OPERAND_PLAN_FILE STREQUAL "${CMAKE_CURRENT_SOURCE_DIR}/presets/3.5m/scalar.json")
     set(FIBERCPU_STATIC_OPERAND_PLAN_FILE "${_default_baking_directory}/scalar.json" CACHE FILEPATH "Profile-baked scalar operand plan" FORCE)
 endif()
 set(FIBERCPU_FUSION_STRATEGY "AUTO" CACHE STRING "Baked fusion set (AUTO, BASE, EXTENDED)")
@@ -21,16 +28,16 @@ set(FIBERCPU_OPERAND_BUDGET "768" CACHE STRING "Maximum baked fusion operand sha
 set(FIBERCPU_OPERAND_PLAN_FILE "" CACHE FILEPATH "Override the baked fusion operand plan")
 set(FIBERCPU_GENERATED_SUPEROPCODES_FILE "" CACHE FILEPATH "Explicit generated superopcode source (empty follows strategy)")
 
-set(FIBERCPU_BAKING_TEXT_HINT 0)
+set(FIBERCPU_BAKING_GROWTH_PER_GUEST 0)
 if(NOT FIBERCPU_BAKING_PRESET STREQUAL "custom")
-    if(FIBERCPU_BAKING_PRESET STREQUAL "1.75m")
-        math(EXPR FIBERCPU_BAKING_TEXT_HINT "7 * 256 * 1024")
-    elseif(FIBERCPU_BAKING_PRESET STREQUAL "3.5m")
-        math(EXPR FIBERCPU_BAKING_TEXT_HINT "7 * 512 * 1024")
+    if(FIBERCPU_BAKING_PRESET STREQUAL "1.5m")
+        math(EXPR FIBERCPU_BAKING_GROWTH_PER_GUEST "3 * 512 * 1024")
+    elseif(FIBERCPU_BAKING_PRESET STREQUAL "3m")
+        math(EXPR FIBERCPU_BAKING_GROWTH_PER_GUEST "3 * 1024 * 1024")
     elseif(FIBERCPU_BAKING_PRESET STREQUAL "10m")
-        math(EXPR FIBERCPU_BAKING_TEXT_HINT "10 * 1024 * 1024")
+        math(EXPR FIBERCPU_BAKING_GROWTH_PER_GUEST "10 * 1024 * 1024")
     else()
-        message(FATAL_ERROR "Unknown FIBERCPU_BAKING_PRESET '${FIBERCPU_BAKING_PRESET}'. Choose custom, 1.75m, 3.5m or 10m.")
+        message(FATAL_ERROR "Unknown FIBERCPU_BAKING_PRESET '${FIBERCPU_BAKING_PRESET}'. Choose custom, 1.5m, 3m or 10m.")
     endif()
 
     # Use regular variables so switching back to custom restores the cached choices.
@@ -51,12 +58,16 @@ if(NOT FIBERCPU_BAKING_PRESET STREQUAL "custom")
     set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${FIBERCPU_OPERAND_PLAN_FILE}")
 endif()
 
-if(FIBERCPU_BAKING_TEXT_HINT)
-    message(STATUS "libfibercpu baking preset: ${FIBERCPU_BAKING_PRESET} (macOS ARM64 text hint: ${FIBERCPU_BAKING_TEXT_HINT} bytes)")
+set(FIBERCPU_BAKING_TEXT_GROWTH ${FIBERCPU_BAKING_GROWTH_PER_GUEST})
+if(FIBERCPU_GUEST_I386 AND FIBERCPU_GUEST_AARCH64)
+    math(EXPR FIBERCPU_BAKING_TEXT_GROWTH "2 * ${FIBERCPU_BAKING_TEXT_GROWTH}")
+endif()
+if(FIBERCPU_BAKING_TEXT_GROWTH)
+    message(STATUS "libfibercpu baking preset: ${FIBERCPU_BAKING_PRESET} (native text growth budget: ${FIBERCPU_BAKING_TEXT_GROWTH} bytes)")
 endif()
 
 function(fibercpu_report_baking_size target)
-    if(NOT FIBERCPU_BAKING_TEXT_HINT OR FIBERCPU_BUILD_STATIC OR EMSCRIPTEN)
+    if(NOT FIBERCPU_BAKING_TEXT_GROWTH OR FIBERCPU_BUILD_STATIC OR EMSCRIPTEN)
         return()
     endif()
 
@@ -80,7 +91,7 @@ function(fibercpu_report_baking_size target)
     set_property(TARGET "${target}" APPEND PROPERTY LINK_DEPENDS "${checker}")
     add_custom_command(TARGET "${target}" POST_BUILD
         COMMAND "${Python3_EXECUTABLE}" "${checker}" ${size_args}
-            --hint "${FIBERCPU_BAKING_TEXT_HINT}" "$<TARGET_FILE:${target}>"
+            --growth-hint "${FIBERCPU_BAKING_TEXT_GROWTH}" "$<TARGET_FILE:${target}>"
         COMMENT "Reporting the ${FIBERCPU_BAKING_PRESET} native text size"
         VERBATIM)
 endfunction()

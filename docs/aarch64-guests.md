@@ -85,4 +85,4 @@ On an Apple M5 Max with macOS 27.2.1, the dual-guest Release CLI built from comm
 | i386 | 3556.2, 3542.5, 3557.7 | 3556.2 |
 | AArch64 | 3515.1, 3560.0, 3522.4 | 3522.4 |
 
-AArch64 reached 99.0% of i386 throughput in this workload. All six runs passed CoreMark's time check and matched the four CRCs (`e714`, `1fd7`, `8e3a`, `bd59`). CoreMark is also one of the inputs to the stock AArch64 training profile.
+AArch64 reached 99.0% of i386 throughput in this workload. All six runs passed CoreMark's time check and matched the four CRCs (`e714`, `1fd7`, `8e3a`, `bd59`).

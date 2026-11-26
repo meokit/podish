@@ -12,10 +12,10 @@
         <NativeBuildDir Condition="'$(IsBrowserWasm)' == 'true'">$(FibercpuWasmNativeBuildDir)</NativeBuildDir>
         <NativeBuildDir Condition="'$(IsBrowserWasm)' != 'true' And '$(RuntimeIdentifier)' != ''">build_native/$(RuntimeIdentifier)</NativeBuildDir>
         <NativeBuildDir Condition="'$(IsBrowserWasm)' != 'true' And '$(RuntimeIdentifier)' == ''">build_native/host</NativeBuildDir>
-        <NativeBuildDir Condition="'$(IsBrowserWasm)' != 'true' And '$(FibercpuIsolatedPreset)' == 'true'">$(NativeBuildDir)/$(FibercpuBakingPreset)</NativeBuildDir>
+        <NativeBuildDir Condition="'$(IsBrowserWasm)' != 'true' And '$(FibercpuIsolatedPreset)' == 'true'">$(NativeBuildDir)/$(FibercpuResolvedBakingPreset)</NativeBuildDir>
         <NativeBuildDir Condition="'$(IsBrowserWasm)' != 'true'">$(NativeBuildDir)$(FibercpuGuestSuffix)</NativeBuildDir>
-        <NativeBakingPreset>$(FibercpuBakingPreset)</NativeBakingPreset>
-        <NativeBakingPreset Condition="'$(IsBrowserWasm)' == 'true'">$(FibercpuWasmBakingPreset)</NativeBakingPreset>
+        <NativeBakingPreset>$(FibercpuResolvedBakingPreset)</NativeBakingPreset>
+        <NativeBakingPreset Condition="'$(IsBrowserWasm)' == 'true'">$(FibercpuResolvedWasmBakingPreset)</NativeBakingPreset>
         <FusionStrategy Condition="'$(FusionStrategy)' == ''">AUTO</FusionStrategy>
         <OperandBudget Condition="'$(OperandBudget)' == ''">AUTO</OperandBudget>
         <PinSpecialization Condition="'$(PinSpecialization)' == ''">AUTO</PinSpecialization>
@@ -113,8 +113,8 @@
 
     <Target Name="PrepareNativeOptions" BeforeTargets="BuildNativeLib"
             Condition="'$(DesignTimeBuild)' != 'true' And '$(FiberishSkipNativeBuild)' != 'true'">
-        <Error Condition="'$(NativeBakingPreset)' != 'custom' And '$(NativeBakingPreset)' != '1.75m' And '$(NativeBakingPreset)' != '3.5m' And '$(NativeBakingPreset)' != '10m'"
-               Text="Unknown FibercpuBakingPreset '$(NativeBakingPreset)'. Choose custom, 1.75m, 3.5m or 10m." />
+        <Error Condition="'$(NativeBakingPreset)' != 'custom' And '$(NativeBakingPreset)' != '1.5m' And '$(NativeBakingPreset)' != '3m' And '$(NativeBakingPreset)' != '10m'"
+               Text="Unknown FibercpuBakingPreset '$(NativeBakingPreset)'. Choose custom, 1.5m, 3m or 10m." />
         <MakeDir Directories="$(SuperOpcodeGenerationDir)" />
         <WriteLinesToFile File="$(SuperOpcodeGenerationDir)/native-options.txt"
             Lines="i386=$(FiberGuestI386);aarch64=$(FiberGuestAArch64);aarch64_plan=$(AArch64OperandPlanFile);aarch64_pin=$(AArch64PinRegister);baking_preset=$(NativeBakingPreset);fusion=$(FusionStrategy);budget=$(OperandBudget);pin=$(GprPin);pins=$(GprPinRegisters);writeback=$(GprWriteBack);coverage=$(PinSpecialization);plan=$(OperandPlanFile);static=$(StaticInstructionSpecialization);dynamic=$(DynamicInstructionSpecialization);dynamic_plan=$(DynamicOperandPlanFile);llvm=$(LlvmBlockJit);llvm_dir=$(LlvmConfigDir);native_clang=$(NativeClangDir);super=$(EnableSuperOpcodes);source=$(SuperOpcodeSource);handler=$(EnableHandlerProfile);block=$(EnableBlockProfile);sequence=$(EnableSequenceProfile);wasm_hot_dispatch=$(WasmHotDispatchHandlers);wasm_hot_plan=$(WasmHotDispatchPlan)"

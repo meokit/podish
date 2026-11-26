@@ -7,7 +7,7 @@ slots so execution can resume at the instruction that faulted.
 
 ## Build inputs
 
-CMake uses the trained `3.5m` preset by default. Each preset supplies a set of
+CMake uses the trained `3m` preset by default. Each preset supplies a set of
 fusion recipes and their exact operand shapes. Select
 `FIBERCPU_BAKING_PRESET=custom` to change the individual baking options.
 In a custom build, `FIBERCPU_FUSION_STRATEGY=BASE` selects the legacy
@@ -17,8 +17,8 @@ bindings.
 
 | Default input | Role |
 | --- | --- |
-| [Sequence manifest](../libfibercpu/presets/3.5m/recipes.json) | Orders candidates by their numeric, catalog-assigned operation IDs. |
-| [Fusion operand plan](../libfibercpu/presets/3.5m/fusion-operands.json) | Lists the exact operand shapes to compile for those sequences. |
+| [Sequence manifest](../libfibercpu/presets/3m/recipes.json) | Orders candidates by their numeric, catalog-assigned operation IDs. |
+| [Fusion operand plan](../libfibercpu/presets/3m/fusion-operands.json) | Lists the exact operand shapes to compile for those sequences. |
 | [Instruction catalog](../libfibercpu/src/instruction_catalog.json) | Defines instruction identities, kernel bindings, and eligible family aliases. |
 
 `Podish.PerfTools gen-superopcodes` reads the version 3 manifest and emits

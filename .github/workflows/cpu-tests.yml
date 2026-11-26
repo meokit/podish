@@ -45,7 +45,7 @@ jobs:
       - name: Verify pinned offline corpus
         run: dotnet run --project tests/cpu/tools/FexImport -c Release -- verify
       - name: Run deterministic boundaries and imported regressions
-        run: dotnet test Fiberish.X86.Tests/Fiberish.X86.Tests.csproj -c Release -p:FibercpuBakingPreset=${{ matrix.superopcodes == 'false' && 'custom' || '3.5m' }} -p:EnableSuperOpcodes=${{ matrix.superopcodes }} --filter "Category!=Exhaustive" --logger "trx;LogFileName=cpu.trx" --blame-hang-timeout 3m
+        run: dotnet test Fiberish.X86.Tests/Fiberish.X86.Tests.csproj -c Release -p:FibercpuBakingPreset=${{ matrix.superopcodes == 'false' && 'custom' || '3m' }} -p:EnableSuperOpcodes=${{ matrix.superopcodes }} --filter "Category!=Exhaustive" --logger "trx;LogFileName=cpu.trx" --blame-hang-timeout 3m
       - name: Run exhaustive byte arithmetic
         if: ${{ !cancelled() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') }}
         run: dotnet test Fiberish.X86.Tests/Fiberish.X86.Tests.csproj -c Release --no-build --filter "Category=Exhaustive" --logger "trx;LogFileName=cpu-exhaustive.trx" --blame-hang-timeout 5m
