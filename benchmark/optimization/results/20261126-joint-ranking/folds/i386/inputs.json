@@ -1,0 +1,28 @@
+{
+  "config_sha256": "4e6312efe276221bb865d80d8b9cff5a2c08ed21a33c7aaa29adcfee6886d012",
+  "profiles": {
+    "gzip": "bb70e017880015edb26d623800039ba126adc580284b2e76b14e85ea6f09b045",
+    "gunzip": "d9e3e0213054c7ca3080ccb6e3a6fd3aff3c9dda9c68084d5b2b5cdc9631d51b",
+    "sed": "449bba821d5fa0b1a549d7bfb08e63f446ed0200ee2e0c7808260d6dd845845e",
+    "sort": "3cd56655e31c3a84ac7fd2da7151a2c8e67017b2aef101c717716efcba613742",
+    "sha256": "ed73c2c58a9ee338c3f2daf12b1000476aa9360046966dcf12e78dd1bd862990",
+    "tar": "e3a848c7a326e3e6674bf5466d0dd16aa66436c20d509b41ddfea7c8a2cee5bc",
+    "du": "a29f549e77b3d14dbabcd41417c29c522c3f502a50ae86f99dd33ddb71dffd22",
+    "ls": "8630c72068581a40f9acfb4f4be5645d642fad7dbbbd010148c2e65c581b9b59"
+  },
+  "families": [
+    "coreutils",
+    "gzip",
+    "sed",
+    "tar"
+  ],
+  "excluded": [
+    "grep",
+    "node"
+  ],
+  "tiers_mib": [
+    1.5,
+    3,
+    10
+  ]
+}

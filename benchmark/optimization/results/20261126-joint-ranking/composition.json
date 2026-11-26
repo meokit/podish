@@ -1,0 +1,1733 @@
+{
+  "methodology": {
+    "cut": "estimated uses the ranking file cut; verified_exceptions gives any materialized correction when the search summary exists",
+    "shares": "row shares divide by selected symbols; length >=5 defines long fusion. Width-4 histogram is available separately",
+    "raw_gains": "same original dispatch-unit credits replayed for B/C on the four training families after priority resolution and overlap. Equal family weight, no transfer multiplier",
+    "one_family": "at predicted native dispatch sites, credit is earned in exactly one training family. Row denominator is all selected symbols with a winning site. Gain denominator is all credited dispatch units over all families",
+    "contexts": "at most 32 unique pairs of neighboring exact candidate IDs or sentinels per candidate; operand shapes count distinct exact candidate IDs for the first member, capped at 32"
+  },
+  "guests": {
+    "i386": {
+      "pool_sha256": "8640065771f702415a66a57508bd3e0203c15d2379a84ce478c952df73846c4c",
+      "pool": {
+        "candidates": 18378,
+        "training_families": [
+          "coreutils",
+          "gzip",
+          "sed",
+          "tar"
+        ],
+        "fraction_in_candidate_bearing_layouts_seen_in_all_families": 0.2794743,
+        "candidates_by_observed_families": {
+          "1": 7686,
+          "2": 932,
+          "3": 832,
+          "4": 8928
+        },
+        "weighted_exact_signature_fraction_in_candidate_bearing_layouts": 0.9997828,
+        "weighted_empty_position_fraction_in_candidate_bearing_layouts": 1.46e-05
+      },
+      "methods": {
+        "B": {
+          "ranking_sha256": "553058f1e4004caa8dd257873c10290713b815a7734acd80dbae9b623ce4f4a5",
+          "estimated": {
+            "1.5": {
+              "cut": 9581,
+              "fusion_rows": 927,
+              "fusion_widths": {
+                "2": 234,
+                "3": 222,
+                "4": 471
+              },
+              "scalar_exact_row_share": 0.8360296,
+              "dynamic_scalar_row_share": 0.0640852,
+              "raw_gain_share_per_fusion_width": {
+                "2": 0.0875312,
+                "3": 0.1475266,
+                "4": 0.6228839
+              },
+              "long_fusion_raw_gain_share": 0.0,
+              "long_fusion_row_share": 0.0,
+              "mean_fusion_length": 3.2556634,
+              "raw_gain_by_family": {
+                "coreutils": 0.5254023507525795,
+                "gzip": 0.6759202644502826,
+                "sed": 0.6364217211514488,
+                "tar": 0.61055861387182
+              },
+              "raw_gain_mean": 0.6120757375565327,
+              "largest_family": "gzip",
+              "largest_family_share": 0.2760771,
+              "realized_rows": 9382,
+              "one_family_only_rows": 3075,
+              "one_family_only_row_share": 0.3277553,
+              "one_family_only_gain_share": 0.5521228,
+              "median_contexts": 1,
+              "median_dynamic_exact_shapes": 8.0,
+              "by_kind": {
+                "dynamic-both": {
+                  "rows": 25,
+                  "cost_bytes": 7042,
+                  "raw_gain_share": 1.15e-05
+                },
+                "dynamic-disp": {
+                  "rows": 450,
+                  "cost_bytes": 80886,
+                  "raw_gain_share": 0.0003574
+                },
+                "dynamic-imm": {
+                  "rows": 139,
+                  "cost_bytes": 12217,
+                  "raw_gain_share": 0.000139
+                },
+                "exact": {
+                  "rows": 8010,
+                  "cost_bytes": 990463,
+                  "raw_gain_share": 0.141513
+                },
+                "fusion": {
+                  "rows": 927,
+                  "cost_bytes": 456549,
+                  "raw_gain_share": 0.8579417
+                },
+                "modrm": {
+                  "rows": 22,
+                  "cost_bytes": 17579,
+                  "raw_gain_share": 2.63e-05
+                },
+                "policies": {
+                  "rows": 8,
+                  "cost_bytes": 2913,
+                  "raw_gain_share": 1.12e-05
+                }
+              }
+            },
+            "3": {
+              "cut": 15510,
+              "fusion_rows": 980,
+              "fusion_widths": {
+                "2": 262,
+                "3": 241,
+                "4": 477
+              },
+              "scalar_exact_row_share": 0.8897485,
+              "dynamic_scalar_row_share": 0.0439716,
+              "raw_gain_share_per_fusion_width": {
+                "2": 0.0877404,
+                "3": 0.1487811,
+                "4": 0.6222545
+              },
+              "long_fusion_raw_gain_share": 0.0,
+              "long_fusion_row_share": 0.0,
+              "mean_fusion_length": 3.2193878,
+              "raw_gain_by_family": {
+                "coreutils": 0.5260891352071383,
+                "gzip": 0.6764749422491686,
+                "sed": 0.6370672520374467,
+                "tar": 0.611081291133587
+              },
+              "raw_gain_mean": 0.6126781551568352,
+              "largest_family": "gzip",
+              "largest_family_share": 0.2760319,
+              "realized_rows": 14694,
+              "one_family_only_rows": 6800,
+              "one_family_only_row_share": 0.4627739,
+              "one_family_only_gain_share": 0.5530242,
+              "median_contexts": 1.0,
+              "median_dynamic_exact_shapes": 8.0,
+              "by_kind": {
+                "dynamic-both": {
+                  "rows": 27,
+                  "cost_bytes": 7366,
+                  "raw_gain_share": 0.0
+                },
+                "dynamic-disp": {
+                  "rows": 510,
+                  "cost_bytes": 96753,
+                  "raw_gain_share": 0.0
+                },
+                "dynamic-imm": {
+                  "rows": 145,
+                  "cost_bytes": 14728,
+                  "raw_gain_share": 0.0
+                },
+                "exact": {
+                  "rows": 13800,
+                  "cost_bytes": 2066868,
+                  "raw_gain_share": 0.1412037
+                },
+                "fusion": {
+                  "rows": 980,
+                  "cost_bytes": 480907,
+                  "raw_gain_share": 0.8587759
+                },
+                "modrm": {
+                  "rows": 39,
+                  "cost_bytes": 42891,
+                  "raw_gain_share": 2.03e-05
+                },
+                "policies": {
+                  "rows": 9,
+                  "cost_bytes": 3634,
+                  "raw_gain_share": 0.0
+                }
+              }
+            },
+            "10": {
+              "cut": 15510,
+              "fusion_rows": 980,
+              "fusion_widths": {
+                "2": 262,
+                "3": 241,
+                "4": 477
+              },
+              "scalar_exact_row_share": 0.8897485,
+              "dynamic_scalar_row_share": 0.0439716,
+              "raw_gain_share_per_fusion_width": {
+                "2": 0.0877404,
+                "3": 0.1487811,
+                "4": 0.6222545
+              },
+              "long_fusion_raw_gain_share": 0.0,
+              "long_fusion_row_share": 0.0,
+              "mean_fusion_length": 3.2193878,
+              "raw_gain_by_family": {
+                "coreutils": 0.5260891352071383,
+                "gzip": 0.6764749422491686,
+                "sed": 0.6370672520374467,
+                "tar": 0.611081291133587
+              },
+              "raw_gain_mean": 0.6126781551568352,
+              "largest_family": "gzip",
+              "largest_family_share": 0.2760319,
+              "realized_rows": 14694,
+              "one_family_only_rows": 6800,
+              "one_family_only_row_share": 0.4627739,
+              "one_family_only_gain_share": 0.5530242,
+              "median_contexts": 1.0,
+              "median_dynamic_exact_shapes": 8.0,
+              "by_kind": {
+                "dynamic-both": {
+                  "rows": 27,
+                  "cost_bytes": 7366,
+                  "raw_gain_share": 0.0
+                },
+                "dynamic-disp": {
+                  "rows": 510,
+                  "cost_bytes": 96753,
+                  "raw_gain_share": 0.0
+                },
+                "dynamic-imm": {
+                  "rows": 145,
+                  "cost_bytes": 14728,
+                  "raw_gain_share": 0.0
+                },
+                "exact": {
+                  "rows": 13800,
+                  "cost_bytes": 2066868,
+                  "raw_gain_share": 0.1412037
+                },
+                "fusion": {
+                  "rows": 980,
+                  "cost_bytes": 480907,
+                  "raw_gain_share": 0.8587759
+                },
+                "modrm": {
+                  "rows": 39,
+                  "cost_bytes": 42891,
+                  "raw_gain_share": 2.03e-05
+                },
+                "policies": {
+                  "rows": 9,
+                  "cost_bytes": 3634,
+                  "raw_gain_share": 0.0
+                }
+              }
+            }
+          },
+          "verified_exceptions": {
+            "1.5": {
+              "cut": 9315,
+              "fusion_rows": 925,
+              "fusion_widths": {
+                "2": 233,
+                "3": 221,
+                "4": 471
+              },
+              "scalar_exact_row_share": 0.8325282,
+              "dynamic_scalar_row_share": 0.064949,
+              "raw_gain_share_per_fusion_width": {
+                "2": 0.0875339,
+                "3": 0.147532,
+                "4": 0.6229124
+              },
+              "long_fusion_raw_gain_share": 0.0,
+              "long_fusion_row_share": 0.0,
+              "mean_fusion_length": 3.2572973,
+              "raw_gain_by_family": {
+                "coreutils": 0.5253870730810501,
+                "gzip": 0.6759117369759179,
+                "sed": 0.636419180851138,
+                "tar": 0.6104729092282253
+              },
+              "raw_gain_mean": 0.6120477250340828,
+              "largest_family": "gzip",
+              "largest_family_share": 0.2760862,
+              "realized_rows": 9125,
+              "one_family_only_rows": 3007,
+              "one_family_only_row_share": 0.3295342,
+              "one_family_only_gain_share": 0.552117,
+              "median_contexts": 1,
+              "median_dynamic_exact_shapes": 8,
+              "by_kind": {
+                "dynamic-both": {
+                  "rows": 23,
+                  "cost_bytes": 5748,
+                  "raw_gain_share": 1.34e-05
+                },
+                "dynamic-disp": {
+                  "rows": 445,
+                  "cost_bytes": 80173,
+                  "raw_gain_share": 0.0004208
+                },
+                "dynamic-imm": {
+                  "rows": 137,
+                  "cost_bytes": 11739,
+                  "raw_gain_share": 0.0001478
+                },
+                "exact": {
+                  "rows": 7755,
+                  "cost_bytes": 937363,
+                  "raw_gain_share": 0.1413974
+                },
+                "fusion": {
+                  "rows": 925,
+                  "cost_bytes": 455323,
+                  "raw_gain_share": 0.8579784
+                },
+                "modrm": {
+                  "rows": 22,
+                  "cost_bytes": 17579,
+                  "raw_gain_share": 2.82e-05
+                },
+                "policies": {
+                  "rows": 8,
+                  "cost_bytes": 2913,
+                  "raw_gain_share": 1.39e-05
+                }
+              }
+            }
+          },
+          "unselected_at_final_cut": {
+            "candidate_count": 2868,
+            "per_single_new_dependency_bundle_marginal_sign": {
+              "zero_within_1e-13": 2860,
+              "negative": 8
+            },
+            "with_positive_undiscounted_mean_by_kind": {},
+            "top_raw_gain_for_rejected_candidates": []
+          },
+          "verified_cuts": [
+            9315,
+            15510,
+            15510
+          ]
+        },
+        "C": {
+          "ranking_sha256": "fee8c0b3b8e6684f25f183e6fdc7169ea0658ecde13bca4a6375b2db9fe2ef71",
+          "estimated": {
+            "1.5": {
+              "cut": 7539,
+              "fusion_rows": 921,
+              "fusion_widths": {
+                "2": 252,
+                "3": 232,
+                "4": 437
+              },
+              "scalar_exact_row_share": 0.7482425,
+              "dynamic_scalar_row_share": 0.1195119,
+              "raw_gain_share_per_fusion_width": {
+                "2": 0.0945368,
+                "3": 0.1698142,
+                "4": 0.5965604
+              },
+              "long_fusion_raw_gain_share": 0.0,
+              "long_fusion_row_share": 0.0,
+              "mean_fusion_length": 3.2008686,
+              "raw_gain_by_family": {
+                "coreutils": 0.5172838767732949,
+                "gzip": 0.6732040852748358,
+                "sed": 0.6289031422896681,
+                "tar": 0.6028769674494228
+              },
+              "raw_gain_mean": 0.6055670179468053,
+              "largest_family": "gzip",
+              "largest_family_share": 0.277923,
+              "realized_rows": 7287,
+              "one_family_only_rows": 2262,
+              "one_family_only_row_share": 0.3104158,
+              "one_family_only_gain_share": 0.5210009,
+              "median_contexts": 2,
+              "median_dynamic_exact_shapes": 5,
+              "by_kind": {
+                "dynamic-both": {
+                  "rows": 34,
+                  "cost_bytes": 8813,
+                  "raw_gain_share": 0.0
+                },
+                "dynamic-disp": {
+                  "rows": 655,
+                  "cost_bytes": 131267,
+                  "raw_gain_share": 0.0110717
+                },
+                "dynamic-imm": {
+                  "rows": 212,
+                  "cost_bytes": 25661,
+                  "raw_gain_share": 0.0034671
+                },
+                "exact": {
+                  "rows": 5641,
+                  "cost_bytes": 893262,
+                  "raw_gain_share": 0.124529
+                },
+                "fusion": {
+                  "rows": 921,
+                  "cost_bytes": 446576,
+                  "raw_gain_share": 0.8609114
+                },
+                "modrm": {
+                  "rows": 57,
+                  "cost_bytes": 55092,
+                  "raw_gain_share": 2.06e-05
+                },
+                "policies": {
+                  "rows": 19,
+                  "cost_bytes": 7104,
+                  "raw_gain_share": 2e-07
+                }
+              }
+            },
+            "3": {
+              "cut": 8191,
+              "fusion_rows": 935,
+              "fusion_widths": {
+                "2": 262,
+                "3": 235,
+                "4": 438
+              },
+              "scalar_exact_row_share": 0.7646197,
+              "dynamic_scalar_row_share": 0.1114638,
+              "raw_gain_share_per_fusion_width": {
+                "2": 0.0945042,
+                "3": 0.1692521,
+                "4": 0.5972735
+              },
+              "long_fusion_raw_gain_share": 0.0,
+              "long_fusion_row_share": 0.0,
+              "mean_fusion_length": 3.1882353,
+              "raw_gain_by_family": {
+                "coreutils": 0.5173026912849783,
+                "gzip": 0.6736457557585386,
+                "sed": 0.6289043743567807,
+                "tar": 0.6029274756679855
+              },
+              "raw_gain_mean": 0.6056950742670708,
+              "largest_family": "gzip",
+              "largest_family_share": 0.2780466,
+              "realized_rows": 7788,
+              "one_family_only_rows": 2708,
+              "one_family_only_row_share": 0.3477144,
+              "one_family_only_gain_share": 0.5211796,
+              "median_contexts": 2,
+              "median_dynamic_exact_shapes": 5,
+              "by_kind": {
+                "dynamic-both": {
+                  "rows": 35,
+                  "cost_bytes": 9021,
+                  "raw_gain_share": 0.0
+                },
+                "dynamic-disp": {
+                  "rows": 663,
+                  "cost_bytes": 133476,
+                  "raw_gain_share": 0.0110215
+                },
+                "dynamic-imm": {
+                  "rows": 215,
+                  "cost_bytes": 26155,
+                  "raw_gain_share": 0.0034644
+                },
+                "exact": {
+                  "rows": 6263,
+                  "cost_bytes": 1035860,
+                  "raw_gain_share": 0.1244638
+                },
+                "fusion": {
+                  "rows": 935,
+                  "cost_bytes": 452530,
+                  "raw_gain_share": 0.8610298
+                },
+                "modrm": {
+                  "rows": 60,
+                  "cost_bytes": 59252,
+                  "raw_gain_share": 2.06e-05
+                },
+                "policies": {
+                  "rows": 20,
+                  "cost_bytes": 7825,
+                  "raw_gain_share": 0.0
+                }
+              }
+            },
+            "10": {
+              "cut": 8191,
+              "fusion_rows": 935,
+              "fusion_widths": {
+                "2": 262,
+                "3": 235,
+                "4": 438
+              },
+              "scalar_exact_row_share": 0.7646197,
+              "dynamic_scalar_row_share": 0.1114638,
+              "raw_gain_share_per_fusion_width": {
+                "2": 0.0945042,
+                "3": 0.1692521,
+                "4": 0.5972735
+              },
+              "long_fusion_raw_gain_share": 0.0,
+              "long_fusion_row_share": 0.0,
+              "mean_fusion_length": 3.1882353,
+              "raw_gain_by_family": {
+                "coreutils": 0.5173026912849783,
+                "gzip": 0.6736457557585386,
+                "sed": 0.6289043743567807,
+                "tar": 0.6029274756679855
+              },
+              "raw_gain_mean": 0.6056950742670708,
+              "largest_family": "gzip",
+              "largest_family_share": 0.2780466,
+              "realized_rows": 7788,
+              "one_family_only_rows": 2708,
+              "one_family_only_row_share": 0.3477144,
+              "one_family_only_gain_share": 0.5211796,
+              "median_contexts": 2,
+              "median_dynamic_exact_shapes": 5,
+              "by_kind": {
+                "dynamic-both": {
+                  "rows": 35,
+                  "cost_bytes": 9021,
+                  "raw_gain_share": 0.0
+                },
+                "dynamic-disp": {
+                  "rows": 663,
+                  "cost_bytes": 133476,
+                  "raw_gain_share": 0.0110215
+                },
+                "dynamic-imm": {
+                  "rows": 215,
+                  "cost_bytes": 26155,
+                  "raw_gain_share": 0.0034644
+                },
+                "exact": {
+                  "rows": 6263,
+                  "cost_bytes": 1035860,
+                  "raw_gain_share": 0.1244638
+                },
+                "fusion": {
+                  "rows": 935,
+                  "cost_bytes": 452530,
+                  "raw_gain_share": 0.8610298
+                },
+                "modrm": {
+                  "rows": 60,
+                  "cost_bytes": 59252,
+                  "raw_gain_share": 2.06e-05
+                },
+                "policies": {
+                  "rows": 20,
+                  "cost_bytes": 7825,
+                  "raw_gain_share": 0.0
+                }
+              }
+            }
+          },
+          "verified_exceptions": {
+            "1.5": {
+              "cut": 7335,
+              "fusion_rows": 918,
+              "fusion_widths": {
+                "2": 250,
+                "3": 231,
+                "4": 437
+              },
+              "scalar_exact_row_share": 0.742604,
+              "dynamic_scalar_row_share": 0.1220177,
+              "raw_gain_share_per_fusion_width": {
+                "2": 0.0945389,
+                "3": 0.1698179,
+                "4": 0.5965736
+              },
+              "long_fusion_raw_gain_share": 0.0,
+              "long_fusion_row_share": 0.0,
+              "mean_fusion_length": 3.2037037,
+              "raw_gain_by_family": {
+                "coreutils": 0.5172516162135797,
+                "gzip": 0.6732029224041594,
+                "sed": 0.6289024640010678,
+                "tar": 0.6028571518182205
+              },
+              "raw_gain_mean": 0.6055535386092569,
+              "largest_family": "gzip",
+              "largest_family_share": 0.2779287,
+              "realized_rows": 7116,
+              "one_family_only_rows": 2137,
+              "one_family_only_row_share": 0.3003092,
+              "one_family_only_gain_share": 0.5209854,
+              "median_contexts": 2,
+              "median_dynamic_exact_shapes": 6,
+              "by_kind": {
+                "dynamic-both": {
+                  "rows": 34,
+                  "cost_bytes": 8813,
+                  "raw_gain_share": 1e-07
+                },
+                "dynamic-disp": {
+                  "rows": 651,
+                  "cost_bytes": 130494,
+                  "raw_gain_share": 0.0111312
+                },
+                "dynamic-imm": {
+                  "rows": 210,
+                  "cost_bytes": 24837,
+                  "raw_gain_share": 0.0034708
+                },
+                "exact": {
+                  "rows": 5447,
+                  "cost_bytes": 841520,
+                  "raw_gain_share": 0.1244464
+                },
+                "fusion": {
+                  "rows": 918,
+                  "cost_bytes": 445199,
+                  "raw_gain_share": 0.8609304
+                },
+                "modrm": {
+                  "rows": 56,
+                  "cost_bytes": 53548,
+                  "raw_gain_share": 2.07e-05
+                },
+                "policies": {
+                  "rows": 19,
+                  "cost_bytes": 7104,
+                  "raw_gain_share": 4e-07
+                }
+              }
+            }
+          },
+          "unselected_at_final_cut": {
+            "candidate_count": 10187,
+            "per_single_new_dependency_bundle_marginal_sign": {
+              "zero_within_1e-13": 2618,
+              "negative": 7569
+            },
+            "with_positive_undiscounted_mean_by_kind": {
+              "fusion": 38,
+              "exact": 7511
+            },
+            "top_raw_gain_for_rejected_candidates": [
+              {
+                "id": 16137,
+                "rank": 8366,
+                "kind": "fusion",
+                "raw_marginal": 0.00030442022522418063,
+                "discounted_family_marginal": -1.0762169956338977e-05,
+                "transfer": {
+                  "contexts_capped32": 1,
+                  "exact_shapes_capped32": 1,
+                  "transfer_factor": 0.5333333333333333
+                }
+              },
+              {
+                "id": 16167,
+                "rank": 8769,
+                "kind": "fusion",
+                "raw_marginal": 0.0002515231984270683,
+                "discounted_family_marginal": -1.8910247079373346e-05,
+                "transfer": {
+                  "contexts_capped32": 1,
+                  "exact_shapes_capped32": 1,
+                  "transfer_factor": 0.5333333333333333
+                }
+              },
+              {
+                "id": 16162,
+                "rank": 8650,
+                "kind": "fusion",
+                "raw_marginal": 0.0002515231984270683,
+                "discounted_family_marginal": -7.605252442845647e-05,
+                "transfer": {
+                  "contexts_capped32": 1,
+                  "exact_shapes_capped32": 1,
+                  "transfer_factor": 0.5333333333333333
+                }
+              }
+            ]
+          },
+          "verified_cuts": [
+            7335,
+            8191,
+            8191
+          ]
+        }
+      },
+      "shared_prefix_members": {
+        "1.5": 6131,
+        "3": 7896,
+        "10": 7896
+      }
+    },
+    "aarch64": {
+      "pool_sha256": "427cbfd4352aeeddb03f6f7ae35bcba73ffd2c1d222471fea90e5829cb36f9a0",
+      "pool": {
+        "candidates": 59266,
+        "training_families": [
+          "coreutils",
+          "gzip",
+          "sed",
+          "tar"
+        ],
+        "fraction_in_candidate_bearing_layouts_seen_in_all_families": 0.2848811,
+        "candidates_by_observed_families": {
+          "1": 34327,
+          "2": 1897,
+          "3": 2466,
+          "4": 20576
+        },
+        "weighted_exact_signature_fraction_in_candidate_bearing_layouts": 0.9832305,
+        "weighted_empty_position_fraction_in_candidate_bearing_layouts": 0.0167695
+      },
+      "methods": {
+        "B": {
+          "ranking_sha256": "12f0e77f56803be5d5870b0f976fb4627ccb62ea3b1828eb1b5a5584a0efdc47",
+          "estimated": {
+            "1.5": {
+              "cut": 3134,
+              "fusion_rows": 1954,
+              "fusion_widths": {
+                "2": 673,
+                "3": 374,
+                "4": 363,
+                "5": 108,
+                "6": 77,
+                "7": 65,
+                "8": 48,
+                "9": 45,
+                "10": 26,
+                "11": 18,
+                "12": 12,
+                "13": 8,
+                "14": 10,
+                "15": 1,
+                "16": 12,
+                "17": 2,
+                "18": 6,
+                "19": 4,
+                "20": 3,
+                "21": 4,
+                "22": 1,
+                "23": 3,
+                "24": 91
+              },
+              "scalar_exact_row_share": 0.346522,
+              "dynamic_scalar_row_share": 0.0299936,
+              "raw_gain_share_per_fusion_width": {
+                "2": 0.0289733,
+                "3": 0.0714597,
+                "4": 0.0978589,
+                "5": 0.1177172,
+                "6": 0.0566771,
+                "7": 0.1286319,
+                "8": 0.0846485,
+                "9": 0.0689449,
+                "10": 0.0410975,
+                "11": 0.0556796,
+                "12": 0.0161219,
+                "13": 0.0088213,
+                "14": 0.0117403,
+                "15": 0.0053531,
+                "16": 0.022201,
+                "17": 0.0010222,
+                "18": 0.011905,
+                "19": 0.0126962,
+                "20": 0.0078244,
+                "21": 0.0062568,
+                "22": 0.0006671,
+                "23": 0.0058054,
+                "24": 0.107491
+              },
+              "long_fusion_raw_gain_share": 0.7713025,
+              "long_fusion_row_share": 0.1735801,
+              "mean_fusion_length": 5.0440123,
+              "raw_gain_by_family": {
+                "coreutils": 0.7669698576062155,
+                "gzip": 0.8222880928364271,
+                "sed": 0.7626890484689902,
+                "tar": 0.6818010892880979
+              },
+              "raw_gain_mean": 0.7584370220499327,
+              "largest_family": "gzip",
+              "largest_family_share": 0.2710469,
+              "realized_rows": 2392,
+              "one_family_only_rows": 1188,
+              "one_family_only_row_share": 0.4966555,
+              "one_family_only_gain_share": 0.6900591,
+              "median_contexts": 1.0,
+              "median_dynamic_exact_shapes": 22.0,
+              "by_kind": {
+                "entries": {
+                  "rows": 1086,
+                  "cost_bytes": 127125,
+                  "raw_gain_share": 0.0271421
+                },
+                "pairs": {
+                  "rows": 673,
+                  "cost_bytes": 101150,
+                  "raw_gain_share": 0.0289733
+                },
+                "partials": {
+                  "rows": 94,
+                  "cost_bytes": 24877,
+                  "raw_gain_share": 0.0032635
+                },
+                "sequences": {
+                  "rows": 1281,
+                  "cost_bytes": 1144568,
+                  "raw_gain_share": 0.9406211
+                }
+              }
+            },
+            "3": {
+              "cut": 7036,
+              "fusion_rows": 3988,
+              "fusion_widths": {
+                "2": 1811,
+                "3": 583,
+                "4": 557,
+                "5": 235,
+                "6": 155,
+                "7": 142,
+                "8": 97,
+                "9": 77,
+                "10": 48,
+                "11": 33,
+                "12": 26,
+                "13": 21,
+                "14": 19,
+                "15": 11,
+                "16": 22,
+                "17": 9,
+                "18": 8,
+                "19": 9,
+                "20": 6,
+                "21": 7,
+                "22": 5,
+                "23": 3,
+                "24": 104
+              },
+              "scalar_exact_row_share": 0.4026435,
+              "dynamic_scalar_row_share": 0.0305571,
+              "raw_gain_share_per_fusion_width": {
+                "2": 0.0279671,
+                "3": 0.0681502,
+                "4": 0.0971131,
+                "5": 0.1189378,
+                "6": 0.0604308,
+                "7": 0.1310501,
+                "8": 0.0855398,
+                "9": 0.0695805,
+                "10": 0.0417843,
+                "11": 0.053276,
+                "12": 0.0146823,
+                "13": 0.0074523,
+                "14": 0.0144044,
+                "15": 0.0076794,
+                "16": 0.0223803,
+                "17": 0.0019578,
+                "18": 0.0116433,
+                "19": 0.0129243,
+                "20": 0.0077545,
+                "21": 0.006361,
+                "22": 0.0033621,
+                "23": 0.005623,
+                "24": 0.1047145
+              },
+              "long_fusion_raw_gain_share": 0.7815387,
+              "long_fusion_row_share": 0.1473849,
+              "mean_fusion_length": 4.4603811,
+              "raw_gain_by_family": {
+                "coreutils": 0.8060464653343763,
+                "gzip": 0.8286316651143604,
+                "sed": 0.7662321085386461,
+                "tar": 0.7312351654730752
+              },
+              "raw_gain_mean": 0.7830363511151145,
+              "largest_family": "gzip",
+              "largest_family_share": 0.2645572,
+              "realized_rows": 5444,
+              "one_family_only_rows": 1997,
+              "one_family_only_row_share": 0.3668259,
+              "one_family_only_gain_share": 0.6893233,
+              "median_contexts": 1.0,
+              "median_dynamic_exact_shapes": 13,
+              "by_kind": {
+                "entries": {
+                  "rows": 2833,
+                  "cost_bytes": 332681,
+                  "raw_gain_share": 0.0245269
+                },
+                "pairs": {
+                  "rows": 1811,
+                  "cost_bytes": 281435,
+                  "raw_gain_share": 0.0279671
+                },
+                "partials": {
+                  "rows": 215,
+                  "cost_bytes": 53893,
+                  "raw_gain_share": 0.0007039
+                },
+                "sequences": {
+                  "rows": 2177,
+                  "cost_bytes": 2301842,
+                  "raw_gain_share": 0.946802
+                }
+              }
+            },
+            "10": {
+              "cut": 19587,
+              "fusion_rows": 12574,
+              "fusion_widths": {
+                "2": 6002,
+                "3": 1633,
+                "4": 1530,
+                "5": 790,
+                "6": 569,
+                "7": 516,
+                "8": 330,
+                "9": 261,
+                "10": 174,
+                "11": 130,
+                "12": 105,
+                "13": 85,
+                "14": 67,
+                "15": 45,
+                "16": 45,
+                "17": 29,
+                "18": 28,
+                "19": 27,
+                "20": 21,
+                "21": 23,
+                "22": 12,
+                "23": 12,
+                "24": 140
+              },
+              "scalar_exact_row_share": 0.3415531,
+              "dynamic_scalar_row_share": 0.0164905,
+              "raw_gain_share_per_fusion_width": {
+                "2": 0.0266624,
+                "3": 0.0683729,
+                "4": 0.0979878,
+                "5": 0.1192449,
+                "6": 0.0611169,
+                "7": 0.1313853,
+                "8": 0.0857604,
+                "9": 0.069579,
+                "10": 0.0419615,
+                "11": 0.0533482,
+                "12": 0.0150939,
+                "13": 0.0076938,
+                "14": 0.0147087,
+                "15": 0.0078731,
+                "16": 0.0224723,
+                "17": 0.0022436,
+                "18": 0.0117159,
+                "19": 0.0129944,
+                "20": 0.0078218,
+                "21": 0.0064785,
+                "22": 0.0034693,
+                "23": 0.0055709,
+                "24": 0.1038927
+              },
+              "long_fusion_raw_gain_share": 0.7844251,
+              "long_fusion_row_share": 0.174044,
+              "mean_fusion_length": 4.2284874,
+              "raw_gain_by_family": {
+                "coreutils": 0.8127401921632972,
+                "gzip": 0.8298189007223764,
+                "sed": 0.7668769115330398,
+                "tar": 0.7533985540313594
+              },
+              "raw_gain_mean": 0.7907086396125182,
+              "largest_family": "gzip",
+              "largest_family_share": 0.2623656,
+              "realized_rows": 10859,
+              "one_family_only_rows": 5635,
+              "one_family_only_row_share": 0.5189244,
+              "one_family_only_gain_share": 0.6888867,
+              "median_contexts": 1,
+              "median_dynamic_exact_shapes": 10,
+              "by_kind": {
+                "entries": {
+                  "rows": 6690,
+                  "cost_bytes": 957530,
+                  "raw_gain_share": 0.0225509
+                },
+                "pairs": {
+                  "rows": 6002,
+                  "cost_bytes": 1007391,
+                  "raw_gain_share": 0.0266624
+                },
+                "partials": {
+                  "rows": 323,
+                  "cost_bytes": 87556,
+                  "raw_gain_share": 1e-06
+                },
+                "sequences": {
+                  "rows": 6572,
+                  "cost_bytes": 8258067,
+                  "raw_gain_share": 0.9507858
+                }
+              }
+            }
+          },
+          "verified_exceptions": {
+            "3": {
+              "cut": 6613,
+              "fusion_rows": 3731,
+              "fusion_widths": {
+                "2": 1654,
+                "3": 565,
+                "4": 532,
+                "5": 221,
+                "6": 146,
+                "7": 134,
+                "8": 93,
+                "9": 74,
+                "10": 42,
+                "11": 31,
+                "12": 24,
+                "13": 20,
+                "14": 18,
+                "15": 10,
+                "16": 20,
+                "17": 7,
+                "18": 8,
+                "19": 8,
+                "20": 5,
+                "21": 7,
+                "22": 5,
+                "23": 3,
+                "24": 104
+              },
+              "scalar_exact_row_share": 0.4045063,
+              "dynamic_scalar_row_share": 0.031302,
+              "raw_gain_share_per_fusion_width": {
+                "2": 0.0279688,
+                "3": 0.0682185,
+                "4": 0.0969554,
+                "5": 0.1189781,
+                "6": 0.0603228,
+                "7": 0.1310428,
+                "8": 0.0855735,
+                "9": 0.0696055,
+                "10": 0.0417022,
+                "11": 0.0532839,
+                "12": 0.014643,
+                "13": 0.0074301,
+                "14": 0.0143969,
+                "15": 0.007655,
+                "16": 0.0223544,
+                "17": 0.0018739,
+                "18": 0.0116571,
+                "19": 0.0128911,
+                "20": 0.0077182,
+                "21": 0.0063686,
+                "22": 0.0033661,
+                "23": 0.0056297,
+                "24": 0.1048385
+              },
+              "long_fusion_raw_gain_share": 0.7813314,
+              "long_fusion_row_share": 0.148193,
+              "mean_fusion_length": 4.5103189,
+              "raw_gain_by_family": {
+                "coreutils": 0.8053070996676319,
+                "gzip": 0.8284865426632908,
+                "sed": 0.7661841758236333,
+                "tar": 0.7284602979477676
+              },
+              "raw_gain_mean": 0.7821095290255808,
+              "largest_family": "gzip",
+              "largest_family_share": 0.2648243,
+              "realized_rows": 5140,
+              "one_family_only_rows": 1908,
+              "one_family_only_row_share": 0.3712062,
+              "one_family_only_gain_share": 0.6896776,
+              "median_contexts": 1,
+              "median_dynamic_exact_shapes": 13,
+              "by_kind": {
+                "entries": {
+                  "rows": 2675,
+                  "cost_bytes": 313671,
+                  "raw_gain_share": 0.0246866
+                },
+                "pairs": {
+                  "rows": 1654,
+                  "cost_bytes": 255016,
+                  "raw_gain_share": 0.0279688
+                },
+                "partials": {
+                  "rows": 207,
+                  "cost_bytes": 52146,
+                  "raw_gain_share": 0.0008393
+                },
+                "sequences": {
+                  "rows": 2077,
+                  "cost_bytes": 2162891,
+                  "raw_gain_share": 0.9465053
+                }
+              }
+            },
+            "10": {
+              "cut": 18928,
+              "fusion_rows": 12050,
+              "fusion_widths": {
+                "2": 5848,
+                "3": 1542,
+                "4": 1444,
+                "5": 735,
+                "6": 538,
+                "7": 487,
+                "8": 311,
+                "9": 248,
+                "10": 166,
+                "11": 124,
+                "12": 102,
+                "13": 81,
+                "14": 66,
+                "15": 44,
+                "16": 45,
+                "17": 26,
+                "18": 25,
+                "19": 25,
+                "20": 20,
+                "21": 22,
+                "22": 12,
+                "23": 11,
+                "24": 128
+              },
+              "scalar_exact_row_share": 0.346418,
+              "dynamic_scalar_row_share": 0.016959,
+              "raw_gain_share_per_fusion_width": {
+                "2": 0.0266692,
+                "3": 0.0683721,
+                "4": 0.0979849,
+                "5": 0.1192424,
+                "6": 0.0611155,
+                "7": 0.1313846,
+                "8": 0.0857593,
+                "9": 0.0695805,
+                "10": 0.0419607,
+                "11": 0.0533469,
+                "12": 0.0150936,
+                "13": 0.0076928,
+                "14": 0.0147087,
+                "15": 0.0078731,
+                "16": 0.0224727,
+                "17": 0.0022429,
+                "18": 0.0117153,
+                "19": 0.0129941,
+                "20": 0.0078214,
+                "21": 0.0064782,
+                "22": 0.0034694,
+                "23": 0.005571,
+                "24": 0.1038936
+              },
+              "long_fusion_raw_gain_share": 0.7844167,
+              "long_fusion_row_share": 0.169907,
+              "mean_fusion_length": 4.1952697,
+              "raw_gain_by_family": {
+                "coreutils": 0.8127215805997475,
+                "gzip": 0.8298110737035108,
+                "sed": 0.7668486791306054,
+                "tar": 0.7533979952628851
+              },
+              "raw_gain_mean": 0.7906948321741872,
+              "largest_family": "gzip",
+              "largest_family_share": 0.2623677,
+              "realized_rows": 10827,
+              "one_family_only_rows": 5547,
+              "one_family_only_row_share": 0.5123303,
+              "one_family_only_gain_share": 0.6888568,
+              "median_contexts": 1.0,
+              "median_dynamic_exact_shapes": 10,
+              "by_kind": {
+                "entries": {
+                  "rows": 6557,
+                  "cost_bytes": 932567,
+                  "raw_gain_share": 0.0225547
+                },
+                "pairs": {
+                  "rows": 5848,
+                  "cost_bytes": 982150,
+                  "raw_gain_share": 0.0266692
+                },
+                "partials": {
+                  "rows": 321,
+                  "cost_bytes": 87406,
+                  "raw_gain_share": 2.4e-06
+                },
+                "sequences": {
+                  "rows": 6202,
+                  "cost_bytes": 7781253,
+                  "raw_gain_share": 0.9507737
+                }
+              }
+            }
+          },
+          "verified_cuts": [
+            3134,
+            6613,
+            18928
+          ]
+        },
+        "C": {
+          "ranking_sha256": "df12a78ba90f2a3ffb0fe5699111713185f65dc2af915777cceafea1225f0ca7",
+          "estimated": {
+            "1.5": {
+              "cut": 4810,
+              "fusion_rows": 2485,
+              "fusion_widths": {
+                "2": 796,
+                "3": 667,
+                "4": 833,
+                "5": 89,
+                "6": 54,
+                "7": 23,
+                "8": 9,
+                "9": 4,
+                "10": 3,
+                "11": 1,
+                "12": 1,
+                "13": 1,
+                "14": 2,
+                "18": 1,
+                "22": 1
+              },
+              "scalar_exact_row_share": 0.4164241,
+              "dynamic_scalar_row_share": 0.0669439,
+              "raw_gain_share_per_fusion_width": {
+                "2": 0.054989,
+                "3": 0.2093837,
+                "4": 0.4069263,
+                "5": 0.1237545,
+                "6": 0.0531481,
+                "7": 0.060734,
+                "8": 0.0190892,
+                "9": 0.0053897,
+                "10": 0.0009291,
+                "11": 0.0004962,
+                "12": 0.0003977,
+                "13": 9.02e-05,
+                "14": 0.0010573,
+                "18": 0.0008436,
+                "22": 0.0010421
+              },
+              "long_fusion_raw_gain_share": 0.2669716,
+              "long_fusion_row_share": 0.0392931,
+              "mean_fusion_length": 3.2583501,
+              "raw_gain_by_family": {
+                "coreutils": 0.6218898561519265,
+                "gzip": 0.7138463918335559,
+                "sed": 0.6651793642702538,
+                "tar": 0.6095327531454009
+              },
+              "raw_gain_mean": 0.6526120913502843,
+              "largest_family": "gzip",
+              "largest_family_share": 0.2734574,
+              "realized_rows": 3948,
+              "one_family_only_rows": 1850,
+              "one_family_only_row_share": 0.4685917,
+              "one_family_only_gain_share": 0.6450864,
+              "median_contexts": 1.0,
+              "median_dynamic_exact_shapes": 10.0,
+              "by_kind": {
+                "entries": {
+                  "rows": 2003,
+                  "cost_bytes": 237465,
+                  "raw_gain_share": 0.0508871
+                },
+                "pairs": {
+                  "rows": 796,
+                  "cost_bytes": 122845,
+                  "raw_gain_share": 0.054989
+                },
+                "partials": {
+                  "rows": 322,
+                  "cost_bytes": 113877,
+                  "raw_gain_share": 0.0108424
+                },
+                "sequences": {
+                  "rows": 1689,
+                  "cost_bytes": 923384,
+                  "raw_gain_share": 0.8832815
+                }
+              }
+            },
+            "3": {
+              "cut": 10276,
+              "fusion_rows": 4824,
+              "fusion_widths": {
+                "2": 2234,
+                "3": 949,
+                "4": 1167,
+                "5": 201,
+                "6": 132,
+                "7": 61,
+                "8": 31,
+                "9": 19,
+                "10": 11,
+                "11": 4,
+                "12": 4,
+                "13": 4,
+                "14": 2,
+                "17": 1,
+                "18": 1,
+                "22": 1,
+                "24": 2
+              },
+              "scalar_exact_row_share": 0.4785909,
+              "dynamic_scalar_row_share": 0.0519657,
+              "raw_gain_share_per_fusion_width": {
+                "2": 0.0548465,
+                "3": 0.1930953,
+                "4": 0.4079279,
+                "5": 0.1266774,
+                "6": 0.0639905,
+                "7": 0.0632921,
+                "8": 0.0208787,
+                "9": 0.0122105,
+                "10": 0.0023596,
+                "11": 0.0014085,
+                "12": 0.0007449,
+                "13": 0.0005827,
+                "14": 0.0010145,
+                "17": 0.000555,
+                "18": 0.0008094,
+                "22": 0.0009999,
+                "24": 6.68e-05
+              },
+              "long_fusion_raw_gain_share": 0.2955906,
+              "long_fusion_row_share": 0.0461269,
+              "mean_fusion_length": 3.1121476,
+              "raw_gain_by_family": {
+                "coreutils": 0.669065641060918,
+                "gzip": 0.7236768095806858,
+                "sed": 0.6808631273248279,
+                "tar": 0.6469340839456506
+              },
+              "raw_gain_mean": 0.6801349154780205,
+              "largest_family": "gzip",
+              "largest_family_share": 0.2660049,
+              "realized_rows": 8411,
+              "one_family_only_rows": 2976,
+              "one_family_only_row_share": 0.3538224,
+              "one_family_only_gain_share": 0.6504744,
+              "median_contexts": 1.0,
+              "median_dynamic_exact_shapes": 7.0,
+              "by_kind": {
+                "entries": {
+                  "rows": 4918,
+                  "cost_bytes": 623842,
+                  "raw_gain_share": 0.0460532
+                },
+                "pairs": {
+                  "rows": 2234,
+                  "cost_bytes": 396003,
+                  "raw_gain_share": 0.0548465
+                },
+                "partials": {
+                  "rows": 534,
+                  "cost_bytes": 180555,
+                  "raw_gain_share": 0.0024864
+                },
+                "sequences": {
+                  "rows": 2590,
+                  "cost_bytes": 1770530,
+                  "raw_gain_share": 0.8966138
+                }
+              }
+            },
+            "10": {
+              "cut": 25585,
+              "fusion_rows": 14911,
+              "fusion_widths": {
+                "2": 8213,
+                "3": 2118,
+                "4": 2208,
+                "5": 745,
+                "6": 539,
+                "7": 378,
+                "8": 223,
+                "9": 155,
+                "10": 108,
+                "11": 75,
+                "12": 55,
+                "13": 45,
+                "14": 25,
+                "15": 5,
+                "16": 3,
+                "17": 3,
+                "18": 3,
+                "19": 1,
+                "20": 1,
+                "22": 1,
+                "23": 2,
+                "24": 5
+              },
+              "scalar_exact_row_share": 0.3897987,
+              "dynamic_scalar_row_share": 0.0273989,
+              "raw_gain_share_per_fusion_width": {
+                "2": 0.0529865,
+                "3": 0.1909443,
+                "4": 0.4139966,
+                "5": 0.1274451,
+                "6": 0.0585783,
+                "7": 0.0652718,
+                "8": 0.0220534,
+                "9": 0.0134468,
+                "10": 0.0031382,
+                "11": 0.0022503,
+                "12": 0.0013646,
+                "13": 0.0014371,
+                "14": 0.001421,
+                "15": 6.59e-05,
+                "16": 8.99e-05,
+                "17": 0.0005538,
+                "18": 0.0008089,
+                "19": 4.07e-05,
+                "20": 2.86e-05,
+                "22": 0.0009874,
+                "23": 1.1e-06,
+                "24": 8.81e-05
+              },
+              "long_fusion_raw_gain_share": 0.2990712,
+              "long_fusion_row_share": 0.0927106,
+              "mean_fusion_length": 3.2426397,
+              "raw_gain_by_family": {
+                "coreutils": 0.6780523947857656,
+                "gzip": 0.7253242694637024,
+                "sed": 0.6838263811718154,
+                "tar": 0.6677682631923685
+              },
+              "raw_gain_mean": 0.688742827153413,
+              "largest_family": "gzip",
+              "largest_family_share": 0.2632783,
+              "realized_rows": 15043,
+              "one_family_only_rows": 8537,
+              "one_family_only_row_share": 0.5675065,
+              "one_family_only_gain_share": 0.658464,
+              "median_contexts": 1,
+              "median_dynamic_exact_shapes": 5,
+              "by_kind": {
+                "entries": {
+                  "rows": 9973,
+                  "cost_bytes": 1846370,
+                  "raw_gain_share": 0.0430006
+                },
+                "pairs": {
+                  "rows": 8213,
+                  "cost_bytes": 1634938,
+                  "raw_gain_share": 0.0529865
+                },
+                "partials": {
+                  "rows": 701,
+                  "cost_bytes": 259078,
+                  "raw_gain_share": 8e-07
+                },
+                "sequences": {
+                  "rows": 6698,
+                  "cost_bytes": 6570457,
+                  "raw_gain_share": 0.904012
+                }
+              }
+            }
+          },
+          "verified_exceptions": {
+            "1.5": {
+              "cut": 4657,
+              "fusion_rows": 2399,
+              "fusion_widths": {
+                "2": 764,
+                "3": 657,
+                "4": 805,
+                "5": 82,
+                "6": 50,
+                "7": 23,
+                "8": 9,
+                "9": 3,
+                "10": 1,
+                "11": 1,
+                "13": 1,
+                "14": 1,
+                "18": 1,
+                "22": 1
+              },
+              "scalar_exact_row_share": 0.4165772,
+              "dynamic_scalar_row_share": 0.0682843,
+              "raw_gain_share_per_fusion_width": {
+                "2": 0.0558402,
+                "3": 0.2111567,
+                "4": 0.4055429,
+                "5": 0.1220803,
+                "6": 0.0526035,
+                "7": 0.0610711,
+                "8": 0.0191951,
+                "9": 0.0051195,
+                "10": 0.0004491,
+                "11": 0.000499,
+                "13": 9.07e-05,
+                "14": 0.0006487,
+                "18": 0.0008483,
+                "22": 0.0010479
+              },
+              "long_fusion_raw_gain_share": 0.263653,
+              "long_fusion_row_share": 0.0371484,
+              "mean_fusion_length": 3.2417674,
+              "raw_gain_by_family": {
+                "coreutils": 0.6138038097919971,
+                "gzip": 0.7134287638594057,
+                "sed": 0.6625146215563664,
+                "tar": 0.6062912285766615
+              },
+              "raw_gain_mean": 0.6490096059461077,
+              "largest_family": "gzip",
+              "largest_family_share": 0.2748144,
+              "realized_rows": 3857,
+              "one_family_only_rows": 1833,
+              "one_family_only_row_share": 0.4752398,
+              "one_family_only_gain_share": 0.6442989,
+              "median_contexts": 1,
+              "median_dynamic_exact_shapes": 10.0,
+              "by_kind": {
+                "entries": {
+                  "rows": 1940,
+                  "cost_bytes": 228607,
+                  "raw_gain_share": 0.0518908
+                },
+                "pairs": {
+                  "rows": 764,
+                  "cost_bytes": 117314,
+                  "raw_gain_share": 0.0558402
+                },
+                "partials": {
+                  "rows": 318,
+                  "cost_bytes": 112401,
+                  "raw_gain_share": 0.0119165
+                },
+                "sequences": {
+                  "rows": 1635,
+                  "cost_bytes": 870212,
+                  "raw_gain_share": 0.8803525
+                }
+              }
+            },
+            "3": {
+              "cut": 8976,
+              "fusion_rows": 4260,
+              "fusion_widths": {
+                "2": 1849,
+                "3": 900,
+                "4": 1108,
+                "5": 176,
+                "6": 108,
+                "7": 50,
+                "8": 25,
+                "9": 16,
+                "10": 10,
+                "11": 4,
+                "12": 3,
+                "13": 4,
+                "14": 2,
+                "17": 1,
+                "18": 1,
+                "22": 1,
+                "24": 2
+              },
+              "scalar_exact_row_share": 0.4692513,
+              "dynamic_scalar_row_share": 0.0561497,
+              "raw_gain_share_per_fusion_width": {
+                "2": 0.0543791,
+                "3": 0.1945247,
+                "4": 0.4101175,
+                "5": 0.1265814,
+                "6": 0.0610751,
+                "7": 0.0628052,
+                "8": 0.0207432,
+                "9": 0.0120902,
+                "10": 0.0023256,
+                "11": 0.0014126,
+                "12": 0.0006248,
+                "13": 0.0005844,
+                "14": 0.0010174,
+                "17": 0.0005566,
+                "18": 0.0008118,
+                "22": 0.0010028,
+                "24": 6.7e-05
+              },
+              "long_fusion_raw_gain_share": 0.2916982,
+              "long_fusion_row_share": 0.0448975,
+              "mean_fusion_length": 3.1495305,
+              "raw_gain_by_family": {
+                "coreutils": 0.6673196095812354,
+                "gzip": 0.7229227967844847,
+                "sed": 0.680407071296033,
+                "tar": 0.6420855334842008
+              },
+              "raw_gain_mean": 0.6781837527864885,
+              "largest_family": "gzip",
+              "largest_family_share": 0.2664922,
+              "realized_rows": 7373,
+              "one_family_only_rows": 2705,
+              "one_family_only_row_share": 0.3668792,
+              "one_family_only_gain_share": 0.6501907,
+              "median_contexts": 1.0,
+              "median_dynamic_exact_shapes": 7.0,
+              "by_kind": {
+                "entries": {
+                  "rows": 4212,
+                  "cost_bytes": 526771,
+                  "raw_gain_share": 0.0460993
+                },
+                "pairs": {
+                  "rows": 1849,
+                  "cost_bytes": 321969,
+                  "raw_gain_share": 0.0543791
+                },
+                "partials": {
+                  "rows": 504,
+                  "cost_bytes": 169186,
+                  "raw_gain_share": 0.0031813
+                },
+                "sequences": {
+                  "rows": 2411,
+                  "cost_bytes": 1594242,
+                  "raw_gain_share": 0.8963404
+                }
+              }
+            },
+            "10": {
+              "cut": 23570,
+              "fusion_rows": 13610,
+              "fusion_widths": {
+                "2": 7368,
+                "3": 1992,
+                "4": 2086,
+                "5": 683,
+                "6": 494,
+                "7": 344,
+                "8": 206,
+                "9": 143,
+                "10": 99,
+                "11": 71,
+                "12": 45,
+                "13": 42,
+                "14": 20,
+                "15": 2,
+                "16": 3,
+                "17": 2,
+                "18": 3,
+                "20": 1,
+                "22": 1,
+                "23": 1,
+                "24": 4
+              },
+              "scalar_exact_row_share": 0.3932541,
+              "dynamic_scalar_row_share": 0.0293169,
+              "raw_gain_share_per_fusion_width": {
+                "2": 0.0530678,
+                "3": 0.1909952,
+                "4": 0.4140712,
+                "5": 0.1274315,
+                "6": 0.058571,
+                "7": 0.0652151,
+                "8": 0.0220417,
+                "9": 0.0134436,
+                "10": 0.0031367,
+                "11": 0.0022472,
+                "12": 0.0013556,
+                "13": 0.0014344,
+                "14": 0.0013669,
+                "15": 3.15e-05,
+                "16": 8.99e-05,
+                "17": 0.0005527,
+                "18": 0.000809,
+                "20": 2.86e-05,
+                "22": 0.0009875,
+                "23": 1e-06,
+                "24": 8.81e-05
+              },
+              "long_fusion_raw_gain_share": 0.298832,
+              "long_fusion_row_share": 0.0918116,
+              "mean_fusion_length": 3.250698,
+              "raw_gain_by_family": {
+                "coreutils": 0.6780014366568924,
+                "gzip": 0.7253096252639889,
+                "sed": 0.6838067418261646,
+                "tar": 0.6675109270279416
+              },
+              "raw_gain_mean": 0.6886571826937469,
+              "largest_family": "gzip",
+              "largest_family_share": 0.2633058,
+              "realized_rows": 14239,
+              "one_family_only_rows": 7528,
+              "one_family_only_row_share": 0.5286888,
+              "one_family_only_gain_share": 0.6574139,
+              "median_contexts": 1.0,
+              "median_dynamic_exact_shapes": 5,
+              "by_kind": {
+                "entries": {
+                  "rows": 9269,
+                  "cost_bytes": 1690254,
+                  "raw_gain_share": 0.0430269
+                },
+                "pairs": {
+                  "rows": 7368,
+                  "cost_bytes": 1474292,
+                  "raw_gain_share": 0.0530678
+                },
+                "partials": {
+                  "rows": 691,
+                  "cost_bytes": 253565,
+                  "raw_gain_share": 6.9e-06
+                },
+                "sequences": {
+                  "rows": 6242,
+                  "cost_bytes": 6056099,
+                  "raw_gain_share": 0.9038983
+                }
+              }
+            }
+          },
+          "verified_cuts": [
+            4657,
+            8976,
+            23570
+          ]
+        }
+      },
+      "shared_prefix_members": {
+        "1.5": 2481,
+        "3": 5856,
+        "10": 17281
+      }
+    }
+  }
+}

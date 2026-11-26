@@ -1,0 +1,83 @@
+{
+  "frozen_at_utc": "2026-11-26T11:17:43.836340+00:00",
+  "workloads_sha256": "7fe528439ed11cd25d88204635616d39b80e41f3fd6319c060977f4c3e25acbe",
+  "workload_selection": "Fresh software families: perl-base 5.36.0-7+deb12u4 and util-linux 2.38.1-5+deb12u3. Existing gzip family: GNU gzip 1.12 built with O1 and O3.",
+  "source": "https://mirrors.kernel.org/gnu/gzip/gzip-1.12.tar.xz",
+  "source_sha256": "ce5e03e519f637e1f814011ace35c4f87b33c0bbabeec35baf5fbd3479e91956",
+  "zig": "0.15.2",
+  "clang": "Homebrew clang version 20.1.8",
+  "inputs": {
+    "records.gz": "10bd489cfdcb779358565850d4363d0f190495721458567ffb629ae056df51ac",
+    "records.txt": "d0b9f472ebdaca6e1ec749e37bdfdc44ae8cfc3d4310f92b985b630cbf4176ed"
+  },
+  "binaries": {
+    "i386": {
+      "O1": {
+        "elf_sha256": "41339c3b37cc76813b12d1f2208a38a8c9931e6df6e0ea28bcb576b38ca0fa9d",
+        "text_sha256": "4c6ca23b08ea4d5ca5fdccaf16599b4f71edf13c3ad652b689e928f486516329",
+        "text_bytes": 65696,
+        "target": "x86-linux-gnu.2.36",
+        "cpu": "pentium4",
+        "driver_flags": [
+          "-O1",
+          "-Xclang",
+          "-O1"
+        ],
+        "cc1_opt_flags": [
+          "-O2",
+          "-O1"
+        ]
+      },
+      "O3": {
+        "elf_sha256": "8880be61ce2bdf6c2a32189c7a471ef49b4b9314453cde9f43af86e51418be91",
+        "text_sha256": "cfb15799aebfb763e3c0788b73a50c4c45f6ed03764f1837634fed042c833eb7",
+        "text_bytes": 78784,
+        "target": "x86-linux-gnu.2.36",
+        "cpu": "pentium4",
+        "driver_flags": [
+          "-O3",
+          "-Xclang",
+          "-O3"
+        ],
+        "cc1_opt_flags": [
+          "-O2",
+          "-O3"
+        ]
+      }
+    },
+    "aarch64": {
+      "O1": {
+        "elf_sha256": "38ece1fb82b9d80fa91d2c063b1d37670161ed913a4e5aa255759cd68ec6e9d5",
+        "text_sha256": "c6e628621950907d6d53d88441009d0efcd90eb85cd1fd65c0cf0d7e75d6ae4d",
+        "text_bytes": 55200,
+        "target": "aarch64-linux-gnu.2.36",
+        "cpu": "generic",
+        "driver_flags": [
+          "-O1",
+          "-Xclang",
+          "-O1"
+        ],
+        "cc1_opt_flags": [
+          "-O2",
+          "-O1"
+        ]
+      },
+      "O3": {
+        "elf_sha256": "255e7adb0d2dd14c431b50b05d40852730a6f6d37388cd7b8832c79c7a4e0c7c",
+        "text_sha256": "c027371740f2e2f78c1ac940f714f21a3f0d30ea339f49b2528b148fe82fb2c4",
+        "text_bytes": 61968,
+        "target": "aarch64-linux-gnu.2.36",
+        "cpu": "generic",
+        "driver_flags": [
+          "-O3",
+          "-Xclang",
+          "-O3"
+        ],
+        "cc1_opt_flags": [
+          "-O2",
+          "-O3"
+        ]
+      }
+    }
+  }
+}
