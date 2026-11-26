@@ -1,7 +1,6 @@
 #pragma once
 
-#include "block_operands.h"
-#include "dispatch.h"
+#include "compare_branch.h"
 #include "flag_liveness.h"
 #include "memory.h"
 
@@ -85,6 +84,16 @@ A64_BAKED_INLINE BakedStop ExecuteBakedOps(State& state, const detail::DecodedOp
                                            uint64_t& utlb_tags, uintptr_t& utlb_addend,
                                            uint32_t& flags_cache A64_HOT_PIN_REF) {
     constexpr auto op = detail::DecodeFields(Word);
+    if constexpr (HasNativeCompareBranch && sizeof...(Rest) == 1 && IsUnshiftedCompare(op) && !dynamic_imm12 &&
+                  !(dead & 1)) {
+        constexpr auto branch = detail::DecodeFields(std::array{Rest...}.front());
+        if constexpr (branch.kind == Kind::BranchCondition && branch.shift < ConditionalBranchCount) {
+            const bool taken =
+                CompareAndTest<op.kind, op.width, branch.shift>(state, op, flags_cache A64_HANDLER_PIN_ARGS);
+            member = member->NextOp<false>();
+            return {member, taken ? Branch(GetExtraOperands(*member).primary) : StepResult{}};
+        }
+    }
     auto operands = op;
     if constexpr (dynamic_imm12) operands = BakedOperands<Word, true>(GetOpOperands<op.kind>(*member));
     uint64_t target = 0;

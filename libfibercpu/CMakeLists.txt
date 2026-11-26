@@ -18,11 +18,13 @@ endif()
 
 option(FIBERCPU_GUEST_I386 "Build the IA-32 guest interpreter" ON)
 option(FIBERCPU_AARCH64_DFE "Eliminate dead NZCV writes in complete AArch64 blocks" ON)
+option(FIBERCPU_AARCH64_NATIVE_COMPARE_BRANCH "Use host conditions inside fused AArch64 compare branches" ON)
 set(FIBERCPU_AARCH64_PIN_REG "-1" CACHE STRING "AArch64 guest GPR held across threaded handlers (-1 or 0..30)")
 if(NOT FIBERCPU_AARCH64_PIN_REG MATCHES "^(-1|[0-9]|[12][0-9]|30)$")
     message(FATAL_ERROR "FIBERCPU_AARCH64_PIN_REG must be -1 or a guest register number from 0 to 30")
 endif()
 add_compile_definitions(FIBERCPU_AARCH64_DFE=$<BOOL:${FIBERCPU_AARCH64_DFE}>
+                        FIBERCPU_AARCH64_NATIVE_COMPARE_BRANCH=$<BOOL:${FIBERCPU_AARCH64_NATIVE_COMPARE_BRANCH}>
                         FIBERCPU_AARCH64_PIN_REG=${FIBERCPU_AARCH64_PIN_REG})
 option(FIBERCPU_GUEST_AARCH64 "Build the AArch64 guest interpreter" ON)
 if(NOT FIBERCPU_GUEST_I386 AND NOT FIBERCPU_GUEST_AARCH64)
@@ -489,7 +491,7 @@ set(FIBERCPU_OPTIMIZATION_CONFIG "static=${FIBERCPU_STATIC_SPECIALIZATION};fusio
 string(APPEND FIBERCPU_OPTIMIZATION_CONFIG ";baking_preset=${FIBERCPU_BAKING_PRESET};i386=${FIBERCPU_GUEST_I386};aarch64=${FIBERCPU_GUEST_AARCH64}")
 string(APPEND FIBERCPU_OPTIMIZATION_CONFIG ";data_tlb_entries=${FIBERCPU_DATA_TLB_ENTRIES}")
 if(FIBERCPU_GUEST_AARCH64)
-    string(APPEND FIBERCPU_OPTIMIZATION_CONFIG ";a64_dfe=${FIBERCPU_AARCH64_DFE};a64_pin=${FIBERCPU_AARCH64_PIN_REG}")
+    string(APPEND FIBERCPU_OPTIMIZATION_CONFIG ";a64_dfe=${FIBERCPU_AARCH64_DFE};a64_pin=${FIBERCPU_AARCH64_PIN_REG};a64_native_compare_branch=${FIBERCPU_AARCH64_NATIVE_COMPARE_BRANCH}")
 endif()
 if(_static_operand_hashes)
     list(JOIN _static_operand_hashes "+" _static_operand_hash)

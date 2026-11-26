@@ -676,6 +676,74 @@ bool TruncatedBlocks() {
     return true;
 }
 
+bool CompareBranchPair() {
+    // Different encodings exercise both register-31 meanings and the W/X widths.
+    constexpr std::array<uint32_t, 4> compares{0xf1000fff, 0x71000c1f, 0xeb01001f, 0x6b0103ff};
+    constexpr std::array operands{uint64_t{0}, uint64_t{3}, uint64_t{1} << 31, uint64_t{1} << 63, UINT64_MAX};
+    for (auto compare : compares) {
+        for (uint32_t cond = 0; cond < 16; ++cond) {
+            Backing backing;
+            backing.Code(Base, {compare, 0x54000040 | cond, 0x91000442, 0x91000842}); // b.cond +8
+            for (auto left : operands) {
+                for (auto right : operands) {
+                    for (unsigned budget = 1; budget <= 4; ++budget) {
+                        State expected;
+                        expected.pc = Base;
+                        expected.sp = left;
+                        expected.x[0] = left;
+                        expected.x[1] = right;
+                        expected.nzcv = 0xf0000000;
+                        State actual = expected;
+                        const auto scalar = Run(expected, backing.Callbacks(false), budget);
+                        const auto blocked = Run(actual, backing.Callbacks(), budget);
+                        if (blocked.reason != scalar.reason || blocked.executed != scalar.executed ||
+                            actual.pc != expected.pc || actual.nzcv != expected.nzcv || actual.x != expected.x ||
+                            actual.sp != expected.sp)
+                            return false;
+                    }
+                }
+            }
+        }
+    }
+    return true;
+}
+
+bool BakedCompareBranchSuffix() {
+    constexpr uint32_t Prefix = 0x91000483;  // add x3, x4, #1
+    constexpr uint32_t Compare = 0xeb01001f; // cmp x0, x1
+    constexpr uint32_t Less = 0x5400004b;    // b.lt +8
+    Backing backing;
+    backing.Code(Base, {Prefix, Compare, Less, 0x91000463, 0xf94000a6}); // add x3, x3, #1; ldr x6, [x5]
+    const Profile profile{
+        .resolve_sequence = [](const uint32_t* words, unsigned count, unsigned* length, uint32_t dead,
+                               detail::HandlerFunc& handler) -> ScalarHandlerFunc {
+            if (count < 3 || words[0] != Prefix || words[1] != Compare || words[2] != Less)
+                return nullptr;
+            *length = 3;
+            return BindBakedFusion<Prefix, Compare, Less>(dead, handler);
+        },
+        .trusted_baking = true,
+    };
+
+    for (auto left : {uint64_t{1}, uint64_t{1} << 63}) {
+        for (unsigned budget = 2; budget <= 5; ++budget) {
+            State expected;
+            expected.pc = Base;
+            expected.x[0] = left;
+            expected.x[1] = 1;
+            expected.x[4] = 7;
+            expected.x[5] = Base + 2 * Page; // The next data access faults.
+            State actual = expected;
+            const auto scalar = Run(expected, backing.Callbacks(false), budget);
+            const auto baked = Run(actual, backing.Callbacks(), budget, profile);
+            if (baked.reason != scalar.reason || baked.executed != scalar.executed || baked.address != scalar.address ||
+                actual.pc != expected.pc || actual.nzcv != expected.nzcv || actual.x != expected.x)
+                return false;
+        }
+    }
+    return true;
+}
+
 bool BakedDispatch() {
     constexpr uint32_t Add1 = 0x91000400;
     constexpr uint32_t Add2 = 0x91000800;
@@ -1471,6 +1539,8 @@ int main() {
         {"baked dispatch and profiling", BakedDispatch()},
         {"partial immediate shapes retain the decoded arithmetic value and scaled offset", PartialImmediateOperands()},
         {"fused dispatch branch, budget and fault accounting", FusedDispatch()},
+        {"compare and conditional branch preserve flags and budget boundaries", CompareBranchPair()},
+        {"baked compare branch suffix preserves flags at a successor fault", BakedCompareBranchSuffix()},
         {"fused PC-relative address, link and conditional branch use each member PC", FusedPCRelativeMembers()},
         {"fused load fault and instruction refetch", FusedLoadRefetch()},
         {"fused load replay preserves the prefix and commits writeback once", FusedLoadReplay()},

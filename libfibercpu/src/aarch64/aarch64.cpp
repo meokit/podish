@@ -7,6 +7,7 @@
 #include <unordered_map>
 #include <utility>
 
+#include "compare_branch.h"
 #include "flag_liveness.h"
 #include "lowering.h"
 
@@ -266,6 +267,14 @@ const BasicBlock* DecodeBlock(uint64_t pc, const uint8_t* executable, const Prof
                 slot.handler = binding.handler ? binding.handler : GetFusedDispatchHandler();
                 slot.flags |= OmitsFlags;
             }
+#if FIBERCPU_AARCH64_TAIL_DISPATCH
+        } else if (following == 1 && i + 2 == slot_count && slot.can_follow) {
+            const auto& branch = decoded[i + 1];
+            if (profile.trusted_baking || (!slot.keep_scalar && !branch.keep_scalar)) {
+                // Only the hot entry changes. Partial budgets still run the two scalar instructions.
+                if (const auto pair = LowerCompareBranch(slot.op, branch.op)) slot.handler = pair;
+            }
+#endif
         }
         following = slot.Has(UntrustedScalar) ? 0 : slot.can_follow ? following + 1 : 1;
         units += 1 + slot.Has(HasDataSlot);
