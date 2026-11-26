@@ -153,10 +153,9 @@ FIBERCPU_AARCH64_HANDLER_ABI uint64_t ResolveBranchTargetSlow(A64_HANDLER_PARAMS
             {::fiberish::aarch64::Stop::Branch, ::fiberish::aarch64::Access::Execute, 0, a64_target});            \
     } while (false)
 
-FIBERCPU_AARCH64_HANDLER_ABI uint64_t ResolveDirectBranchTarget(A64_HANDLER_PARAMS);
-
-#define A64_RESOLVE_DIRECT_BRANCH_TARGET() \
-    ATTR_MUSTTAIL return ::fiberish::aarch64::detail::ResolveDirectBranchTarget(A64_HANDLER_ARGS)
+#define A64_RESOLVE_DIRECT_BRANCH_TARGET()                       \
+    A64_RESOLVE_BRANCH_TARGET_INLINE(current->NextOp<true>(), 0, \
+                                     ::fiberish::aarch64::detail::GetExtraOperands(*current).primary)
 
 // Cold dispatch reconstructs the full operation from the saved instruction word.
 DecodedInstruction ReadScalarOp(const DecodedOp& slot);

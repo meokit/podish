@@ -32,16 +32,6 @@ DecodedInstruction ReadScalarOp(const DecodedOp& slot) {
 #if defined(_MSC_VER)
 __declspec(noinline)
 #elif defined(__GNUC__) || defined(__clang__)
-[[gnu::noinline]]
-#endif
-FIBERCPU_AARCH64_HANDLER_ABI uint64_t ResolveDirectBranchTarget(A64_HANDLER_PARAMS) {
-    const auto target_pc = GetExtraOperands(*current).primary;
-    A64_RESOLVE_BRANCH_TARGET_INLINE(current->NextOp<true>(), 0, target_pc);
-}
-
-#if defined(_MSC_VER)
-__declspec(noinline)
-#elif defined(__GNUC__) || defined(__clang__)
 [[gnu::cold, gnu::noinline]]
 #endif
 FIBERCPU_AARCH64_HANDLER_ABI uint64_t ResolveBranchTargetSlow(A64_HANDLER_PARAMS) {
