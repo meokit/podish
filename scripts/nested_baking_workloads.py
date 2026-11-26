@@ -66,9 +66,26 @@ def canonical_output(data, mode):
 
 @contextmanager
 def benchmark_lock(path):
-    import fcntl
-
     with Path(path).open("a") as lock:
+        if os.name == "nt":
+            import msvcrt
+
+            lock.seek(0)
+            while True:
+                try:
+                    msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
+                except PermissionError:
+                    time.sleep(0.1)
+                else:
+                    break
+            try:
+                yield
+            finally:
+                msvcrt.locking(lock.fileno(), msvcrt.LK_UNLCK, 1)
+            return
+
+        import fcntl
+
         fcntl.flock(lock, fcntl.LOCK_EX)
         try:
             yield
