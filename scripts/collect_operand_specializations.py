@@ -106,7 +106,7 @@ def collect(profiles, fusion_source, limit):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("profiles", type=Path, nargs="+", help="blocks.bin files or guest stats directories")
-    parser.add_argument("--fusions", type=Path, default=SRC.parent / "presets/3.5m/superopcodes.generated.cpp",
+    parser.add_argument("--fusions", type=Path, default=SRC.parent / "presets/3m/superopcodes.generated.cpp",
                         help="C++ fusion source selected when capturing the profiles")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--limit", type=int, help="Export only this many rows (default: all observed rows)")

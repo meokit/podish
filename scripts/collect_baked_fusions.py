@@ -42,7 +42,7 @@ def unfused_blocks(profile, handlers):
         yield executions, ops
 
 
-def record_scores(profiles, handlers, relative):
+def record_scores(profiles, handlers, relative, profile_weights):
     scores, visits, totals = Counter(), Counter(), {}
     for profile in profiles:
         counts = Counter()
@@ -56,7 +56,7 @@ def record_scores(profiles, handlers, relative):
         visits.update(counts)
         totals[profile] = total
         for key, count in counts.items():
-            scores[key] += count * (len(key[0]) - 1) / total
+            scores[key] += count * (len(key[0]) - 1) / total * profile_weights.get(profile, 1)
     return scores, visits, totals
 
 
@@ -86,8 +86,9 @@ def saved_dispatches(layout, widths, enabled):
     return saved
 
 
-def select_variants(profiles, handlers, relative, top, budget):
-    scores, visits, totals = record_scores(profiles, handlers, relative)
+def select_variants(profiles, handlers, relative, top, budget, profile_weights=None):
+    profile_weights = profile_weights or {}
+    scores, visits, totals = record_scores(profiles, handlers, relative, profile_weights)
     # Rank by potential savings before replay. Keep a wider shortlist so
     # overlap can reject redundant shapes.
     ranked = sorted(scores, key=lambda key: (-scores[key], key))[:max(top, 4 * budget)]
@@ -97,7 +98,7 @@ def select_variants(profiles, handlers, relative, top, budget):
     weights = Counter()
     for profile, layouts in profile_layouts.items():
         for layout, count in layouts.items():
-            weights[layout] += count / totals[profile]
+            weights[layout] += count / totals[profile] * profile_weights.get(profile, 1)
     layouts = list(weights)
     affected = defaultdict(list)
     for i, layout in enumerate(layouts):

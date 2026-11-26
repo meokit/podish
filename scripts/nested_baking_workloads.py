@@ -82,7 +82,7 @@ def stage_cli(managed, directory, library):
     return directory / "Podish.Cli.dll"
 
 
-def run_workloads(cfg, cli, cases, log, capture=None):
+def run_workloads(cfg, cli, cases, log, capture=None, *, native_defaults=False):
     rootfs = Path(cfg["rootfs"])
     shell = ["set -eu"]
     files = []
@@ -103,9 +103,10 @@ def run_workloads(cfg, cli, cases, log, capture=None):
             f"printf 'BAKE_END {i}\\n'",
         ])
     argv = [cfg.get("dotnet", "dotnet"), str(cli), "run", "--rm",
-            "--rootfs", str(rootfs), "--log-driver", "none", "--memory", "1G",
-            "-XX:JitMode=off", "-XX:BlockCacheSize=400m", "-e", "LC_ALL=C",
-            "-e", "LANG=C", "-e", "TZ=UTC"]
+            "--rootfs", str(rootfs), "--log-driver", "none", "--memory", "1G"]
+    if not native_defaults:
+        argv.extend(["-XX:JitMode=off", "-XX:BlockCacheSize=400m"])
+    argv.extend(["-e", "LC_ALL=C", "-e", "LANG=C", "-e", "TZ=UTC"])
     if capture is not None:
         capture.mkdir(parents=True, exist_ok=True)
         if cfg.get("guest") == "aarch64":
@@ -115,9 +116,9 @@ def run_workloads(cfg, cli, cases, log, capture=None):
     argv.extend(["--", "/bin/sh", "-c", "\n".join(shell)])
     env = {key: value for key, value in os.environ.items()
            if not key.startswith(("FIBERCPU_", "PODISH_", "DYLD_", "DOTNET_STARTUP_HOOKS"))}
-    env.update(FIBERCPU_LLVM_JIT="0", FIBERCPU_DYNAMIC_SPECIALIZATION="0",
-               FIBERCPU_LINKED_BLOCK_CACHE="0",
-               PODISH_SKIP_BLOCKS_EXPORT="1" if capture is None else "0")
+    if not native_defaults:
+        env.update(FIBERCPU_LLVM_JIT="0", FIBERCPU_DYNAMIC_SPECIALIZATION="0", FIBERCPU_LINKED_BLOCK_CACHE="0")
+    env["PODISH_SKIP_BLOCKS_EXPORT"] = "1" if capture is None else "0"
     marks = {}
     pending = b""
     deadline = time.monotonic() + cfg.get("workload_timeout", 120)
@@ -163,3 +164,16 @@ def run_workloads(cfg, cli, cases, log, capture=None):
         timings[case["id"]] = end - begin
         output.unlink()
     return timings
+
+
+def split_families(cases, held_out):
+    ids = [case["id"] for case in cases]
+    families = {case.get("family", case["id"]) for case in cases}
+    if len(ids) != len(set(ids)):
+        raise ValueError("workload IDs must be unique")
+    if set(held_out) - families:
+        raise ValueError(f"unknown holdout families: {sorted(set(held_out) - families)}")
+    training = [c for c in cases if c.get("family", c["id"]) not in held_out]
+    if not training:
+        raise ValueError("at least one training family is required")
+    return training, [c for c in cases if c.get("family", c["id"]) in held_out]
