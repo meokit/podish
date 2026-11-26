@@ -81,7 +81,12 @@ ATTR_PRESERVE_NONE int64_t MemoryOpGeneric(EmuState* RESTRICT state, DecodedOp* 
     }
     // A TLB-only attempt never calls a guest observer. Recover the faulting
     // instruction's EIP once, before replay can invoke callbacks or fault.
-    if (state->mem_op_type != PendingMemOp::None) state->sync_eip_to_op_start(op);
+    if (state->mem_op_type != PendingMemOp::None) {
+#ifdef ENABLE_TLB_STATS
+        ++state->mmu.dispatch_stats.memory_replays;
+#endif
+        state->sync_eip_to_op_start(op);
+    }
     if (state->mem_op_type == PendingMemOp::Read) {
         auto& mem_op = state->mem_op.read;
         state->can_restart_memory_fault = restart;
@@ -182,12 +187,20 @@ static ATTR_PRESERVE_NONE int64_t ResolveBranchTargetSlowImpl(EmuState* RESTRICT
     if (!next_block) next_block = state->mmu.invalid_code_block();
 
     if (!next_block->MatchesChainTarget(target_eip)) {
+#ifdef ENABLE_TLB_STATS
+        ++state->mmu.dispatch_stats.link_misses;
+#endif
         FIBERCPU_PIN_COMMIT(state);
         CommitFlagsCache(state, flags_cache);
         state->ctx.eip = target_eip;
         return instr_limit;
     }
 
+#ifdef ENABLE_TLB_STATS
+    auto& dispatch_stats = state->mmu.dispatch_stats;
+    ++dispatch_stats.resolved_links;
+    dispatch_stats.cross_page_links += ((state->last_block->start_eip() ^ target_eip) & ~mem::PAGE_MASK) != 0;
+#endif
     (op + LinkSlot)->StoreBlockLink(next_block);
 
     state->last_block = next_block;

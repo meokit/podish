@@ -48,7 +48,7 @@ inline void* Mmu::try_allocate_block_bytes(size_t size, uint32_t guest_eip) {
         cache.pending_budget_flush = true;
         const size_t bytes_before_flush = cache.requested_block_bytes;
         const size_t valid_blocks_before_flush = cache.CountValidBlocks();
-        const size_t total_blocks_before_flush = cache.all_blocks.size();
+        const size_t total_blocks_before_flush = cache.AllocatedBlockCount();
         const uint64_t next_flush_count = cache.flush_count + 1;
         const uintptr_t mmu_identity = core_ ? core_->identity : 0;
 
@@ -64,6 +64,10 @@ inline void* Mmu::try_allocate_block_bytes(size_t size, uint32_t guest_eip) {
 
     void* block_mem = cache.block_pool.allocate(size, alignof(BasicBlock));
     cache.NoteAllocatedBlockBytes(size);
+#ifdef ENABLE_TLB_STATS
+    ++dispatch_stats.block_allocations;
+    dispatch_stats.block_allocated_bytes += size;
+#endif
     return block_mem;
 }
 

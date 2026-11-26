@@ -27,14 +27,17 @@
 static_assert(FIBERCPU_AARCH64_PIN_REG >= -1 && FIBERCPU_AARCH64_PIN_REG <= 30);
 
 namespace fiberish::mem {
-struct MicroTLB;
-}
+class SoftTlb;
+struct TlbStats;
+struct DispatchStats;
+}  // namespace fiberish::mem
 
 namespace fiberish::aarch64 {
 
 namespace detail {
 struct RunFrame;
-}
+struct Block;
+}  // namespace detail
 
 struct Vector128 {
     uint64_t lo = 0;
@@ -72,7 +75,16 @@ struct Memory {
     // Writes already dirty, non-executable data without faults, hooks or callbacks.
     bool (*write_fast)(void*, uint64_t, const void*, size_t) = nullptr;
     // Live entries owned and invalidated by the guest MMU, including hook installation.
-    const mem::MicroTLB* read_tlb = nullptr;
+    const mem::SoftTlb* data_tlb = nullptr;
+    // An MMU owns its blocks across Run calls and invalidates links on mapping changes.
+    // A null backing asks find_block to probe the executable mapping without invoking callbacks.
+    detail::Block* (*find_block)(void*, uint64_t, const uint8_t*) = nullptr;
+    void* (*allocate_block)(void*, size_t, uint64_t) = nullptr;
+    void (*cache_block)(void*, detail::Block*) = nullptr;
+#ifdef ENABLE_TLB_STATS
+    mem::TlbStats* stats = nullptr;
+    mem::DispatchStats* dispatch_stats = nullptr;
+#endif
 };
 
 enum class Stop : uint8_t {
@@ -85,7 +97,8 @@ enum class Stop : uint8_t {
     Continue,
     Branch,
     Refetch,
-    Replay
+    Replay,
+    CachePressure
 };
 
 struct StepResult {
@@ -110,8 +123,9 @@ struct DispatchSlot;
 
 #define A64_THREAD_PARAMS                                                                                   \
     State &state, const ::fiberish::aarch64::detail::DispatchSlot *current, uint64_t remaining_after_block, \
-        [[maybe_unused]] const mem::MicroTLB *read_tlb, uint32_t nzcv A64_THREAD_PIN_PARAM
-#define A64_THREAD_ARGS state, current, remaining_after_block, read_tlb, nzcv A64_THREAD_PIN_PASS
+        [[maybe_unused]] const mem::SoftTlb *data_tlb, [[maybe_unused]] uint64_t tlb_tags,                  \
+        [[maybe_unused]] uintptr_t tlb_addend, uint32_t nzcv A64_THREAD_PIN_PARAM
+#define A64_THREAD_ARGS state, current, remaining_after_block, data_tlb, tlb_tags, tlb_addend, nzcv A64_THREAD_PIN_PASS
 
 using ThreadHandler = uint64_t(FIBERCPU_AARCH64_THREAD_ABI*)(A64_THREAD_PARAMS);
 }  // namespace detail

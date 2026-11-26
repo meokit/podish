@@ -79,12 +79,13 @@ struct BakedStop {
 
 template <uint32_t dead, bool dynamic_imm12, uint32_t Word, uint32_t... Rest>
 A64_BAKED_INLINE BakedStop ExecuteBakedThread(State& state, const detail::DispatchSlot* member,
-                                              const mem::MicroTLB* read_tlb, uint32_t& nzcv A64_HOT_PIN_REF) {
+                                              const mem::SoftTlb* data_tlb, uint64_t& tlb_tags, uintptr_t& tlb_addend,
+                                              uint32_t& nzcv A64_HOT_PIN_REF) {
     constexpr auto op = detail::DecodeFields(Word);
     const auto& operands = BakedOperands<Word, dynamic_imm12>(member->op);
     if constexpr (IsBakedTransfer(op.kind)) {
         if (!detail::ProbeLoadStore<op.kind, op.width, op.operation, op.mode, op.shift, detail::Field(Word, 26, 1)>(
-                state, operands, BlockTarget<op.kind>(member->op), read_tlb A64_THREAD_PIN_PASS))
+                state, operands, BlockTarget<op.kind>(member->op), data_tlb, tlb_tags, tlb_addend A64_THREAD_PIN_PASS))
             return {member, {Stop::Replay}};
     } else {
         const auto step = detail::HotInteger<op.kind, op.width, op.operation, op.shift, !(dead & 1)>(
@@ -95,14 +96,15 @@ A64_BAKED_INLINE BakedStop ExecuteBakedThread(State& state, const detail::Dispat
         return {member, {}};
     } else {
         static_assert(!dynamic_imm12 && CanFollowInBakedSequence(Word));
-        return ExecuteBakedThread<(dead >> 1), false, Rest...>(state, member + 1, read_tlb, nzcv A64_THREAD_PIN_PASS);
+        return ExecuteBakedThread<(dead >> 1), false, Rest...>(state, member + 1, data_tlb, tlb_tags, tlb_addend,
+                                                               nzcv A64_THREAD_PIN_PASS);
     }
 }
 
 template <uint32_t dead, bool dynamic_imm12, uint32_t... Words>
 FIBERCPU_AARCH64_THREAD_ABI uint64_t BakedThreadRun(A64_THREAD_PARAMS) {
-    const auto result =
-        ExecuteBakedThread<dead, dynamic_imm12, Words...>(state, current, read_tlb, nzcv A64_THREAD_PIN_PASS);
+    const auto result = ExecuteBakedThread<dead, dynamic_imm12, Words...>(state, current, data_tlb, tlb_tags,
+                                                                          tlb_addend, nzcv A64_THREAD_PIN_PASS);
     if constexpr ((IsBakedTransfer(detail::DecodeFields(Words).kind) || ...)) {
         if (result.step.reason == Stop::Replay) [[unlikely]] {
             A64_THREAD_REPLAY(result.member);

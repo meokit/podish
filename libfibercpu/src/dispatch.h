@@ -137,6 +137,11 @@ FORCE_INLINE BlockChainTarget TryChainBlock(EmuState* state, DecodedOp* op, uint
     auto header_ptr = reinterpret_cast<const BasicBlock*>(&header);
     if (!header_ptr->MatchesChainTarget(target_eip)) [[unlikely]]
         return {};
+#ifdef ENABLE_TLB_STATS
+    auto& dispatch_stats = state->mmu.dispatch_stats;
+    ++dispatch_stats.direct_links;
+    dispatch_stats.cross_page_links += ((state->last_block->start_eip() ^ target_eip) & ~mem::PAGE_MASK) != 0;
+#endif
     state->last_block = next_block;
     instr_limit -= header_ptr->inst_count();
     DecodedOp* next_head = next_block->FirstOp();

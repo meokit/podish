@@ -109,7 +109,7 @@ bool IsFastSpan(uint64_t address, size_t size) {
 bool ReadFast(void* opaque, uint64_t address, void* dest, size_t size) {
     if (!IsFastSpan(address, size)) return false;
     auto& engine = *static_cast<EmuState*>(opaque);
-    const auto* source = engine.mmu.try_cached_read_page(static_cast<uint32_t>(address));
+    const auto* source = engine.mmu.try_cached_data_page<false>(static_cast<uint32_t>(address));
     if (!source) return false;
     CopyFast(dest, source, size);
     return true;
@@ -118,7 +118,7 @@ bool ReadFast(void* opaque, uint64_t address, void* dest, size_t size) {
 bool WriteFast(void* opaque, uint64_t address, const void* source, size_t size) {
     if (!IsFastSpan(address, size)) return false;
     auto& engine = *static_cast<EmuState*>(opaque);
-    auto* dest = engine.mmu.try_nonexecuting_write_page(static_cast<uint32_t>(address));
+    auto* dest = engine.mmu.try_cached_data_page<true>(static_cast<uint32_t>(address));
     if (!dest) return false;
     CopyFast(dest, source, size);
     return true;
@@ -128,6 +128,20 @@ const uint8_t* ExecutablePage(void* opaque, uint64_t address) {
     auto& engine = *static_cast<EmuState*>(opaque);
     if (engine.mem_hook || address > UINT32_MAX || (address & mem::PAGE_MASK)) return nullptr;
     return reinterpret_cast<const uint8_t*>(engine.mmu.try_executable_page(static_cast<uint32_t>(address)));
+}
+
+aarch64::detail::Block* FindBlock(void* opaque, uint64_t pc, const uint8_t* executable) {
+    if (!executable) executable = ExecutablePage(opaque, pc & ~aarch64::detail::PageMask);
+    if (!executable) return nullptr;
+    return static_cast<EmuState*>(opaque)->mmu.lookup_arm_block(static_cast<uint32_t>(pc), executable);
+}
+
+void* AllocateBlock(void* opaque, size_t size, uint64_t pc) {
+    return static_cast<EmuState*>(opaque)->mmu.try_allocate_block_bytes(size, uint32_t(pc));
+}
+
+void CacheBlock(void* opaque, aarch64::detail::Block* block) {
+    static_cast<EmuState*>(opaque)->mmu.cache_arm_block(block);
 }
 
 bool Write(void* opaque, uint64_t address, const void* source, size_t size) {
@@ -169,8 +183,13 @@ int RunArmEngine(EmuState& engine, uint64_t end_pc, uint64_t budget, bool step) 
     auto publish = engine.mmu.scoped_runtime_tlb_publish_batch();
     RestartableMemoryFaultScope restartable(&engine);
     if (!step) cpu.ClearExclusive();
-    const aarch64::Memory memory{
-        &engine, Read, Write, ExecutablePage, ReadFast, WriteFast, engine.mmu.read_tlb_entries()};
+    aarch64::Memory memory{
+        &engine,   Read,          Write,     ExecutablePage, ReadFast, WriteFast, engine.mmu.data_tlb(),
+        FindBlock, AllocateBlock, CacheBlock};
+#ifdef ENABLE_TLB_STATS
+    memory.stats = &engine.mmu.stats;
+    memory.dispatch_stats = &engine.mmu.dispatch_stats;
+#endif
     aarch64::Profile profile{};
 #if FIBERCPU_AARCH64_BAKED
     profile.resolve = FindBakedArmHandler;
@@ -214,8 +233,21 @@ int RunArmEngine(EmuState& engine, uint64_t end_pc, uint64_t budget, bool step) 
     }
     uint64_t remaining = budget ? budget : UINT64_MAX;
     while (engine.status == EmuStatus::Running && remaining && (!end_pc || cpu.pc != end_pc)) {
-        const auto result = aarch64::Run(cpu, memory, end_pc ? 1 : remaining, profile);
+        if (engine.mmu.code_cache_flush_pending()) {
+            engine.status = EmuStatus::CachePressure;
+            break;
+        }
+        auto result = aarch64::Run(cpu, memory, end_pc ? 1 : remaining, profile);
         remaining -= result.executed;
+        const bool cache_pressure = result.reason == aarch64::Stop::CachePressure;
+        if (cache_pressure && remaining) {
+            // As with x86's stack decoder, retire one instruction even when a single
+            // block is larger than the configured budget.
+            auto uncached = memory;
+            uncached.executable_page = nullptr;
+            result = aarch64::Run(cpu, uncached, 1, profile);
+            remaining -= result.executed;
+        }
         if (engine.status != EmuStatus::Running) break;
         switch (result.reason) {
             case aarch64::Stop::Syscall:
@@ -234,6 +266,8 @@ int RunArmEngine(EmuState& engine, uint64_t end_pc, uint64_t budget, bool step) 
                 engine.status = EmuStatus::Fault;
                 break;
         }
+        if (cache_pressure && engine.status == EmuStatus::Running && (!end_pc || cpu.pc != end_pc))
+            engine.status = EmuStatus::CachePressure;
     }
     if (capture.counts) {
         std::lock_guard guard(capture.counts->mutex);

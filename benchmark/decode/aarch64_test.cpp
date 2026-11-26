@@ -399,12 +399,12 @@ bool PartialImmediateOperands() {
     Backing backing;
     auto memory = backing.Callbacks();
     std::array<uint32_t, Page / 4> data{};
-    std::array<fiberish::mem::MicroTLB, fiberish::mem::TLB_ENTRIES> tlb{};
-    tlb[(Data >> fiberish::mem::PAGE_SHIFT) & fiberish::mem::TLB_INDEX_MASK] = {
+    fiberish::mem::SoftTlb tlb{};
+    tlb.read_tlb[(Data >> fiberish::mem::PAGE_SHIFT) & fiberish::mem::TLB_INDEX_MASK] = {
         fiberish::mem::PackMicroTlbTags(Data, fiberish::mem::kInvalidMicroTlbTag),
         reinterpret_cast<uintptr_t>(data.data()) - Data,
     };
-    memory.read_tlb = tlb.data();
+    memory.data_tlb = &tlb;
     Profile profile{.trusted_baking = true};
     profile.resolve = [](const DecodedInstruction& op, bool dead) -> detail::HandlerBinding {
         switch (op.word & ~(0xfffu << 10)) {
@@ -623,12 +623,12 @@ bool FusedLoadReplay() {
         return false;
 
     std::array<uint8_t, Page + 4> data{42};
-    std::array<fiberish::mem::MicroTLB, fiberish::mem::TLB_ENTRIES> tlb;
-    tlb[(HotData >> fiberish::mem::PAGE_SHIFT) & fiberish::mem::TLB_INDEX_MASK] = {
+    fiberish::mem::SoftTlb tlb;
+    tlb.read_tlb[(HotData >> fiberish::mem::PAGE_SHIFT) & fiberish::mem::TLB_INDEX_MASK] = {
         fiberish::mem::PackMicroTlbTags(HotData, fiberish::mem::kInvalidMicroTlbTag),
         reinterpret_cast<uintptr_t>(data.data()) - HotData,
     };
-    memory.read_tlb = tlb.data();
+    memory.data_tlb = &tlb;
     state = {};
     state.pc = Lead;
     state.x[AddressReg] = HotData;
@@ -637,7 +637,7 @@ bool FusedLoadReplay() {
         state.x[AddressReg] != HotData + 4 || state.x[Observer] != HotData + 4 || backing.sequences != 1)
         return false;
 
-    // Exercise replay after crossing the warmed same-page successor link.
+    // Exercise replay after starting from the preceding branch.
     for (const auto address : {0x1'0000'0000ull + HotData, HotData + Page - 2ull}) {
         state = {};
         state.pc = Lead;
@@ -705,6 +705,48 @@ bool FusedStoreReplay() {
            state.nzcv == 0;
 }
 
+bool FusedStorePromotesReadWriteMicroTlb() {
+#if FIBERCPU_AARCH64_TAIL_DISPATCH
+    constexpr uint32_t Store = 0xb8004420;  // str w0, [x1], #4
+    constexpr uint32_t Load = 0xb9400062;   // ldr w2, [x3]
+    constexpr uint32_t Branch = 0x14000001; // b +4
+    constexpr uint32_t Data = 0x410000;
+    Backing backing;
+    backing.Code(Base, {Store, Load, Branch});
+    auto memory = backing.Callbacks();
+    memory.read = nullptr;
+    memory.write = nullptr;
+    uint32_t word = 0;
+    fiberish::mem::SoftTlb tlb;
+    // Only the write table holds this page. The following read needs the
+    // read tag promoted into the handler ABI by the store.
+    tlb.write_tlb[(Data >> fiberish::mem::PAGE_SHIFT) & fiberish::mem::TLB_INDEX_MASK] = {
+        fiberish::mem::PackMicroTlbTags(Data, Data), reinterpret_cast<uintptr_t>(&word) - Data};
+    memory.data_tlb = &tlb;
+    Profile profile{.trusted_baking = true};
+    profile.resolve_sequence = [](const uint32_t*, unsigned count, unsigned* length, uint32_t dead,
+                                  detail::ThreadHandler& threaded) -> Handler {
+        if (count != 3)
+            return nullptr;
+        *length = 3;
+        return BindBakedRun<Store, Load, Branch>(dead, threaded);
+    };
+    for (const auto& bindings : {Profile{}, profile}) {
+        State state{};
+        state.pc = Base;
+        state.x[0] = 123;
+        state.x[1] = state.x[3] = Data;
+        state.exclusive_address = Data;
+        state.exclusive_size = 4;
+        const auto result = Run(state, memory, 3, bindings);
+        if (result.reason != Stop::Budget || result.executed != 3 || state.pc != Base + 12 || state.x[1] != Data + 4 ||
+            state.x[2] != 123 || word != 123 || state.exclusive_size)
+            return false;
+    }
+#endif
+    return true;
+}
+
 bool BoundLiteralAddress() {
     constexpr uint32_t GuestPage = 0x00400000;
     constexpr uint32_t Start = GuestPage + 32;
@@ -714,13 +756,13 @@ bool BoundLiteralAddress() {
     Backing backing;
     backing.Put(Base + 28, 123);
     backing.Code(Base + 32, {Add, Load, Branch});
-    std::array<fiberish::mem::MicroTLB, fiberish::mem::TLB_ENTRIES> tlb;
-    tlb[(GuestPage >> fiberish::mem::PAGE_SHIFT) & fiberish::mem::TLB_INDEX_MASK] = {
+    fiberish::mem::SoftTlb tlb;
+    tlb.read_tlb[(GuestPage >> fiberish::mem::PAGE_SHIFT) & fiberish::mem::TLB_INDEX_MASK] = {
         fiberish::mem::PackMicroTlbTags(GuestPage, fiberish::mem::kInvalidMicroTlbTag),
         reinterpret_cast<uintptr_t>(backing.data.data()) - GuestPage,
     };
     Memory memory{&backing};
-    memory.read_tlb = tlb.data();
+    memory.data_tlb = &tlb;
     memory.executable_page = [](void* context, uint64_t address) -> const uint8_t* {
         return address == GuestPage ? static_cast<Backing*>(context)->data.data() : nullptr;
     };
@@ -1008,6 +1050,7 @@ int main() {
         {"fused load fault and instruction refetch", FusedLoadRefetch()},
         {"fused load replay preserves the prefix and commits writeback once", FusedLoadReplay()},
         {"fused store replay exposes the prefix once and refetches", FusedStoreReplay()},
+        {"store promotes a shared read/write micro-TLB entry", FusedStorePromotesReadWriteMicroTlb()},
         {"literal addresses bind to the member in hot and bounded dispatch", BoundLiteralAddress()},
         {"NZCV at every instruction budget, including ADCS input carry", FlagElisionBudgets()},
         {"NZCV at a conditional branch and for reused instruction words", FlagElisionBranchAndCache()},

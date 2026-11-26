@@ -27,46 +27,29 @@ Standalone CMake builds use `FIBERCPU_GUEST_I386` and `FIBERCPU_GUEST_AARCH64`. 
 
 The fixed-width decoder indexes 256 buckets with bits 31–24, tests the candidate encoding masks, checks reserved operands and extracts fields. Lowering binds the operation to a handler. Integer and memory variants specialize common widths, operations, shift and addressing modes. Scalar FP and SIMD lowering classify their instruction families before execution. Hot operand and fusion plans use the very same integer and memory kernels. The x86 decoder retains the opcode maps, prefixes, and ModRM tables its variable-length encoding requires.
 
-The threaded calling convention passes a CPU pointer, a slot pointer, the remaining instruction budget after the block, a read-TLB pointer and the guest NZCV bits. A build can add one guest GPR as the last argument with `-DFIBERCPU_AARCH64_PIN_REG=9` or `-p:AArch64PinRegister=9`. The default is `-1` and emits the shorter function type. The runtime frame belongs to the current invocation of `Run`. Nested calls restore the outer frame on return.
+The threaded calling convention passes CPU state, the current slot, the remaining budget after the block, the software TLB, the micro-TLB tags and addend, and NZCV. A build can add one guest GPR as the last argument with `-DFIBERCPU_AARCH64_PIN_REG=9` or `-p:AArch64PinRegister=9`. The default is `-1` and emits the shorter function type. Nested calls restore the outer run frame on return.
 
 The decoder scans each block backward for NZCV reads and writes. All four flags are live on block exit and at instructions that can fault or call an observer. When a later writer kills every output of an integer flag producer, lowering selects a handler that omits that write. Carry-consuming arithmetic still reads the incoming C. The word cache retains the precise handler for single steps and short budgets. Use `-DFIBERCPU_AARCH64_DFE=OFF` for a control build.
 
-The AArch64 cache holds decoded straight-line spans on one executable page. Instruction budgets, synchronous faults, syscalls and self-modifying code can all interrupt a span. Slow memory callbacks force instruction refetch. Threaded dispatch uses the same compiler attribute probe as x86. Compilers without guaranteed tail calls use a bounded loop. See [baked instruction variants and training](baked-instruction-variants.md) for profiling and regeneration.
+AArch64 uses the same MMU page index and block arena as i386. The index keys a block by executable host backing and guest PC. A 128-entry lookup cache precedes the page index. Both guests charge actual decoded block allocation bytes against `BlockCacheSize`, defaulting to 64 MiB per address space. Budget pressure exits the interpreter before releasing the arena. The next native run performs the pending flush. One instruction can retire through the scalar path when a block cannot fit.
 
-Within a full block, the slot identifies the precise guest PC of every constituent, including the interior of a fused sequence. Block binding resolves ADR, ADRP, literal addresses and immediate branch targets after copying the word-cache entry. The remaining budget passes unchanged through ALU handlers. An early exit refunds the unretired suffix. Same-page links bind to a host executable page and check the target slot generation and current instruction bytes. The taken immediate branch uses a shared tail-called entry. Ordinary block chaining carries NZCV and the optional pin directly.
+An operand slot carries the exact guest PC, including at the interior of a fused sequence. Block binding resolves ADR, ADRP, literal and immediate branch addresses. ALU handlers carry the remaining budget unchanged and an early exit refunds the unretired suffix. Each block has distinct taken and fallthrough links. A link loads the target entry and metadata together, validates the target PC and block validity, charges the budget, and tail-dispatches across executable pages. A cold lookup either installs the link and tail-dispatches or returns control to the decoder. A budget shorter than the target block uses bounded dispatch.
 
-A hot load checks the address range, full page tag and page boundary using the ABI's TLB argument. A miss tail-calls the scalar replay entry with the offending slot, before changing the destination or applying writeback. Replay publishes the current PC, NZCV and pin before a possible observer. A callback-free completion can tail-dispatch to the next member. An observing callback forces a refetch. Guest stores currently use this synchronized path, which checks for executable aliases, dirty-page tracking and mapping hooks.
+The managed runtime invalidates cached targets after host-side code changes. For example, `VMAManager.NotifyFileContentChanged` sends `ResetCodeCacheByRange` to the affected engines. Native remaps, removal of execute permission and guest writes through a writable alias invalidate blocks through the backing-page index. A stale link then fails its target validity check. The standalone callback interface, which has no managed invalidation protocol, keeps a per-run cache and checks bytes before reusing a block.
 
-The AArch64 backend provides lowered, offline-baked and fused interpreter handlers. The online LLVM block compiler continues to target i386.
+Ordinary loads and stores share the x86 two-level data TLB policy. A hit in the register micro-TLB or the 256-entry software read or write table performs the transfer inline. An L2 hit promotes both tags and the addend into the handler ABI. The write table only holds dirty pages that require no write interception. The fast probe checks the entire page tag, address range and transfer width. A miss tail-calls replay at the current instruction before updating a register or guest memory. Replay publishes PC, NZCV and the optional pin before a possible callback. A callback-free replay resumes the block. A transfer through the MMU slow path refetches the next instruction.
+
+The compiler attribute probe for tail dispatch is shared with x86. Compilers without guaranteed tail calls use bounded dispatch. LLVM block compilation targets i386. See [baked instruction variants and training](baked-instruction-variants.md) for profiling and regeneration.
 
 ## Linked handler code generation
 
-Apple Clang 21 on an Apple M5 Max assigns `x20` to CPU state, `x21` to the slot, `x22` to the budget, `x23` to the read TLB, and `w24` to NZCV. In the optional pin build, `x25` holds the selected guest GPR. These assignments describe the inspected Release binary. The ABI is expressed using typed arguments and `preserve_none` so other host compilers can allocate their own registers.
+On Apple Clang 21, the Release AArch64 handler ABI uses `x20` for CPU state, `x21` for the slot, `x22` for the budget, `x23` for the software TLB, `x24` and `x25` for the micro-TLB tags and addend, and `w26` for NZCV. The optional guest GPR occupies the last ABI argument. The inspected branch hit uses one link load, a paired `ldp` of the target header, validity and budget checks, and `br` through the loaded entry. The inspected 32-bit load and store handlers perform the access and tail-dispatch on a hit. Branch misses use a direct tail branch to `ChainSlow`, and transfer misses use a direct tail branch to `ReplayMemory`. The inspected hot entries have no stack frame.
 
-The table counts static host instructions in linked entries, including dispatch. The probe used `FIBERCPU_AARCH64_PIN_REG=9` and exact operand entries for the listed guest words. The read example includes both the hit path and its direct jump to replay. The conditional branch calls the shared target-validation entry with a tail jump, so its count excludes that shared code.
+To reproduce a probe, add an instruction's numeric encoding to an AArch64 version-1 plan (`entries`, each with `word` and `count`). Provide `pairs` or `sequences` to emit fused entries. Configure `FIBERCPU_AARCH64_OPERAND_PLAN_FILE` with this plan, build Release and resolve `BakedThreadRun`, `DispatchMemory`, `ChainDirect`, and `ReplayMemory` with `nm -n -C libfibercpu.dylib`. Pass the symbol's start and the next symbol's address to `xcrun llvm-objdump -d --no-show-raw-insn --start-address=... --stop-address=... libfibercpu.dylib`.
 
-| Guest encoding | Entry | ARM64 host instructions |
-| --- | --- | ---: |
-| `91001529` | `ADD X9,X9,#5` | 3 |
-| `BA020129` | `ADCS X9,X9,X2` | 6 |
-| `54000042` | `B.HS +8` | 4 |
-| `F9400429` | `LDR X9,[X1,#8]` | 17 |
-| `BA020129 54000042` | Fused `ADCS` and `B.HS` | 9 |
-| `91001529 F940012A 71000400 54FFFFE1` | Fused add, load, subtract and branch | 27 |
+## Cache and TLB counters
 
-A separate scan of the stock AArch64-only Release library with the pin disabled covered all 441 baked entries, 201 integer entries and 78 memory entries. None contained a normal call or a stack operand on this host. The shared branch and end-of-block entries also stayed stackless. The scalar fallback and memory replay entries call the platform ABI after publishing guest state.
-
-The complete entry for `ADD X9,X9,#5` is shown below.
-
-```asm
-ldr x0, [x21, #0x48]!
-add x25, x25, #5
-br  x0
-```
-
-The stock i386 guest's baked `ADD EAX,0x17eaff` on the same host advances its 16-byte slot and takes two additions for its immediate, then tail-jumps through the loaded address. Both entries keep the guest operand in a register throughout. The A64 fused load's replay exit advances the slot by 72 bytes to the load, then jumps directly to `ReplayMemory`; the preceding add has already committed to the hot pin.
-
-To reproduce a probe, add its numeric words to an AArch64 version-1 plan (`entries`, each with `word` and `count`). Provide `pairs` or `sequences` to emit fused entries. Configure `FIBERCPU_AARCH64_OPERAND_PLAN_FILE` with this plan, build Release and resolve `BakedThreadRun`, `ChainDirect`, and `ReplayMemory` with `nm -n -C libfibercpu.dylib`. Pass the symbol's start and the next symbol's address to `xcrun llvm-objdump -d --no-show-raw-insn --start-address=... --stop-address=... libfibercpu.dylib`.
+Build with `-DENABLE_TLB_STATS=ON` and export the workload process's counters with `--guest-stats-dir`. Set `PODISH_SKIP_BLOCKS_EXPORT=1` for a counters-only run and `exec` the measured program when a shell prepares input and output. The `native_stats` field in `summary.json` contains direct-link hits, slow link resolutions, cross-page hits, link misses, dispatcher lookups, block allocations and bytes, memory replays, and individual L1/L2 TLB probe totals. Equal cache limits apply to allocation bytes. Code shape, block length and guest placement can change the number of blocks and TLB conflicts under that limit.
 
 ## Reproduce validation
 

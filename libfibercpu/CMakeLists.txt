@@ -57,7 +57,7 @@ CPMAddPackage(
 )
 
 option(USE_SOFTFLOAT "Use Berkeley SoftFloat 3 for x87 FPU emulation" ON)
-option(ENABLE_TLB_STATS "Enable tracking of L1/L2 TLB hits and misses" OFF)
+option(ENABLE_TLB_STATS "Track TLB probes, memory replay and block dispatch" OFF)
 option(FIBERCPU_BUILD_STATIC "Build fibercpu as a static library instead of shared" OFF)
 option(FIBERCPU_ENABLE_LTO "Enable interprocedural optimization (LTO/IPO)" ON)
 set(FIBERCPU_WASM_HOT_DISPATCH_HANDLERS "0" CACHE STRING "Profiled cases in the inlined Wasm dispatch loop")

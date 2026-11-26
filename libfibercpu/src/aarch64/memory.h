@@ -6,6 +6,7 @@
 
 #include "../mem/tlb.h"
 #include "integer.h"
+#include "threading.h"
 
 namespace fiberish::aarch64::detail {
 
@@ -85,15 +86,6 @@ inline void WriteElement(uint8_t* data, unsigned width, uint64_t value) {
     }
 }
 
-inline void StoreRegister(const State& state, uint8_t* data, unsigned reg, unsigned width, bool vector) {
-    if (vector) {
-        WriteElement(data, width, state.v[reg].lo);
-        if (width == 128) WriteLittle(data + 8, state.v[reg].hi);
-    } else {
-        WriteElement(data, width, ReadRegister(state, reg, width));
-    }
-}
-
 template <bool hot>
 A64_MEMORY_INLINE uint64_t ReadTransferRegister(const State& state, unsigned reg, bool use_sp,
                                                 [[maybe_unused]] uint64_t* pinned) {
@@ -116,6 +108,54 @@ A64_MEMORY_INLINE void WriteTransferRegister(State& state, unsigned reg, unsigne
 }
 
 template <bool hot = false>
+A64_MEMORY_INLINE void StoreRegister(const State& state, uint8_t* data, unsigned reg, unsigned width, bool vector,
+                                     uint64_t* pinned = nullptr) {
+    if (vector) {
+        WriteElement(data, width, state.v[reg].lo);
+        if (width == 128) WriteLittle(data + 8, state.v[reg].hi);
+    } else {
+        WriteElement(data, width, ReadTransferRegister<hot>(state, reg, false, pinned));
+    }
+}
+
+template <bool write>
+A64_MEMORY_INLINE bool ProbeDataTlb([[maybe_unused]] const State& state, uint64_t address, unsigned size,
+                                    const mem::SoftTlb* data_tlb, uint64_t& tlb_tags, uintptr_t& tlb_addend,
+                                    uint8_t*& data) {
+#ifdef ENABLE_TLB_STATS
+    auto* stats = state.active_run ? state.active_run->memory.stats : nullptr;
+    if (stats) ++(write ? stats->total_writes : stats->total_reads);
+#endif
+    if (address <= UINT32_MAX && (address & mem::PAGE_MASK) <= mem::PAGE_SIZE - size) [[likely]] {
+        const auto addr = static_cast<uint32_t>(address);
+        const auto tag = addr & ~mem::PAGE_MASK;
+        const auto cached = write ? uint32_t(tlb_tags >> 32) : uint32_t(tlb_tags);
+        if (cached == tag) [[likely]] {
+#ifdef ENABLE_TLB_STATS
+            if (stats) ++(write ? stats->l1_write_hits : stats->l1_read_hits);
+#endif
+            data = reinterpret_cast<uint8_t*>(tlb_addend + addr);
+            return true;
+        }
+        const auto index = (addr >> mem::PAGE_SHIFT) & mem::TLB_INDEX_MASK;
+        const auto entry = (write ? data_tlb->write_tlb : data_tlb->read_tlb)[index];
+        if ((write ? entry.WriteTag() : entry.ReadTag()) == tag) [[likely]] {
+#ifdef ENABLE_TLB_STATS
+            if (stats) ++(write ? stats->l2_write_hits : stats->l2_read_hits);
+#endif
+            tlb_tags = entry.tags;
+            tlb_addend = entry.addend;
+            data = reinterpret_cast<uint8_t*>(entry.addend + addr);
+            return true;
+        }
+    }
+#ifdef ENABLE_TLB_STATS
+    if (stats) ++(write ? stats->write_misses : stats->read_misses);
+#endif
+    return false;
+}
+
+template <bool hot = false>
 A64_MEMORY_INLINE void LoadRegister(State& state, const uint8_t* data, unsigned reg, unsigned width, bool vector,
                                     unsigned operation, uint64_t* pinned = nullptr) {
     auto value = ReadElement(data, width);
@@ -130,8 +170,9 @@ A64_MEMORY_INLINE void LoadRegister(State& state, const uint8_t* data, unsigned 
 template <Kind kind, unsigned fixed_width, int fixed_operation, int fixed_mode, int fixed_shift, int fixed_vector,
           bool probe_only>
 A64_MEMORY_INLINE StepResult LoadStoreTransfer(State& state, const DecodedInstruction& op, uint64_t pc,
-                                               uint64_t literal_address, const mem::MicroTLB* read_tlb,
-                                               const Memory* memory, uint64_t* pinned) {
+                                               uint64_t literal_address, const mem::SoftTlb* data_tlb,
+                                               uint64_t& tlb_tags, uintptr_t& tlb_addend, const Memory* memory,
+                                               uint64_t* pinned) {
     const unsigned width = fixed_width == 0 ? op.width : fixed_width;
     const unsigned operation = fixed_operation < 0 ? op.operation : fixed_operation;
     const unsigned mode = fixed_mode < 0 ? op.mode : fixed_mode;
@@ -165,68 +206,45 @@ A64_MEMORY_INLINE StepResult LoadStoreTransfer(State& state, const DecodedInstru
     }
     if (operation == Prefetch) return {};
 
-    std::array<uint8_t, pair ? 32 : 16> data;
     const auto size = bytes * (pair ? 2 : 1);
+    if constexpr (pair) {
+        if (operation != Store && !vector && op.rd == op.ra) return Undefined(pc);
+    }
     bool refetch = false;
+    std::array<uint8_t, pair ? 32 : 16> storage;
+    auto* data = storage.data();
+    if constexpr (probe_only) {
+        const bool hit = operation == Store
+                             ? ProbeDataTlb<true>(state, address, size, data_tlb, tlb_tags, tlb_addend, data)
+                             : ProbeDataTlb<false>(state, address, size, data_tlb, tlb_tags, tlb_addend, data);
+        if (!hit) return {Stop::Replay};
+    }
     if (operation == Store) {
-        if constexpr (probe_only) {
-            return {Stop::Replay};
-        } else {
-            StoreRegister(state, data.data(), op.rd, width, vector);
-            if constexpr (pair) StoreRegister(state, data.data() + bytes, op.ra, width, vector);
+#if defined(__has_builtin)
+#if __has_builtin(__builtin_assume_separate_storage)
+        if constexpr (probe_only) __builtin_assume_separate_storage(&state, data);
+#endif
+#endif
+        StoreRegister<probe_only>(state, data, op.rd, width, vector, pinned);
+        if constexpr (pair) StoreRegister<probe_only>(state, data + bytes, op.ra, width, vector, pinned);
+        if constexpr (!probe_only) {
             refetch = address > UINT64_MAX - (size - 1) || !memory->write_fast ||
-                      !memory->write_fast(memory->context, address, data.data(), size);
-            if (refetch) {
-                if (!WriteMemory(state, *memory, address, data.data(), size)) return Fault(address, access);
-            } else {
-                ClearOverlappingExclusive(state, address, size);
-            }
+                      !memory->write_fast(memory->context, address, data, size);
+            if (refetch && !WriteMemory(state, *memory, address, data, size)) return Fault(address, access);
         }
+        ClearOverlappingExclusive(state, address, size);
     } else {
-        if constexpr (pair) {
-            if (!vector && op.rd == op.ra) return Undefined(pc);
-        }
-        const auto tag = address & ~uint64_t{mem::PAGE_MASK};
-        const auto index = (address >> mem::PAGE_SHIFT) & mem::TLB_INDEX_MASK;
-        if (read_tlb && (address & mem::PAGE_MASK) <= mem::PAGE_SIZE - size && read_tlb[index].ReadTag() == tag) {
-            const auto source = reinterpret_cast<const void*>(read_tlb[index].addend + address);
-            if constexpr (fixed_width != 0) {
-                std::memcpy(data.data(), source, (fixed_width / 8) * (pair ? 2 : 1));
-            } else {
-                // Fixed copies keep the generic probe free of calls as well.
-                switch (size) {
-                    case 1:
-                        std::memcpy(data.data(), source, 1);
-                        break;
-                    case 2:
-                        std::memcpy(data.data(), source, 2);
-                        break;
-                    case 4:
-                        std::memcpy(data.data(), source, 4);
-                        break;
-                    case 8:
-                        std::memcpy(data.data(), source, 8);
-                        break;
-                    case 16:
-                        std::memcpy(data.data(), source, 16);
-                        break;
-                    case 32:
-                        if constexpr (pair) std::memcpy(data.data(), source, 32);
-                        break;
-                }
-            }
-        } else {
-            if constexpr (probe_only) {
-                return {Stop::Replay};
-            } else {
+        if constexpr (!probe_only) {
+            const bool hit = memory->data_tlb && !memory->find_block &&
+                             ProbeDataTlb<false>(state, address, size, memory->data_tlb, tlb_tags, tlb_addend, data);
+            if (!hit) {
                 refetch = address > UINT64_MAX - (size - 1) || !memory->read_fast ||
-                          !memory->read_fast(memory->context, address, data.data(), size);
-                if (refetch && !ReadMemory(*memory, address, data.data(), size)) return Fault(address, access);
+                          !memory->read_fast(memory->context, address, data, size);
+                if (refetch && !ReadMemory(*memory, address, data, size)) return Fault(address, access);
             }
         }
-        LoadRegister<probe_only>(state, data.data(), op.rd, width, vector, operation, pinned);
-        if constexpr (pair)
-            LoadRegister<probe_only>(state, data.data() + bytes, op.ra, width, vector, operation, pinned);
+        LoadRegister<probe_only>(state, data, op.rd, width, vector, operation, pinned);
+        if constexpr (pair) LoadRegister<probe_only>(state, data + bytes, op.ra, width, vector, operation, pinned);
     }
     if (update_base) WriteTransferRegister<probe_only>(state, op.rn, 64, writeback, true, pinned);
     return refetch ? StepResult{Stop::Refetch} : StepResult{};
@@ -235,21 +253,23 @@ A64_MEMORY_INLINE StepResult LoadStoreTransfer(State& state, const DecodedInstru
 template <Kind kind, unsigned width = 0, int operation = -1, int mode = -1, int shift = -1, int vector = -1>
 A64_MEMORY_INLINE StepResult LoadStore(State& state, const Memory& memory, const DecodedInstruction& op) {
     const auto literal_address = kind == Kind::LoadLiteral ? state.pc + op.immediate : 0;
-    return LoadStoreTransfer<kind, width, operation, mode, shift, vector, false>(state, op, state.pc, literal_address,
-                                                                                 memory.read_tlb, &memory, nullptr);
+    uint64_t tags = mem::InvalidMicroTlbAbiTags();
+    uintptr_t addend = 0;
+    return LoadStoreTransfer<kind, width, operation, mode, shift, vector, false>(
+        state, op, state.pc, literal_address, nullptr, tags, addend, &memory, nullptr);
 }
 
-// Only a hit can change guest state. The caller replays the actual member on
-// a miss, including stores and architectural exceptions.
+// Only a TLB hit can change guest state. A miss replays the current member.
 template <Kind kind, unsigned width = 0, int operation = -1, int mode = -1, int shift = -1, int vector = -1>
 A64_MEMORY_INLINE bool ProbeLoadStore(State& state, const DecodedInstruction& op, uint64_t literal_address,
-                                      const mem::MicroTLB* read_tlb A64_HOT_PIN_REF) {
+                                      const mem::SoftTlb* data_tlb, uint64_t& tlb_tags,
+                                      uintptr_t& tlb_addend A64_HOT_PIN_REF) {
     uint64_t* pin = nullptr;
 #if defined(FIBERCPU_AARCH64_PIN_REG) && FIBERCPU_AARCH64_PIN_REG >= 0
     pin = &pinned;
 #endif
-    return LoadStoreTransfer<kind, width, operation, mode, shift, vector, true>(state, op, 0, literal_address, read_tlb,
-                                                                                nullptr, pin)
+    return LoadStoreTransfer<kind, width, operation, mode, shift, vector, true>(state, op, 0, literal_address, data_tlb,
+                                                                                tlb_tags, tlb_addend, nullptr, pin)
                .reason == Stop::Continue;
 }
 

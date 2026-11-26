@@ -7,6 +7,33 @@
 
 namespace fiberish::mem {
 
+#ifdef ENABLE_TLB_STATS
+struct TlbStats {
+    uint64_t l1_read_hits = 0;
+    uint64_t l1_write_hits = 0;
+    uint64_t l2_read_hits = 0;
+    uint64_t l2_write_hits = 0;
+    uint64_t read_misses = 0;
+    uint64_t write_misses = 0;
+    uint64_t total_reads = 0;
+    uint64_t total_writes = 0;
+
+    void reset() { *this = {}; }
+};
+
+struct DispatchStats {
+    uint64_t direct_links = 0;
+    uint64_t resolved_links = 0;
+    uint64_t cross_page_links = 0;
+    uint64_t link_misses = 0;
+    uint64_t block_lookup_hits = 0;
+    uint64_t block_lookup_misses = 0;
+    uint64_t block_allocations = 0;
+    uint64_t block_allocated_bytes = 0;
+    uint64_t memory_replays = 0;
+};
+#endif
+
 using MicroTlbAbiWord = uint64_t;
 inline constexpr uint32_t kInvalidMicroTlbTag = std::numeric_limits<uint32_t>::max();
 

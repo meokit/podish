@@ -1,9 +1,11 @@
 #pragma once
 
+#include <bit>
 #include <cstring>
 
+#include "../mem/tlb.h"
 #include "../musttail.h"
-#include "aarch64.h"
+#include "block.h"
 
 #if FIBERCPU_HAS_MUSTTAIL && !defined(FIBERCPU_AARCH64_LOOP_DISPATCH)
 #define FIBERCPU_AARCH64_TAIL_DISPATCH 1
@@ -13,55 +15,13 @@
 
 namespace fiberish::aarch64::detail {
 
-constexpr unsigned BlockMax = 24;
-constexpr unsigned PageBytes = 4096;
-constexpr uint64_t PageMask = PageBytes - 1;
-
-struct Block;
-
-struct DispatchSlot {
-    ThreadHandler thread = nullptr;
-    uint64_t pc = 0;
-    DecodedInstruction op{};
-    union {
-        Handler fused = nullptr;
-        const Block* owner;  // Only the sentinel has an owner pointer.
-    };
-    uint8_t remaining = 0;  // Includes this member, excludes the sentinel.
-    uint8_t fused_length = 1;
-    bool retains_page = false;
-    bool can_follow = false;
-    bool omits_flags = false;
-    bool untrusted_scalar = false;
-    bool untrusted_fused = false;
-};
-
-static_assert(offsetof(DispatchSlot, thread) == 0);
-
-struct BlockLink {
-    const Block* target = nullptr;
-    uint64_t replacement = 0;
-};
-
-struct Block {
-    uint64_t pc = 0;
-    const uint8_t* executable_page = nullptr;
-    decltype(Profile::resolve) resolver = nullptr;
-    decltype(Profile::resolve_pair) pair_resolver = nullptr;
-    decltype(Profile::resolve_sequence) sequence_resolver = nullptr;
-    unsigned count = 0;
-    bool trusted_baking = false;
-    uint64_t replacement = 0;
-    mutable std::array<BlockLink, 2> successors{};
-    std::array<uint32_t, BlockMax> words{};
-    std::array<DispatchSlot, BlockMax + 1> slots{};
-};
-
 struct RunFrame {
     const Memory& memory;
     const uint8_t* executable = nullptr;
     const DispatchSlot* exit_slot = nullptr;
     StepResult exit{};
+    unsigned exit_edge = 2;
+    uint64_t exit_target = 0;
 };
 
 inline StepResult CompleteStep(State& state, const DispatchSlot* last, StepResult step) {
@@ -87,8 +47,8 @@ inline Word CodeWord(const uint8_t* code) {
 [[gnu::always_inline]]
 #endif
 inline bool MatchesWords(const Block& block, const uint8_t* code) {
-    const auto* words = reinterpret_cast<const uint8_t*>(block.words.data());
-    unsigned count = block.count;
+    const auto* words = reinterpret_cast<const uint8_t*>(block.Words());
+    unsigned count = block.Count();
     while (count >= 4) {
         const uint64_t difference = (CodeWord<uint64_t>(code) ^ CodeWord<uint64_t>(words)) |
                                     (CodeWord<uint64_t>(code + 8) ^ CodeWord<uint64_t>(words + 8));
@@ -127,46 +87,67 @@ inline uint64_t FinishThread(State& state, const DispatchSlot* current, uint64_t
 #if defined(__GNUC__) || defined(__clang__)
 [[gnu::always_inline]]
 #endif
-inline const Block* LinkedBlock(const Block& source, uint64_t target_pc, uint64_t remaining_after_block) {
-    if (!remaining_after_block || (target_pc & 3) || ((target_pc ^ source.pc) & ~PageMask)) return nullptr;
-    for (const auto& link : source.successors) {
-        const auto* target = link.target;
-        if (target && target->pc == target_pc && target->replacement == link.replacement &&
-            target->executable_page == source.executable_page && remaining_after_block >= target->count &&
-            MatchesWords(*target, source.executable_page + (target_pc & PageMask)))
-            return target;
-    }
-    return nullptr;
+inline ThreadHandler LinkedBlock(const Block*& target, const DispatchSlot& sentinel, unsigned edge, uint64_t target_pc,
+                                 uint64_t& remaining_after_block) {
+    if (!remaining_after_block) return nullptr;
+    target = sentinel.links[edge];
+    const auto bits = *reinterpret_cast<const volatile __uint128_t*>(&target->header);
+    const auto header = std::bit_cast<BlockHeader>(bits);
+    if (!header.IsValid() || header.Start() != target_pc || remaining_after_block < header.Count()) return nullptr;
+    remaining_after_block -= header.Count();
+#if defined(__clang__)
+    __builtin_assume(header.entry != nullptr);
+#endif
+    return header.entry;
 }
 
-#define A64_THREAD_NEXT(length)                                                                 \
-    do {                                                                                        \
-        const auto* a64_next = current + (length);                                              \
-        ATTR_MUSTTAIL return a64_next->thread(state, a64_next, remaining_after_block, read_tlb, \
-                                              nzcv A64_THREAD_PIN_PASS);                        \
+#define A64_THREAD_NEXT(length)                                                                                       \
+    do {                                                                                                              \
+        const auto* a64_next = current + (length);                                                                    \
+        ATTR_MUSTTAIL return a64_next->thread(state, a64_next, remaining_after_block, data_tlb, tlb_tags, tlb_addend, \
+                                              nzcv A64_THREAD_PIN_PASS);                                              \
     } while (false)
 
 #define A64_THREAD_REPLAY(slot)                                                                                    \
-    ATTR_MUSTTAIL return ::fiberish::aarch64::detail::ReplayMemory(state, (slot), remaining_after_block, read_tlb, \
-                                                                   nzcv A64_THREAD_PIN_PASS)
+    ATTR_MUSTTAIL return ::fiberish::aarch64::detail::ReplayMemory(state, (slot), remaining_after_block, data_tlb, \
+                                                                   tlb_tags, tlb_addend, nzcv A64_THREAD_PIN_PASS)
 
-#define A64_THREAD_LINK(sentinel, target_pc)                                                                          \
-    do {                                                                                                              \
-        if (const auto* a64_link =                                                                                    \
-                ::fiberish::aarch64::detail::LinkedBlock(*(sentinel)->owner, (target_pc), remaining_after_block)) {   \
-            const auto* a64_next = a64_link->slots.data();                                                            \
-            ATTR_MUSTTAIL return a64_next->thread(state, a64_next, remaining_after_block - a64_link->count, read_tlb, \
-                                                  nzcv A64_THREAD_PIN_PASS);                                          \
-        }                                                                                                             \
+FIBERCPU_AARCH64_THREAD_ABI uint64_t ChainSlow(A64_THREAD_PARAMS);
+
+#ifdef ENABLE_TLB_STATS
+#define A64_COUNT_DIRECT_LINK(source, target)                                            \
+    do {                                                                                 \
+        if (auto* stats = state.active_run->memory.dispatch_stats) {                     \
+            ++stats->direct_links;                                                       \
+            stats->cross_page_links += (((source)->pc ^ (target)->pc) & ~PageMask) != 0; \
+        }                                                                                \
+    } while (false)
+#else
+#define A64_COUNT_DIRECT_LINK(source, target) ((void)0)
+#endif
+
+#define A64_THREAD_LINK(sentinel, edge, target_pc)                                                            \
+    do {                                                                                                      \
+        const ::fiberish::aarch64::detail::Block* a64_target_block;                                           \
+        if (const auto a64_entry = ::fiberish::aarch64::detail::LinkedBlock(                                  \
+                a64_target_block, *(sentinel), (edge), (target_pc), remaining_after_block)) [[likely]] {      \
+            A64_COUNT_DIRECT_LINK((sentinel)->owner, a64_target_block);                                       \
+            ATTR_MUSTTAIL return a64_entry(state, a64_target_block->Slots(), remaining_after_block, data_tlb, \
+                                           tlb_tags, tlb_addend, nzcv A64_THREAD_PIN_PASS);                   \
+        }                                                                                                     \
+        auto& a64_frame = *state.active_run;                                                                  \
+        a64_frame.exit_edge = (edge);                                                                         \
+        a64_frame.exit_target = (target_pc);                                                                  \
+        ATTR_MUSTTAIL return ::fiberish::aarch64::detail::ChainSlow(A64_THREAD_ARGS);                         \
     } while (false)
 
-#define A64_THREAD_BRANCH(target_pc)                                                                   \
-    do {                                                                                               \
-        const uint64_t a64_target = (target_pc);                                                       \
-        if (current->remaining == 1) A64_THREAD_LINK(current + 1, a64_target);                         \
-        return ::fiberish::aarch64::detail::FinishThread(                                              \
-            state, current, remaining_after_block, nzcv A64_THREAD_PIN_PASS,                           \
-            {::fiberish::aarch64::Stop::Branch, ::fiberish::aarch64::Access::Execute, 0, a64_target}); \
+#define A64_THREAD_BRANCH(target_pc)                                                                          \
+    do {                                                                                                      \
+        const uint64_t a64_target = (target_pc);                                                              \
+        if (current->remaining == 1) A64_THREAD_LINK(current + 1, a64_target == current->pc + 4, a64_target); \
+        return ::fiberish::aarch64::detail::FinishThread(                                                     \
+            state, current, remaining_after_block, nzcv A64_THREAD_PIN_PASS,                                  \
+            {::fiberish::aarch64::Stop::Branch, ::fiberish::aarch64::Access::Execute, 0, a64_target});        \
     } while (false)
 
 FIBERCPU_AARCH64_THREAD_ABI uint64_t ChainDirect(A64_THREAD_PARAMS);
@@ -183,7 +164,11 @@ __declspec(noinline)
 FIBERCPU_AARCH64_THREAD_ABI inline uint64_t ReplayMemory(A64_THREAD_PARAMS) {
     FlushThread(state, current->pc, nzcv A64_THREAD_PIN_PASS);
     const auto& memory = state.active_run->memory;
+#ifdef ENABLE_TLB_STATS
+    if (auto* stats = memory.dispatch_stats) ++stats->memory_replays;
+#endif
     auto step = CompleteStep(state, current, current->op.handler(state, memory, current->op));
+    tlb_tags = mem::InvalidMicroTlbAbiTags();
     if (current->untrusted_scalar) {
         state.active_run->executable = nullptr;
         if (step.reason == Stop::Continue) step.reason = Stop::Refetch;
@@ -216,6 +201,7 @@ FIBERCPU_AARCH64_THREAD_ABI uint64_t SafeScalar(A64_THREAD_PARAMS) {
 #if FIBERCPU_AARCH64_PIN_REG >= 0
     pinned = state.x[FIBERCPU_AARCH64_PIN_REG];
 #endif
+    tlb_tags = mem::InvalidMicroTlbAbiTags();
     if (step.reason == Stop::Continue) {
         step = CompleteStep(state, last, step);
         if (step.reason == Stop::Continue && !untrusted) A64_THREAD_NEXT(length);
@@ -233,10 +219,7 @@ FIBERCPU_AARCH64_THREAD_ABI uint64_t SafeScalar(A64_THREAD_PARAMS) {
     return FinishThread(state, current, remaining_after_block, nzcv A64_THREAD_PIN_PASS, step);
 }
 
-FIBERCPU_AARCH64_THREAD_ABI inline uint64_t EndBlock(A64_THREAD_PARAMS) {
-    A64_THREAD_LINK(current, current->pc);
-    return FinishThread(state, current, remaining_after_block, nzcv A64_THREAD_PIN_PASS, {});
-}
+FIBERCPU_AARCH64_THREAD_ABI inline uint64_t EndBlock(A64_THREAD_PARAMS) { A64_THREAD_LINK(current, 1, current->pc); }
 #endif
 
 constexpr ThreadHandler EndBlockThread() {

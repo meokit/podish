@@ -528,33 +528,85 @@ public class EngineMmuTransferTests : IDisposable
         Assert.Equal(4ul, engine.ReadArmRegister(0));
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AArch64_LinkedSuccessorObservesCodeFlushAndBudget(bool crossPage)
+    {
+        var runtime = new TestRuntimeFactory();
+        using var engine = runtime.CreateEngine();
+        using var source = new UnmanagedPageFixture([]);
+        using var remote = new UnmanagedPageFixture([]);
+        var delta = crossPage ? LinuxConstants.PageSize : 8u;
+        var targetAddress = CodeAddr + delta;
+        var targetPointer = crossPage ? remote.Pointer : source.Pointer + 8;
+        Marshal.WriteInt32(source.Pointer, unchecked((int)(0x14000000u | (delta / 4))));
+        Marshal.WriteInt32(targetPointer, 0, unchecked((int)0x91000400u)); // add x0, x0, #1
+        Marshal.WriteInt32(targetPointer, 4, unchecked((int)0x91000800u)); // add x0, x0, #2
+        var back = (0u - (delta + 8) / 4) & 0x03ffffff;
+        Marshal.WriteInt32(targetPointer, 8, unchecked((int)(0x14000000u | back)));
+        engine.SelectArchitecture(GuestArchitecture.AArch64);
+        MapHostPage(engine, CodeAddr, source.Pointer, Protection.Read | Protection.Exec);
+        if (crossPage)
+            MapHostPage(engine, targetAddress, remote.Pointer, Protection.Read | Protection.Exec);
+
+        engine.InstructionPointer = CodeAddr;
+        engine.Run(maxInsts: 10);
+        Assert.Equal(7ul, engine.ReadArmRegister(0));
+        Assert.Equal(targetAddress + 4ul, engine.InstructionPointer);
+        Assert.Equal(EmuStatus.Stopped, engine.Status);
+
+        Marshal.WriteInt32(targetPointer, unchecked((int)0x91001c00)); // add x0, x0, #7
+        engine.ResetCodeCacheByRange(targetAddress, 4);
+        engine.InstructionPointer = CodeAddr;
+        engine.Run(maxInsts: 2);
+        Assert.Equal(14ul, engine.ReadArmRegister(0));
+        Assert.Equal(targetAddress + 4ul, engine.InstructionPointer);
+        Assert.Equal(EmuStatus.Stopped, engine.Status);
+
+        if (!crossPage) return;
+        engine.MemProtect(targetAddress, LinuxConstants.PageSize, (byte)Protection.Read);
+        engine.InstructionPointer = CodeAddr;
+        engine.Run(maxInsts: 10);
+        Assert.Equal(EmuStatus.Fault, engine.Status);
+        Assert.Equal((ulong)targetAddress, engine.InstructionPointer);
+        Assert.Equal(14ul, engine.ReadArmRegister(0));
+    }
+
     [Fact]
-    public void AArch64_LinkedSuccessorChecksCurrentBytesAndBudget()
+    public void AArch64_BlockCacheLimitFlushesBetweenRunsAndAllowsOversizedBlocks()
     {
         var runtime = new TestRuntimeFactory();
         using var engine = runtime.CreateEngine();
         using var code = new UnmanagedPageFixture([
-            0x02, 0x00, 0x00, 0x14, // b +8
-            0x1f, 0x20, 0x03, 0xd5, // nop
+            0x01, 0x00, 0x00, 0x14, // b +4
             0x00, 0x04, 0x00, 0x91, // add x0, x0, #1
-            0x00, 0x08, 0x00, 0x91, // add x0, x0, #2
-            0xfc, 0xff, 0xff, 0x17  // b -16
+            0x00, 0x04, 0x00, 0x91, // add x0, x0, #1
+            0x01, 0x00, 0x00, 0x14  // b +4
         ]);
         engine.SelectArchitecture(GuestArchitecture.AArch64);
         MapHostPage(engine, CodeAddr, code.Pointer, Protection.Read | Protection.Exec);
-
+        engine.SetCodeCacheBudgetBytesForTesting(384);
         engine.InstructionPointer = CodeAddr;
-        engine.Run(maxInsts: 6);
-        Assert.Equal(4ul, engine.ReadArmRegister(0));
-        Assert.Equal(CodeAddr + 12ul, engine.InstructionPointer);
-        Assert.Equal(EmuStatus.Stopped, engine.Status);
+        engine.Run(maxInsts: 4);
+        Assert.Equal(EmuStatus.CachePressure, engine.Status);
+        Assert.Equal(CodeAddr + 8ul, engine.InstructionPointer);
+        var before = ReadCodeCacheStats(engine);
+        Assert.InRange(before.CodeCacheBytesRequested, 1ul, before.CodeCacheLimitBytes);
 
-        Marshal.WriteInt32(code.Pointer, 8, unchecked((int)0x91001c00)); // add x0, x0, #7
-        engine.InstructionPointer = CodeAddr;
         engine.Run(maxInsts: 2);
-        Assert.Equal(11ul, engine.ReadArmRegister(0));
-        Assert.Equal(CodeAddr + 12ul, engine.InstructionPointer);
         Assert.Equal(EmuStatus.Stopped, engine.Status);
+        Assert.Equal(2ul, engine.ReadArmRegister(0));
+        Assert.Equal(CodeAddr + 16ul, engine.InstructionPointer);
+        Assert.Equal(before.CodeCacheFlushCount + 1, ReadCodeCacheStats(engine).CodeCacheFlushCount);
+
+        engine.ResetAllCodeCache();
+        engine.SetCodeCacheBudgetBytesForTesting(1);
+        engine.InstructionPointer = CodeAddr;
+        engine.Run(maxInsts: 4);
+        Assert.Equal(EmuStatus.CachePressure, engine.Status);
+        Assert.Equal(CodeAddr + 4ul, engine.InstructionPointer);
+        Assert.Equal(0ul, ReadCodeCacheStats(engine).CodeCacheBytesRequested);
     }
 
     [Fact]
@@ -574,6 +626,7 @@ public class EngineMmuTransferTests : IDisposable
         {
             if (address != dataAddress || write) return false;
             Marshal.WriteInt32(code.Pointer, 4, 0x11000800); // add w0, w0, #2
+            cpu.ResetCodeCacheByRange(CodeAddr + 4, 4);
             return cpu.MemMapHostPage(dataAddress, data.Pointer, (byte)Protection.Read);
         };
         engine.SelectArchitecture(GuestArchitecture.AArch64);
@@ -622,7 +675,7 @@ public class EngineMmuTransferTests : IDisposable
     }
 
     [Fact]
-    public unsafe void AArch64_StoreThroughDistinctHostViewRefetchesExecutableBytes()
+    public unsafe void AArch64_FlushAfterDistinctHostViewWriteInvalidatesLinks()
     {
         var path = Path.GetTempFileName();
         try
@@ -633,9 +686,9 @@ public class EngineMmuTransferTests : IDisposable
                 MemoryMappedFileAccess.ReadWrite, HandleInheritability.None, leaveOpen: true);
             using var code = backing.CreateViewAccessor(0, LinuxConstants.PageSize);
             using var writer = backing.CreateViewAccessor(0, LinuxConstants.PageSize);
-            code.Write(0, 0xb9000020u); // str w0, [x1]
+            code.Write(0, 0x14000001u); // b +4
             code.Write(4, 0x91000442u); // add x2, x2, #1
-            code.Write(8, 0x14000001u); // b +4
+            code.Write(8, 0x17fffffeu); // b -8
             byte* codePointer = null;
             byte* writerPointer = null;
             code.SafeMemoryMappedViewHandle.AcquirePointer(ref codePointer);
@@ -645,20 +698,21 @@ public class EngineMmuTransferTests : IDisposable
                 Assert.NotEqual((nint)codePointer, (nint)writerPointer);
                 var runtime = new TestRuntimeFactory();
                 using var engine = runtime.CreateEngine();
-                const uint writeAlias = CodeAddr + LinuxConstants.PageSize;
                 MapHostPage(engine, CodeAddr, (nint)codePointer, Protection.Read | Protection.Exec);
-                MapHostPage(engine, writeAlias, (nint)writerPointer, Protection.Read | Protection.Write);
-                Assert.True(engine.CopyToUser(writeAlias + 64, [0])); // Dirty before the native store.
                 engine.SelectArchitecture(GuestArchitecture.AArch64);
                 engine.InstructionPointer = CodeAddr;
-                engine.WriteArmRegister(0, 0x91001c42); // add x2, x2, #7
-                engine.WriteArmRegister(1, writeAlias + 4);
-                engine.Run(maxInsts: 3);
+                engine.Run(maxInsts: 6);
+                Assert.Equal(2ul, engine.ReadArmRegister(2));
+                Assert.Equal((ulong)CodeAddr, engine.InstructionPointer);
+
+                writer.Write(4, 0x91001c42u); // add x2, x2, #7
+                engine.InvalidateCodeCacheHostPages([(nint)codePointer]);
+                engine.Run(maxInsts: 6);
 
                 Assert.Equal(EmuStatus.Stopped, engine.Status);
                 Assert.Equal(0x91001c42u, code.ReadUInt32(4));
-                Assert.Equal(7ul, engine.ReadArmRegister(2));
-                Assert.Equal(CodeAddr + 12ul, engine.InstructionPointer);
+                Assert.Equal(16ul, engine.ReadArmRegister(2));
+                Assert.Equal((ulong)CodeAddr, engine.InstructionPointer);
             }
             finally
             {
@@ -691,6 +745,7 @@ public class EngineMmuTransferTests : IDisposable
             if (address != dataAddress || !write) return false;
             faultCount++;
             Marshal.WriteInt32(code.Pointer, 4, unchecked((int)0x91001c42)); // add x2, x2, #7
+            cpu.ResetCodeCacheByRange(CodeAddr + 4, 4);
             return cpu.MemMapHostPage(dataAddress, data.Pointer, (byte)(Protection.Read | Protection.Write));
         };
         engine.SelectArchitecture(GuestArchitecture.AArch64);

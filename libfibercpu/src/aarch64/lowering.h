@@ -105,8 +105,9 @@ inline StepResult SystemInstruction(State& state, const Memory& memory, const De
 #if FIBERCPU_AARCH64_TAIL_DISPATCH
 template <Kind kind, unsigned width, int operation, int mode, int shift, int vector>
 FIBERCPU_AARCH64_THREAD_ABI uint64_t DispatchMemory(A64_THREAD_PARAMS) {
-    if (!ProbeLoadStore<kind, width, operation, mode, shift, vector>(state, current->op, BlockTarget<kind>(current->op),
-                                                                     read_tlb A64_THREAD_PIN_PASS)) [[unlikely]] {
+    if (!ProbeLoadStore<kind, width, operation, mode, shift, vector>(
+            state, current->op, BlockTarget<kind>(current->op), data_tlb, tlb_tags, tlb_addend A64_THREAD_PIN_PASS))
+        [[unlikely]] {
         A64_THREAD_REPLAY(current);
     }
     A64_THREAD_NEXT(1);

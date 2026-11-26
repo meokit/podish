@@ -1078,6 +1078,10 @@ int X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
 
         BasicBlock* block_ptr = state->mmu.lookup_cached_block(eip);
         bool use_single_step = false;
+#ifdef ENABLE_TLB_STATS
+        auto& dispatch_stats = state->mmu.dispatch_stats;
+        ++(block_ptr && block_ptr->is_valid() ? dispatch_stats.block_lookup_hits : dispatch_stats.block_lookup_misses);
+#endif
         if (!block_ptr || !block_ptr->is_valid()) {
             block_ptr = ResolveBlockForRunSlow(state, eip, end_eip, block_ptr, &use_single_step);
         }
@@ -1511,7 +1515,10 @@ void X86_GetTlbStats(EmuState* state, X86_TlbStats* stats) {
 
 void X86_ResetTlbStats(EmuState* state) {
 #ifdef ENABLE_TLB_STATS
-    if (state) state->mmu.stats.reset();
+    if (state) {
+        state->mmu.stats.reset();
+        state->mmu.dispatch_stats = {};
+    }
 #endif
 }
 
@@ -1529,23 +1536,32 @@ int X86_DumpStats(EmuState* state, char* buffer, size_t buffer_size) {
 #endif
 #ifdef ENABLE_TLB_STATS
     auto& s = state->mmu.stats;
-    int n = snprintf(buffer, buffer_size,
-                     "{\"l1_read_hits\":%llu,\"l1_write_hits\":%llu,"
-                     "\"l2_read_hits\":%llu,\"l2_write_hits\":%llu,"
-                     "\"read_misses\":%llu,\"write_misses\":%llu,"
-                     "\"total_reads\":%llu,\"total_writes\":%llu,"
-                     "\"all_blocks_count\":%zu,\"block_cache_size\":%zu,\"page_to_blocks_size\":%zu,"
-                     "\"code_cache_bytes_requested\":%llu,\"code_cache_limit_bytes\":%llu,"
-                     "\"code_cache_flush_count\":%llu,\"code_cache_generation\":%llu,\"llvm_code_cache_bytes\":%zu,"
-                     "\"jit_arena_used_bytes\":%zu,\"jit_arena_capacity_bytes\":%zu}",
-                     (unsigned long long)s.l1_read_hits, (unsigned long long)s.l1_write_hits,
-                     (unsigned long long)s.l2_read_hits, (unsigned long long)s.l2_write_hits,
-                     (unsigned long long)s.read_misses, (unsigned long long)s.write_misses,
-                     (unsigned long long)s.total_reads, (unsigned long long)s.total_writes,
-                     code_cache.all_blocks.size(), code_cache.CountValidBlocks(), code_cache.page_to_blocks.size(),
-                     (unsigned long long)code_cache.requested_block_bytes,
-                     (unsigned long long)code_cache.block_budget_bytes, (unsigned long long)code_cache.flush_count,
-                     (unsigned long long)code_cache.generation, arena.llvm, arena.total, arena.capacity);
+    const auto& dispatch_stats = state->mmu.dispatch_stats;
+    int n = snprintf(
+        buffer, buffer_size,
+        "{\"l1_read_hits\":%llu,\"l1_write_hits\":%llu,"
+        "\"l2_read_hits\":%llu,\"l2_write_hits\":%llu,"
+        "\"read_misses\":%llu,\"write_misses\":%llu,"
+        "\"total_reads\":%llu,\"total_writes\":%llu,"
+        "\"direct_links\":%llu,\"resolved_links\":%llu,\"cross_page_links\":%llu,\"link_misses\":%llu,"
+        "\"block_lookup_hits\":%llu,\"block_lookup_misses\":%llu,\"block_allocations\":%llu,"
+        "\"block_allocated_bytes\":%llu,\"memory_replays\":%llu,"
+        "\"all_blocks_count\":%zu,\"block_cache_size\":%zu,\"page_to_blocks_size\":%zu,"
+        "\"code_cache_bytes_requested\":%llu,\"code_cache_limit_bytes\":%llu,"
+        "\"code_cache_flush_count\":%llu,\"code_cache_generation\":%llu,\"llvm_code_cache_bytes\":%zu,"
+        "\"jit_arena_used_bytes\":%zu,\"jit_arena_capacity_bytes\":%zu}",
+        (unsigned long long)s.l1_read_hits, (unsigned long long)s.l1_write_hits, (unsigned long long)s.l2_read_hits,
+        (unsigned long long)s.l2_write_hits, (unsigned long long)s.read_misses, (unsigned long long)s.write_misses,
+        (unsigned long long)s.total_reads, (unsigned long long)s.total_writes,
+        (unsigned long long)dispatch_stats.direct_links, (unsigned long long)dispatch_stats.resolved_links,
+        (unsigned long long)dispatch_stats.cross_page_links, (unsigned long long)dispatch_stats.link_misses,
+        (unsigned long long)dispatch_stats.block_lookup_hits, (unsigned long long)dispatch_stats.block_lookup_misses,
+        (unsigned long long)dispatch_stats.block_allocations, (unsigned long long)dispatch_stats.block_allocated_bytes,
+        (unsigned long long)dispatch_stats.memory_replays, code_cache.AllocatedBlockCount(),
+        code_cache.CountValidBlocks(), code_cache.CachedPageCount(),
+        (unsigned long long)code_cache.requested_block_bytes, (unsigned long long)code_cache.block_budget_bytes,
+        (unsigned long long)code_cache.flush_count, (unsigned long long)code_cache.generation, arena.llvm, arena.total,
+        arena.capacity);
     return n;
 #else
     return snprintf(buffer, buffer_size,
@@ -1553,7 +1569,7 @@ int X86_DumpStats(EmuState* state, char* buffer, size_t buffer_size) {
                     "\"code_cache_bytes_requested\":%llu,\"code_cache_limit_bytes\":%llu,"
                     "\"code_cache_flush_count\":%llu,\"code_cache_generation\":%llu,\"llvm_code_cache_bytes\":%zu,"
                     "\"jit_arena_used_bytes\":%zu,\"jit_arena_capacity_bytes\":%zu}",
-                    code_cache.all_blocks.size(), code_cache.CountValidBlocks(), code_cache.page_to_blocks.size(),
+                    code_cache.AllocatedBlockCount(), code_cache.CountValidBlocks(), code_cache.CachedPageCount(),
                     (unsigned long long)code_cache.requested_block_bytes,
                     (unsigned long long)code_cache.block_budget_bytes, (unsigned long long)code_cache.flush_count,
                     (unsigned long long)code_cache.generation, arena.llvm, arena.total, arena.capacity);
