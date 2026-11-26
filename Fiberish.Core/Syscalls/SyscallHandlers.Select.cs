@@ -250,7 +250,7 @@ public partial class SyscallManager
         return true;
     }
 
-    private static bool TryReadTimespec32TimeoutMs(Engine engine, uint timespecPtr, out int timeoutMs, out int err)
+    private static bool TryReadTimespec32TimeoutMs(Engine engine, ulong timespecPtr, out int timeoutMs, out int err)
     {
         timeoutMs = -1;
         err = 0;
@@ -268,7 +268,7 @@ public partial class SyscallManager
         return TryConvertTimespecToTimeoutMs(sec, nsec, out timeoutMs, out err);
     }
 
-    private static bool TryReadTimespec64TimeoutMs(Engine engine, uint timespecPtr, out int timeoutMs, out int err)
+    private static bool TryReadTimespec64TimeoutMs(Engine engine, ulong timespecPtr, out int timeoutMs, out int err)
     {
         timeoutMs = -1;
         err = 0;

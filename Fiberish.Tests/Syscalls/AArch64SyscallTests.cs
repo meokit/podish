@@ -57,8 +57,10 @@ public class AArch64SyscallTests
         Assert.Equal(1 << 14, Invoke(env, 25, (ulong)dirfd, 3) & (1 << 14)); // F_GETFL
     }
 
-    [Fact]
-    public void FileIoPreservesA64BitOffsetAndReads16ByteIovecs()
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void FileIoPreservesA64BitOffsetAndReads16ByteIovecs(bool high)
     {
         using var env = new SyscallTestEnv(architecture: GuestArchitecture.AArch64);
         env.PutString(0x10000, "/abi");
@@ -67,22 +69,44 @@ public class AArch64SyscallTests
         Assert.Equal((long)offset, Invoke(env, 62, fd, offset, 0)); // lseek
         Assert.Equal((long)offset + 2, Invoke(env, 62, fd, 2, 1));
 
-        Assert.True(env.Engine.CopyToUser(0x11000, "ab"u8));
-        Assert.True(env.Engine.CopyToUser(0x12000, "cd"u8));
+        var bias = high ? 0x40_0000_0000UL : 0;
+        var first = bias + 0x11000;
+        var second = bias + 0x12000;
+        var vectors = bias + 0x13000;
+        if (high)
+        {
+            const ulong size = 3 * LinuxConstants.PageSize;
+            Assert.Equal(first, ProcessAddressSpaceSync.Mmap(env.Mem, env.Engine, first, size,
+                Protection.Read | Protection.Write, MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous,
+                null, 0, "[aarch64 iovec test]"));
+            Assert.True(env.Mem.PrefaultRange(first, size, env.Engine, true));
+        }
+        Assert.True(env.Engine.CopyToUser(first, "ab"u8));
+        Assert.True(env.Engine.CopyToUser(second, "cd"u8));
         Span<byte> iov = stackalloc byte[32];
-        BinaryPrimitives.WriteUInt64LittleEndian(iov, 0x11000);
+        BinaryPrimitives.WriteUInt64LittleEndian(iov, first);
         BinaryPrimitives.WriteUInt64LittleEndian(iov[8..], 2);
-        BinaryPrimitives.WriteUInt64LittleEndian(iov[16..], 0x12000);
+        BinaryPrimitives.WriteUInt64LittleEndian(iov[16..], second);
         BinaryPrimitives.WriteUInt64LittleEndian(iov[24..], 2);
-        Assert.True(env.Engine.CopyToUser(0x13000, iov));
-        Assert.Equal(4, Invoke(env, 70, fd, 0x13000, 2, 0)); // pwritev
-        Assert.Equal(4, Invoke(env, 67, fd, 0x11000, 4, 0)); // pread64
-        Assert.Equal("abcd"u8.ToArray(), Read(env, 0x11000, 4));
+        Assert.True(env.Engine.CopyToUser(vectors, iov));
+        Assert.Equal(4, Invoke(env, 70, fd, vectors, 2, 0)); // pwritev
+        Assert.Equal(4, Invoke(env, 67, fd, first, 4, 0)); // pread64
+        Assert.Equal("abcd"u8.ToArray(), Read(env, first, 4));
 
-        BinaryPrimitives.WriteUInt64LittleEndian(iov, 0x1_0001_1000);
-        Assert.True(env.Engine.CopyToUser(0x13000, iov));
-        Assert.Equal(-(long)Errno.EFAULT, Invoke(env, 70, fd, 0x13000, 2, 0));
-        Assert.Equal(-(long)Errno.EFAULT, Invoke(env, 64, fd, 0x1_0001_1000, 1)); // write
+        Assert.Equal(0, Invoke(env, 62, fd, 0, 0)); // lseek
+        Assert.Equal(2, Invoke(env, 64, fd, second, 2)); // write
+        Assert.Equal(0, Invoke(env, 62, fd, 0, 0));
+        Assert.Equal(2, Invoke(env, 63, fd, first, 2)); // read
+        Assert.Equal("cd"u8.ToArray(), Read(env, first, 2));
+
+        Assert.Equal(4, Invoke(env, 69, fd, vectors, 2, 0)); // preadv
+        Assert.Equal("cd"u8.ToArray(), Read(env, first, 2));
+        Assert.Equal("cd"u8.ToArray(), Read(env, second, 2));
+
+        BinaryPrimitives.WriteUInt64LittleEndian(iov, LinuxConstants.TaskSizeAArch64 - 1);
+        Assert.True(env.Engine.CopyToUser(vectors, iov));
+        Assert.Equal(-(long)Errno.EFAULT, Invoke(env, 70, fd, vectors, 2, 0));
+        Assert.Equal(-(long)Errno.EFAULT, Invoke(env, 64, fd, LinuxConstants.TaskSizeAArch64, 1)); // write
     }
 
     [Fact]
@@ -159,17 +183,24 @@ public class AArch64SyscallTests
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void SignalHandlerAndTrampolineRestoreFullWidthIntegerAndVectorState(bool useRestorer)
+    [InlineData(false, false)]
+    [InlineData(true, false)]
+    [InlineData(false, true)]
+    [InlineData(true, true)]
+    public void SignalHandlerAndTrampolineRestoreFullWidthIntegerAndVectorState(bool useRestorer, bool high)
     {
         using var env = new SyscallTestEnv(architecture: GuestArchitecture.AArch64);
         var engine = env.Engine;
-        const uint main = 0x14000;
-        const uint handler = main + 4;
-        const uint restorer = main + 6 * 4;
-        const uint result = 0x10000;
-        const uint stackTop = 0x13ff0;
+        var bias = high ? 0x40_0000_0000UL : 0;
+        var main = bias + 0x14000;
+        var handler = main + 4;
+        var restorer = main + 6 * 4;
+        var result = bias + 0x10000;
+        var stackTop = bias + 0x13ff0;
+        var actionPtr = bias + 0x11000;
+        var oldActionPtr = actionPtr + 64;
+        var altStack = result + 5 * LinuxConstants.PageSize;
+        const ulong altStackSize = 2 * LinuxConstants.PageSize;
         const int signal = (int)Signal.SIGUSR1;
         const ulong originalX0 = 0xfedc_ba98_7654_3210;
         const ulong originalX8 = 0x1100_2200_3300_4400;
@@ -186,6 +217,25 @@ public class AArch64SyscallTests
             0xd2801168, // mov x8, #139
             0xd4000001  // svc #0
         ];
+        if (high)
+        {
+            const ulong regionSize = 7 * LinuxConstants.PageSize;
+            Assert.Equal(result, ProcessAddressSpaceSync.Mmap(env.Mem, engine, result, regionSize,
+                Protection.Read | Protection.Write, MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous,
+                null, 0, "[aarch64 signal test]"));
+            Assert.True(env.Mem.PrefaultRange(result, regionSize, engine, true));
+            Span<byte> stack = stackalloc byte[24];
+            stack.Clear();
+            BinaryPrimitives.WriteUInt64LittleEndian(stack, altStack);
+            BinaryPrimitives.WriteUInt64LittleEndian(stack[16..], altStackSize);
+            Assert.True(engine.CopyToUser(actionPtr, stack));
+            Assert.Equal(0, Invoke(env, 132, actionPtr, 0)); // sigaltstack
+            Assert.Equal(0, Invoke(env, 132, 0, oldActionPtr));
+            Assert.Equal(stack.ToArray(), Read(env, oldActionPtr, stack.Length));
+            BinaryPrimitives.WriteUInt64LittleEndian(stack, LinuxConstants.TaskSizeAArch64 - LinuxConstants.PageSize);
+            Assert.True(engine.CopyToUser(actionPtr, stack));
+            Assert.Equal(-(long)Errno.EFAULT, Invoke(env, 132, actionPtr, 0));
+        }
         Assert.True(engine.CopyToUser(main, System.Runtime.InteropServices.MemoryMarshal.AsBytes(instructions.AsSpan())));
         Assert.Equal(0, ProcessAddressSpaceSync.Mprotect(env.Mem, engine, main,
             LinuxConstants.PageSize, Protection.Read | Protection.Exec));
@@ -193,10 +243,13 @@ public class AArch64SyscallTests
         action.Clear();
         BinaryPrimitives.WriteUInt64LittleEndian(action, handler);
         BinaryPrimitives.WriteUInt64LittleEndian(action[8..],
-            LinuxConstants.SA_SIGINFO | (useRestorer ? LinuxConstants.SA_RESTORER : 0));
+            LinuxConstants.SA_SIGINFO | (useRestorer ? LinuxConstants.SA_RESTORER : 0) |
+            (high ? LinuxConstants.SA_ONSTACK : 0));
         BinaryPrimitives.WriteUInt64LittleEndian(action[16..], useRestorer ? restorer : ulong.MaxValue);
-        Assert.True(engine.CopyToUser(0x11000, action));
-        Assert.Equal(0, Invoke(env, 134, signal, 0x11000, 0, 8)); // rt_sigaction
+        Assert.True(engine.CopyToUser(actionPtr, action));
+        Assert.Equal(0, Invoke(env, 134, signal, actionPtr, 0, 8)); // rt_sigaction
+        Assert.Equal(0, Invoke(env, 134, signal, 0, oldActionPtr, 8));
+        Assert.Equal(action.ToArray(), Read(env, oldActionPtr, action.Length));
 
         engine.InstructionPointer = main;
         engine.StackPointer = stackTop;
@@ -213,22 +266,123 @@ public class AArch64SyscallTests
         Assert.Equal(signal, BinaryPrimitives.ReadInt32LittleEndian(Read(env, result, 4)));
         Assert.NotEqual(stackTop, engine.StackPointer);
         Assert.Equal(0UL, engine.StackPointer & 15);
+        if (high)
+        {
+            Assert.InRange(engine.StackPointer, altStack + 16, altStack + altStackSize);
+            Assert.Equal(-(int)Errno.EPERM, env.Task.SetAltStack(0, 0, LinuxConstants.SS_DISABLE));
+        }
         for (var i = 0; i < 3; i++) engine.Step();
         Assert.Equal(0UL, engine.ReadArmRegister(0));
         Assert.Equal(1UL, engine.ReadArmRegister(8));
         Assert.Equal(0UL, engine.ReadArmRegister(64) | engine.ReadArmRegister(65));
 
         engine.Step(); // Return from the handler to the selected trampoline.
-        Assert.Equal(useRestorer ? restorer : (ulong)env.Sm.RtSigReturnAddr, engine.InstructionPointer);
+        Assert.Equal(useRestorer ? restorer : env.Sm.RtSigReturnAddr, engine.InstructionPointer);
         engine.Step(); // mov x8, #139
         Assert.Equal(139UL, engine.ReadArmRegister(8));
         engine.Step(); // svc #0
-        Assert.Equal((ulong)main, engine.InstructionPointer);
-        Assert.Equal((ulong)stackTop, engine.StackPointer);
+        Assert.Equal(main, engine.InstructionPointer);
+        Assert.Equal(stackTop, engine.StackPointer);
         Assert.Equal(originalX0, engine.ReadArmRegister(0));
         Assert.Equal(originalX8, engine.ReadArmRegister(8));
         Assert.Equal(originalV0Low, engine.ReadArmRegister(64));
         Assert.Equal(originalV0High, engine.ReadArmRegister(65));
+    }
+
+    [Fact]
+    public void CloneAndExitUseHighStackAndTidAddresses()
+    {
+        using var env = new SyscallTestEnv(architecture: GuestArchitecture.AArch64);
+        var page = MapHighThreadPage(env);
+        var stack = page + LinuxConstants.PageSize - 16;
+        var parentTidPtr = page + 4;
+        var childTidPtr = page + 8;
+        var tls = page + 16;
+        var flags = LinuxConstants.CLONE_VM | LinuxConstants.CLONE_SIGHAND | LinuxConstants.CLONE_THREAD |
+                    LinuxConstants.CLONE_SETTLS | LinuxConstants.CLONE_PARENT_SETTID |
+                    LinuxConstants.CLONE_CHILD_SETTID | LinuxConstants.CLONE_CHILD_CLEARTID;
+        var childTid = (int)Invoke(env, 220, flags, stack, parentTidPtr, tls, childTidPtr); // clone
+        Assert.True(childTid > 0);
+        var child = Assert.IsType<FiberTask>(env.Scheduler.GetTask(childTid));
+        Assert.Equal(stack, child.CPU.StackPointer);
+        Assert.Equal(tls, child.CPU.ReadArmRegister(33));
+        Assert.Equal(childTid, BinaryPrimitives.ReadInt32LittleEndian(Read(env, parentTidPtr, 4)));
+        Assert.Equal(childTid, BinaryPrimitives.ReadInt32LittleEndian(Read(env, childTidPtr, 4)));
+        Assert.Equal(childTidPtr, child.ChildClearTidPtr);
+        var waiter = env.Sm.Futex.PrepareWait(FutexKey.Private(env.Mem, page, 8));
+        child.ClearChildTidAndWake();
+        Assert.True(waiter.Result);
+        Assert.Equal(0, BinaryPrimitives.ReadInt32LittleEndian(Read(env, childTidPtr, 4)));
+
+        Assert.Equal(env.Task.TID, Invoke(env, 96, parentTidPtr)); // set_tid_address
+        Assert.Equal(parentTidPtr, env.Task.ChildClearTidPtr);
+        env.Task.ClearChildTidAndWake();
+        Assert.Equal(0, BinaryPrimitives.ReadInt32LittleEndian(Read(env, parentTidPtr, 4)));
+    }
+
+    [Fact]
+    public void RobustListExitAndFutexWakeUseDistinctHighAndLowAddresses()
+    {
+        using var env = new SyscallTestEnv(architecture: GuestArchitecture.AArch64);
+        var page = MapHighThreadPage(env);
+        var head = page + 32;
+        var entry = page + 64;
+        var futex = entry + 8;
+        var lenPtr = page + 96;
+        var headPtr = page + 104;
+        var lowFutex = (uint)futex;
+        Span<byte> robust = stackalloc byte[24];
+        robust.Clear();
+        BinaryPrimitives.WriteUInt64LittleEndian(robust, entry);
+        BinaryPrimitives.WriteInt64LittleEndian(robust[8..], 8);
+        Assert.True(env.Engine.CopyToUser(head, robust));
+        BinaryPrimitives.WriteUInt64LittleEndian(robust, head);
+        BinaryPrimitives.WriteUInt32LittleEndian(robust[8..], (uint)env.Task.TID | LinuxConstants.FUTEX_WAITERS);
+        Assert.True(env.Engine.CopyToUser(entry, robust[..12]));
+        Assert.Equal(0, Invoke(env, 99, head, 24)); // set_robust_list
+        Assert.Equal(0, Invoke(env, 100, 0, headPtr, lenPtr)); // get_robust_list
+        Assert.Equal(head, BinaryPrimitives.ReadUInt64LittleEndian(Read(env, headPtr, 8)));
+        Assert.Equal(24UL, BinaryPrimitives.ReadUInt64LittleEndian(Read(env, lenPtr, 8)));
+
+        const uint wakePrivate = 1 | LinuxConstants.FUTEX_PRIVATE_FLAG;
+        var key = FutexKey.Private(env.Mem, page, (ushort)(futex - page));
+        var waiter = env.Sm.Futex.PrepareWait(key);
+        Assert.Equal(0, Invoke(env, 98, lowFutex, wakePrivate, 1));
+        Assert.False(waiter.IsCompleted);
+        Assert.Equal(1, Invoke(env, 98, futex, wakePrivate, 1));
+        Assert.True(waiter.Result);
+
+        const uint requeuePrivate = LinuxConstants.FUTEX_REQUEUE | LinuxConstants.FUTEX_PRIVATE_FLAG;
+        var target = page + 128;
+        waiter = env.Sm.Futex.PrepareWait(key);
+        Assert.Equal(1, Invoke(env, 98, futex, requeuePrivate, 0, 1, target));
+        Assert.Equal(0, Invoke(env, 98, (uint)target, wakePrivate, 1));
+        Assert.Equal(1, Invoke(env, 98, target, wakePrivate, 1));
+        Assert.True(waiter.Result);
+
+        var timeout = page + 160;
+        Span<byte> timespec = stackalloc byte[16];
+        timespec.Clear();
+        BinaryPrimitives.WriteInt64LittleEndian(timespec[8..], 1);
+        Assert.True(env.Engine.CopyToUser(timeout, timespec));
+        Assert.Equal(-(long)Errno.EAGAIN, Invoke(env, 98, futex, LinuxConstants.FUTEX_PRIVATE_FLAG, 0, timeout));
+
+        waiter = env.Sm.Futex.PrepareWait(key);
+        env.Task.ExitRobustList();
+        Assert.True(waiter.Result);
+        Assert.Equal(LinuxConstants.FUTEX_WAITERS | LinuxConstants.FUTEX_OWNER_DIED,
+            BinaryPrimitives.ReadUInt32LittleEndian(Read(env, futex, 4)));
+        Assert.Equal(0u, BinaryPrimitives.ReadUInt32LittleEndian(Read(env, lowFutex, 4)));
+    }
+
+    private static ulong MapHighThreadPage(SyscallTestEnv env)
+    {
+        const ulong page = 0x40_0001_0000;
+        Assert.Equal(page, ProcessAddressSpaceSync.Mmap(env.Mem, env.Engine, page, LinuxConstants.PageSize,
+            Protection.Read | Protection.Write, MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous,
+            null, 0, "[aarch64 thread test]"));
+        Assert.True(env.Mem.PrefaultRange(page, LinuxConstants.PageSize, env.Engine, true));
+        return page;
     }
 
     [Fact]
@@ -333,7 +487,7 @@ public class AArch64SyscallTests
         return (ulong)fd;
     }
 
-    private static byte[] Read(SyscallTestEnv env, uint address, int count)
+    private static byte[] Read(SyscallTestEnv env, ulong address, int count)
     {
         var result = new byte[count];
         Assert.True(env.Engine.CopyFromUser(address, result));

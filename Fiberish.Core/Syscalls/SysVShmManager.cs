@@ -13,7 +13,7 @@ public class SysVShmSegment
 {
     public int Key { get; set; } // IPC key (IPC_PRIVATE = 0)
     public int Shmid { get; set; } // Segment identifier
-    public uint Size { get; set; } // Requested size in bytes
+    public ulong Size { get; set; } // Requested size in bytes
     public int Mode { get; set; } // Permission mode (lower 9 bits)
     public int Uid { get; set; } // Owner UID
     public int Gid { get; set; } // Owner GID
@@ -32,8 +32,8 @@ public class SysVShmSegment
     /// <summary>
     ///     Number of pages in this segment.
     /// </summary>
-    public uint PageCount => (uint)(((ulong)Size + LinuxConstants.PageSize - 1) / LinuxConstants.PageSize);
-    internal uint MappedSize => PageCount * LinuxConstants.PageSize;
+    public uint PageCount => checked((uint)((Size + LinuxConstants.PageOffsetMask) / LinuxConstants.PageSize));
+    internal ulong MappedSize => (ulong)PageCount * LinuxConstants.PageSize;
 }
 
 /// <summary>
@@ -42,7 +42,7 @@ public class SysVShmSegment
 public class SysVShmAttach
 {
     public int Pid { get; set; } // Process that attached
-    public uint BaseAddr { get; set; } // Virtual address where attached
+    public ulong BaseAddr { get; set; } // Virtual address where attached
     public int Shmid { get; set; } // Segment ID
     public Protection Prot { get; set; } // Mapping protection
     public VMAManager AddressSpace { get; set; } = null!; // Address space that owns this attach
@@ -77,7 +77,7 @@ public class SysVShmManager
     /// <param name="gid">Creator/owner GID</param>
     /// <param name="pid">Creator PID</param>
     /// <returns>shmid on success, negative errno on failure</returns>
-    public int ShmGet(int key, uint size, int flags, int uid, int gid, int pid)
+    public int ShmGet(int key, ulong size, int flags, int uid, int gid, int pid, ulong maxSize = uint.MaxValue)
     {
         // Single-container scheduler-thread ownership: SysV SHM metadata is mutated on scheduler thread.
         // Check if key exists (and not IPC_PRIVATE)
@@ -102,8 +102,10 @@ public class SysVShmManager
         if (key != LinuxConstants.IPC_PRIVATE && (flags & LinuxConstants.IPC_CREAT) == 0)
             return -(int)Errno.ENOENT; // No IPC_CREAT and doesn't exist -> error
 
-        var alignedSize = ((ulong)size + LinuxConstants.PageSize - 1) & ~(ulong)(LinuxConstants.PageSize - 1);
-        if (size == 0 || alignedSize > uint.MaxValue)
+        if (size == 0 || size > maxSize || size > ulong.MaxValue - LinuxConstants.PageOffsetMask)
+            return -(int)Errno.EINVAL;
+        var alignedSize = (size + LinuxConstants.PageOffsetMask) & LinuxConstants.PageMask64;
+        if (alignedSize > maxSize)
             return -(int)Errno.EINVAL;
 
         // Create new segment
@@ -127,7 +129,7 @@ public class SysVShmManager
                 DTime = DateTime.UnixEpoch,
                 NAttch = 0,
                 MarkedForDelete = false,
-                BackingFile = _memoryContext.CreateSysVSharedMemoryFile(shmid, (uint)alignedSize, uid, gid)
+                BackingFile = _memoryContext.CreateSysVSharedMemoryFile(shmid, alignedSize, uid, gid)
             };
         }
         catch
@@ -152,7 +154,7 @@ public class SysVShmManager
     /// <param name="vmaManager">VmArea manager for the process</param>
     /// <param name="engine">Engine instance</param>
     /// <returns>Attached address on success, negative errno on failure</returns>
-    public long ShmAt(int shmid, uint addr, int flags, int pid, VMAManager vmaManager, Engine engine,
+    public long ShmAt(int shmid, ulong addr, int flags, int pid, VMAManager vmaManager, Engine engine,
         Process? process = null)
     {
         var ownerProcess = process ?? (engine.Owner as FiberTask)?.Process;
@@ -178,11 +180,12 @@ public class SysVShmManager
             return -(int)Errno.EINVAL;
 
         // Determine address
+        var taskSize = vmaManager.GetTaskSize(engine);
         var attachAddr = addr;
         if (attachAddr == 0)
         {
             // Auto-allocate: find free region
-            attachAddr = FindFreeRegion(vmaManager, segment.MappedSize);
+            attachAddr = vmaManager.FindFreeRegion(segment.MappedSize, taskSize);
             if (attachAddr == 0)
                 return -(int)Errno.ENOMEM;
         }
@@ -190,14 +193,13 @@ public class SysVShmManager
         {
             // Handle SHM_RND
             if ((flags & LinuxConstants.SHM_RND) != 0)
-                attachAddr &= ~0xFFFu; // Round down to page boundary
+                attachAddr &= LinuxConstants.PageMask64;
 
             // Check alignment
-            if ((attachAddr & 0xFFFu) != 0)
+            if ((attachAddr & LinuxConstants.PageOffsetMask) != 0)
                 return -(int)Errno.EINVAL;
         }
 
-        var taskSize = vmaManager.Layout?.TaskSize ?? LinuxConstants.TaskSize32;
         if (!TryComputeRangeEnd(attachAddr, segment.MappedSize, taskSize, out var attachEnd))
             return -(int)Errno.EINVAL;
 
@@ -210,7 +212,7 @@ public class SysVShmManager
             {
                 // SHM_REMAP: unmap existing mappings at this address
                 ProcessAddressSpaceSync.Munmap(vmaManager, engine, attachAddr, segment.MappedSize, ownerProcess);
-                DropAttachmentsInRange(vmaManager, attachAddr, attachEnd, pid);
+                DropAttachmentsInRange(vmaManager, attachAddr, attachEnd, taskSize, pid);
             }
             else
             {
@@ -260,7 +262,7 @@ public class SysVShmManager
             segment.ATime = DateTime.UtcNow;
             segment.Lpid = pid;
 
-            return attachAddr;
+            return (long)attachAddr;
         }
         catch
         {
@@ -278,7 +280,7 @@ public class SysVShmManager
     /// <param name="vmaManager">VmArea manager for the process</param>
     /// <param name="engine">Engine instance</param>
     /// <returns>0 on success, negative errno on failure</returns>
-    public int ShmDt(uint addr, int pid, VMAManager vmaManager, Engine engine, Process? process = null)
+    public int ShmDt(ulong addr, int pid, VMAManager vmaManager, Engine engine, Process? process = null)
     {
         var ownerProcess = process ?? (engine.Owner as FiberTask)?.Process;
         using var scope = ProcessAddressSpaceSync.EnterAddressSpaceScope(engine, ownerProcess);
@@ -321,7 +323,7 @@ public class SysVShmManager
     /// <param name="gid">Caller's GID</param>
     /// <param name="pid">Caller's PID</param>
     /// <returns>0 on success, negative errno on failure</returns>
-    public int ShmCtl(int shmid, int cmd, uint buf, Engine engine, int uid, int gid, int pid)
+    public int ShmCtl(int shmid, int cmd, ulong buf, Engine engine, int uid, int gid, int pid)
     {
         if (!_segmentsByShmid.TryGetValue(shmid, out var segment))
             return -(int)Errno.EIDRM;
@@ -441,19 +443,13 @@ public class SysVShmManager
         return (requested & ~(segment.Mode << (6 - shift))) == 0;
     }
 
-    private uint FindFreeRegion(VMAManager vmaManager, uint size)
-    {
-        return vmaManager.FindFreeRegion(size);
-    }
-
-    private void DropAttachmentsInRange(VMAManager vmaManager, uint start, uint end, int lpid)
+    private void DropAttachmentsInRange(VMAManager vmaManager, ulong start, ulong end, ulong taskSize, int lpid)
     {
         for (var i = _attaches.Count - 1; i >= 0; i--)
         {
             var attach = _attaches[i];
             if (!ReferenceEquals(attach.AddressSpace, vmaManager)) continue;
             if (!_segmentsByShmid.TryGetValue(attach.Shmid, out var segment)) continue;
-            var taskSize = vmaManager.Layout?.TaskSize ?? LinuxConstants.TaskSize32;
             if (!TryComputeRangeEnd(attach.BaseAddr, segment.MappedSize, taskSize, out var attachEnd)) continue;
             if (attach.BaseAddr >= end || attachEnd <= start) continue;
 
@@ -467,14 +463,12 @@ public class SysVShmManager
         }
     }
 
-    private static bool TryComputeRangeEnd(uint start, uint size, uint taskSize, out uint end)
+    private static bool TryComputeRangeEnd(ulong start, ulong size, ulong taskSize, out ulong end)
     {
         end = 0;
-        if (size == 0) return false;
-        var end64 = (ulong)start + size;
-        if (end64 > taskSize) return false;
-        end = (uint)end64;
-        return end > start;
+        if (size == 0 || start >= taskSize || size > taskSize - start) return false;
+        end = start + size;
+        return true;
     }
 
     // i386 shmid_ds and shmid64_ds from Linux UAPI. The latter stores the 64-bit
@@ -482,7 +476,7 @@ public class SysVShmManager
     private const int LegacyShmidDsSize = 48;
     private const int Ipc64ShmidDsSize = 84;
 
-    private static int WriteShmidDs(SysVShmSegment segment, uint buf, Engine engine, bool ipc64)
+    private static int WriteShmidDs(SysVShmSegment segment, ulong buf, Engine engine, bool ipc64)
     {
         var isAArch64 = engine.IsAArch64;
         Span<byte> data = stackalloc byte[isAArch64 ? 112 : ipc64 ? Ipc64ShmidDsSize : LegacyShmidDsSize];
@@ -511,7 +505,7 @@ public class SysVShmManager
             BinaryPrimitives.WriteInt32LittleEndian(data[12..], segment.CUid);
             BinaryPrimitives.WriteInt32LittleEndian(data[16..], segment.CGid);
             BinaryPrimitives.WriteUInt16LittleEndian(data[20..], (ushort)mode);
-            BinaryPrimitives.WriteUInt32LittleEndian(data[36..], segment.Size);
+            BinaryPrimitives.WriteUInt32LittleEndian(data[36..], (uint)segment.Size);
             BinaryPrimitives.WriteInt64LittleEndian(data[40..], ToUnixSeconds(segment.ATime));
             BinaryPrimitives.WriteInt64LittleEndian(data[48..], ToUnixSeconds(segment.DTime));
             BinaryPrimitives.WriteInt64LittleEndian(data[56..], ToUnixSeconds(segment.CTime));
@@ -526,7 +520,7 @@ public class SysVShmManager
             BinaryPrimitives.WriteUInt16LittleEndian(data[8..], ToLegacyId(segment.CUid));
             BinaryPrimitives.WriteUInt16LittleEndian(data[10..], ToLegacyId(segment.CGid));
             BinaryPrimitives.WriteUInt16LittleEndian(data[12..], (ushort)mode);
-            BinaryPrimitives.WriteUInt32LittleEndian(data[16..], segment.Size);
+            BinaryPrimitives.WriteUInt32LittleEndian(data[16..], (uint)segment.Size);
             BinaryPrimitives.WriteInt32LittleEndian(data[20..], (int)ToUnixSeconds(segment.ATime));
             BinaryPrimitives.WriteInt32LittleEndian(data[24..], (int)ToUnixSeconds(segment.DTime));
             BinaryPrimitives.WriteInt32LittleEndian(data[28..], (int)ToUnixSeconds(segment.CTime));
@@ -538,7 +532,7 @@ public class SysVShmManager
         return buf != 0 && engine.CopyToUser(buf, data) ? 0 : -(int)Errno.EFAULT;
     }
 
-    private static int ReadShmidDsForSet(SysVShmSegment segment, uint buf, Engine engine, bool ipc64)
+    private static int ReadShmidDsForSet(SysVShmSegment segment, ulong buf, Engine engine, bool ipc64)
     {
         var isAArch64 = engine.IsAArch64;
         Span<byte> data = stackalloc byte[isAArch64 ? 112 : ipc64 ? Ipc64ShmidDsSize : LegacyShmidDsSize];

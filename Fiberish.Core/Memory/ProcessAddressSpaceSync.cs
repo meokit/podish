@@ -202,18 +202,17 @@ internal static class ProcessAddressSpaceSync
         return min;
     }
 
-    private static uint AlignLengthToPage(uint len)
+    private static ulong AlignLengthToPage(ulong len)
     {
-        if (len == 0) return 0;
-        if (len > uint.MaxValue - LinuxConstants.PageOffsetMask)
-            return uint.MaxValue & LinuxConstants.PageMask;
-        return (len + LinuxConstants.PageOffsetMask) & LinuxConstants.PageMask;
+        if (len > ulong.MaxValue - LinuxConstants.PageOffsetMask)
+            throw new OutOfMemoryException("Mapping length overflow");
+        return (len + LinuxConstants.PageOffsetMask) & LinuxConstants.PageMask64;
     }
 
-    private static uint ComputeRangeEnd(uint addr, uint len)
+    private static ulong ComputeRangeEnd(ulong addr, ulong len)
     {
         var end = unchecked(addr + len);
-        return end < addr ? uint.MaxValue : end;
+        return end < addr ? ulong.MaxValue : end;
     }
 
     private static bool HasExecRole(Protection perms)
@@ -231,7 +230,7 @@ internal static class ProcessAddressSpaceSync
         return HasExecRole(perms) || HasSharedWriterRole(flags, perms);
     }
 
-    private static bool WouldMprotectAffectTbCoh(VMAManager vmaManager, uint addr, uint len, Protection newProt)
+    private static bool WouldMprotectAffectTbCoh(VMAManager vmaManager, ulong addr, ulong len, Protection newProt)
     {
         if (len == 0) return false;
 
@@ -254,8 +253,8 @@ internal static class ProcessAddressSpaceSync
         return changed;
     }
 
-    private static void SyncSharedMappingsForEngines(VMAManager vmaManager, IReadOnlyList<Engine> engines, uint addr,
-        uint len)
+    private static void SyncSharedMappingsForEngines(VMAManager vmaManager, IReadOnlyList<Engine> engines, ulong addr,
+        ulong len)
     {
         if (len == 0) return;
         if (engines.Count == 0) return;
@@ -267,7 +266,7 @@ internal static class ProcessAddressSpaceSync
         });
     }
 
-    private static int MunmapCore(VMAManager vmaManager, Engine engine, uint addr, uint len)
+    private static int MunmapCore(VMAManager vmaManager, Engine engine, ulong addr, ulong len)
     {
         using var snapshot = RentEngineSnapshot();
         FillAddressSpaceEngineSnapshot(vmaManager, snapshot.Engines, snapshot.SeenStates, engine);
@@ -278,14 +277,14 @@ internal static class ProcessAddressSpaceSync
         return rc;
     }
 
-    internal static int Munmap(VMAManager vmaManager, Engine engine, uint addr, uint len, Process? process = null)
+    internal static int Munmap(VMAManager vmaManager, Engine engine, ulong addr, ulong len, Process? process = null)
     {
         if (len == 0) return 0;
         using var scope = EnterAddressSpaceScope(engine, process);
         return MunmapCore(vmaManager, engine, addr, len);
     }
 
-    internal static int RemapFileRange(VMAManager vmaManager, Engine engine, uint addr, uint len,
+    internal static int RemapFileRange(VMAManager vmaManager, Engine engine, ulong addr, ulong len,
         long newOffset, ulong newPgoff, Process? process = null)
     {
         if (len == 0) return 0;
@@ -299,7 +298,7 @@ internal static class ProcessAddressSpaceSync
         return rc;
     }
 
-    internal static int Mprotect(VMAManager vmaManager, Engine engine, uint addr, uint len, Protection prot,
+    internal static int Mprotect(VMAManager vmaManager, Engine engine, ulong addr, ulong len, Protection prot,
         Process? process = null)
     {
         if (len == 0) return 0;
@@ -319,7 +318,7 @@ internal static class ProcessAddressSpaceSync
         return rc;
     }
 
-    internal static int MadviseForkInheritance(VMAManager vmaManager, Engine engine, uint addr, uint len,
+    internal static int MadviseForkInheritance(VMAManager vmaManager, Engine engine, ulong addr, ulong len,
         bool dontFork, Process? process = null)
     {
         if (len == 0) return 0;
@@ -327,7 +326,7 @@ internal static class ProcessAddressSpaceSync
         return vmaManager.MadviseForkInheritance(addr, len, dontFork);
     }
 
-    internal static int MadviseWipeOnFork(VMAManager vmaManager, Engine engine, uint addr, uint len,
+    internal static int MadviseWipeOnFork(VMAManager vmaManager, Engine engine, ulong addr, ulong len,
         bool wipeOnFork, Process? process = null)
     {
         if (len == 0) return 0;
@@ -335,7 +334,7 @@ internal static class ProcessAddressSpaceSync
         return vmaManager.MadviseWipeOnFork(addr, len, wipeOnFork);
     }
 
-    internal static int MadviseDontNeed(VMAManager vmaManager, Engine engine, uint addr, uint len,
+    internal static int MadviseDontNeed(VMAManager vmaManager, Engine engine, ulong addr, ulong len,
         Process? process = null)
     {
         if (len == 0) return 0;
@@ -374,7 +373,7 @@ internal static class ProcessAddressSpaceSync
             vmaManager.PruneCodeCacheResetRanges(minSeen);
     }
 
-    internal static uint Mmap(VMAManager vmaManager, Engine engine, uint addr, uint len, Protection perms,
+    internal static ulong Mmap(VMAManager vmaManager, Engine engine, ulong addr, ulong len, Protection perms,
         MapFlags flags,
         LinuxFile? file, long offset, string name, Process? process = null)
     {
@@ -384,14 +383,21 @@ internal static class ProcessAddressSpaceSync
         var tbCohWorkSet = shouldApplyWx ? new TbCohWorkSet() : null;
         var fixedReplace = (flags & MapFlags.Fixed) != 0 && (flags & MapFlags.FixedNoReplace) == 0;
         if (fixedReplace && addr != 0 && alignedLen != 0)
+        {
+            if ((addr & LinuxConstants.PageOffsetMask) != 0)
+                throw new ArgumentException("Address not aligned", nameof(addr));
+            var taskSize = vmaManager.GetTaskSize(engine);
+            if (addr >= taskSize || alignedLen > taskSize - addr)
+                throw new OutOfMemoryException("Mapping exceeds user task address space");
             MunmapCore(vmaManager, engine, addr, alignedLen);
+        }
 
         var mapped = vmaManager.Mmap(addr, len, perms, flags, file, offset, name, engine, tbCohWorkSet);
         tbCohWorkSet?.Visit(hostPagePtr => TbCoh.ApplyWx(vmaManager.MemoryContext, hostPagePtr));
         return mapped;
     }
 
-    internal static void SyncSharedRange(VMAManager vmaManager, Engine engine, uint addr, uint len,
+    internal static void SyncSharedRange(VMAManager vmaManager, Engine engine, ulong addr, ulong len,
         Process? process = null)
     {
         if (len == 0) return;
@@ -562,7 +568,7 @@ internal static class ProcessAddressSpaceSync
         vmaManager.SyncAllMappedSharedFiles(snapshot.Engines.Count == 0 ? [engine] : snapshot.Engines);
     }
 
-    private static void PublishCodeCacheInvalidation(VMAManager vmaManager, Engine engine, uint addr, uint len)
+    private static void PublishCodeCacheInvalidation(VMAManager vmaManager, Engine engine, ulong addr, ulong len)
     {
         if (len == 0) return;
         var sequence = vmaManager.BumpCodeCacheSequence();

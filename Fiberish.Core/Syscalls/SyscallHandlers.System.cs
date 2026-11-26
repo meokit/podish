@@ -123,7 +123,7 @@ public partial class SyscallManager
         return 0;
     }
 
-    private async ValueTask<int> SysUname(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysUname(Engine engine, ulong a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var t = engine.Owner as FiberTask;
         if (t == null) return -(int)Errno.EPERM;
@@ -147,7 +147,7 @@ public partial class SyscallManager
         return engine.CopyToUser(a1, result) ? 0 : -(int)Errno.EFAULT;
     }
 
-    private async ValueTask<int> SysSysinfo(Engine engine, uint sysinfoAddr, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysSysinfo(Engine engine, ulong sysinfoAddr, uint a2, uint a3, uint a4, uint a5,
         uint a6)
     {
         var t = engine.Owner as FiberTask;
@@ -439,7 +439,7 @@ public partial class SyscallManager
         }
     }
 
-    private async ValueTask<int> SysGetTimeOfDay(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysGetTimeOfDay(Engine engine, ulong a1, ulong a2, uint a3, uint a4, uint a5,
         uint a6)
     {
         var tvPtr = a1;
@@ -496,7 +496,7 @@ public partial class SyscallManager
         return 0;
     }
 
-    private async ValueTask<int> SysClockGetTime64(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysClockGetTime64(Engine engine, uint a1, ulong a2, uint a3, uint a4, uint a5,
         uint a6)
     {
         var clockId = (int)a1;
@@ -1195,7 +1195,7 @@ public partial class SyscallManager
         return 0;
     }
 
-    private async ValueTask<int> SysGetRandom(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysGetRandom(Engine engine, ulong a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var bufAddr = a1;
         var count = a2;

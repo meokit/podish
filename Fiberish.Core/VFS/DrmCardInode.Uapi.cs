@@ -289,7 +289,7 @@ public sealed partial class DrmCardInode
             AnonymousInodeLifecycle.CloseAliasesAndFinalize(this, "DRM PRIME close");
         }
 
-        public override int ResolveMmapBacking(LinuxFile file, uint length, ref long offset, out LinuxFile backing)
+        public override int ResolveMmapBacking(LinuxFile file, ulong length, ref long offset, out LinuxFile backing)
         {
             backing = Buffer.File!;
             return offset >= 0 && (ulong)offset + length <= Buffer.Size ? 0 : -(int)Errno.EINVAL;
@@ -349,7 +349,7 @@ public sealed partial class DrmCardInode
 
         public override bool SupportsMmap => true;
 
-        public override int ResolveMmapBacking(LinuxFile file, uint length, ref long offset, out LinuxFile backing) =>
+        public override int ResolveMmapBacking(LinuxFile file, ulong length, ref long offset, out LinuxFile backing) =>
             _card.ResolveMmapBacking(file, length, ref offset, out backing);
     }
 }

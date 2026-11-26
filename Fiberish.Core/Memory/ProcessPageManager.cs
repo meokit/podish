@@ -48,7 +48,7 @@ internal readonly struct MappedPageBinding
 public sealed class ProcessPageManager
 {
     private readonly MemoryRuntimeContext _memoryContext;
-    private readonly Dictionary<uint, MappedPageBinding> _pages = [];
+    private readonly Dictionary<ulong, MappedPageBinding> _pages = [];
 
     public ProcessPageManager(MemoryRuntimeContext memoryContext)
     {
@@ -58,7 +58,7 @@ public sealed class ProcessPageManager
 
     public int Count => _pages.Count;
 
-    public bool TryGet(uint pageAddr, out IntPtr ptr)
+    public bool TryGet(ulong pageAddr, out IntPtr ptr)
     {
         if (_pages.TryGetValue(pageAddr, out var page))
         {
@@ -70,7 +70,7 @@ public sealed class ProcessPageManager
         return false;
     }
 
-    internal bool TryGetBinding(uint pageAddr, out MappedPageBinding? binding)
+    internal bool TryGetBinding(ulong pageAddr, out MappedPageBinding? binding)
     {
         if (_pages.TryGetValue(pageAddr, out var existing))
         {
@@ -82,7 +82,7 @@ public sealed class ProcessPageManager
         return false;
     }
 
-    internal bool AddBinding(uint pageAddr, MappedPageBinding binding, out bool addedRef)
+    internal bool AddBinding(ulong pageAddr, MappedPageBinding binding, out bool addedRef)
     {
         addedRef = false;
         if (binding.Ptr == IntPtr.Zero) return false;
@@ -95,7 +95,7 @@ public sealed class ProcessPageManager
         return true;
     }
 
-    public void Release(uint pageAddr, bool preserveOwnerBinding = false)
+    public void Release(ulong pageAddr, bool preserveOwnerBinding = false)
     {
         if (!_pages.Remove(pageAddr, out var binding)) return;
         var hostPage = binding.Page?.HostPage ?? _memoryContext.HostPages.GetRequired(binding.Ptr);
@@ -113,21 +113,49 @@ public sealed class ProcessPageManager
         _memoryContext.HostPages.TryRemoveIfUnused(hostPage);
     }
 
-    public void ReleaseRange(uint addr, uint length, bool preserveOwnerBinding = false)
+    public void ReleaseRange(ulong addr, ulong length, bool preserveOwnerBinding = false)
     {
-        if (length == 0) return;
-        var start = addr & LinuxConstants.PageMask;
-        var end = (addr + length + LinuxConstants.PageOffsetMask) & LinuxConstants.PageMask;
-        for (var p = start; p < end; p += LinuxConstants.PageSize) Release(p, preserveOwnerBinding);
+        if (length == 0 || _pages.Count == 0) return;
+        var start = addr & LinuxConstants.PageMask64;
+        var end = (addr + length + LinuxConstants.PageOffsetMask) & LinuxConstants.PageMask64;
+        if ((end - start) / LinuxConstants.PageSize <= (ulong)_pages.Count)
+        {
+            for (var page = start; page < end; page += LinuxConstants.PageSize)
+                Release(page, preserveOwnerBinding);
+            return;
+        }
+
+        var pages = new List<ulong>();
+        foreach (var page in _pages.Keys)
+            if (page >= start && page < end)
+                pages.Add(page);
+        foreach (var page in pages)
+            Release(page, preserveOwnerBinding);
     }
 
-    public uint[] SnapshotMappedPages()
+    internal void VisitMappedPages(ulong start, ulong end, Action<ulong, MappedPageBinding> visitor)
     {
-        if (_pages.Count == 0) return Array.Empty<uint>();
+        if (start >= end || _pages.Count == 0) return;
+        if ((end - start) / LinuxConstants.PageSize < (ulong)_pages.Count)
+        {
+            for (var page = start; page < end; page += LinuxConstants.PageSize)
+                if (_pages.TryGetValue(page, out var binding))
+                    visitor(page, binding);
+            return;
+        }
+
+        foreach (var (page, binding) in _pages)
+            if (page >= start && page < end)
+                visitor(page, binding);
+    }
+
+    public ulong[] SnapshotMappedPages()
+    {
+        if (_pages.Count == 0) return Array.Empty<ulong>();
         return _pages.Keys.ToArray();
     }
 
-    public int CountInRange(uint start, uint end)
+    public int CountInRange(ulong start, ulong end)
     {
         if (_pages.Count == 0 || start >= end) return 0;
         var count = 0;

@@ -132,7 +132,7 @@ public static class ProcFsManager
         for (var i = 0; i < vmas.Count; i++)
         {
             var vma = vmas[i];
-            var vmaKb = vma.Length / 1024;
+            var vmaKb = (long)(vma.Length / 1024);
             vmSizeKb += vmaKb;
             vmRssKb += CountVmaResidentKb(process, vma);
             if ((vma.Flags & MapFlags.Locked) != 0)
@@ -406,9 +406,22 @@ public static class ProcFsManager
         if (pageMapping.Count == 0 && anonCount == 0)
             return 0;
 
-        var vmaPageCount = (ulong)vma.Length / LinuxConstants.PageSize;
-        if (anonCount == 0 && vmaPageCount > (ulong)pageMapping.Count * 2)
-            return (long)pageMapping.CountInRange(vma.Start, vma.End) * 4;
+        var vmaPageCount = vma.Length / LinuxConstants.PageSize;
+        if (vmaPageCount > (ulong)pageMapping.Count * 2 + (ulong)anonCount)
+        {
+            var residentPages = pageMapping.CountInRange(vma.Start, vma.End);
+            if (anon != null)
+            {
+                var first = vma.GetPageIndex(vma.Start);
+                var last = vma.GetPageIndex(vma.End);
+                anon.Pages.VisitResidentPagesInRange(first, last, (index, page) =>
+                {
+                    if (!pageMapping.TryGet(vma.GetGuestPageStart(index), out _))
+                        residentPages++;
+                });
+            }
+            return residentPages * 4L;
+        }
 
         var residentKb = 0L;
         for (var p = vma.Start; p < vma.End; p += LinuxConstants.PageSize)
@@ -476,7 +489,10 @@ public static class ProcFsManager
     public static int ReadPagemap(Process? process, long offset, Span<byte> destination)
     {
         if (process == null || destination.Length <= 0 || offset < 0) return 0;
-        var taskSize = process.Mem.Layout?.TaskSize ?? LinuxConstants.TaskSize32;
+        var taskSize = process.Mem.Layout?.TaskSize ??
+                       (process.Threads.FirstOrDefault()?.CPU.IsAArch64 == true
+                           ? LinuxConstants.TaskSizeAArch64
+                           : LinuxConstants.TaskSize32);
         var maxBytes = (long)((taskSize / LinuxConstants.PageSize) * 8);
         if (offset >= maxBytes) return 0;
 
@@ -493,14 +509,13 @@ public static class ProcFsManager
             var pageAddr = (ulong)pageIndex * LinuxConstants.PageSize;
             if (pageAddr >= taskSize) break;
 
-            var addr = (uint)pageAddr;
-            var vma = process.Mem.FindVmArea(addr);
+            var vma = process.Mem.FindVmArea(pageAddr);
             var isPresent = false;
             if (vma != null)
             {
-                if (process.Mem.PageMapping.TryGet(addr, out _))
+                if (process.Mem.PageMapping.TryGet(pageAddr, out _))
                     isPresent = true;
-                else if (vma.VmAnonVma is { } anon && anon.PeekPage(vma.GetPageIndex(addr)) != IntPtr.Zero)
+                else if (vma.VmAnonVma is { } anon && anon.PeekPage(vma.GetPageIndex(pageAddr)) != IntPtr.Zero)
                     isPresent = true;
             }
 

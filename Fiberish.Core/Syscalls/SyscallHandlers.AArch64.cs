@@ -234,9 +234,11 @@ public partial class SyscallManager
     };
 
     private ValueTask<int> DispatchAArch64Syscall(uint number, uint operation, Engine engine,
-        ReadOnlySpan<ulong> args, uint pointers, uint sizes, out bool handled, out long? wideResult)
+        ReadOnlySpan<ulong> args, uint pointers, uint sizes, out bool handled, out long? wideResult,
+        out ValueTask<long>? wideTask)
     {
         wideResult = null;
+        wideTask = null;
         if (operation == uint.MaxValue)
         {
             handled = false;
@@ -244,13 +246,172 @@ public partial class SyscallManager
         }
 
         handled = true;
+        switch (operation)
+        {
+            case X86SyscallNumbers.brk:
+                wideResult = Brk(engine, args[0]);
+                return default;
+            case X86SyscallNumbers.mmap2:
+                if ((args[5] & LinuxConstants.PageOffsetMask) != 0)
+                    return ValueTask.FromResult(-(int)Errno.EINVAL);
+                wideTask = Mmap(engine, args[0], args[1], (int)args[2], (int)args[3], (int)args[4],
+                    unchecked((long)args[5]));
+                return default;
+            case X86SyscallNumbers.munmap:
+                return SysMunmap(engine, args[0], args[1], 0, 0, 0, 0);
+            case X86SyscallNumbers.mremap:
+                wideResult = Mremap(engine, args[0], args[1], args[2], (int)args[3], args[4]);
+                return default;
+            case X86SyscallNumbers.madvise:
+                return SysMadvise(engine, args[0], args[1], (uint)args[2], 0, 0, 0);
+            case X86SyscallNumbers.msync:
+                return SysMsync(engine, args[0], args[1], (uint)args[2], 0, 0, 0);
+            case X86SyscallNumbers.mincore:
+                return SysMincore(engine, args[0], args[1], args[2], 0, 0, 0);
+            case X86SyscallNumbers.mlock:
+                return SysMlock(engine, args[0], args[1], 0, 0, 0, 0);
+            case X86SyscallNumbers.mlock2:
+                return SysMlock2(engine, args[0], args[1], (uint)args[2], 0, 0, 0);
+            case X86SyscallNumbers.munlock:
+                return SysMunlock(engine, args[0], args[1], 0, 0, 0, 0);
+            case X86SyscallNumbers.mprotect:
+                return SysMprotect(engine, args[0], args[1], (uint)args[2], 0, 0, 0);
+            case X86SyscallNumbers.rt_sigaction:
+                if (args[3] != 8) return ValueTask.FromResult(-(int)Errno.EINVAL);
+                return SysRtSigAction(engine, (uint)args[0], args[1], args[2], 8, 0, 0);
+            case X86SyscallNumbers.sigaltstack:
+                return SysSigAltStack(engine, args[0], args[1], 0, 0, 0, 0);
+            case X86SyscallNumbers.execve:
+                return SysExecve(engine, args[0], args[1], args[2], 0, 0, 0);
+            case X86SyscallNumbers.clone:
+                return CloneTask(engine, (uint)args[0], args[1], args[2], args[3], args[4]);
+            case X86SyscallNumbers.set_tid_address:
+                return SysSetTidAddress(engine, args[0], 0, 0, 0, 0, 0);
+            case X86SyscallNumbers.set_robust_list:
+                return SysSetRobustList(engine, args[0], args[1], 0, 0, 0, 0);
+            case X86SyscallNumbers.get_robust_list:
+                return SysGetRobustList(engine, (uint)args[0], args[1], args[2], 0, 0, 0);
+            case X86SyscallNumbers.futex_time64:
+                return SysFutexTime64(engine, args[0], (uint)args[1], (uint)args[2], args[3], args[4], (uint)args[5]);
+            case X86SyscallNumbers.getcwd:
+                return SysGetCwd(engine, args[0], args[1], 0, 0, 0, 0);
+            case X86SyscallNumbers.mknodat:
+                return SysMknodat(engine, (uint)args[0], args[1], (uint)args[2], (uint)args[3], 0, 0);
+            case X86SyscallNumbers.mkdirat:
+                return SysMkdirAt(engine, (uint)args[0], args[1], (uint)args[2], 0, 0, 0);
+            case X86SyscallNumbers.unlinkat:
+                return SysUnlinkAt(engine, (uint)args[0], args[1], (uint)args[2], 0, 0, 0);
+            case X86SyscallNumbers.symlinkat:
+                return SysSymlinkAt(engine, args[0], (uint)args[1], args[2], 0, 0, 0);
+            case X86SyscallNumbers.linkat:
+                return SysLinkat(engine, (uint)args[0], args[1], (uint)args[2], args[3], (uint)args[4], 0);
+            case X86SyscallNumbers.renameat:
+                return SysRenameAt(engine, (uint)args[0], args[1], (uint)args[2], args[3], 0, 0);
+            case X86SyscallNumbers.renameat2:
+                return SysRenameAt2(engine, (uint)args[0], args[1], (uint)args[2], args[3], (uint)args[4], 0);
+            case X86SyscallNumbers.statfs:
+                return SysStatfs(engine, args[0], args[1], 0, 0, 0, 0);
+            case X86SyscallNumbers.fstatfs:
+                return SysFstatfs(engine, (uint)args[0], args[1], 0, 0, 0, 0);
+            case X86SyscallNumbers.faccessat:
+                return SysFaccessAt(engine, (uint)args[0], args[1], (uint)args[2], 0, 0, 0);
+            case X86SyscallNumbers.faccessat2:
+                return SysFaccessAt2(engine, (uint)args[0], args[1], (uint)args[2], (uint)args[3], 0, 0);
+            case X86SyscallNumbers.chdir:
+                return SysChdir(engine, args[0], 0, 0, 0, 0, 0);
+            case X86SyscallNumbers.chroot:
+                return SysChroot(engine, args[0], 0, 0, 0, 0, 0);
+            case X86SyscallNumbers.fchmodat:
+                return SysFchmodAt(engine, (uint)args[0], args[1], (uint)args[2], 0, 0, 0);
+            case X86SyscallNumbers.fchmodat2:
+                return SysFchmodAt2(engine, (uint)args[0], args[1], (uint)args[2], (uint)args[3], 0, 0);
+            case X86SyscallNumbers.fchownat:
+                return SysFchownAt(engine, (uint)args[0], args[1], (uint)args[2], (uint)args[3], (uint)args[4], 0);
+            case X86SyscallNumbers.getdents64:
+                return SysGetdents64(engine, (uint)args[0], args[1], (uint)args[2], 0, 0, 0);
+            case X86SyscallNumbers.readlinkat:
+                return SysReadlinkAt(engine, (uint)args[0], args[1], args[2], (uint)args[3], 0, 0);
+            case X86SyscallNumbers.fstatat64:
+                return SysNewFstatAt(engine, (uint)args[0], args[1], args[2], (uint)args[3], 0, 0);
+            case X86SyscallNumbers.fstat64:
+                return SysFstat64(engine, (uint)args[0], args[1], 0, 0, 0, 0);
+            case X86SyscallNumbers.statx:
+                return SysStatx(engine, (uint)args[0], args[1], (uint)args[2], (uint)args[3], args[4], 0);
+            case X86SyscallNumbers.utimensat_time64:
+                return SysUtimensAtTime64(engine, (uint)args[0], args[1], args[2], (uint)args[3], 0, 0);
+            case X86SyscallNumbers.truncate64:
+                return SysTruncate64(engine, args[0], (uint)args[1], (uint)(args[1] >> 32), 0, 0, 0);
+            case X86SyscallNumbers.openat:
+                return SysOpenAt(engine, (uint)args[0], args[1], (uint)args[2], (uint)args[3], 0, 0);
+            case X86SyscallNumbers.openat2:
+                if (args[3] > uint.MaxValue) return ValueTask.FromResult(-(int)Errno.EINVAL);
+                return SysOpenAt2(engine, (uint)args[0], args[1], args[2], (uint)args[3], 0, 0);
+            case X86SyscallNumbers.clock_gettime64:
+                return SysClockGetTime64(engine, (uint)args[0], args[1], 0, 0, 0, 0);
+            case X86SyscallNumbers.gettimeofday:
+                return SysGetTimeOfDay(engine, args[0], args[1], 0, 0, 0, 0);
+            case X86SyscallNumbers.sysinfo:
+                return SysSysinfo(engine, args[0], 0, 0, 0, 0, 0);
+            case X86SyscallNumbers.uname:
+                return SysUname(engine, args[0], 0, 0, 0, 0, 0);
+            case X86SyscallNumbers.getrandom:
+                if (args[1] > uint.MaxValue) return ValueTask.FromResult(-(int)Errno.EINVAL);
+                return SysGetRandom(engine, args[0], (uint)args[1], (uint)args[2], 0, 0, 0);
+            case X86SyscallNumbers.semctl:
+                if ((args[2] & LinuxConstants.IPC_64) != 0)
+                    return ValueTask.FromResult(-(int)Errno.EINVAL);
+                return SysSemCtl(engine, (uint)args[0], (uint)args[1], (uint)args[2], args[3], 0, 0);
+            case X86SyscallNumbers.semtimedop_time64:
+                return DoSemTimedOp(engine, (int)args[0], args[1], (uint)args[2], number == 192 ? args[3] : 0,
+                    time64: true);
+            case X86SyscallNumbers.shmget:
+                return SysShmGet(engine, (uint)args[0], args[1], (uint)args[2]);
+            case X86SyscallNumbers.shmctl:
+                return SysShmCtl(engine, (uint)args[0], (uint)args[1], args[2]);
+            case X86SyscallNumbers.shmat:
+                wideResult = AttachSharedMemory(engine, (uint)args[0], args[1], (uint)args[2]);
+                return default;
+            case X86SyscallNumbers.shmdt:
+                return SysShmDt(engine, args[0]);
+            case X86SyscallNumbers.read:
+            case X86SyscallNumbers.write:
+            case X86SyscallNumbers.pread:
+            case X86SyscallNumbers.pwrite:
+            case X86SyscallNumbers.readv:
+            case X86SyscallNumbers.writev:
+            case X86SyscallNumbers.preadv:
+            case X86SyscallNumbers.pwritev:
+            case X86SyscallNumbers.preadv2:
+            case X86SyscallNumbers.pwritev2:
+                if (args[2] > uint.MaxValue) return ValueTask.FromResult(-(int)Errno.EINVAL);
+                var fd = (uint)args[0];
+                var count = (uint)args[2];
+                var offsetLow = (uint)args[3];
+                var offsetHigh = (uint)(args[3] >> 32);
+                var flags = (uint)args[5];
+                return operation switch
+                {
+                    X86SyscallNumbers.read => SysRead(engine, fd, args[1], count, 0, 0, 0),
+                    X86SyscallNumbers.write => SysWrite(engine, fd, args[1], count, 0, 0, 0),
+                    X86SyscallNumbers.pread => SysPRead(engine, fd, args[1], count, offsetLow, offsetHigh, flags),
+                    X86SyscallNumbers.pwrite => SysPWrite(engine, fd, args[1], count, offsetLow, offsetHigh, flags),
+                    X86SyscallNumbers.readv => SysReadV(engine, fd, args[1], count, 0, 0, 0),
+                    X86SyscallNumbers.writev => SysWriteV(engine, fd, args[1], count, 0, 0, 0),
+                    X86SyscallNumbers.preadv => SysPReadV(engine, fd, args[1], count, offsetLow, offsetHigh, flags),
+                    X86SyscallNumbers.pwritev => SysPWriteV(engine, fd, args[1], count, offsetLow, offsetHigh, flags),
+                    X86SyscallNumbers.preadv2 => SysPReadV2(engine, fd, args[1], count, offsetLow, offsetHigh, flags),
+                    X86SyscallNumbers.pwritev2 => SysPWriteV2(engine, fd, args[1], count, offsetLow, offsetHigh, flags),
+                    _ => throw new InvalidOperationException()
+                };
+        }
+
         for (var i = 0; i < args.Length; i++)
         {
             if (args[i] <= uint.MaxValue) continue;
             var bit = 1u << i;
             if ((pointers & bit) != 0) return ValueTask.FromResult(-(int)Errno.EFAULT);
             if ((sizes & bit) != 0)
-                return ValueTask.FromResult(operation == X86SyscallNumbers.mmap2 ? -(int)Errno.ENOMEM : -(int)Errno.EINVAL);
+                return ValueTask.FromResult(-(int)Errno.EINVAL);
         }
 
         var a1 = (uint)args[0];
@@ -264,35 +425,9 @@ public partial class SyscallManager
             case X86SyscallNumbers.lseek:
                 wideResult = SeekFile((int)a1, (long)args[1], (int)a3);
                 return default;
-            case X86SyscallNumbers.brk:
-                if (args[0] > uint.MaxValue)
-                    return ValueTask.FromResult(unchecked((int)BrkAddr));
-                break;
             case X86SyscallNumbers.accept4 when number == 202:
                 a4 = 0; // accept() has no flags argument.
                 break;
-            case X86SyscallNumbers.semtimedop_time64 when number == 193:
-                a4 = 0; // semop() has no timeout argument.
-                break;
-            case X86SyscallNumbers.semctl:
-                if ((a3 & LinuxConstants.IPC_64) != 0) return ValueTask.FromResult(-(int)Errno.EINVAL);
-                if (a3 is LinuxConstants.IPC_STAT or LinuxConstants.IPC_SET or LinuxConstants.GETALL
-                    or LinuxConstants.SETALL or LinuxConstants.IPC_INFO or LinuxConstants.SEM_INFO
-                    or LinuxConstants.SEM_STAT or LinuxConstants.SEM_STAT_ANY && args[3] > uint.MaxValue)
-                    return ValueTask.FromResult(-(int)Errno.EFAULT);
-                break;
-            case X86SyscallNumbers.shmctl:
-                if (a2 is LinuxConstants.IPC_STAT or LinuxConstants.IPC_SET && args[2] > uint.MaxValue)
-                    return ValueTask.FromResult(-(int)Errno.EFAULT);
-                break;
-            case X86SyscallNumbers.clone:
-                if ((a1 & LinuxConstants.CLONE_PARENT_SETTID) != 0 && args[2] > uint.MaxValue)
-                    return ValueTask.FromResult(-(int)Errno.EFAULT);
-                if ((a1 & LinuxConstants.CLONE_CHILD_SETTID) != 0 || (a1 & LinuxConstants.CLONE_CHILD_CLEARTID) != 0)
-                {
-                    if (args[4] > uint.MaxValue) return ValueTask.FromResult(-(int)Errno.EFAULT);
-                }
-                return CloneTask(engine, a1, a2, a3, args[3], a5);
             case X86SyscallNumbers.ioctl:
                 if (args[2] > uint.MaxValue) return ValueTask.FromResult(-(int)Errno.EFAULT);
                 break;
@@ -326,7 +461,6 @@ public partial class SyscallManager
                     return default;
                 }
                 break;
-            case X86SyscallNumbers.truncate64:
             case X86SyscallNumbers.ftruncate64:
                 a3 = (uint)(args[1] >> 32);
                 break;
@@ -334,28 +468,6 @@ public partial class SyscallManager
                 a4 = (uint)(args[2] >> 32);
                 a5 = (uint)args[3];
                 a6 = (uint)(args[3] >> 32);
-                break;
-            case X86SyscallNumbers.pread:
-            case X86SyscallNumbers.pwrite:
-            case X86SyscallNumbers.preadv:
-            case X86SyscallNumbers.pwritev:
-            case X86SyscallNumbers.preadv2:
-            case X86SyscallNumbers.pwritev2:
-                a5 = (uint)(args[3] >> 32);
-                break;
-            case X86SyscallNumbers.mmap2:
-                if ((args[5] & LinuxConstants.PageOffsetMask) != 0)
-                    return ValueTask.FromResult(-(int)Errno.EINVAL);
-                if (args[0] > uint.MaxValue)
-                {
-                    if ((a4 & (uint)(MapFlags.Fixed | MapFlags.FixedNoReplace)) != 0)
-                        return ValueTask.FromResult(-(int)Errno.ENOMEM);
-                    a1 = 0; // An out-of-range non-fixed hint can be ignored.
-                }
-                return Mmap(engine, a1, a2, (int)a3, (int)a4, (int)a5, unchecked((long)args[5]));
-            case X86SyscallNumbers.mremap:
-                if ((a4 & 2) != 0 && args[4] > uint.MaxValue) // MREMAP_FIXED
-                    return ValueTask.FromResult(-(int)Errno.ENOMEM);
                 break;
         }
 
@@ -380,14 +492,4 @@ public partial class SyscallManager
     // The same permutation converts from either ABI to the other.
     private static uint TranslateAArch64OpenFlags(uint flags)
         => (flags & ~0x3C000u) | ((flags & 0xC000u) << 2) | ((flags & 0x30000u) >> 2);
-
-    internal static long WidenAArch64SyscallResult(uint operation, int result)
-    {
-        // Mappings can be placed above INT_MAX in the shared 32-bit address space.
-        // Linux represents errors using only the final 4095 values of a syscall word.
-        if (result < -4095 && operation is (X86SyscallNumbers.mmap2 or X86SyscallNumbers.mremap
-            or X86SyscallNumbers.brk or X86SyscallNumbers.shmat))
-            return unchecked((uint)result);
-        return result;
-    }
 }

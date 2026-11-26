@@ -747,7 +747,7 @@ public abstract class Inode : IAddressSpaceOperations, IBackingPageHandleRelease
     /// </summary>
     public virtual bool SupportsMmap => false;
 
-    public virtual int ResolveMmapBacking(LinuxFile file, uint length, ref long offset, out LinuxFile backing)
+    public virtual int ResolveMmapBacking(LinuxFile file, ulong length, ref long offset, out LinuxFile backing)
     {
         backing = file;
         return 0;
@@ -1509,7 +1509,7 @@ public abstract class Inode : IAddressSpaceOperations, IBackingPageHandleRelease
             while (iovProcessed < iov.Len)
             {
                 var currAddr = iov.BaseAddr + iovProcessed;
-                var pageOffset = currAddr & 0xFFF;
+                var pageOffset = (uint)currAddr & LinuxConstants.PageOffsetMask;
                 var chunkLen = Math.Min(iov.Len - iovProcessed, 4096 - pageOffset);
 
                 while (true)
@@ -1605,7 +1605,7 @@ public abstract class Inode : IAddressSpaceOperations, IBackingPageHandleRelease
             while (iovProcessed < iov.Len)
             {
                 var currAddr = iov.BaseAddr + iovProcessed;
-                var pageOffset = currAddr & 0xFFF;
+                var pageOffset = (uint)currAddr & LinuxConstants.PageOffsetMask;
                 var chunkLen = Math.Min(iov.Len - iovProcessed, 4096 - pageOffset);
                 while (true)
                 {

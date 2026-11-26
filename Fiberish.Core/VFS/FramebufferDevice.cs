@@ -467,7 +467,7 @@ internal sealed class FramebufferInode : MappingBackedInode
     // Video memory must remain resident when guests unmap it or invoke msync.
     protected override AddressSpacePolicy.AddressSpaceCacheClass? MappingCacheClass => null;
 
-    public override int ResolveMmapBacking(LinuxFile file, uint length, ref long offset, out LinuxFile backing)
+    public override int ResolveMmapBacking(LinuxFile file, ulong length, ref long offset, out LinuxFile backing)
     {
         backing = file;
         return offset >= 0 && (ulong)offset + length <= Size ? 0 : -(int)Errno.EINVAL;
@@ -554,7 +554,7 @@ internal sealed class FramebufferInode : MappingBackedInode
                 if (address < iov.BaseAddr)
                     return total > 0 ? total : -(int)Errno.EFAULT;
                 var count = (int)Math.Min(Math.Min(iov.Len - transferred,
-                    LinuxConstants.PageSize - (address & LinuxConstants.PageOffsetMask)), remaining);
+                    LinuxConstants.PageSize - ((uint)address & LinuxConstants.PageOffsetMask)), remaining);
                 var data = buffer[..count];
                 int result;
                 if (write)

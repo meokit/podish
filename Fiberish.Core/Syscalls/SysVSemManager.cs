@@ -218,7 +218,7 @@ public class SysVSemManager
         return semid;
     }
 
-    public async ValueTask<int> SemOp(int semid, uint sopsPtr, uint nsops, Engine engine, long? timeoutMs = null)
+    public async ValueTask<int> SemOp(int semid, ulong sopsPtr, uint nsops, Engine engine, long? timeoutMs = null)
     {
         var task = engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
@@ -347,7 +347,7 @@ public class SysVSemManager
         }
     }
 
-    public int SemCtl(int semid, int semnum, int cmd, uint arg, Engine engine, int uid, int gid,
+    public int SemCtl(int semid, int semnum, int cmd, ulong arg, Engine engine, int uid, int gid,
         Process? process = null)
     {
         var actualCmd = cmd & ~LinuxConstants.IPC_64;
@@ -576,7 +576,7 @@ public class SysVSemManager
             proc.SemUndo.Remove((semid, semnum));
     }
 
-    private static int WriteSemidDs(SemaphoreSet set, uint buf, Engine engine)
+    private static int WriteSemidDs(SemaphoreSet set, ulong buf, Engine engine)
     {
         if (buf == 0) return -(int)Errno.EFAULT;
 
@@ -612,7 +612,7 @@ public class SysVSemManager
         return 0;
     }
 
-    private static int ReadSemidDsForSet(SemaphoreSet set, uint buf, Engine engine)
+    private static int ReadSemidDsForSet(SemaphoreSet set, ulong buf, Engine engine)
     {
         if (buf == 0) return -(int)Errno.EFAULT;
 
@@ -631,7 +631,7 @@ public class SysVSemManager
         return 0;
     }
 
-    private int WriteSemInfo(uint buf, Engine engine, bool semInfo)
+    private int WriteSemInfo(ulong buf, Engine engine, bool semInfo)
     {
         if (buf == 0) return -(int)Errno.EFAULT;
 

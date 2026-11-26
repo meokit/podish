@@ -250,7 +250,7 @@ public sealed class AddressSpace
             Mm = mm,
             Vma = vma,
             StartPageIndex = startPageIndex,
-            EndPageIndexExclusive = startPageIndex + vma.Length / LinuxConstants.PageSize
+            EndPageIndexExclusive = checked(startPageIndex + (uint)(vma.Length / LinuxConstants.PageSize))
         };
         if (_rmapAttachmentIndexByVma.TryGetValue(vma, out var existingIndex))
         {
@@ -594,7 +594,7 @@ public sealed class AnonVma
             Mm = mm,
             Vma = vma,
             StartPageIndex = startPageIndex,
-            EndPageIndexExclusive = startPageIndex + vma.Length / LinuxConstants.PageSize
+            EndPageIndexExclusive = checked(startPageIndex + (uint)(vma.Length / LinuxConstants.PageSize))
         };
         if (_rmapAttachmentIndexByVma.TryGetValue(vma, out var existingIndex))
         {

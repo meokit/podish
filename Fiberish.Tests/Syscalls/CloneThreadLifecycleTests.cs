@@ -18,7 +18,7 @@ public class CloneThreadLifecycleTests
     private delegate ValueTask<int> SyscallInvoker(SyscallManager manager, Engine engine, uint a1, uint a2, uint a3,
         uint a4, uint a5, uint a6);
 
-    private delegate bool ResolveFutexKeyInvoker(SyscallManager manager, Engine engine, uint uaddr, bool fshared,
+    private delegate bool ResolveFutexKeyInvoker(SyscallManager manager, Engine engine, ulong uaddr, bool fshared,
         out FutexKey key, out int error);
 
     private static readonly SyscallInvoker SysFutexMethod =
@@ -31,7 +31,7 @@ public class CloneThreadLifecycleTests
             .GetMethod("TryResolveFutexKey",
                 BindingFlags.NonPublic | BindingFlags.Instance,
                 null,
-                [typeof(Engine), typeof(uint), typeof(bool), typeof(FutexKey).MakeByRefType(),
+                [typeof(Engine), typeof(ulong), typeof(bool), typeof(FutexKey).MakeByRefType(),
                     typeof(int).MakeByRefType()],
                 null)!
             .CreateDelegate(typeof(ResolveFutexKeyInvoker));

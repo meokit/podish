@@ -14,14 +14,14 @@ namespace Fiberish.Loader;
 
 public struct LoaderResult
 {
-    public uint Entry { get; set; }
-    public uint SP { get; set; }
+    public ulong Entry { get; set; }
+    public ulong SP { get; set; }
     /// <summary>
     ///     Initial stack bytes, as a slice of the loader-owned backing array. Callers must copy or
     ///     consume it before the result goes out of scope.
     /// </summary>
     public ArraySegment<byte> InitialStack { get; set; }
-    public uint BrkAddr { get; set; }
+    public ulong BrkAddr { get; set; }
     public GuestAddressSpaceLayout Layout { get; set; }
 }
 
@@ -117,6 +117,11 @@ public class ElfLoader
         ElfLoadInfo LoadMain(ElfFile elf, LinuxFile file, Stream? stream)
         {
             engine.SelectArchitecture(elf.Architecture);
+            if (engine.IsAArch64)
+            {
+                layout = layout.WithAArch64AddressLimit();
+                mm.Layout = layout;
+            }
             sys.SetupVDSO();
             return LoadSegments(elf, GetLoadBase(elf, layout.PieBase), mm, engine, guestPathRaw, file, stream);
         }
@@ -139,12 +144,12 @@ public class ElfLoader
             mainInfo = LoadMain(elf, file, stream);
         }
 
-        uint interpBase = 0;
+        ulong interpBase = 0;
         var interpEntry = mainInfo.EntryPoint;
 
         if (mainInfo.InterpPathRaw is { } interpPath)
         {
-            uint LoadInterpreter(ElfFile elf, LinuxFile file, Stream? stream)
+            ulong LoadInterpreter(ElfFile elf, LinuxFile file, Stream? stream)
             {
                 interpBase = GetLoadBase(elf, layout.InterpreterBaseHint);
                 return LoadSegments(elf, interpBase, mm, engine, interpPath, file, stream).EntryPoint;
@@ -206,23 +211,23 @@ public class ElfLoader
         // AT_EXECFN is the path passed to execve: for a script that is the script path,
         // not the resolved interpreter path used for EXECUTABLE_PATH/AT_PHDR.
         var initialTargetSp = checked(layout.InitialStackTop - (uint)(variableDataSize + totalSize));
-        var finalSp = initialTargetSp & ~0xFu;
-        var stackMapStart = finalSp & LinuxConstants.PageMask;
+        var finalSp = initialTargetSp & ~0xFUL;
+        var stackMapStart = finalSp & LinuxConstants.PageMask64;
         if (stackMapStart < layout.StackLowerBound)
             throw new InvalidOperationException(
                 $"Initial stack exceeds RLIMIT-derived range: start=0x{stackMapStart:x}, lower=0x{layout.StackLowerBound:x}");
 
-        var stackData = new byte[layout.InitialStackTop - finalSp];
+        var stackData = new byte[checked((int)(layout.InitialStackTop - finalSp))];
         var sp = layout.InitialStackTop;
 
-        uint PushBytes(ReadOnlySpan<byte> bytes)
+        ulong PushBytes(ReadOnlySpan<byte> bytes)
         {
             sp -= (uint)bytes.Length;
             bytes.CopyTo(stackData.AsSpan((int)(sp - finalSp)));
             return sp;
         }
 
-        uint PushCStringBytes(ReadOnlySpan<byte> value)
+        ulong PushCStringBytes(ReadOnlySpan<byte> value)
         {
             var byteCount = value.Length;
             sp -= (uint)(byteCount + 1);
@@ -232,12 +237,12 @@ public class ElfLoader
             return sp;
         }
 
-        void WriteWord(int offset, uint value)
+        void WriteWord(int offset, ulong value)
         {
             if (isAArch64)
                 BinaryPrimitives.WriteUInt64LittleEndian(stackData.AsSpan(offset, wordSize), value);
             else
-                BinaryPrimitives.WriteUInt32LittleEndian(stackData.AsSpan(offset, wordSize), value);
+                BinaryPrimitives.WriteUInt32LittleEndian(stackData.AsSpan(offset, wordSize), checked((uint)value));
         }
 
         // Write vector slots directly into the final stack buffer.
@@ -261,7 +266,7 @@ public class ElfLoader
             Logger.LogInformation("Pushing AT_RANDOM to guest stack at 0x{Ptr:X}: {Bytes}", randPtr,
                 BitConverter.ToString(randBytes));
 
-        Span<uint> auxv = stackalloc uint[]
+        Span<ulong> auxv = stackalloc ulong[]
         {
             LinuxConstants.AT_PLATFORM, platPtr,
             LinuxConstants.AT_EXECFN, execFnPtr,
@@ -351,7 +356,7 @@ public class ElfLoader
         return (long)segment.Position;
     }
 
-    private static uint GetLoadBase(ElfFile elf, uint hint)
+    private static ulong GetLoadBase(ElfFile elf, ulong hint)
     {
         if (elf.FileType == ElfFileType.Executable) return 0;
         if (elf.Architecture == GuestArchitecture.I386) return hint;
@@ -364,13 +369,13 @@ public class ElfLoader
         var loadBase = hint & ~(alignment - 1);
         if (loadBase == 0)
             throw new FatalExecException("ELF load alignment exceeds the guest address space.");
-        return (uint)loadBase;
+        return loadBase;
     }
 
-    private static ElfLoadInfo LoadSegments(ElfFile elf, uint loadBase, VMAManager mm, Engine engine,
+    private static ElfLoadInfo LoadSegments(ElfFile elf, ulong loadBase, VMAManager mm, Engine engine,
         byte[] fileDescRaw, LinuxFile sharedFile, Stream? elfStream)
     {
-        static void MmapSharedFile(VMAManager mm, Engine engine, uint pageStart, uint fileMapLen, Protection perms,
+        static void MmapSharedFile(VMAManager mm, Engine engine, ulong pageStart, ulong fileMapLen, Protection perms,
             LinuxFile sharedFile, long pageOffset)
         {
             sharedFile.Get();
@@ -394,11 +399,11 @@ public class ElfLoader
         {
             PhEnt = elf.ProgramHeaderEntrySize,
             PhNum = (uint)elf.Segments.Length,
-            EntryPoint = (uint)elf.EntryPointAddress + loadBase
+            EntryPoint = elf.EntryPointAddress + loadBase
         };
 
-        uint? firstLoadVaddr = null;
-        uint? phdrInLoad = null;
+        ulong? firstLoadVaddr = null;
+        ulong? phdrInLoad = null;
         var phdrSize = (ulong)info.PhEnt * info.PhNum;
 
         foreach (var segment in elf.Segments)
@@ -413,13 +418,13 @@ public class ElfLoader
                     ((segment.VirtualAddress ^ segment.Position) & LinuxConstants.PageOffsetMask) != 0)
                     throw new FatalExecException("Invalid ELF PT_LOAD after Linux's point of no return.");
 
-                var vaddrRaw = (uint)segment.VirtualAddress + loadBase;
+                var vaddrRaw = segment.VirtualAddress + loadBase;
                 firstLoadVaddr ??= vaddrRaw;
                 if (segment.Position <= elf.ProgramHeaderOffset && phdrSize <= segment.Size)
                 {
                     var offsetInSegment = elf.ProgramHeaderOffset - segment.Position;
                     if (offsetInSegment <= segment.Size - phdrSize)
-                        phdrInLoad = vaddrRaw + (uint)offsetInSegment;
+                        phdrInLoad = vaddrRaw + offsetInSegment;
                 }
 
                 var perms = Protection.None;
@@ -427,18 +432,18 @@ public class ElfLoader
                 if ((segment.Flags & ElfSegmentFlags.Writable) != 0) perms |= Protection.Write;
                 if ((segment.Flags & ElfSegmentFlags.Readable) != 0) perms |= Protection.Read;
 
-                var sizeRaw = (uint)segment.SizeInMemory;
+                var sizeRaw = segment.SizeInMemory;
 
-                var pageStart = vaddrRaw & LinuxConstants.PageMask;
+                var pageStart = vaddrRaw & LinuxConstants.PageMask64;
                 var pageOffset = (long)(segment.Position & ~(ulong)LinuxConstants.PageOffsetMask);
                 if (sizeRaw > 0)
                 {
-                    var bssStart = vaddrRaw + (uint)segment.Size;
+                    var bssStart = vaddrRaw + segment.Size;
                     var bssEnd = vaddrRaw + sizeRaw;
 
                     var fileMapEnd = segment.Size == 0
                         ? pageStart
-                        : (bssStart + LinuxConstants.PageOffsetMask) & LinuxConstants.PageMask;
+                        : (bssStart + LinuxConstants.PageOffsetMask) & LinuxConstants.PageMask64;
                     var fileMapLen = fileMapEnd - pageStart;
 
                     if (fileMapLen > 0)
@@ -459,14 +464,14 @@ public class ElfLoader
                     if (bssEnd > fileMapEnd)
                     {
                         var anonLen = (bssEnd - fileMapEnd + LinuxConstants.PageOffsetMask) &
-                                      LinuxConstants.PageMask;
+                                      LinuxConstants.PageMask64;
                         ProcessAddressSpaceSync.Mmap(mm, engine, fileMapEnd, anonLen, perms,
                             MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, "ELF_BSS");
                     }
                 }
 
                 var end = vaddrRaw + sizeRaw;
-                end = (end + LinuxConstants.PageOffsetMask) & LinuxConstants.PageMask;
+                end = (end + LinuxConstants.PageOffsetMask) & LinuxConstants.PageMask64;
                 if (end > info.BrkAddr) info.BrkAddr = end;
             }
 
@@ -475,7 +480,7 @@ public class ElfLoader
                 if (segment.VirtualAddress >= taskSize - loadBase ||
                     phdrSize > taskSize - loadBase - segment.VirtualAddress)
                     throw new FatalExecException("ELF PT_PHDR is outside the guest address space.");
-                info.PhdrAddr = (uint)segment.VirtualAddress + loadBase;
+                info.PhdrAddr = segment.VirtualAddress + loadBase;
             }
 
             if (segment.Type == ElfSegmentType.Interpreter && elfStream != null)
@@ -498,11 +503,11 @@ public class ElfLoader
 
     private struct ElfLoadInfo
     {
-        public uint PhdrAddr { get; set; }
+        public ulong PhdrAddr { get; set; }
         public uint PhNum { get; set; }
         public uint PhEnt { get; set; }
-        public uint EntryPoint { get; set; }
-        public uint BrkAddr { get; set; }
+        public ulong EntryPoint { get; set; }
+        public ulong BrkAddr { get; set; }
         public byte[]? InterpPathRaw { get; set; }
     }
 }

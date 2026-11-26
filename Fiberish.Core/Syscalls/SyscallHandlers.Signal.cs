@@ -37,7 +37,7 @@ public partial class SyscallManager
         return unchecked((int)oldAction.Handler);
     }
 
-    private async ValueTask<int> SysRtSigAction(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysRtSigAction(Engine engine, uint a1, ulong a2, ulong a3, uint a4, uint a5,
         uint a6)
     {
         // a1: sig, a2: new_sa, a3: old_sa, a4: sigsetsize
@@ -73,16 +73,13 @@ public partial class SyscallManager
 
             Span<byte> buf = stackalloc byte[actionSize];
             if (!engine.CopyFromUser(newSaPtr, buf)) return -(int)Errno.EFAULT;
-            var handler = ReadGuestWord(buf, wordSize);
-            var restorer = ReadGuestWord(buf[(wordSize * 2)..], wordSize);
-            if (handler > uint.MaxValue) return -(int)Errno.EFAULT;
             task.Process.SignalActions[sig] = new SigAction
             {
-                Handler = (uint)handler,
+                Handler = ReadGuestWord(buf, wordSize),
                 Flags = (uint)ReadGuestWord(buf[wordSize..], wordSize),
                 // The kernel ABI round-trips this word. Arm64 glibc can leave
                 // it uninitialized when SA_RESTORER is clear.
-                Restorer = restorer,
+                Restorer = ReadGuestWord(buf[(wordSize * 2)..], wordSize),
                 Mask = BinaryPrimitives.ReadUInt64LittleEndian(buf[(wordSize * 3)..])
             };
         }
@@ -178,7 +175,7 @@ public partial class SyscallManager
         return engine.CopyToUser(a1, buf) ? 0 : -(int)Errno.EFAULT;
     }
 
-    private async ValueTask<int> SysSigAltStack(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysSigAltStack(Engine engine, ulong a1, ulong a2, uint a3, uint a4, uint a5,
         uint a6)
     {
         if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
@@ -193,7 +190,7 @@ public partial class SyscallManager
         Span<byte> oldBuf = stackalloc byte[stackSize];
         oldBuf.Clear();
         WriteGuestWord(oldBuf, wordSize, task.AltStackSp);
-        BinaryPrimitives.WriteInt32LittleEndian(oldBuf[wordSize..], task.GetAltStackFlags((uint)engine.StackPointer));
+        BinaryPrimitives.WriteInt32LittleEndian(oldBuf[wordSize..], task.GetAltStackFlags(engine.StackPointer));
         WriteGuestWord(oldBuf[(wordSize * 2)..], wordSize, task.AltStackSize);
 
         if (newStackPtr != 0)
@@ -204,9 +201,7 @@ public partial class SyscallManager
             var ssSp = ReadGuestWord(buf, wordSize);
             var ssFlags = BinaryPrimitives.ReadUInt32LittleEndian(buf[wordSize..]);
             var ssSize = ReadGuestWord(buf[(wordSize * 2)..], wordSize);
-            if (ssSp > uint.MaxValue || ssSize > uint.MaxValue) return -(int)Errno.EFAULT;
-
-            var error = task.SetAltStack((uint)ssSp, (uint)ssSize, ssFlags);
+            var error = task.SetAltStack(ssSp, ssSize, ssFlags);
             if (error != 0) return error;
         }
 

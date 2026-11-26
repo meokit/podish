@@ -189,7 +189,7 @@ public sealed partial class DrmCardInode : Inode, ITaskWaitSource, IPollNotifica
             CloseBuffer(session, id);
     }
 
-    public override int ResolveMmapBacking(LinuxFile file, uint length, ref long offset, out LinuxFile backing)
+    public override int ResolveMmapBacking(LinuxFile file, ulong length, ref long offset, out LinuxFile backing)
     {
         backing = file;
         if (offset < BufferStride || (ulong)offset / BufferStride > uint.MaxValue) return -(int)Errno.EINVAL;
@@ -661,9 +661,8 @@ public sealed partial class DrmCardInode : Inode, ITaskWaitSource, IPollNotifica
                 var item = iovs[i];
                 if (offset == item.Len) { i++; offset = 0; continue; }
                 var size = (int)Math.Min(item.Len - offset, (uint)(EventSize - copied));
-                var ptr = (ulong)item.BaseAddr + offset;
-                if (ptr == 0 || ptr + (uint)size > 1UL << 32 ||
-                    !cpu.CopyToUser((uint)ptr, data.AsSpan(copied, size)))
+                var ptr = item.BaseAddr + offset;
+                if (ptr == 0 || ptr < item.BaseAddr || !cpu.CopyToUser(ptr, data.AsSpan(copied, size)))
                     return total > 0 ? total : -(int)Errno.EFAULT;
                 copied += size;
                 offset += (uint)size;

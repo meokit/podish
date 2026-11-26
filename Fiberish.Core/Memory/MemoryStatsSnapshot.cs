@@ -206,13 +206,13 @@ public readonly record struct MemoryStatsSnapshot(
         foreach (var vma in process.Mem.VMAs)
         {
             if ((vma.Flags & MapFlags.Private) == 0) continue;
-            committedBytes += vma.Length;
+            committedBytes += (long)vma.Length;
 
             if (vma.File == null)
             {
                 var privateStates = vma.VmAnonVma?.SnapshotPageStates() ?? Array.Empty<VmPageState>();
                 var startPageIndex = vma.GetPageIndex(vma.Start);
-                var endPageIndex = startPageIndex + vma.Length / LinuxConstants.PageSize;
+                var endPageIndex = checked(startPageIndex + (uint)(vma.Length / LinuxConstants.PageSize));
                 var privatePages = vma.VmAnonVma?.CountPagesInRange(startPageIndex, endPageIndex) ?? 0;
                 var zeroPages = Math.Max(0L, endPageIndex - startPageIndex - privatePages);
                 anonymousZeroMappedBytes += zeroPages * LinuxConstants.PageSize;

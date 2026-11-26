@@ -59,13 +59,20 @@ public partial class SyscallManager
     private ValueTask<int> SysClone(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
         => CloneTask(engine, a1, a2, a3, a4, a5);
 
-    private async ValueTask<int> CloneTask(Engine engine, uint flags, uint stackPtr, uint ptidPtr, ulong tls,
-        uint ctidPtr)
+    private async ValueTask<int> CloneTask(Engine engine, uint flags, ulong stackPtr, ulong ptidPtr, ulong tls,
+        ulong ctidPtr)
     {
         if (engine.Owner is not FiberTask current) return -(int)Errno.EPERM;
 
         var flagError = ValidateCloneFlags(current, flags);
         if (flagError != 0) return flagError;
+
+        if (engine.IsAArch64 &&
+            (stackPtr > engine.UserAddressLimit ||
+             ((flags & LinuxConstants.CLONE_PARENT_SETTID) != 0 && !engine.IsUserRange(ptidPtr, 4)) ||
+             ((flags & (LinuxConstants.CLONE_CHILD_SETTID | LinuxConstants.CLONE_CHILD_CLEARTID)) != 0 &&
+              !engine.IsUserRange(ctidPtr, 4))))
+            return -(int)Errno.EFAULT;
 
         FiberTask child;
         try
@@ -596,7 +603,7 @@ public partial class SyscallManager
             Logger.LogDebug("[Exit] Auto-reaped zombie PID {Pid} by engine init reaper", task.Process.TGID);
     }
 
-    private async ValueTask<int> SysExecve(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysExecve(Engine engine, ulong a1, ulong a2, ulong a3, uint a4, uint a5, uint a6)
     {
         var task = engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;

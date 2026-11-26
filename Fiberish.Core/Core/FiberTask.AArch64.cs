@@ -45,17 +45,19 @@ public partial class FiberTask
     {
         var sp = CPU.StackPointer;
         var top = sp;
-        if (AltStackSize != 0 && (action.Flags & LinuxConstants.SA_ONSTACK) != 0 &&
-            (sp > uint.MaxValue || !IsOnAltStack((uint)sp)))
-            top = (ulong)AltStackSp + AltStackSize;
-        if (top > 1UL << 32 || top < ArmFrameSize + 16) return false;
-        var frame = (uint)((top - ArmFrameSize - 16) & ~15UL);
+        if (AltStackSize != 0 && (action.Flags & LinuxConstants.SA_ONSTACK) != 0 && !IsOnAltStack(sp))
+        {
+            if (!CPU.IsUserRange(AltStackSp, AltStackSize)) return false;
+            top = AltStackSp + AltStackSize;
+        }
+        if (top > LinuxConstants.TaskSizeAArch64 || top < ArmFrameSize + 16) return false;
+        var frame = (top - ArmFrameSize - 16) & ~15UL;
         var data = new byte[ArmFrameSize + 16];
         WriteAArch64SigInfo(data, info);
         void Put64(int offset, ulong value) => BinaryPrimitives.WriteUInt64LittleEndian(data.AsSpan(offset), value);
         void Put32(int offset, uint value) => BinaryPrimitives.WriteUInt32LittleEndian(data.AsSpan(offset), value);
         Put64(ArmUContext + 16, AltStackSp);
-        Put32(ArmUContext + 24, (uint)GetAltStackFlags(sp <= uint.MaxValue ? (uint)sp : 0));
+        Put32(ArmUContext + 24, (uint)GetAltStackFlags(sp));
         Put64(ArmUContext + 32, AltStackSize);
         Put64(ArmUContext + 40, mask);
         Put64(ArmMContext, info.HasAddr ? info.ArmFaultAddress ?? info.Addr : 0);
@@ -88,7 +90,7 @@ public partial class FiberTask
     {
         var sp = CPU.StackPointer;
         var data = new byte[ArmFrameSize];
-        if ((sp & 15) != 0 || sp > uint.MaxValue || !CPU.CopyFromUser((uint)sp, data)) return false;
+        if ((sp & 15) != 0 || !CPU.CopyFromUser(sp, data)) return false;
         uint U32(int offset) => BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(offset));
         ulong U64(int offset) => BinaryPrimitives.ReadUInt64LittleEndian(data.AsSpan(offset));
         if (U32(ArmReserved) != FpsimdMagic || U32(ArmReserved + 4) != FpsimdSize ||
@@ -98,14 +100,13 @@ public partial class FiberTask
         CPU.WriteArmRegister(35, U32(ArmReserved + 12));
         CPU.WriteArmRegister(36, U32(ArmReserved + 8));
         for (int i = 0; i < 64; i++) CPU.WriteArmRegister(64 + i, U64(ArmReserved + 16 + 8 * i));
-        if (U64(ArmUContext + 16) <= uint.MaxValue && U64(ArmUContext + 32) <= uint.MaxValue)
-            SetAltStack((uint)U64(ArmUContext + 16), (uint)U64(ArmUContext + 32), U32(ArmUContext + 24));
+        SetAltStack(U64(ArmUContext + 16), U64(ArmUContext + 32), U32(ArmUContext + 24));
         SignalMask = U64(ArmUContext + 40) & ~((1UL << 8) | (1UL << 18));
         RestoreDeferredSignalMaskIfAny();
         return true;
     }
 
-    private void ExitArmRobustList(uint head)
+    private void ExitArmRobustList(ulong head)
     {
         Span<byte> header = stackalloc byte[24];
         if (!CPU.CopyFromUser(head, header)) return;
@@ -115,13 +116,13 @@ public partial class FiberTask
         void Notify(ulong node, bool pendingOp)
         {
             var address = unchecked(node + (ulong)offset);
-            if (node <= uint.MaxValue && address <= uint.MaxValue && (address & 3) == 0)
-                HandleFutexDeath(Process.Syscalls, (uint)address, pendingOp);
+            if (node < CPU.UserAddressLimit && CPU.IsUserRange(address, 4) && (address & 3) == 0)
+                HandleFutexDeath(Process.Syscalls, address, pendingOp);
         }
         var next = header[..8];
-        for (int i = 0; i < 2048 && entry != 0 && entry != head && entry <= uint.MaxValue; i++)
+        for (int i = 0; i < 2048 && entry != 0 && entry != head; i++)
         {
-            if (!CPU.CopyFromUser((uint)entry, next)) break;
+            if (!CPU.CopyFromUser(entry, next)) break;
             if (entry != pending) Notify(entry, false);
             entry = BinaryPrimitives.ReadUInt64LittleEndian(next) & ~1UL;
         }

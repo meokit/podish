@@ -49,13 +49,13 @@ public partial class SyscallManager
 
     public bool IsClosed => Volatile.Read(ref _closed) != 0;
 
-    public SyscallManager(Engine engine, VMAManager mem, uint brk, TtyDiscipline? tty = null,
+    public SyscallManager(Engine engine, VMAManager mem, ulong brk, TtyDiscipline? tty = null,
         DeviceNumberManager? deviceNumbers = null)
         : this(engine, mem, brk, tty, deviceNumbers, initializeVdso: true)
     {
     }
 
-    internal SyscallManager(Engine engine, VMAManager mem, uint brk, TtyDiscipline? tty,
+    internal SyscallManager(Engine engine, VMAManager mem, ulong brk, TtyDiscipline? tty,
         DeviceNumberManager? deviceNumbers, bool initializeVdso)
     {
         ArgumentNullException.ThrowIfNull(engine);
@@ -149,8 +149,8 @@ public partial class SyscallManager
         SharedUnixSocketNamespace sharedUnixSocketNamespace,
         SharedFsState sharedFsState,
         FutexManager futex,
-        SysVShmManager sysvShm, SysVSemManager sysvSem, uint brk,
-        uint brkBase,
+        SysVShmManager sysvShm, SysVSemManager sysvSem, ulong brk,
+        ulong brkBase,
         bool strace, Dentry devShmRoot, SuperBlock memfdSuperBlock,
         Mount anonMount,
         TtyDiscipline? tty,
@@ -241,8 +241,8 @@ public partial class SyscallManager
 
     public FutexManager Futex { get; }
 
-    public uint BrkAddr { get; set; }
-    public uint BrkBase { get; }
+    public ulong BrkAddr { get; set; }
+    public ulong BrkBase { get; }
     public bool Strace { get; set; }
     public NetworkMode NetworkMode { get; set; } = NetworkMode.Host;
 
@@ -527,7 +527,7 @@ public partial class SyscallManager
                 LinuxConstants.PageSize);
 
         // Map vDSO page writable for setup first, then reprotect it RX after the trampolines are installed.
-        var vdsoAddr = Mem.Layout?.VdsoBaseHint ?? (LinuxConstants.TaskSize32 - LinuxConstants.PageSize);
+        var vdsoAddr = checked((uint)(Mem.Layout?.VdsoBaseHint ?? LinuxConstants.TaskSize32 - LinuxConstants.PageSize));
         ProcessAddressSpaceSync.Mmap(Mem, CurrentSyscallEngine, vdsoAddr, 4096, Protection.Read | Protection.Write,
             MapFlags.Private | MapFlags.Fixed | MapFlags.Anonymous, null, 0, "[vdso]");
 
@@ -1421,7 +1421,7 @@ public partial class SyscallManager
             // The CPU has advanced past the syscall instruction.
             var isAArch64 = engine.IsAArch64;
             if (fiberTask != null)
-                fiberTask.SyscallEip = (uint)(engine.InstructionPointer - (isAArch64 ? 4u : 2u));
+                fiberTask.SyscallEip = engine.InstructionPointer - (isAArch64 ? 4u : 2u);
 
             SyscallCpu cpu = engine;
             Span<ulong> args = stackalloc ulong[6];
@@ -1446,11 +1446,12 @@ public partial class SyscallManager
             ValueTask<int> retTask;
             bool handled;
             long? wideResult = null;
+            ValueTask<long>? wideTask = null;
             try
             {
                 retTask = isAArch64
                     ? DispatchAArch64Syscall(number, operation, engine, args, pointers, sizes, out handled,
-                        out wideResult)
+                        out wideResult, out wideTask)
                     : DispatchSyscall(operation, engine, a1, a2, a3, (uint)args[3], (uint)args[4], (uint)args[5],
                         out handled);
             }
@@ -1464,11 +1465,12 @@ public partial class SyscallManager
 
             if (!handled && !Strace) LogUnimplementedSyscall(number);
 
-            int completedRet;
-            if (retTask.IsCompleted)
+            var isCompleted = wideTask?.IsCompleted ?? retTask.IsCompleted;
+            long completedRet;
+            if (isCompleted)
                 try
                 {
-                    completedRet = retTask.Result;
+                    completedRet = wideTask?.Result ?? retTask.Result;
                 }
                 catch (Exception ex)
                 {
@@ -1480,9 +1482,9 @@ public partial class SyscallManager
             else
                 completedRet = 0;
 
-            if (retTask.IsCompleted && completedRet != -(int)Errno.ERESTARTSYS)
+            if (isCompleted && completedRet != -(int)Errno.ERESTARTSYS)
             {
-                var ret = wideResult ?? (isAArch64 ? WidenAArch64SyscallResult(operation, completedRet) : completedRet);
+                var ret = wideResult ?? completedRet;
                 var isSigReturn = operation is X86SyscallNumbers.rt_sigreturn or X86SyscallNumbers.sigreturn;
                 if (!isSigReturn || (isAArch64 && ret < 0)) engine.SetSyscallResult(ret);
                 if (Strace)
@@ -1490,7 +1492,7 @@ public partial class SyscallManager
             }
             else if (fiberTask != null)
             {
-                var awaitRestart = retTask.IsCompleted && completedRet == -(int)Errno.ERESTARTSYS;
+                var awaitRestart = isCompleted && completedRet == -(int)Errno.ERESTARTSYS;
                 LogAsyncSyscallSuspend(fiberTask.TID, number, retTask.IsCompleted, awaitRestart);
 
                 fiberTask.SyscallNr = operation;
@@ -1498,6 +1500,7 @@ public partial class SyscallManager
                 fiberTask.SyscallArg2 = a2;
                 fiberTask.SyscallArg3 = a3;
                 fiberTask.PendingSyscall = retTask;
+                fiberTask.PendingWideSyscall = wideTask;
                 fiberTask.Status = FiberTaskStatus.Waiting;
 
                 if (Strace) LogStraceSuspended();

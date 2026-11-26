@@ -71,7 +71,7 @@ public class UTSNamespace
 
 public struct SigAction
 {
-    public uint Handler;
+    public ulong Handler;
     public uint Flags;
     public ulong Restorer;
     public ulong Mask;
@@ -498,9 +498,9 @@ public class Process
 
         var spBase = res.SP;
         var stackData = res.InitialStack;
-        var stackStart = spBase & LinuxConstants.PageMask;
+        var stackStart = spBase & LinuxConstants.PageMask64;
         var stackLength = ((spBase + (uint)stackData.Count + LinuxConstants.PageSize - 1) &
-                           LinuxConstants.PageMask) - stackStart;
+                           LinuxConstants.PageMask64) - stackStart;
         if (!Syscalls.Mem.PrefaultRange(stackStart, stackLength, engine, true))
             throw new OutOfMemoryException($"Failed to allocate initial stack pages at 0x{stackStart:x}");
 

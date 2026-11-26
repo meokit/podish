@@ -56,6 +56,7 @@ public partial class Engine : IGuestCpu, IDisposable
         X86Native.SetInterruptHook(State, 6, &OnNativeInterrupt, GCHandle.ToIntPtr(_gcHandle));
         X86Native.SetLogCallback(State, &OnNativeLog, GCHandle.ToIntPtr(_gcHandle));
         InitializeCurrentMmuFromState();
+        if (IsAArch64) RegisterArmFaultCallback();
     }
 
     protected Engine(bool mock)
@@ -78,6 +79,7 @@ public partial class Engine : IGuestCpu, IDisposable
         X86Native.SetInterruptHook(State, 6, &OnNativeInterrupt, GCHandle.ToIntPtr(_gcHandle));
         X86Native.SetLogCallback(State, &OnNativeLog, GCHandle.ToIntPtr(_gcHandle));
         InitializeCurrentMmuFromState();
+        if (IsAArch64) RegisterArmFaultCallback();
     }
 
     public IntPtr State { get; private set; }
@@ -89,14 +91,14 @@ public partial class Engine : IGuestCpu, IDisposable
     internal MmuHandle CurrentMmu => CurrentMmuInternal;
 
     // Callbacks
-    public Func<Engine, uint, bool, bool>? FaultHandler { get; set; }
-    internal Func<Engine, uint, NativeFaultAccess, bool>? ExtendedFaultHandler { get; set; }
+    public Func<Engine, ulong, bool, bool>? FaultHandler { get; set; }
+    internal Func<Engine, ulong, NativeFaultAccess, bool>? ExtendedFaultHandler { get; set; }
     public Func<Engine, uint, bool>? InterruptHandler { get; set; }
 
     public Action<Engine, int, string>? LogHandler { get; set; }
 
     // New resolver for synchronous fault handling during safe access
-    public Func<uint, bool, bool>? PageFaultResolver { get; set; }
+    public Func<ulong, bool, bool>? PageFaultResolver { get; set; }
 
     // Context Owner (e.g. FiberTask) to avoid ThreadStatic lookups
     public object? Owner { get; set; }
@@ -269,6 +271,23 @@ public partial class Engine : IGuestCpu, IDisposable
 
     [UnmanagedCallersOnly]
     private static int OnNativeFault(IntPtr state, uint addr, int accessFlags, IntPtr userdata)
+        => InvokeNativeFault(addr, accessFlags, userdata);
+
+#if FIBER_GUEST_AARCH64
+    [UnmanagedCallersOnly]
+    private static int OnNativeArmFault(IntPtr state, ulong addr, int accessFlags, IntPtr userdata)
+        => InvokeNativeFault(addr, accessFlags, userdata);
+#endif
+
+    private unsafe void RegisterArmFaultCallback()
+    {
+#if FIBER_GUEST_AARCH64
+        if (State != IntPtr.Zero)
+            AArch64Native.SetExtendedFaultCallback(State, &OnNativeArmFault, GCHandle.ToIntPtr(_gcHandle));
+#endif
+    }
+
+    private static int InvokeNativeFault(ulong addr, int accessFlags, IntPtr userdata)
     {
         try
         {
@@ -344,6 +363,7 @@ public partial class Engine : IGuestCpu, IDisposable
             LogHandler = LogHandler // Copy the handler delegate
         };
 
+        if (newEngine.IsAArch64) newEngine.RegisterArmFaultCallback();
         if (skipMmu)
         {
             using var detached = newEngine.DetachOwnedMmuHandle();
@@ -447,30 +467,46 @@ public partial class Engine : IGuestCpu, IDisposable
         return DetachOwnedMmuHandle();
     }
 
-    public void MemUnmap(uint addr, uint size)
+    public void MemUnmap(ulong addr, ulong size)
     {
-        X86Native.MemUnmap(State, addr, size);
+        if (IsAArch64) AArch64Native.MemUnmap(State, addr, size);
+        else X86Native.MemUnmap(State, checked((uint)addr), checked((uint)size));
     }
 
     /// <summary>Map caller-owned backing. Keep it alive for the lifetime of all mappings and clones.</summary>
-    public bool MemMapHostPage(uint addr, IntPtr hostPage, byte perms)
+    public bool MemMapHostPage(ulong addr, IntPtr hostPage, byte perms)
         => MemMapHostPage(addr, hostPage, perms, stableBacking: false);
 
-    internal unsafe bool MemMapHostPage(uint addr, IntPtr hostPage, byte perms, bool stableBacking)
+    internal unsafe bool MemMapHostPage(ulong addr, IntPtr hostPage, byte perms, bool stableBacking)
     {
         const byte stableBackingFlag = 1 << 6;
         var mappingFlags = (byte)(perms & ~stableBackingFlag);
         if (stableBacking && IsAArch64) mappingFlags |= stableBackingFlag;
-        return X86Native.MemMapHostPage(State, addr, (void*)hostPage, mappingFlags) != 0;
+        return IsAArch64
+            ? AArch64Native.MemMapHostPage(State, addr, (void*)hostPage, mappingFlags) != 0
+            : addr <= uint.MaxValue && X86Native.MemMapHostPage(State, (uint)addr, (void*)hostPage, mappingFlags) != 0;
     }
 
-    public unsafe IntPtr GetPhysicalAddressSafe(uint vaddr, bool isWrite)
+    internal ulong UserAddressLimit => IsAArch64 ? LinuxConstants.TaskSizeAArch64 : 1UL << 32;
+
+    internal bool IsUserRange(ulong address, ulong size)
+        => address <= UserAddressLimit && size <= UserAddressLimit - address;
+
+    private unsafe void* ResolveUserPointer(ulong address, bool write)
+    {
+        if (IsAArch64)
+            return write ? AArch64Native.ResolvePtrForWrite(State, address) : AArch64Native.ResolvePtrForRead(State, address);
+        if (address > uint.MaxValue) return null;
+        return write ? X86Native.ResolvePtrForWrite(State, (uint)address) : X86Native.ResolvePtrForRead(State, (uint)address);
+    }
+
+    public unsafe IntPtr GetPhysicalAddressSafe(ulong vaddr, bool isWrite)
     {
         EnsureAddressSpaceSynchronized();
-        return (IntPtr)(isWrite ? X86Native.ResolvePtrForWrite(State, vaddr) : X86Native.ResolvePtrForRead(State, vaddr));
+        return (IntPtr)ResolveUserPointer(vaddr, isWrite);
     }
 
-    public unsafe bool TryGetWritableUserBuffer(uint vaddr, int maxLen, out Span<byte> buffer)
+    public unsafe bool TryGetWritableUserBuffer(ulong vaddr, int maxLen, out Span<byte> buffer)
     {
         EnsureAddressSpaceSynchronized();
 
@@ -486,9 +522,9 @@ public partial class Engine : IGuestCpu, IDisposable
             return true;
         }
 
-        var ptr = X86Native.ResolvePtrForWrite(State, vaddr);
+        var ptr = ResolveUserPointer(vaddr, true);
         if (ptr == null && TryResolveUserAccessFault(vaddr, true))
-            ptr = X86Native.ResolvePtrForWrite(State, vaddr);
+            ptr = ResolveUserPointer(vaddr, true);
 
         if (ptr == null)
         {
@@ -534,9 +570,9 @@ public partial class Engine : IGuestCpu, IDisposable
             while (remainingInIov > 0 && bytesResolved < maxBytes)
             {
                 var currAddr = iov.BaseAddr + iovOffset;
-                var ptr = isWrite ? X86Native.ResolvePtrForWrite(State, currAddr) : X86Native.ResolvePtrForRead(State, currAddr);
+                var ptr = ResolveUserPointer(currAddr, isWrite);
                 if (ptr == null && TryResolveUserAccessFault(currAddr, isWrite))
-                    ptr = isWrite ? X86Native.ResolvePtrForWrite(State, currAddr) : X86Native.ResolvePtrForRead(State, currAddr);
+                    ptr = ResolveUserPointer(currAddr, isWrite);
 
                 if (ptr == null)
                 {
@@ -592,9 +628,9 @@ public partial class Engine : IGuestCpu, IDisposable
         return segmentCount;
     }
 
-    public unsafe bool CopyToUser(uint vaddr, ReadOnlySpan<byte> data)
+    public unsafe bool CopyToUser(ulong vaddr, ReadOnlySpan<byte> data)
     {
-        if ((ulong)vaddr + (uint)data.Length > 1UL << 32) return false;
+        if (!IsUserRange(vaddr, (uint)data.Length)) return false;
         EnsureAddressSpaceSynchronized();
         var len = data.Length;
         var written = 0;
@@ -604,10 +640,10 @@ public partial class Engine : IGuestCpu, IDisposable
             while (written < len)
             {
                 var currAddr = vaddr + (uint)written;
-                var ptr = X86Native.ResolvePtrForWrite(State, currAddr);
+                var ptr = ResolveUserPointer(currAddr, true);
                 if (ptr == null)
                     if (TryResolveUserAccessFault(currAddr, true))
-                        ptr = X86Native.ResolvePtrForWrite(State, currAddr);
+                        ptr = ResolveUserPointer(currAddr, true);
 
                 if (ptr == null) return false;
 
@@ -622,9 +658,9 @@ public partial class Engine : IGuestCpu, IDisposable
         return true;
     }
 
-    public unsafe bool CopyFromUser(uint vaddr, Span<byte> data)
+    public unsafe bool CopyFromUser(ulong vaddr, Span<byte> data)
     {
-        if ((ulong)vaddr + (uint)data.Length > 1UL << 32) return false;
+        if (!IsUserRange(vaddr, (uint)data.Length)) return false;
         EnsureAddressSpaceSynchronized();
         var len = data.Length;
         var read = 0;
@@ -634,10 +670,10 @@ public partial class Engine : IGuestCpu, IDisposable
             while (read < len)
             {
                 var currAddr = vaddr + (uint)read;
-                var ptr = X86Native.ResolvePtrForRead(State, currAddr);
+                var ptr = ResolveUserPointer(currAddr, false);
                 if (ptr == null)
                     if (TryResolveUserAccessFault(currAddr, false))
-                        ptr = X86Native.ResolvePtrForRead(State, currAddr);
+                        ptr = ResolveUserPointer(currAddr, false);
 
                 if (ptr == null) return false;
 
@@ -652,7 +688,7 @@ public partial class Engine : IGuestCpu, IDisposable
         return true;
     }
 
-    internal async ValueTask<(IntPtr Pointer, int Error)> ResolveUserIoPageAsync(uint address, bool write,
+    internal async ValueTask<(IntPtr Pointer, int Error)> ResolveUserIoPageAsync(ulong address, bool write,
         bool noWait = false)
     {
         var ptr = GetPhysicalAddressSafe(address, write);
@@ -675,9 +711,9 @@ public partial class Engine : IGuestCpu, IDisposable
         return (ptr, ptr == IntPtr.Zero ? -(int)Errno.EFAULT : 0);
     }
 
-    internal async ValueTask<int> CopyUserIoAsync(uint address, Memory<byte> buffer, bool write)
+    internal async ValueTask<int> CopyUserIoAsync(ulong address, Memory<byte> buffer, bool write)
     {
-        if ((ulong)address + (uint)buffer.Length > 1UL << 32) return -(int)Errno.EFAULT;
+        if (!IsUserRange(address, (uint)buffer.Length)) return -(int)Errno.EFAULT;
         while (!buffer.IsEmpty)
         {
             var (pointer, error) = await ResolveUserIoPageAsync(address, write);
@@ -696,7 +732,7 @@ public partial class Engine : IGuestCpu, IDisposable
         return 0;
     }
 
-    private bool TryResolveUserAccessFault(uint addr, bool isWrite)
+    private bool TryResolveUserAccessFault(ulong addr, bool isWrite)
     {
         // While servicing a guest syscall, invalid user pointers must surface as
         // -EFAULT to the guest rather than posting SIGSEGV via FiberTask's regular
@@ -720,10 +756,11 @@ public partial class Engine : IGuestCpu, IDisposable
     ///     Best-effort read from guest memory without invoking PageFaultResolver.
     ///     Returns the number of bytes copied before hitting an unmapped/inaccessible range.
     /// </summary>
-    public unsafe int CopyFromUserNoFault(uint vaddr, Span<byte> data)
+    public unsafe int CopyFromUserNoFault(ulong vaddr, Span<byte> data)
     {
         EnsureAddressSpaceSynchronized();
-        var len = (int)Math.Min((ulong)data.Length, (1UL << 32) - vaddr);
+        if (vaddr >= UserAddressLimit) return 0;
+        var len = (int)Math.Min((ulong)data.Length, UserAddressLimit - vaddr);
         var read = 0;
 
         fixed (byte* pData = data)
@@ -731,7 +768,7 @@ public partial class Engine : IGuestCpu, IDisposable
             while (read < len)
             {
                 var currAddr = vaddr + (uint)read;
-                var ptr = X86Native.ResolvePtrForRead(State, currAddr);
+                var ptr = ResolveUserPointer(currAddr, false);
                 if (ptr == null) return read;
 
                 var pageOffset = currAddr & 0xFFF;
@@ -745,7 +782,7 @@ public partial class Engine : IGuestCpu, IDisposable
         return read;
     }
 
-    public unsafe string? ReadStringSafe(uint addr, int limit = 4096)
+    public unsafe string? ReadStringSafe(ulong addr, int limit = 4096)
     {
         EnsureAddressSpaceSynchronized();
         if (addr == 0)
@@ -761,10 +798,10 @@ public partial class Engine : IGuestCpu, IDisposable
         {
             while (length < limit)
             {
-                var ptr = X86Native.ResolvePtrForRead(State, current);
+                var ptr = ResolveUserPointer(current, false);
                 if (ptr == null)
                     if (TryResolveUserAccessFault(current, false))
-                        ptr = X86Native.ResolvePtrForRead(State, current);
+                        ptr = ResolveUserPointer(current, false);
 
                 if (ptr == null)
                     return null;
@@ -785,7 +822,7 @@ public partial class Engine : IGuestCpu, IDisposable
 
                 chunk.CopyTo(rented.AsSpan(length));
                 length += chunkLength;
-                if (length < limit && current > uint.MaxValue - (uint)chunkLength) return null;
+                if (length < limit && !IsUserRange(current, (uint)chunkLength + 1)) return null;
                 current += (uint)chunkLength;
             }
 
@@ -828,6 +865,20 @@ public partial class Engine : IGuestCpu, IDisposable
         if (entered == 0)
             throw new InvalidOperationException("Native guest execution cannot be re-entered from a callback.");
     }
+
+    public void Run(ulong endPc, ulong maxInsts = 0)
+    {
+        if (endPc <= uint.MaxValue || !IsAArch64)
+        {
+            Run(checked((uint)endPc), maxInsts);
+            return;
+        }
+        AssertNotDisposed();
+        if (AArch64Native.Run(State, endPc, maxInsts, 0) == 0)
+            throw new InvalidOperationException("Native guest execution cannot be re-entered from a callback.");
+    }
+
+    void IGuestCpu.Run(ulong endPc, ulong maxInsts) => Run(endPc, maxInsts);
 
     public virtual void Stop()
     {
@@ -878,16 +929,57 @@ public partial class Engine : IGuestCpu, IDisposable
         }
     }
 
-    public bool HasMappedPage(uint addr, uint size)
+    public unsafe int CollectMappedPages(ulong addr, ulong size, Span<X86Native.PageMapping64> buffer)
     {
-        Span<X86Native.PageMapping> page = stackalloc X86Native.PageMapping[1];
+        EnsureAddressSpaceSynchronized();
+        if (size == 0 || buffer.IsEmpty || addr >= UserAddressLimit) return 0;
+        size = Math.Min(size, UserAddressLimit - addr);
+        if (IsAArch64)
+        {
+            fixed (X86Native.PageMapping64* pages = buffer)
+                return (int)AArch64Native.CollectMappedPages(State, addr, size, pages, (nuint)buffer.Length);
+        }
+
+        X86Native.PageMapping[]? rented = null;
+        Span<X86Native.PageMapping> narrow = buffer.Length <= 128
+            ? stackalloc X86Native.PageMapping[buffer.Length]
+            : (rented = ArrayPool<X86Native.PageMapping>.Shared.Rent(buffer.Length)).AsSpan(0, buffer.Length);
+        try
+        {
+            var count = CollectMappedPages((uint)addr, (uint)Math.Min(size, uint.MaxValue), narrow);
+            for (var i = 0; i < count; ++i)
+                buffer[i] = new X86Native.PageMapping64
+                {
+                    GuestPage = narrow[i].GuestPage,
+                    Perms = narrow[i].Perms,
+                    Flags = narrow[i].Flags,
+                    HostPage = narrow[i].HostPage
+                };
+            return count;
+        }
+        finally
+        {
+            if (rented != null) ArrayPool<X86Native.PageMapping>.Shared.Return(rented);
+        }
+    }
+
+    public bool HasMappedPage(ulong addr, ulong size)
+    {
+        Span<X86Native.PageMapping64> page = stackalloc X86Native.PageMapping64[1];
         return CollectMappedPages(addr, size, page) > 0;
     }
 
-    public void ResetCodeCacheByRange(uint addr, uint size)
+    public bool IsDirty(ulong addr)
+        => IsAArch64 ? AArch64Native.IsDirty(State, addr) != 0 : addr <= uint.MaxValue && IsDirty((uint)addr);
+
+    public bool HasSlowWrite(ulong addr)
+        => IsAArch64 ? AArch64Native.HasSlowWrite(State, addr) != 0 : addr <= uint.MaxValue && HasSlowWrite((uint)addr);
+
+    public void ResetCodeCacheByRange(ulong addr, ulong size)
     {
         AssertNotDisposed();
-        X86Native.ResetCodeCacheByRange(State, addr, size);
+        if (IsAArch64) AArch64Native.ResetCodeCacheByRange(State, addr, size);
+        else X86Native.ResetCodeCacheByRange(State, checked((uint)addr), checked((uint)size));
     }
 
     public unsafe void InvalidateCodeCacheHostPages(ReadOnlySpan<nint> hostPages)
@@ -901,10 +993,11 @@ public partial class Engine : IGuestCpu, IDisposable
         }
     }
 
-    public void MemProtect(uint addr, uint size, byte perms)
+    public void MemProtect(ulong addr, ulong size, byte perms)
     {
         AssertNotDisposed();
-        X86Native.MemProtect(State, addr, size, perms);
+        if (IsAArch64) AArch64Native.MemProtect(State, addr, size, perms);
+        else X86Native.MemProtect(State, checked((uint)addr), checked((uint)size), perms);
     }
 
     public void ResetAllCodeCache()

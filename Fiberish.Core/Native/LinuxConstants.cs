@@ -129,7 +129,8 @@ public enum SigProcMaskAction
 
 public struct Iovec
 {
-    public uint BaseAddr;
+    // Guest iovec layouts are decoded at the syscall boundary.
+    public ulong BaseAddr;
     public uint Len;
 }
 
@@ -138,6 +139,7 @@ public static class LinuxConstants
     public const int PageSize = 4096;
     public const uint PageMask = 0xFFFFF000;
     public const uint PageOffsetMask = 0xFFF;
+    public const ulong PageMask64 = ~(ulong)PageOffsetMask;
     public const int PathMax = 4096;
     public const int MaxArgStrlen = 32 * 4096;
     public const int NameMax = 255;
@@ -158,6 +160,7 @@ public static class LinuxConstants
 
     // x86_64 compat 32-bit layout: user address space top (task_size=0xffffe000)
     public const uint TaskSize32 = 0xffffe000;
+    public const ulong TaskSizeAArch64 = 1UL << 39;
 
     // madvise behaviors
     public const uint MADV_DONTNEED = 4;

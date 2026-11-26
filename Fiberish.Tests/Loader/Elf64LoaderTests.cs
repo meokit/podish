@@ -87,13 +87,33 @@ public class Elf64LoaderTests
     }
 
     [Fact]
+    public void ProcessEntry_ExecutesLoadSegmentAboveFourGiB()
+    {
+        using var runtime = CreateRuntime();
+        using var scheduler = new KernelScheduler();
+        var image = Elf64Image.Create();
+        const ulong address = (1UL << 38) + 0x400000;
+        var entry = address + Elf64Image.EntryOffset;
+        BinaryPrimitives.WriteUInt64LittleEndian(image.AsSpan(24), entry);
+        var load = image.AsSpan(Elf64Image.ProgramHeaderOffset, Elf64Image.ProgramHeaderSize);
+        BinaryPrimitives.WriteUInt64LittleEndian(load[16..], address);
+        WriteImage(runtime, "program", image);
+
+        var task = Start(runtime, scheduler);
+        Assert.Equal(entry, task.CPU.InstructionPointer);
+        scheduler.Run(100);
+        Assert.True(task.Exited);
+        Assert.Equal(42, task.ExitStatus);
+    }
+
+    [Fact]
     public void ProcessEntry_RejectsAnAddressOutsideTheGuestMappingRange()
     {
         using var runtime = CreateRuntime();
         using var scheduler = new KernelScheduler();
         var image = Elf64Image.Create();
         var load = image.AsSpan(Elf64Image.ProgramHeaderOffset, Elf64Image.ProgramHeaderSize);
-        BinaryPrimitives.WriteUInt64LittleEndian(load[16..], 0x1_0040_0000);
+        BinaryPrimitives.WriteUInt64LittleEndian(load[16..], LinuxConstants.TaskSizeAArch64);
         WriteImage(runtime, "program", image);
 
         Assert.Throws<FatalExecException>(() => Start(runtime, scheduler));

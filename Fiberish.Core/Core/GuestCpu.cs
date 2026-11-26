@@ -12,7 +12,7 @@ public interface IGuestCpu
     ulong StackPointer { get; set; }
     uint ReadSyscall(Span<ulong> arguments);
     void SetSyscallResult(long value);
-    void Run(uint endEip = 0, ulong maxInsts = 0);
+    void Run(ulong endPc = 0, ulong maxInsts = 0);
     int Step();
 }
 
@@ -49,6 +49,7 @@ public partial class Engine
 #if FIBER_GUEST_I386 && FIBER_GUEST_AARCH64
         Architecture = architecture;
 #endif
+        if (IsAArch64) RegisterArmFaultCallback();
     }
 
     internal void ResetForExec(GuestArchitecture architecture, ulong instructionPointer, ulong stackPointer)
