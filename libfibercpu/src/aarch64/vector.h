@@ -1,6 +1,15 @@
 #pragma once
 
 #include "floating.h"
+#include "vector_simde.h"
+
+#if defined(_MSC_VER)
+#define A64_VECTOR_INLINE __forceinline
+#elif defined(__GNUC__) || defined(__clang__)
+#define A64_VECTOR_INLINE inline __attribute__((always_inline))
+#else
+#define A64_VECTOR_INLINE inline
+#endif
 
 namespace fiberish::aarch64::detail {
 
@@ -17,6 +26,20 @@ inline void SetElement(Vector128& v, unsigned width, unsigned index, uint64_t va
 }
 
 inline Vector128 Splat(uint64_t element, unsigned width, bool q) {
+#if FIBERCPU_AARCH64_SIMDE
+    if constexpr (UseSimdeVectors) {
+        switch (width) {
+            case 8:
+                return SimdeSplat<8>(element, q);
+            case 16:
+                return SimdeSplat<16>(element, q);
+            case 32:
+                return SimdeSplat<32>(element, q);
+            default:
+                return SimdeSplat<64>(element, q);
+        }
+    }
+#endif
     const auto word = Replicate(element & Ones(width), width, 64);
     return {word, q ? word : 0};
 }
@@ -62,21 +85,16 @@ inline uint64_t VectorLogical(uint64_t old, uint64_t a, uint64_t b, unsigned op)
     }
 }
 
-inline bool VectorThree(State& state, const DecodedInstruction& op, bool q, bool u, bool scalar, unsigned size) {
+template <bool floating>
+A64_VECTOR_INLINE bool VectorThree(State& state, const DecodedInstruction& op, bool q, bool u, bool scalar,
+                                   unsigned size) {
     const auto old = state.v[op.rd];
     const auto left = state.v[op.rn];
     const auto right = state.v[op.rm];
     const auto operation = Field(op.word, 11, 5);
     const bool size_high = size & 2;
     unsigned width = 8u << size;
-    if (operation == 3 && !scalar) {
-        const auto logic = size | (u ? 4 : 0);
-        state.v[op.rd] = {VectorLogical(old.lo, left.lo, right.lo, logic),
-                          q ? VectorLogical(old.hi, left.hi, right.hi, logic) : 0};
-        return true;
-    }
-
-    if (operation >= 24) {
+    if constexpr (floating) {
         width = (size & 1) ? 64 : 32;
         if (!scalar && width == 64 && !q) return false;
         FPOp fp;
@@ -149,6 +167,18 @@ inline bool VectorThree(State& state, const DecodedInstruction& op, bool q, bool
         state.v[op.rd] = result;
         return true;
     }
+    if (operation == 3 && !scalar) {
+        const auto logic = size | (u ? 4 : 0);
+#if FIBERCPU_AARCH64_SIMDE
+        if constexpr (UseSimdeVectors) {
+            state.v[op.rd] = SimdeLogical(old, left, right, logic, q);
+            return true;
+        }
+#endif
+        state.v[op.rd] = {VectorLogical(old.lo, left.lo, right.lo, logic),
+                          q ? VectorLogical(old.hi, left.hi, right.hi, logic) : 0};
+        return true;
+    }
 
     if (scalar) {
         const bool any_size = operation == 1 || operation == 5;
@@ -159,6 +189,21 @@ inline bool VectorThree(State& state, const DecodedInstruction& op, bool q, bool
         if (!q) return false;
         if ((operation >= 12 && operation <= 15) || (operation >= 18 && operation <= 21)) return false;
     }
+
+#if FIBERCPU_AARCH64_SIMDE
+    if constexpr (UseSimdeVectors) {
+        switch (size) {
+            case 0:
+                return SimdeThree<8>(state, op.rd, old, left, right, operation, q, u, scalar);
+            case 1:
+                return SimdeThree<16>(state, op.rd, old, left, right, operation, q, u, scalar);
+            case 2:
+                return SimdeThree<32>(state, op.rd, old, left, right, operation, q, u, scalar);
+            default:
+                return SimdeThree<64>(state, op.rd, old, left, right, operation, q, u, scalar);
+        }
+    }
+#endif
 
     const bool pairwise = operation == 20 || operation == 21 || operation == 23;
     const unsigned lanes = scalar ? 1 : (q ? 128 : 64) / width;
@@ -233,7 +278,7 @@ inline bool VectorThree(State& state, const DecodedInstruction& op, bool q, bool
     return true;
 }
 
-inline bool VectorWiden(State& state, const DecodedInstruction& op, bool q, bool u, unsigned size) {
+A64_VECTOR_INLINE bool VectorWiden(State& state, const DecodedInstruction& op, bool q, bool u, unsigned size) {
     const unsigned opcode = Field(op.word, 12, 4);
     if (size == 3 || opcode >= 14 || (u && (opcode == 9 || opcode == 11 || opcode == 13))) return false;
     if (size == 0 && (opcode == 9 || opcode == 11 || opcode == 13)) return false;
@@ -245,6 +290,22 @@ inline bool VectorWiden(State& state, const DecodedInstruction& op, bool q, bool
     const auto left = state.v[op.rn];
     const auto right = state.v[op.rm];
     const auto old = state.v[op.rd];
+#if FIBERCPU_AARCH64_SIMDE
+    if constexpr (UseSimdeVectors) {
+        switch (size) {
+            case 0:
+                state.v[op.rd] = SimdeWiden<8>(state, old, left, right, opcode, q, u);
+                break;
+            case 1:
+                state.v[op.rd] = SimdeWiden<16>(state, old, left, right, opcode, q, u);
+                break;
+            default:
+                state.v[op.rd] = SimdeWiden<32>(state, old, left, right, opcode, q, u);
+                break;
+        }
+        return true;
+    }
+#endif
     Vector128 result;
     if (opcode == 4 || opcode == 6) {
         if (q) result.lo = old.lo;
@@ -308,28 +369,14 @@ inline bool VectorWiden(State& state, const DecodedInstruction& op, bool q, bool
     return true;
 }
 
-inline bool VectorMisc(State& state, const DecodedInstruction& op, bool q, bool u, bool scalar, unsigned size) {
+template <bool floating>
+A64_VECTOR_INLINE bool VectorMisc(State& state, const DecodedInstruction& op, bool q, bool u, bool scalar,
+                                  unsigned size) {
     const unsigned operation = Field(op.word, 12, 5);
     const auto source = state.v[op.rn];
     unsigned width = 8u << size;
     Vector128 result;
-    if (operation == 18 || operation == 20) {
-        if (size == 3 || (scalar && operation == 18 && !u)) return false;
-        if (q && !scalar) result.lo = state.v[op.rd].lo;
-        const unsigned lanes = scalar ? 1 : 64 / width;
-        const unsigned start = q && !scalar ? lanes : 0;
-        for (unsigned i = 0; i < lanes; ++i) {
-            auto value = Element(source, width * 2, i);
-            if (operation == 20 || u) {
-                const auto extended = operation == 20 && u ? __int128_t(value) : __int128_t(Signed(value, width * 2));
-                value = Saturate(state, extended, width, u);
-            }
-            SetElement(result, width, start + i, value);
-        }
-        state.v[op.rd] = result;
-        return true;
-    }
-    if (operation == 15 || operation == 27 || operation == 29 || operation == 31) {
+    if constexpr (floating) {
         width = (size & 1) ? 64 : 32;
         if (width == 64 && !q && !scalar) return false;
         const unsigned lanes = scalar ? 1 : (q ? 128 : 64) / width;
@@ -354,8 +401,56 @@ inline bool VectorMisc(State& state, const DecodedInstruction& op, bool q, bool 
         state.v[op.rd] = result;
         return true;
     }
+    if (operation == 18 || operation == 20) {
+        if (size == 3 || (scalar && operation == 18 && !u)) return false;
+#if FIBERCPU_AARCH64_SIMDE
+        if constexpr (UseSimdeVectors) {
+            const auto old = state.v[op.rd];
+            switch (size) {
+                case 0:
+                    state.v[op.rd] = SimdeNarrow<8>(state, old, source, operation, q, u, scalar);
+                    break;
+                case 1:
+                    state.v[op.rd] = SimdeNarrow<16>(state, old, source, operation, q, u, scalar);
+                    break;
+                default:
+                    state.v[op.rd] = SimdeNarrow<32>(state, old, source, operation, q, u, scalar);
+                    break;
+            }
+            return true;
+        }
+#endif
+        if (q && !scalar) result.lo = state.v[op.rd].lo;
+        const unsigned lanes = scalar ? 1 : 64 / width;
+        const unsigned start = q && !scalar ? lanes : 0;
+        for (unsigned i = 0; i < lanes; ++i) {
+            auto value = Element(source, width * 2, i);
+            if (operation == 20 || u) {
+                const auto extended = operation == 20 && u ? __int128_t(value) : __int128_t(Signed(value, width * 2));
+                value = Saturate(state, extended, width, u);
+            }
+            SetElement(result, width, start + i, value);
+        }
+        state.v[op.rd] = result;
+        return true;
+    }
 
     if (scalar ? (size != 3 || operation < 8 || operation > 11) : (size == 3 && !q)) return false;
+#if FIBERCPU_AARCH64_SIMDE
+    if constexpr (UseSimdeVectors) {
+        switch (size) {
+            case 0:
+                return SimdeMisc<8>(state, op.rd, source, operation, q, u, scalar);
+            case 1:
+                return SimdeMisc<16>(state, op.rd, source, operation, q, u, scalar);
+            case 2:
+                return SimdeMisc<32>(state, op.rd, source, operation, q, u, scalar);
+            default:
+                return SimdeMisc<64>(state, op.rd, source, operation, q, u, scalar);
+        }
+    }
+#endif
+
     const unsigned lanes = scalar ? 1 : (q ? 128 : 64) / width;
     for (unsigned i = 0; i < lanes; ++i) {
         const auto a = Element(source, width, i);
@@ -410,11 +505,23 @@ inline bool VectorMisc(State& state, const DecodedInstruction& op, bool q, bool 
     return true;
 }
 
-inline bool VectorReduction(State& state, const DecodedInstruction& op, bool q, bool u, unsigned size) {
+A64_VECTOR_INLINE bool VectorReduction(State& state, const DecodedInstruction& op, bool q, bool u, unsigned size) {
     const unsigned width = 8u << size;
     const auto operation = Field(op.word, 12, 5);
     if (size == 3 || (size == 2 && !q)) return false;
     const auto source = state.v[op.rn];
+#if FIBERCPU_AARCH64_SIMDE
+    if constexpr (UseSimdeVectors) {
+        switch (size) {
+            case 0:
+                return SimdeReduction<8>(state, op.rd, source, operation, q, u);
+            case 1:
+                return SimdeReduction<16>(state, op.rd, source, operation, q, u);
+            default:
+                return SimdeReduction<32>(state, op.rd, source, operation, q, u);
+        }
+    }
+#endif
     uint64_t value = Element(source, width, 0);
     if (operation == 3 || operation == 27) {
         if (operation == 27 && u) return false;
@@ -434,7 +541,7 @@ inline bool VectorReduction(State& state, const DecodedInstruction& op, bool q, 
     return true;
 }
 
-inline bool VectorModifiedImmediate(State& state, const DecodedInstruction& op, bool q, bool u) {
+A64_VECTOR_INLINE bool VectorModifiedImmediate(State& state, const DecodedInstruction& op, bool q, bool u) {
     if (Field(op.word, 11, 1)) return false;
     const auto cmode = Field(op.word, 12, 4);
     uint64_t bits = (Field(op.word, 16, 3) << 5) | Field(op.word, 5, 5);
@@ -475,7 +582,7 @@ inline bool VectorModifiedImmediate(State& state, const DecodedInstruction& op, 
     return true;
 }
 
-inline bool VectorShiftImmediate(State& state, const DecodedInstruction& op, bool q, bool u, bool scalar) {
+A64_VECTOR_INLINE bool VectorShiftImmediate(State& state, const DecodedInstruction& op, bool q, bool u, bool scalar) {
     const auto imm = Field(op.word, 16, 7);
     const auto width = std::bit_floor(imm);
     const auto operation = Field(op.word, 11, 5);
@@ -483,6 +590,20 @@ inline bool VectorShiftImmediate(State& state, const DecodedInstruction& op, boo
     const auto source = state.v[op.rn];
     Vector128 result;
     if (width < 8) return false;
+#if FIBERCPU_AARCH64_SIMDE
+    if constexpr (UseSimdeVectors) {
+        switch (width) {
+            case 8:
+                return SimdeShiftImmediate<8>(state, op.rd, old, source, operation, imm, q, u, scalar);
+            case 16:
+                return SimdeShiftImmediate<16>(state, op.rd, old, source, operation, imm, q, u, scalar);
+            case 32:
+                return SimdeShiftImmediate<32>(state, op.rd, old, source, operation, imm, q, u, scalar);
+            default:
+                return SimdeShiftImmediate<64>(state, op.rd, old, source, operation, imm, q, u, scalar);
+        }
+    }
+#endif
     if (operation == 16 || operation == 17) {
         if (width == 64 || u || scalar) return false;
         const unsigned half = 64 / width;
@@ -535,7 +656,9 @@ inline bool VectorShiftImmediate(State& state, const DecodedInstruction& op, boo
     return true;
 }
 
-inline bool VectorCopy(State& state, const DecodedInstruction& op, bool q, bool u, bool scalar) {
+template <class Registers>
+A64_VECTOR_INLINE bool VectorCopy(State& state, const DecodedInstruction& op, bool q, bool u, bool scalar,
+                                  const Registers& registers) {
     const auto imm5 = Field(op.word, 16, 5);
     const auto imm4 = Field(op.word, 11, 4);
     if (!imm5 || !(imm5 & 15)) return false;
@@ -557,19 +680,19 @@ inline bool VectorCopy(State& state, const DecodedInstruction& op, bool q, bool 
                 break;
             case 1:
                 if (index || (!q && width == 64)) return false;
-                state.v[op.rd] = Splat(ReadRegister(state, op.rn, width), width, q);
+                state.v[op.rd] = Splat(registers.Read(op.rn, width), width, q);
                 break;
             case 3:
                 if (!q) return false;
-                SetElement(state.v[op.rd], width, index, ReadRegister(state, op.rn, width));
+                SetElement(state.v[op.rd], width, index, registers.Read(op.rn, width));
                 break;
             case 5:
                 if (width >= (q ? 64u : 32u)) return false;
-                WriteRegister(state, op.rd, q ? 64 : 32, SignExtend(Element(source, width, index), width));
+                registers.Write(op.rd, q ? 64 : 32, SignExtend(Element(source, width, index), width));
                 break;
             case 7:
                 if (q != (width == 64)) return false;
-                WriteRegister(state, op.rd, q ? 64 : 32, Element(source, width, index));
+                registers.Write(op.rd, q ? 64 : 32, Element(source, width, index));
                 break;
             default:
                 return false;
@@ -578,12 +701,31 @@ inline bool VectorCopy(State& state, const DecodedInstruction& op, bool q, bool 
     return true;
 }
 
-inline bool VectorPermute(State& state, const DecodedInstruction& op, bool q, unsigned size) {
+A64_VECTOR_INLINE bool VectorPermute(State& state, const DecodedInstruction& op, bool q, unsigned size) {
     const unsigned width = 8u << size;
     const unsigned lanes = (q ? 128 : 64) / width;
     const unsigned opcode = Field(op.word, 12, 3);
     if (lanes < 2 || opcode == 0 || opcode == 4) return false;
     const auto a = state.v[op.rn], b = state.v[op.rm];
+#if FIBERCPU_AARCH64_SIMDE
+    if constexpr (UseSimdeVectors) {
+        switch (size) {
+            case 0:
+                state.v[op.rd] = SimdePermute<8>(a, b, opcode, q);
+                break;
+            case 1:
+                state.v[op.rd] = SimdePermute<16>(a, b, opcode, q);
+                break;
+            case 2:
+                state.v[op.rd] = SimdePermute<32>(a, b, opcode, q);
+                break;
+            default:
+                state.v[op.rd] = SimdePermute<64>(a, b, opcode, q);
+                break;
+        }
+        return true;
+    }
+#endif
     const bool second = opcode & 4;
     const unsigned half = lanes / 2;
     Vector128 result;
@@ -601,11 +743,17 @@ inline bool VectorPermute(State& state, const DecodedInstruction& op, bool q, un
     return true;
 }
 
-inline bool VectorExtract(State& state, const DecodedInstruction& op, bool q) {
+A64_VECTOR_INLINE bool VectorExtract(State& state, const DecodedInstruction& op, bool q) {
     const auto first = state.v[op.rn], second = state.v[op.rm];
     const unsigned bytes = q ? 16 : 8;
     const unsigned index = Field(op.word, 11, 4);
     if (index >= bytes) return false;
+#if FIBERCPU_AARCH64_SIMDE
+    if constexpr (UseSimdeVectors) {
+        state.v[op.rd] = SimdeExtract(first, second, index, q);
+        return true;
+    }
+#endif
     Vector128 result;
     for (unsigned i = 0; i < bytes; ++i) {
         const auto j = i + index;
@@ -615,10 +763,16 @@ inline bool VectorExtract(State& state, const DecodedInstruction& op, bool q) {
     return true;
 }
 
-inline void VectorTable(State& state, const DecodedInstruction& op, bool q) {
+A64_VECTOR_INLINE void VectorTable(State& state, const DecodedInstruction& op, bool q) {
     const auto indexes = state.v[op.rm];
     const unsigned length = 1 + Field(op.word, 13, 2);
     const bool keep = Field(op.word, 12, 1);
+#if FIBERCPU_AARCH64_SIMDE
+    if constexpr (UseSimdeVectors) {
+        state.v[op.rd] = SimdeTable(state, op.rd, op.rn, op.rm, length, q, keep);
+        return;
+    }
+#endif
     Vector128 result;
     for (unsigned i = 0; i < (q ? 16u : 8u); ++i) {
         const auto index = unsigned(Element(indexes, 8, i));
@@ -630,12 +784,17 @@ inline void VectorTable(State& state, const DecodedInstruction& op, bool q) {
     state.v[op.rd] = result;
 }
 
-inline StepResult VectorStructure(State& state, const Memory& memory, const DecodedInstruction& op, bool q) {
+template <bool hot, class Registers>
+inline StepResult VectorStructure(State& state, const Memory* memory, const DecodedInstruction& op,
+                                  const Registers& registers, const mem::SoftTlb* data_tlb, uint64_t& utlb_tags,
+                                  uintptr_t& utlb_addend) {
+    const bool q = Field(op.word, 30, 1);
+    const uint64_t pc = hot ? 0 : state.pc;
     const bool postindex = Field(op.word, 23, 1);
     const bool load = Field(op.word, 22, 1);
     const bool single = Field(op.word, 24, 1);
     const unsigned size = Field(op.word, 10, 2);
-    if ((!postindex && op.rm != 0) || (!single && Field(op.word, 21, 1))) return Undefined(state.pc);
+    if ((!postindex && op.rm != 0) || (!single && Field(op.word, 21, 1))) return Undefined(pc);
 
     unsigned width = 8u << size;
     unsigned count;
@@ -652,17 +811,17 @@ inline StepResult VectorStructure(State& state, const Memory& memory, const Deco
                 index = (q ? 8 : 0) | (s ? 4 : 0) | size;
                 break;
             case 1:
-                if (size & 1) return Undefined(state.pc);
+                if (size & 1) return Undefined(pc);
                 width = 16;
                 index = (q ? 4 : 0) | (s ? 2 : 0) | (size >> 1);
                 break;
             case 2:
-                if ((size & 2) || (size && s)) return Undefined(state.pc);
+                if ((size & 2) || (size && s)) return Undefined(pc);
                 width = size ? 64 : 32;
                 index = size ? unsigned(q) : (q ? 2 : 0) | unsigned(s);
                 break;
             default:
-                if (s || !load) return Undefined(state.pc);
+                if (s || !load) return Undefined(pc);
                 replicate = true;
                 break;
         }
@@ -690,20 +849,27 @@ inline StepResult VectorStructure(State& state, const Memory& memory, const Deco
                 count = 2;
                 break;
             default:
-                return Undefined(state.pc);
+                return Undefined(pc);
         }
-        if (!q && width == 64 && interleave > 1) return Undefined(state.pc);
+        if (!q && width == 64 && interleave > 1) return Undefined(pc);
     }
 
-    const auto address = ReadRegister(state, op.rn, 64, true);
+    const auto address = registers.Read(op.rn, 64, true);
     const auto access = load ? Access::Read : Access::Write;
     if (op.rn == 31 && (address & 15)) return Alignment(address, access);
 
     const unsigned elements = single ? 1 : (q ? 128 : 64) / width;
     const unsigned bytes = width / 8;
     const unsigned total = count * elements * bytes;
-    std::array<uint8_t, 64> data;
-    if (load && !ReadMemory(memory, address, data.data(), total)) return Fault(address, access);
+    std::array<uint8_t, 64> storage;
+    auto* data = storage.data();
+    if constexpr (hot) {
+        const bool hit = load ? ProbeDataTlb<false>(state, address, total, data_tlb, utlb_tags, utlb_addend, data)
+                              : ProbeDataTlb<true>(state, address, total, data_tlb, utlb_tags, utlb_addend, data);
+        if (!hit) return {Stop::Replay};
+    } else if (load && !ReadMemory(*memory, address, data, total)) {
+        return Fault(address, access);
+    }
     unsigned at = 0;
     for (unsigned group = 0; group < count; group += interleave) {
         if (load && !single) {
@@ -714,27 +880,33 @@ inline StepResult VectorStructure(State& state, const Memory& memory, const Deco
                 auto& reg = state.v[(op.rd + group + s) & 31];
                 const unsigned lane = single ? index : e;
                 if (load) {
-                    const auto value = ReadElement(data.data() + at, width);
+                    const auto value = ReadElement(data + at, width);
                     if (replicate)
                         reg = Splat(value, width, q);
                     else
                         SetElement(reg, width, lane, value);
                 } else {
-                    WriteElement(data.data() + at, width, Element(reg, width, lane));
+                    WriteElement(data + at, width, Element(reg, width, lane));
                 }
                 at += bytes;
             }
         }
     }
-    if (!load && !WriteMemory(state, memory, address, data.data(), total)) return Fault(address, access);
+    if (!load) {
+        if constexpr (hot)
+            ClearOverlappingExclusive(state, address, total);
+        else if (!WriteMemory(state, *memory, address, data, total))
+            return Fault(address, access);
+    }
     if (postindex) {
-        const auto offset = op.rm == 31 ? total : ReadRegister(state, op.rm, 64);
-        WriteRegister(state, op.rn, 64, address + offset, true);
+        const auto offset = op.rm == 31 ? total : registers.Read(op.rm, 64);
+        registers.Write(op.rn, 64, address + offset, true);
     }
     return {};
 }
 
 enum class VectorFamily {
+    Undefined,
     Structure,
     Three,
     Widen,
@@ -747,25 +919,26 @@ enum class VectorFamily {
     Copy,
     Extract,
     Table,
-    Permute
+    Permute,
+    ThreeFloat,
+    MiscFloat
 };
 
-template <VectorFamily family>
-inline StepResult Vector(State& state, const Memory& memory, const DecodedInstruction& op) {
+template <VectorFamily family, class Registers>
+inline bool VectorRegisterOp(State& state, const DecodedInstruction& op, const Registers& registers) {
     const auto word = op.word;
     const bool q = Field(word, 30, 1);
     const bool u = Field(word, 29, 1);
     const bool scalar = Field(word, 28, 1);
     const auto size = Field(word, 22, 2);
-    if constexpr (family == VectorFamily::Structure) return VectorStructure(state, memory, op, q);
 
     bool valid = false;
-    if constexpr (family == VectorFamily::Three) {
-        valid = VectorThree(state, op, q, u, scalar, size);
+    if constexpr (family == VectorFamily::Three || family == VectorFamily::ThreeFloat) {
+        valid = VectorThree<family == VectorFamily::ThreeFloat>(state, op, q, u, scalar, size);
     } else if constexpr (family == VectorFamily::Widen) {
         valid = VectorWiden(state, op, q, u, size);
-    } else if constexpr (family == VectorFamily::Misc) {
-        valid = VectorMisc(state, op, q, u, scalar, size);
+    } else if constexpr (family == VectorFamily::Misc || family == VectorFamily::MiscFloat) {
+        valid = VectorMisc<family == VectorFamily::MiscFloat>(state, op, q, u, scalar, size);
     } else if constexpr (family == VectorFamily::Reduction) {
         valid = VectorReduction(state, op, q, u, size);
     } else if constexpr (family == VectorFamily::PairAdd) {
@@ -782,7 +955,7 @@ inline StepResult Vector(State& state, const Memory& memory, const DecodedInstru
     } else if constexpr (family == VectorFamily::ShiftImmediate) {
         valid = VectorShiftImmediate(state, op, q, u, scalar);
     } else if constexpr (family == VectorFamily::Copy) {
-        valid = VectorCopy(state, op, q, u, scalar);
+        valid = VectorCopy(state, op, q, u, scalar, registers);
     } else if constexpr (family == VectorFamily::Extract) {
         valid = VectorExtract(state, op, q);
     } else if constexpr (family == VectorFamily::Table) {
@@ -791,24 +964,48 @@ inline StepResult Vector(State& state, const Memory& memory, const DecodedInstru
     } else if constexpr (family == VectorFamily::Permute) {
         valid = VectorPermute(state, op, q, size);
     }
-    return valid ? StepResult{} : Undefined(state.pc);
+    return valid;
 }
 
-inline ScalarHandlerFunc LowerVector(uint32_t word) {
-    if ((word & 0xbe000000) == 0x0c000000) return Vector<VectorFamily::Structure>;
-    if ((word & 0x8f200400) == 0x0e200400) return Vector<VectorFamily::Three>;
-    if ((word & 0x9f200c00) == 0x0e200000) return Vector<VectorFamily::Widen>;
-    if ((word & 0x8f3e0c00) == 0x0e200800) return Vector<VectorFamily::Misc>;
-    if ((word & 0x9f3e0c00) == 0x0e300800) return Vector<VectorFamily::Reduction>;
-    if ((word & 0xfffffc00) == 0x5ef1b800) return Vector<VectorFamily::PairAdd>;
-    if ((word & 0xffbffc00) == 0x7e30d800) return Vector<VectorFamily::PairFloatAdd>;
-    if ((word & 0x9ff80400) == 0x0f000400) return Vector<VectorFamily::ModifiedImmediate>;
-    if ((word & 0x8f800400) == 0x0f000400) return Vector<VectorFamily::ShiftImmediate>;
-    if ((word & 0x8fe08400) == 0x0e000400) return Vector<VectorFamily::Copy>;
-    if ((word & 0xbfe08400) == 0x2e000000) return Vector<VectorFamily::Extract>;
-    if ((word & 0xbfe08c00) == 0x0e000000) return Vector<VectorFamily::Table>;
-    if ((word & 0xbf208c00) == 0x0e000800) return Vector<VectorFamily::Permute>;
-    return nullptr;
+template <VectorFamily family>
+inline StepResult Vector(State& state, const Memory& memory, const DecodedInstruction& op) {
+    if constexpr (family == VectorFamily::Structure) {
+        uint64_t tags = 0;
+        uintptr_t addend = 0;
+        return VectorStructure<false>(state, &memory, op, ScalarRegisters{state}, nullptr, tags, addend);
+    } else {
+        return VectorRegisterOp<family>(state, op, ScalarRegisters{state}) ? StepResult{} : Undefined(state.pc);
+    }
+}
+
+inline VectorFamily DecodeVectorFamily(uint32_t word) {
+    if ((word & 0xbe000000) == 0x0c000000) return VectorFamily::Structure;
+    if ((word & 0x8f200400) == 0x0e200400)
+        return Field(word, 11, 5) >= 24 ? VectorFamily::ThreeFloat : VectorFamily::Three;
+    if ((word & 0x9f200c00) == 0x0e200000) return VectorFamily::Widen;
+    if ((word & 0x8f3e0c00) == 0x0e200800) {
+        switch (Field(word, 12, 5)) {
+            case 15:
+            case 27:
+            case 29:
+            case 31:
+                return VectorFamily::MiscFloat;
+            default:
+                return VectorFamily::Misc;
+        }
+    }
+    if ((word & 0x9f3e0c00) == 0x0e300800) return VectorFamily::Reduction;
+    if ((word & 0xfffffc00) == 0x5ef1b800) return VectorFamily::PairAdd;
+    if ((word & 0xffbffc00) == 0x7e30d800) return VectorFamily::PairFloatAdd;
+    if ((word & 0x9ff80400) == 0x0f000400) return VectorFamily::ModifiedImmediate;
+    if ((word & 0x8f800400) == 0x0f000400) return VectorFamily::ShiftImmediate;
+    if ((word & 0x8fe08400) == 0x0e000400) return VectorFamily::Copy;
+    if ((word & 0xbfe08400) == 0x2e000000) return VectorFamily::Extract;
+    if ((word & 0xbfe08c00) == 0x0e000000) return VectorFamily::Table;
+    if ((word & 0xbf208c00) == 0x0e000800) return VectorFamily::Permute;
+    return VectorFamily::Undefined;
 }
 
 }  // namespace fiberish::aarch64::detail
+
+#undef A64_VECTOR_INLINE

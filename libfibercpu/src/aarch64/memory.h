@@ -278,30 +278,42 @@ A64_MEMORY_INLINE bool ProbeLoadStore(State& state, const DecodedInstruction& op
 inline void AcquireFence() { std::atomic_thread_fence(std::memory_order_acquire); }
 inline void ReleaseFence() { std::atomic_thread_fence(std::memory_order_release); }
 
-inline StepResult ExclusiveMemory(State& state, const Memory& memory, const DecodedInstruction& op) {
+struct CallbackTransfers {
+    State& state;
+    const Memory& memory;
+
+    bool Read(uint64_t address, void* dest, unsigned size) const { return ReadMemory(memory, address, dest, size); }
+
+    bool Write(uint64_t address, const void* src, unsigned size) const {
+        return WriteMemory(state, memory, address, src, size);
+    }
+};
+
+template <class Registers, class Transfers>
+inline StepResult ExclusiveMemoryOp(State& state, const DecodedInstruction& op, uint64_t address,
+                                    const Registers& registers, const Transfers& memory) {
     const bool cas = op.mode == CompareSwap || op.mode == CompareSwapPair;
     const bool pair = op.mode == ExclusivePair || op.mode == CompareSwapPair;
     const auto bytes = op.width / 8;
     const unsigned total = bytes * (pair ? 2 : 1);
-    const auto address = ReadRegister(state, op.rn, 64, true);
     const auto access = cas || op.operation == Store ? Access::Write : Access::Read;
     if ((op.rn == 31 && (address & 15)) || (address & (total - 1))) return Alignment(address, access);
 
     std::array<uint8_t, 16> data;
     if (cas) {
         if (Field(op.word, 15, 1)) ReleaseFence();
-        if (!ReadMemory(memory, address, data.data(), total)) return Fault(address, access);
-        const auto expected = ReadRegister(state, op.rm, op.width);
-        const auto expected2 = pair ? ReadRegister(state, op.rm + 1, op.width) : 0;
+        if (!memory.Read(address, data.data(), total)) return Fault(address, access);
+        const auto expected = registers.Read(op.rm, op.width);
+        const auto expected2 = pair ? registers.Read(op.rm + 1, op.width) : 0;
         const auto actual = ReadElement(data.data(), op.width);
         const auto actual2 = pair ? ReadElement(data.data() + bytes, op.width) : 0;
         if (expected == actual && expected2 == actual2) {
-            StoreRegister(state, data.data(), op.rd, op.width, false);
-            if (pair) StoreRegister(state, data.data() + bytes, op.rd + 1, op.width, false);
-            if (!WriteMemory(state, memory, address, data.data(), total)) return Fault(address, access);
+            WriteElement(data.data(), op.width, registers.Read(op.rd, op.width));
+            if (pair) WriteElement(data.data() + bytes, op.width, registers.Read(op.rd + 1, op.width));
+            if (!memory.Write(address, data.data(), total)) return Fault(address, access);
         }
-        WriteRegister(state, op.rm, 64, actual);
-        if (pair) WriteRegister(state, op.rm + 1, 64, actual2);
+        registers.Write(op.rm, 64, actual);
+        if (pair) registers.Write(op.rm + 1, 64, actual2);
         if (Field(op.word, 22, 1)) AcquireFence();
         return {};
     }
@@ -310,15 +322,15 @@ inline StepResult ExclusiveMemory(State& state, const Memory& memory, const Deco
     const bool ordered = Field(op.word, 15, 1) || op.mode == Acquire;
     if (op.operation == Load) {
         if (pair && op.rd == op.ra) return Undefined(state.pc);
-        if (!ReadMemory(memory, address, data.data(), total)) return Fault(address, access);
+        if (!memory.Read(address, data.data(), total)) return Fault(address, access);
         if (exclusive) {
             state.exclusive_address = address;
             state.exclusive_size = total;
             std::copy_n(data.data(), total, state.exclusive_value.data());
         }
         if (ordered) AcquireFence();
-        LoadRegister(state, data.data(), op.rd, op.width, false, Load);
-        if (pair) LoadRegister(state, data.data() + bytes, op.ra, op.width, false, Load);
+        registers.Write(op.rd, 64, ReadElement(data.data(), op.width));
+        if (pair) registers.Write(op.ra, 64, ReadElement(data.data() + bytes, op.width));
         return {};
     }
 
@@ -328,32 +340,33 @@ inline StepResult ExclusiveMemory(State& state, const Memory& memory, const Deco
         const bool match = state.exclusive_size == total && state.exclusive_address == address;
         state.ClearExclusive();
         if (!match) {
-            WriteRegister(state, op.rm, 32, 1);
+            registers.Write(op.rm, 32, 1);
             return {};
         }
-        if (!ReadMemory(memory, address, data.data(), total)) return Fault(address, access);
+        if (!memory.Read(address, data.data(), total)) return Fault(address, access);
         if (!std::equal(data.data(), data.data() + total, state.exclusive_value.data())) {
-            WriteRegister(state, op.rm, 32, 1);
+            registers.Write(op.rm, 32, 1);
             return {};
         }
     }
     if (ordered) ReleaseFence();
-    StoreRegister(state, data.data(), op.rd, op.width, false);
-    if (pair) StoreRegister(state, data.data() + bytes, op.ra, op.width, false);
-    if (!WriteMemory(state, memory, address, data.data(), total)) return Fault(address, access);
-    if (exclusive) WriteRegister(state, op.rm, 32, 0);
+    WriteElement(data.data(), op.width, registers.Read(op.rd, op.width));
+    if (pair) WriteElement(data.data() + bytes, op.width, registers.Read(op.ra, op.width));
+    if (!memory.Write(address, data.data(), total)) return Fault(address, access);
+    if (exclusive) registers.Write(op.rm, 32, 0);
     return {};
 }
 
-inline StepResult AtomicMemory(State& state, const Memory& memory, const DecodedInstruction& op) {
+template <class Registers, class Transfers>
+inline StepResult AtomicMemoryOp(const DecodedInstruction& op, uint64_t address, const Registers& registers,
+                                 const Transfers& memory) {
     const unsigned bytes = op.width / 8;
-    const auto address = ReadRegister(state, op.rn, 64, true);
     if ((op.rn == 31 && (address & 15)) || (address & (bytes - 1))) return Alignment(address, Access::Write);
     if (Field(op.word, 22, 1)) ReleaseFence();
     std::array<uint8_t, 8> data;
-    if (!ReadMemory(memory, address, data.data(), bytes)) return Fault(address, Access::Write);
+    if (!memory.Read(address, data.data(), bytes)) return Fault(address, Access::Write);
     const auto previous = ReadElement(data.data(), op.width);
-    const auto operand = ReadRegister(state, op.rm, op.width);
+    const auto operand = registers.Read(op.rm, op.width);
     uint64_t result;
     switch (op.operation) {
         case 0:
@@ -385,10 +398,20 @@ inline StepResult AtomicMemory(State& state, const Memory& memory, const Decoded
             break;
     }
     WriteElement(data.data(), op.width, result);
-    if (!WriteMemory(state, memory, address, data.data(), bytes)) return Fault(address, Access::Write);
+    if (!memory.Write(address, data.data(), bytes)) return Fault(address, Access::Write);
     if (Field(op.word, 23, 1) && op.rd != 31) AcquireFence();
-    WriteRegister(state, op.rd, 64, previous);
+    registers.Write(op.rd, 64, previous);
     return {};
+}
+
+inline StepResult ExclusiveMemory(State& state, const Memory& memory, const DecodedInstruction& op) {
+    const ScalarRegisters registers{state};
+    return ExclusiveMemoryOp(state, op, registers.Read(op.rn, 64, true), registers, CallbackTransfers{state, memory});
+}
+
+inline StepResult AtomicMemory(State& state, const Memory& memory, const DecodedInstruction& op) {
+    const ScalarRegisters registers{state};
+    return AtomicMemoryOp(op, registers.Read(op.rn, 64, true), registers, CallbackTransfers{state, memory});
 }
 
 }  // namespace fiberish::aarch64::detail

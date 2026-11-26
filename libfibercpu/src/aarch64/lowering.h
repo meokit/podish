@@ -1,106 +1,36 @@
 #pragma once
 
-#include <chrono>
 #include <utility>
 
+#include "atomic_handlers.h"
 #include "block_operands.h"
 #include "dispatch.h"
-#include "floating.h"
-#include "memory.h"
-#include "vector.h"
+#include "register_handlers.h"
+#include "system_handlers.h"
 
 namespace fiberish::aarch64::detail {
 
-inline StepResult UndefinedInstruction(State& state, const Memory&, const DecodedInstruction&) {
-    return Undefined(state.pc);
+template <Stop reason>
+inline StepResult TrapInstruction(State& state, const Memory&, const DecodedInstruction& op) {
+    return {reason, Access::Execute, reason == Stop::Undefined ? uint16_t{0} : uint16_t(op.immediate), state.pc};
 }
 
-inline StepResult SyscallInstruction(State& state, const Memory&, const DecodedInstruction& op) {
-    return {Stop::Syscall, Access::Execute, uint16_t(op.immediate), state.pc};
+#if FIBERCPU_AARCH64_TAIL_DISPATCH
+template <Stop reason>
+FIBERCPU_AARCH64_HANDLER_ABI uint64_t TrapHandler(A64_HANDLER_PARAMS) {
+    const uint16_t immediate = reason == Stop::Undefined ? 0 : uint16_t(current->Operands());
+    return ReturnFromBlock(state, current, instr_limit, flags_cache A64_HANDLER_PIN_ARGS,
+                           {reason, Access::Execute, immediate, current->GetStartPc()});
 }
+#endif
 
-inline StepResult BreakpointInstruction(State& state, const Memory&, const DecodedInstruction& op) {
-    return {Stop::Breakpoint, Access::Execute, uint16_t(op.immediate), state.pc};
-}
-
-inline StepResult SystemInstruction(State& state, const Memory& memory, const DecodedInstruction& op) {
-    const auto word = op.word;
-    const auto reg = word & 0xffffffe0;
-    const auto barrier = word & 0xfffff0ff;
-
-    if ((word & 0xfffff01f) == 0xd503201f) return {};  // HINT, including architectural NOP.
-    switch (barrier) {
-        case 0xd503305f:  // CLREX
-            state.ClearExclusive();
-            return {};
-        case 0xd503309f:  // DSB
-        case 0xd50330bf:  // DMB
-            std::atomic_thread_fence(std::memory_order_seq_cst);
-            return {};
-        case 0xd50330df:  // ISB
-            return {};
-    }
-
-    uint64_t result;
-    switch (reg) {
-        case 0xd53bd040:
-            result = state.tpidr_el0;
-            break;
-        case 0xd53bd060:
-            result = state.tpidrro_el0;
-            break;
-        case 0xd53b4200:
-            result = state.nzcv;
-            break;
-        case 0xd53b4400:
-            result = state.fpcr;
-            break;
-        case 0xd53b4420:
-            result = state.fpsr;
-            break;
-        case 0xd53b0020:
-            result = 0x8444c004;
-            break;  // CTR_EL0, 64-byte I/D cache lines.
-        case 0xd53b00e0:
-            result = 3;
-            break;  // DCZID_EL0, 32-byte DC ZVA block.
-        case 0xd53be000:
-            result = 1'000'000'000;
-            break;        // CNTFRQ_EL0.
-        case 0xd53be020:  // CNTPCT_EL0.
-        case 0xd53be040:  // CNTVCT_EL0.
-            result = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                         std::chrono::steady_clock::now().time_since_epoch())
-                         .count();
-            break;
-        case 0xd51bd040:
-            state.tpidr_el0 = ReadRegister(state, op.rd, 64);
-            return {};
-        case 0xd51b4200:
-            state.nzcv = uint32_t(ReadRegister(state, op.rd, 64)) & FlagMask;
-            return {};
-        case 0xd51b4400:
-            state.fpcr = uint32_t(ReadRegister(state, op.rd, 64)) & 0x07c00000u;
-            return {};
-        case 0xd51b4420:
-            state.fpsr = uint32_t(ReadRegister(state, op.rd, 64)) & 0xf800009fu;
-            return {};
-        case 0xd50b7420: {  // DC ZVA
-            std::array<uint8_t, 32> zero{};
-            const auto address = ReadRegister(state, op.rd, 64) & ~uint64_t{zero.size() - 1};
-            if (!WriteMemory(state, memory, address, zero.data(), zero.size())) return Fault(address, Access::Write);
-            return {};
-        }
-        case 0xd50b7520:  // IC IVAU
-        case 0xd50b7a20:  // DC CVAC
-        case 0xd50b7b20:  // DC CVAU
-        case 0xd50b7e20:  // DC CIVAC
-            return {};    // Decode entries depend on current instruction bytes.
-        default:
-            return Undefined(state.pc);
-    }
-    WriteRegister(state, op.rd, 64, result);
-    return {};
+template <Stop reason>
+constexpr HandlerBinding BindTrapHandler() {
+#if FIBERCPU_AARCH64_TAIL_DISPATCH
+    return {&TrapInstruction<reason>, &TrapHandler<reason>};
+#else
+    return {&TrapInstruction<reason>, nullptr};
+#endif
 }
 
 inline StepResult NopInstruction(State&, const Memory&, const DecodedInstruction&) { return {}; }
@@ -164,38 +94,22 @@ constexpr HandlerBinding BindIntegerKernel() {
 }
 
 constexpr std::array<HandlerBinding, size_t(Kind::Count)> Handlers{
-    BindHandler<Kind::Undefined, UndefinedInstruction>(),
-    BindIntegerKernel<Kind::Address>(),
-    BindIntegerKernel<Kind::AddSubImmediate>(),
-    BindIntegerKernel<Kind::AddSubShifted>(),
-    BindIntegerKernel<Kind::AddSubExtended>(),
-    BindIntegerKernel<Kind::AddSubCarry>(),
-    BindIntegerKernel<Kind::LogicalImmediate>(),
-    BindIntegerKernel<Kind::LogicalShifted>(),
-    BindIntegerKernel<Kind::MoveWide>(),
-    BindIntegerKernel<Kind::Bitfield>(),
-    BindIntegerKernel<Kind::Extract>(),
-    BindIntegerKernel<Kind::ConditionalCompare>(),
-    BindIntegerKernel<Kind::ConditionalSelect>(),
-    BindIntegerKernel<Kind::DataOneSource>(),
-    BindIntegerKernel<Kind::DataTwoSource>(),
-    BindIntegerKernel<Kind::Multiply>(),
-    BindIntegerKernel<Kind::BranchImmediate>(),
-    BindIntegerKernel<Kind::BranchRegister>(),
-    BindIntegerKernel<Kind::BranchCondition>(),
-    BindIntegerKernel<Kind::CompareBranch>(),
-    BindIntegerKernel<Kind::TestBranch>(),
-    BindMemoryHandler<Kind::LoadStoreImmediate>(),
-    BindMemoryHandler<Kind::LoadStoreRegister>(),
-    BindMemoryHandler<Kind::LoadStorePair, 32>(),
-    BindMemoryHandler<Kind::LoadLiteral>(),
-    BindHandler<Kind::LoadStoreExclusive, ExclusiveMemory>(),
-    BindHandler<Kind::LoadStoreAtomic, AtomicMemory>(),
-    BindHandler<Kind::Syscall, SyscallInstruction>(),
-    BindHandler<Kind::Breakpoint, BreakpointInstruction>(),
-    BindHandler<Kind::System, SystemInstruction>(),
-    BindHandler<Kind::ScalarFloat, UndefinedInstruction>(),
-    BindHandler<Kind::Vector, UndefinedInstruction>(),
+    BindTrapHandler<Stop::Undefined>(),           BindIntegerKernel<Kind::Address>(),
+    BindIntegerKernel<Kind::AddSubImmediate>(),   BindIntegerKernel<Kind::AddSubShifted>(),
+    BindIntegerKernel<Kind::AddSubExtended>(),    BindIntegerKernel<Kind::AddSubCarry>(),
+    BindIntegerKernel<Kind::LogicalImmediate>(),  BindIntegerKernel<Kind::LogicalShifted>(),
+    BindIntegerKernel<Kind::MoveWide>(),          BindIntegerKernel<Kind::Bitfield>(),
+    BindIntegerKernel<Kind::Extract>(),           BindIntegerKernel<Kind::ConditionalCompare>(),
+    BindIntegerKernel<Kind::ConditionalSelect>(), BindIntegerKernel<Kind::DataOneSource>(),
+    BindIntegerKernel<Kind::DataTwoSource>(),     BindIntegerKernel<Kind::Multiply>(),
+    BindIntegerKernel<Kind::BranchImmediate>(),   BindIntegerKernel<Kind::BranchRegister>(),
+    BindIntegerKernel<Kind::BranchCondition>(),   BindIntegerKernel<Kind::CompareBranch>(),
+    BindIntegerKernel<Kind::TestBranch>(),        BindMemoryHandler<Kind::LoadStoreImmediate>(),
+    BindMemoryHandler<Kind::LoadStoreRegister>(), BindMemoryHandler<Kind::LoadStorePair, 32>(),
+    BindMemoryHandler<Kind::LoadLiteral>(),       BindAtomicHandler<Kind::LoadStoreExclusive>(),
+    BindAtomicHandler<Kind::LoadStoreAtomic>(),   BindTrapHandler<Stop::Syscall>(),
+    BindTrapHandler<Stop::Breakpoint>(),          BindTrapHandler<Stop::Undefined>(),
+    BindTrapHandler<Stop::Undefined>(),           BindTrapHandler<Stop::Undefined>(),
 };
 
 template <Kind kind, unsigned operations, int shift, bool write_nzcv, size_t... index>
@@ -233,11 +147,14 @@ inline HandlerBinding Lower(const DecodedInstruction& op) {
 #endif
     }
     switch (op.kind) {
+        case Kind::System:
+            if (auto binding = LowerSystem(op.word); binding.scalar_handler) return binding;
+            break;
         case Kind::ScalarFloat:
-            if (auto handler = LowerFloat(op.word)) return {handler, nullptr};
+            if (auto binding = LowerFloat(op.word); binding.scalar_handler) return binding;
             break;
         case Kind::Vector:
-            if (auto handler = LowerVector(op.word)) return {handler, nullptr};
+            if (auto binding = LowerVector(op.word); binding.scalar_handler) return binding;
             break;
         case Kind::AddSubImmediate:
             return BindInteger<Kind::AddSubImmediate>(op);

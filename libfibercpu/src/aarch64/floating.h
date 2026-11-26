@@ -105,6 +105,9 @@ inline int FPCompare(uint64_t left, uint64_t right, FPLayout f) {
     return negative == (left > right) ? -1 : 1;
 }
 
+#if defined(__GNUC__) || defined(__clang__)
+[[gnu::always_inline]]
+#endif
 inline uint32_t FPCompareFlags(State& state, uint64_t left, uint64_t right, unsigned width, bool signaling) {
     const auto f = FPBits(width);
     left = FPInput(state, left, f);
@@ -454,10 +457,23 @@ constexpr uint64_t FPImmediate(unsigned width, unsigned b) {
     return (b & 128 ? f.sign : 0) | (exponent << f.fraction_bits) | (uint64_t(b & 15) << (f.fraction_bits - 4));
 }
 
-enum class FloatFamily { Convert, Fused, Compare, ConditionalCompare, Select, Binary, Immediate, Unary, Integer };
+enum class FloatFamily {
+    Undefined,
+    Convert,
+    Fused,
+    Compare,
+    ConditionalCompare,
+    Select,
+    Binary,
+    Immediate,
+    Unary,
+    MoveFromVector,
+    MoveToVector,
+    Integer
+};
 
-template <FloatFamily family>
-inline StepResult ScalarFloat(State& state, const Memory&, const DecodedInstruction& op) {
+template <FloatFamily family, class Registers>
+inline bool FloatRegisterOp(State& state, const DecodedInstruction& op, uint32_t& flags, const Registers& registers) {
     const auto word = op.word;
     const auto type = Field(word, 22, 2);
     const unsigned width = type == 0 ? 32 : type == 3 ? 16 : 64;
@@ -468,59 +484,58 @@ inline StepResult ScalarFloat(State& state, const Memory&, const DecodedInstruct
 
     if constexpr (family == FloatFamily::Convert) {
         const auto operation = Field(word, 15, 6);
-        if (type == 2 || operation - 4 == type) return Undefined(state.pc);
+        if (type == 2 || operation - 4 == type) return false;
         const unsigned dest = operation == 4 ? 32 : operation == 5 ? 64 : 16;
         set(FPConvert(state, width, dest, left));
-        return {};
+        return true;
     }
     if constexpr (family == FloatFamily::Fused) {
         const bool negate_addend = Field(word, 21, 1);
         const bool negate_product = negate_addend != bool(Field(word, 15, 1));
         const auto addend = (state.v[op.ra].lo & Ones(width)) ^ (negate_addend ? f.sign : 0);
         set(FPArithmetic(state, width, FPOp::Fused, left ^ (negate_product ? f.sign : 0), right, addend));
-        return {};
+        return true;
     }
     if constexpr (family == FloatFamily::Compare) {
         const bool zero = Field(word, 3, 1);
-        if (zero && op.rm) return Undefined(state.pc);
-        state.nzcv = FPCompareFlags(state, left, zero ? 0 : right, width, Field(word, 4, 1));
-        return {};
+        if (zero && op.rm) return false;
+        flags = FPCompareFlags(state, left, zero ? 0 : right, width, Field(word, 4, 1));
+        return true;
     }
     if constexpr (family == FloatFamily::ConditionalCompare) {
-        state.nzcv = ConditionHolds(state.nzcv, Field(word, 12, 4))
-                         ? FPCompareFlags(state, left, right, width, Field(word, 4, 1))
-                         : Field(word, 0, 4) << 28;
-        return {};
+        flags = ConditionHolds(flags, Field(word, 12, 4)) ? FPCompareFlags(state, left, right, width, Field(word, 4, 1))
+                                                          : Field(word, 0, 4) << 28;
+        return true;
     }
     if constexpr (family == FloatFamily::Select) {
-        set(ConditionHolds(state.nzcv, Field(word, 12, 4)) ? left : right);
-        return {};
+        set(ConditionHolds(flags, Field(word, 12, 4)) ? left : right);
+        return true;
     }
     if constexpr (family == FloatFamily::Binary) {
         const auto operation = Field(word, 12, 4);
-        if (operation > unsigned(FPOp::NegMul)) return Undefined(state.pc);
+        if (operation > unsigned(FPOp::NegMul)) return false;
         set(FPArithmetic(state, width, FPOp(operation), left, right));
-        return {};
+        return true;
     }
     if constexpr (family == FloatFamily::Immediate) {
         set(FPImmediate(width, Field(word, 13, 8)));
-        return {};
+        return true;
     }
     if constexpr (family == FloatFamily::Unary) {
         const auto operation = Field(word, 15, 6);
         switch (operation) {
             case 0:
                 set(left);
-                return {};
+                return true;
             case 1:
                 set(left & ~f.sign);
-                return {};
+                return true;
             case 2:
                 set(left ^ f.sign);
-                return {};
+                return true;
             case 3:
                 set(FPArithmetic(state, width, FPOp::Sqrt, left));
-                return {};
+                return true;
             case 8:
             case 9:
             case 10:
@@ -530,64 +545,79 @@ inline StepResult ScalarFloat(State& state, const Memory&, const DecodedInstruct
             case 15:
                 set(FPArithmetic(state, width, FPOp::Round, left, 0, 0,
                                  operation < 13 ? FPRound(operation - 8) : FPRounding(state), operation == 14));
-                return {};
+                return true;
             default:
-                return Undefined(state.pc);
+                return false;
         }
     }
 
+    if constexpr (family == FloatFamily::MoveFromVector) {
+        registers.Write(op.rd, width, left);
+        return true;
+    }
+    if constexpr (family == FloatFamily::MoveToVector) {
+        set(registers.Read(op.rn, width));
+        return true;
+    }
+
     const bool fixed = (word & 0x7f200000) == 0x1e000000;
-    if (!fixed && (word & 0x7f20fc00) != 0x1e200000) return Undefined(state.pc);
+    if (!fixed && (word & 0x7f20fc00) != 0x1e200000) return false;
     const auto integer_width = op.width;
     const auto operation = Field(word, 16, 5);
     if (type == 2) {
-        if (fixed || integer_width != 64) return Undefined(state.pc);
+        if (fixed || integer_width != 64) return false;
         if (operation == 14)
-            WriteRegister(state, op.rd, 64, state.v[op.rn].hi);
+            registers.Write(op.rd, 64, state.v[op.rn].hi);
         else if (operation == 15)
-            state.v[op.rd].hi = ReadRegister(state, op.rn, 64);
+            state.v[op.rd].hi = registers.Read(op.rn, 64);
         else
-            return Undefined(state.pc);
-        return {};
+            return false;
+        return true;
     }
     const unsigned scale = fixed ? 64 - Field(word, 10, 6) : 0;
-    if (scale > integer_width) return Undefined(state.pc);
+    if (scale > integer_width) return false;
     if (operation == 2 || operation == 3) {
-        set(IntToFP(state, width, ReadRegister(state, op.rn, integer_width), integer_width, operation == 3, scale));
+        set(IntToFP(state, width, registers.Read(op.rn, integer_width), integer_width, operation == 3, scale));
     } else if (!fixed && integer_width == width && (operation == 6 || operation == 7)) {
         if (operation == 6)
-            WriteRegister(state, op.rd, integer_width, left);
+            registers.Write(op.rd, integer_width, left);
         else
-            set(ReadRegister(state, op.rn, integer_width));
+            set(registers.Read(op.rn, integer_width));
     } else {
         const auto mode = operation >> 3;
         const auto conversion = operation & 7;
-        if ((fixed && mode != TowardZero) || (conversion > 1 && (operation != 4 && operation != 5)))
-            return Undefined(state.pc);
+        if ((fixed && mode != TowardZero) || (conversion > 1 && (operation != 4 && operation != 5))) return false;
         const auto round = conversion >= 4 ? NearestAway : FPRound(mode);
-        WriteRegister(state, op.rd, integer_width,
-                      FPToInt(state, width, left, integer_width, operation & 1, scale, round));
+        registers.Write(op.rd, integer_width, FPToInt(state, width, left, integer_width, operation & 1, scale, round));
     }
-    return {};
+    return true;
 }
 
-inline ScalarHandlerFunc LowerFloat(uint32_t word) {
+template <FloatFamily family>
+inline StepResult ScalarFloat(State& state, const Memory&, const DecodedInstruction& op) {
+    return FloatRegisterOp<family>(state, op, state.nzcv, ScalarRegisters{state}) ? StepResult{} : Undefined(state.pc);
+}
+
+inline FloatFamily DecodeFloatFamily(uint32_t word) {
     const auto type = Field(word, 22, 2);
     if ((word & 0xff207c00) == 0x1e204000) {
         const auto operation = Field(word, 15, 6);
-        if (operation == 4 || operation == 5 || operation == 7) return ScalarFloat<FloatFamily::Convert>;
+        if (operation == 4 || operation == 5 || operation == 7) return FloatFamily::Convert;
     }
-    if (type == 3) return nullptr;  // FEAT_FP16 arithmetic.
+    if (type == 3) return FloatFamily::Undefined;  // FEAT_FP16 arithmetic.
     if (type <= 1) {
-        if ((word & 0xff000000) == 0x1f000000) return ScalarFloat<FloatFamily::Fused>;
-        if ((word & 0xff20fc07) == 0x1e202000) return ScalarFloat<FloatFamily::Compare>;
-        if ((word & 0xff200c00) == 0x1e200400) return ScalarFloat<FloatFamily::ConditionalCompare>;
-        if ((word & 0xff200c00) == 0x1e200c00) return ScalarFloat<FloatFamily::Select>;
-        if ((word & 0xff200c00) == 0x1e200800) return ScalarFloat<FloatFamily::Binary>;
-        if ((word & 0xff201fe0) == 0x1e201000) return ScalarFloat<FloatFamily::Immediate>;
-        if ((word & 0xff207c00) == 0x1e204000) return ScalarFloat<FloatFamily::Unary>;
+        if ((word & 0xff000000) == 0x1f000000) return FloatFamily::Fused;
+        if ((word & 0xff20fc07) == 0x1e202000) return FloatFamily::Compare;
+        if ((word & 0xff200c00) == 0x1e200400) return FloatFamily::ConditionalCompare;
+        if ((word & 0xff200c00) == 0x1e200c00) return FloatFamily::Select;
+        if ((word & 0xff200c00) == 0x1e200800) return FloatFamily::Binary;
+        if ((word & 0xff201fe0) == 0x1e201000) return FloatFamily::Immediate;
+        if ((word & 0xff207c00) == 0x1e204000) return FloatFamily::Unary;
     }
-    return ScalarFloat<FloatFamily::Integer>;
+    const auto move = word & 0xfffffc00;
+    if (move == 0x1e260000 || move == 0x9e660000) return FloatFamily::MoveFromVector;
+    if (move == 0x1e270000 || move == 0x9e670000) return FloatFamily::MoveToVector;
+    return FloatFamily::Integer;
 }
 
 }  // namespace fiberish::aarch64::detail

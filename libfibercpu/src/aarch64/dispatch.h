@@ -246,15 +246,6 @@ constexpr HandlerFunc GetExitHandlerFallthrough([[maybe_unused]] uint64_t fallth
 #endif
 }
 
-template <Kind kind, ScalarHandlerFunc Execute>
-constexpr HandlerBinding BindHandler() {
-#if FIBERCPU_AARCH64_TAIL_DISPATCH
-    return {Execute, &RunScalarHandler<Execute>};
-#else
-    return {Execute, nullptr};
-#endif
-}
-
 constexpr HandlerFunc GetScalarDispatchHandler() {
 #if FIBERCPU_AARCH64_TAIL_DISPATCH
     return &RunScalarHandler<nullptr>;

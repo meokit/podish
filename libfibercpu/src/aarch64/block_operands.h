@@ -13,6 +13,7 @@ constexpr bool HasExtraOperandSlot(Kind kind) {
 }
 
 inline uint64_t PackOpOperands(const DecodedInstruction& op) {
+    if (op.kind == Kind::Syscall || op.kind == Kind::Breakpoint) return op.immediate;
     // The two common immediate forms have room for the sign-extended or
     // scaled byte value. A hot handler never unscales and rescales an offset.
     if (op.kind == Kind::AddSubImmediate)
@@ -26,12 +27,17 @@ inline uint64_t PackOpOperands(const DecodedInstruction& op) {
                (uint64_t{op.mode} << 30) | (uint64_t{op.operation} << 32) | (uint64_t{vector} << 35);
     }
 
-    const auto aux = op.kind == Kind::Multiply || op.kind == Kind::LoadStorePair ? op.ra : op.shift;
+    const auto aux = op.kind == Kind::Multiply || op.kind == Kind::LoadStorePair || op.kind == Kind::LoadStoreExclusive
+                         ? op.ra
+                         : op.shift;
     const bool transfer = op.kind >= Kind::LoadStoreRegister && op.kind <= Kind::LoadLiteral;
     // Bitfield decoding reuses rm for the mask endpoint, which can be 0..63.
     const auto mode = op.kind == Kind::Bitfield ? op.rm >> 5 : op.mode;
-    return op.rd | (op.rn << 5) | ((op.rm & 31) << 10) | (aux << 15) | (op.operation << 21) |
-           (transfer ? vector << 25 : 0) | (mode << 26) | (uint32_t(width) << 29);
+    const uint32_t packed = op.rd | (op.rn << 5) | ((op.rm & 31) << 10) | (aux << 15) | (op.operation << 21) |
+                            (transfer ? vector << 25 : 0) | (mode << 26) | (uint32_t(width) << 29);
+    if (op.kind == Kind::LoadStoreExclusive || op.kind == Kind::LoadStoreAtomic)
+        return packed | (uint64_t{Field(op.word, 15, 1)} << 32) | (uint64_t{Field(op.word, 22, 2)} << 33);
+    return packed;
 }
 
 #if defined(_MSC_VER)
@@ -64,7 +70,7 @@ A64_OPERANDS_INLINE DecodedInstruction GetOpOperands(const DecodedOp& slot) {
         op.rn = Field(bits, 5, 5);
         constexpr bool transfer = kind >= Kind::LoadStoreRegister && kind <= Kind::LoadLiteral;
         op.rm = Field(bits, 10, 5);
-        if constexpr (kind == Kind::Multiply || kind == Kind::LoadStorePair)
+        if constexpr (kind == Kind::Multiply || kind == Kind::LoadStorePair || kind == Kind::LoadStoreExclusive)
             op.ra = Field(bits, 15, 5);
         else
             op.shift = Field(bits, 15, 6);
@@ -75,6 +81,8 @@ A64_OPERANDS_INLINE DecodedInstruction GetOpOperands(const DecodedOp& slot) {
             op.mode = Field(bits, 26, 3);
         op.width = 8 << Field(bits, 29, 3);
         if constexpr (transfer) op.word = Field(bits, 25, 1) << 26;
+        if constexpr (kind == Kind::LoadStoreExclusive || kind == Kind::LoadStoreAtomic)
+            op.word = (((bits >> 32) & 1) << 15) | (((bits >> 33) & 3) << 22);
         if constexpr (HasExtraOperandSlot(kind)) {
             const auto& wide = GetExtraOperands(slot);
             if constexpr (HasBlockTarget(kind))

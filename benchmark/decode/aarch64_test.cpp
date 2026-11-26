@@ -1,5 +1,6 @@
 #include "aarch64/aarch64.h"
 #include "aarch64/baked.h"
+#include "aarch64/lowering.h"
 
 #include <algorithm>
 #include <array>
@@ -189,6 +190,173 @@ bool ExclusivesAndAtomics() {
     const auto result = Run(state, backing.Callbacks(), 6);
     return result.reason == Stop::Budget && result.executed == 6 && state.x[0] == 17 && state.x[1] == 1 &&
            state.x[2] == 17 && backing.data[Page] == 18 && backing.writes == 2 && !state.exclusive_size;
+}
+
+bool RegisterOpsKeepDispatchState() {
+    Backing backing;
+    backing.Code(Base, {
+                           0x9e670120, // fmov d0, x9
+                           0x9e660029, // fmov x9, d1
+                           0xd51bd049, // msr tpidr_el0, x9
+                           0xd51b4202, // msr nzcv, x2
+                           0x1e614c02, // fcsel d2, d0, d1, mi
+                           0x1e612040, // fcmp d2, d1
+                           0xd53b4209, // mrs x9, nzcv
+                           0x9100412b, // add x11, x9, #16
+                           0x4e080d24, // dup v4.2d, x9
+                           0x4e183c69, // umov x9, v3.d[1]
+                           0x91000d2c, // add x12, x9, #3
+                           0xd4000841, // svc #0x42
+                       });
+    State state;
+    state.pc = Base;
+    state.x[9] = std::bit_cast<uint64_t>(1.0);
+    state.x[2] = detail::Negative;
+    state.v[1].lo = std::bit_cast<uint64_t>(2.0);
+    state.v[3].hi = 55;
+    const auto result = Run(state, backing.Callbacks(), 12);
+    return result.reason == Stop::Syscall && result.executed == 12 && result.immediate == 0x42 &&
+           state.pc == Base + 48 && state.tpidr_el0 == state.v[1].lo && state.v[2].lo == state.v[0].lo &&
+           state.v[2].lo == std::bit_cast<uint64_t>(1.0) && state.nzcv == detail::Negative &&
+           state.x[11] == uint64_t(detail::Negative) + 16 && state.v[4].lo == detail::Negative &&
+           state.v[4].hi == detail::Negative && state.x[9] == 55 && state.x[12] == 58;
+}
+
+bool DirectTlbTransfers() {
+#if FIBERCPU_AARCH64_TAIL_DISPATCH
+    constexpr uint32_t Data = 0x00410000;
+    constexpr unsigned TlbIndex = (Data >> fiberish::mem::PAGE_SHIFT) & fiberish::mem::TLB_INDEX_MASK;
+    Backing backing;
+    backing.Code(Base, {
+                           0xc85ffc60, // ldaxr x0, [x3]
+                           0xc801fc62, // stlxr w1, x2, [x3]
+                           0xf8e50066, // ldaddal x5, x6, [x3]
+                           0x4c407060, // ld1 {v0.16b}, [x3]
+                           0x91004063, // add x3, x3, #16
+                           0x4c9f7060, // st1 {v0.16b}, [x3], #16
+                           0xd50b7427, // dc zva, x7
+                           0xd4000001, // svc #0
+                       });
+    std::array<uint8_t, Page> data{9};
+    std::fill_n(data.data() + 64, 32, 0xff);
+    fiberish::mem::SoftTlb tlb;
+    tlb.read_tlb[TlbIndex] = tlb.write_tlb[TlbIndex] = {
+        fiberish::mem::PackMicroTlbTags(Data, Data),
+        reinterpret_cast<uintptr_t>(data.data()) - Data,
+    };
+    auto memory = backing.Callbacks();
+    // A scalar trampoline or an unexpected replay would fail without these callbacks.
+    memory.read = nullptr;
+    memory.write = nullptr;
+    memory.data_tlb = &tlb;
+    State state;
+    state.pc = Base;
+    state.x[2] = 17;
+    state.x[3] = Data;
+    state.x[5] = 3;
+    state.x[7] = Data + 64;
+    const auto result = Run(state, memory, 8);
+    if (result.reason != Stop::Syscall || result.executed != 8 || state.x[0] != 9 || state.x[1] != 0 ||
+        state.x[3] != Data + 32 || state.x[6] != 17 || state.exclusive_size ||
+        detail::ReadLittle<uint64_t>(data.data()) != 20 || detail::ReadLittle<uint64_t>(data.data() + 16) != 20 ||
+        !std::all_of(data.begin() + 64, data.begin() + 96, [](uint8_t byte) { return byte == 0; }))
+        return false;
+
+    backing.Code(Base, {0xc8e5fc62, 0xd4000001}); // casal x5, x2, [x3]; svc #0
+    for (const auto expected : {19u, 20u}) {
+        state = {};
+        state.pc = Base;
+        state.x[2] = 31;
+        state.x[3] = Data;
+        state.x[5] = expected;
+        const auto swap = Run(state, memory, 2);
+        if (swap.reason != Stop::Syscall || swap.executed != 2 || state.x[5] != 20 ||
+            detail::ReadLittle<uint64_t>(data.data()) != (expected == 20 ? 31 : 20))
+            return false;
+    }
+
+    // A read hit followed by a write miss must leave the exclusive monitor
+    // intact until the replay can observe it and complete the store.
+    backing.Code(Base, {0xc801fc62});
+    backing.Put(Base + Page, 31);
+    memory = backing.Callbacks();
+    memory.data_tlb = &tlb;
+    tlb.read_tlb[TlbIndex] = {fiberish::mem::PackMicroTlbTags(Data, fiberish::mem::kInvalidMicroTlbTag),
+                              reinterpret_cast<uintptr_t>(data.data()) - Data};
+    tlb.write_tlb[TlbIndex] = {};
+    // Point the original callbacks at their backing while letting the probe use the low address.
+    memory.read = [](void* context, uint64_t address, void* dest, size_t size, Access access) {
+        auto& backing = *static_cast<Backing*>(context);
+        if (access != Access::Read || address != Data || size != 8)
+            return false;
+        std::memcpy(dest, backing.data.data() + Page, size);
+        ++backing.observed_reads;
+        return true;
+    };
+    memory.write = [](void* context, uint64_t address, const void* src, size_t size) {
+        auto& backing = *static_cast<Backing*>(context);
+        if (address != Data || size != 8)
+            return false;
+        std::memcpy(backing.data.data() + Page, src, size);
+        ++backing.writes;
+        return true;
+    };
+    state = {};
+    state.pc = Base;
+    state.x[2] = 27;
+    state.x[3] = Data;
+    state.exclusive_address = Data;
+    state.exclusive_size = 8;
+    state.exclusive_value.front() = 31;
+    const auto replay = Run(state, memory, 1);
+    return replay.reason == Stop::Budget && replay.executed == 1 && state.pc == Base + 4 && state.x[1] == 0 &&
+           !state.exclusive_size && backing.writes == 1 && backing.observed_reads == 1 &&
+           detail::ReadLittle<uint64_t>(backing.data.data() + Page) == 27;
+#else
+    return true;
+#endif
+}
+
+bool VectorLaneBoundaries() {
+    constexpr uint32_t qc = 1u << 27;
+    constexpr Vector128 table{0x1716151413121110, 0x1f1e1d1c1b1a1918};
+    constexpr Vector128 dest{0xa7a6a5a4a3a2a1a0, 0xe7e6e5e4e3e2e1e0};
+    struct Case {
+        uint32_t word;
+        Vector128 left;
+        Vector128 right;
+        uint64_t expected;
+        uint32_t flags;
+    };
+    constexpr Case cases[]{
+        // A D-width pair uses the low halves of both sources, in operand order.
+        {0x2e22ac20, {0x0807060504030201, 0}, {0x1817161514131211, 0}, 0x1715131107050301, 0},
+        // SQADD only raises QC for saturation within the active lanes.
+        {0x0e220c20, {1, 0x7f}, {2, 1}, 3, 0},
+        {0x0e220c20, {0x7f, 0}, {1, 0}, 0x7f, qc},
+        // URSHR by the lane width rounds from the top bit.
+        {0x2f082420, {0xff80017f00ff8055, 0}, {}, 0x0101000000010100, 0},
+        // SRSHL rounds INT32_MAX without overflowing, and clears an overshifted lane.
+        {0x0ea25420, {0x800000007fffffff, 0}, {0xffffffdfffffffff, 0}, 0x40000000, 0},
+        // TBX wraps the table registers from v31 to v0, also the destination.
+        {0x0e0233e0, {}, {0x1403ff201f100f00, 0}, 0xa413a5a4e7a01f10, 0},
+    };
+    Backing backing;
+    const auto memory = backing.Callbacks();
+    for (const auto& test : cases) {
+        backing.Code(Base, {test.word, 0xd4200000}); // brk #0
+        State state{};
+        state.pc = Base;
+        state.v[0] = dest;
+        state.v[1] = test.left;
+        state.v[2] = test.right;
+        state.v[31] = table;
+        state.fpsr = 2; // DZC stays sticky.
+        if (Run(state, memory, 2).reason != Stop::Breakpoint || state.v[0].lo != test.expected || state.v[0].hi ||
+            state.fpsr != (2 | test.flags))
+            return false;
+    }
+    return true;
 }
 
 bool FloatingAndVector() {
@@ -1148,7 +1316,10 @@ int main() {
         {"integer, branches and traps through executable pages", CoreAndTraps(true)},
         {"precise store, fetch and alignment faults", MemoryFaults()},
         {"exclusive monitor and atomic operations", ExclusivesAndAtomics()},
+        {"direct SIMD, FP and system handlers keep live flags and pinned GPRs", RegisterOpsKeepDispatchState()},
+        {"direct vector/atomic/cache-zero transfers and exclusive store replay", DirectTlbTransfers()},
         {"scalar FP and SIMD structure transfers", FloatingAndVector()},
+        {"SIMD lane order, saturation, rounding and table index boundaries", VectorLaneBoundaries()},
         {"cached instructions after memory callbacks", CodeCoherence()},
         {"dispatch across many blocks and executable pages", DispatchAcrossPages()},
         {"linked successor sees a replaced cache entry", ReplacedSuccessorUsesCurrentProfile()},

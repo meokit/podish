@@ -273,6 +273,14 @@ int main() {
     unsigned dead_nzcv_cases = 0;
     for (const auto& test : Cases) {
         const auto op = Decode(test.word);
+#if FIBERCPU_AARCH64_TAIL_DISPATCH
+        const auto binding = detail::Lower(op);
+        if (!binding.handler || binding.handler == detail::GetScalarDispatchHandler()) {
+            std::fprintf(stderr, "%08" PRIx32 " %s lacks a direct handler\n", test.word, test.mnemonic);
+            ++failing;
+            continue;
+        }
+#endif
         const auto dead_nzcv = detail::LowerDeadNZCV(op);
         if ((dead_nzcv.scalar_handler != nullptr) != test.supports_dead_nzcv ||
             (FIBERCPU_AARCH64_TAIL_DISPATCH && test.supports_dead_nzcv && !dead_nzcv.handler)) {

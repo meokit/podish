@@ -1,6 +1,7 @@
 #include "aarch64.h"
 
 #include <array>
+#include <cassert>
 #include <memory_resource>
 #include <optional>
 #include <unordered_map>
@@ -19,7 +20,7 @@ DecodedInstruction ReadScalarOp(const DecodedOp& slot) {
     const auto word = block->Word(slot.GuestIndex());
     const bool only_base_fields = slot.Has(BaseFields);
     auto op = only_base_fields ? BaseInstruction(word) : DecodeFields(word);
-    if (only_base_fields) op.kind = static_cast<Kind>(slot.Operands());
+    if (only_base_fields) op.kind = static_cast<Kind>(slot.Operands() >> 32);
     op.scalar_handler = block->ScalarBinding(slot.GuestIndex());
     if (!op.scalar_handler) op.scalar_handler = Lower(op).scalar_handler;
     BindBlockOperands(op, block->start_pc + uint64_t{slot.GuestIndex()} * 4);
@@ -126,13 +127,17 @@ DecodedOpBinding BindDecodedOp(uint32_t word, const Profile& profile) {
     slot.nop = !custom && word == NopWord;
     if (!custom) binding = Lower(slot.op);
     slot.op.scalar_handler = binding.scalar_handler;
-    slot.handler = binding.handler ? binding.handler : GetScalarDispatchHandler();
-    slot.keep_scalar = custom || kind == Kind::ScalarFloat || kind == Kind::Vector;
+    slot.handler = binding.handler;
+    if (custom && !slot.handler) slot.handler = GetScalarDispatchHandler();
+#if FIBERCPU_AARCH64_TAIL_DISPATCH
+    assert(slot.handler && "Builtin instructions must provide a tail-dispatch handler");
+#endif
+    slot.keep_scalar = custom;
 
     const bool branch = kind >= Kind::BranchImmediate && kind <= Kind::TestBranch;
     const bool data_transfer = kind >= Kind::LoadStoreImmediate && kind <= Kind::LoadLiteral;
     const bool arithmetic = kind == Kind::ScalarFloat || (kind == Kind::Vector && (word & 0xbe000000) != 0x0c000000);
-    slot.can_follow = !untrusted && (IsInteger(kind) || data_transfer || arithmetic || slot.nop);
+    slot.can_follow = !untrusted && (IsInteger(kind) || data_transfer || arithmetic || slot.nop || binding.can_follow);
     if (slot.can_follow || (branch && !untrusted)) slot.flags |= RetainsPage;
     if (untrusted) slot.flags |= UntrustedScalar;
     if (HasExtraOperandSlot(kind)) slot.flags |= HasDataSlot;
@@ -296,7 +301,8 @@ const BasicBlock* DecodeBlock(uint64_t pc, const uint8_t* executable, const Prof
     unsigned remaining_units = units;
     for (unsigned i = 0; i < slot_count; ++i) {
         const auto& binding = decoded[i];
-        const auto operands = binding.Has(BaseFields) ? uint64_t(binding.op.kind) : PackOpOperands(binding.op);
+        const auto operands =
+            binding.Has(BaseFields) ? binding.op.word | (uint64_t(binding.op.kind) << 32) : PackOpOperands(binding.op);
         const DecodedOp slot{
             .handler = binding.handler,
             .payload = DecodedOp::Pack(operands, binding.ordinal, remaining_units, binding.flags),

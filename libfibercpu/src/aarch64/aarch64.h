@@ -189,6 +189,7 @@ namespace detail {
 struct HandlerBinding {
     ScalarHandlerFunc scalar_handler = nullptr;
     HandlerFunc handler = nullptr;
+    bool can_follow = false;
 };
 }  // namespace detail
 
