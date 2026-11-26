@@ -50,11 +50,6 @@ extern "C" FIBERCPU_AARCH64_HANDLER_ABI uint64_t FiberArmJitLeave(A64_HANDLER_PA
     return instr_limit;
 }
 
-extern "C" FIBERCPU_AARCH64_HANDLER_ABI uint64_t FiberArmJitChainMiss(A64_HANDLER_PARAMS) {
-    state.active_run->exit_target = state.pc;
-    ATTR_MUSTTAIL return ResolveBranchTargetSlow(A64_HANDLER_ARGS);
-}
-
 }  // namespace fiberish::aarch64::detail
 
 namespace fiberish {

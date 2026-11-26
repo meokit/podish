@@ -10,6 +10,7 @@
 #include "linked_block_cache_abi.h"
 #endif
 #if FIBERCPU_GUEST_AARCH64
+#include "aarch64/dispatch.h"
 #include "aarch64/softfloat_jit_helpers.h"
 #include "aarch64/system_handlers.h"
 #include "jit/llvm_arm_ir.h"
@@ -582,7 +583,7 @@ public:
 #if FIBERCPU_GUEST_AARCH64
         bind("FiberArmJitRetry", &aarch64::detail::FiberArmJitRetry);
         bind("FiberArmJitLeave", &aarch64::detail::FiberArmJitLeave);
-        bind("FiberArmJitChainMiss", &aarch64::detail::FiberArmJitChainMiss);
+        bind("FiberArmResolveBranchTargetSlow", &aarch64::detail::ResolveBranchTargetSlow);
         bind("FiberArmJitRefetch", &aarch64::detail::FiberArmJitRefetch);
         bind("FiberArmReadCounter", &FiberArmReadCounter);
 #if FIBERCPU_AARCH64_SOFTFLOAT

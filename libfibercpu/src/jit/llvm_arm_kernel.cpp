@@ -38,8 +38,9 @@ extern "C" HandlerFunc FiberArmJitTryLink(State& state, const DecodedOp* sentine
         next = target->FirstOp();
         return entry;
     }
-    state.pc = target_pc;
-    state.active_run->exit_edge = edge;
+    auto& frame = *state.active_run;
+    frame.exit_target = target_pc;
+    frame.exit_edge = edge;
     next = sentinel;
     return nullptr;
 }

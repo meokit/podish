@@ -269,7 +269,7 @@ class Builder {
         ir_.SetInsertPoint(linked);
         TailExit(llvm::FunctionCallee(entry_.getFunctionType(), entry), Load64(remaining_), next);
         ir_.SetInsertPoint(miss);
-        TailExit(ExitFunction("FiberArmJitChainMiss"), Load64(remaining_), next);
+        TailExit(ExitFunction("FiberArmResolveBranchTargetSlow"), Load64(remaining_), next);
     }
 
 public:
