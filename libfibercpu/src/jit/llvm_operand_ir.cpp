@@ -1099,8 +1099,7 @@ std::unique_ptr<llvm::Module> PrepareLLVMPageRegion(const LLVMOperandTemplates& 
             label.arguments.push_back(phi);
             args.push_back(supplied);
         }
-        label.member_record = builder.CreateGEP(builder.getInt8Ty(), table,
-                                                builder.getInt64(i * sizeof(mem::CodeCacheState::PageRegionFallback)));
+        label.member_record = builder.CreateConstGEP1_64(builder.getPtrTy(), table, i);
         auto* block = builder.CreateLoad(builder.getPtrTy(), label.member_record);
         args[1] = builder.CreateGEP(builder.getInt8Ty(), block, builder.getInt64(kFirstOpOffset));
         auto* call = builder.CreateCall(member, args);

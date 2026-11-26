@@ -272,16 +272,10 @@ struct CodeCacheState {
         BasicBlock* block;
         uint16_t revision;
         HandlerFunc handler;
-        HandlerFunc fallback = nullptr;
-    };
-
-    struct PageRegionFallback {
-        BasicBlock* block;
-        HandlerFunc handler;
     };
 
     struct PageRegions {
-        ankerl::unordered_dense::map<uint32_t, std::vector<PageRegionFallback>> live;
+        ankerl::unordered_dense::map<uint32_t, std::vector<BasicBlock*>> live;
         uint64_t invalidation_epoch = 0;
     };
 
@@ -399,11 +393,9 @@ struct CodeCacheState {
             auto& live = page_regions->live;
             const auto region = live.find(block.start_eip() & ~PAGE_MASK);
             if (region != live.end()) {
-                // A block may be revalidated individually. Restore every
-                // independently executable entry before any member can do that.
-                for (const auto& member : region->second) {
-                    member.block->entry = member.handler;
-                    if (member.block->chain.has_region_context) member.block->SetRegionContext(nullptr);
+                for (auto* member : region->second) {
+                    member->entry = member->FirstOp()->handler;
+                    member->SetRegionContext(nullptr);
                 }
                 live.erase(region);
             }
@@ -483,8 +475,8 @@ struct CodeCacheState {
     bool InstallPageRegion(uint32_t guest_page, uintptr_t host_page, std::span<const PageRegionEntry> members) {
         if (!page_regions || members.size() < 2 || page_regions->live.contains(guest_page)) return false;
 
-        std::vector<PageRegionFallback> fallback;
-        fallback.reserve(members.size());
+        std::vector<BasicBlock*> blocks;
+        blocks.reserve(members.size());
         std::optional<uint32_t> previous;
         for (const auto& member : members) {
             if ((member.eip & ~PAGE_MASK) != guest_page || (previous && member.eip <= *previous) || !member.block ||
@@ -498,18 +490,18 @@ struct CodeCacheState {
                 entry.host_pages.front().host_page_base != host_page)
                 return false;
             const auto& block = *entry.block;
-            if (!block.is_valid() || block.start_eip() != member.eip ||
+            if (!block.is_valid() || block.start_eip() != member.eip || !block.chain.has_region_context ||
                 block.invalidation_revision != member.revision || !block.entry || !block.inst_count() ||
                 block.end_eip <= member.eip || ((block.end_eip - 1) & ~PAGE_MASK) != guest_page)
                 return false;
-            fallback.push_back({member.block, member.fallback ? member.fallback : block.entry});
+            blocks.push_back(member.block);
         }
 
         // The scheduler owns publication. Workers supply code and immutable
         // snapshots. No guest code or callback runs between these stores.
-        const auto installed = page_regions->live.emplace(guest_page, std::move(fallback)).first;
+        const auto installed = page_regions->live.emplace(guest_page, std::move(blocks)).first;
         for (const auto& member : members) {
-            if (member.block->chain.has_region_context) member.block->SetRegionContext(installed->second.data());
+            member.block->SetRegionContext(installed->second.data());
             member.block->entry = member.handler;
         }
         return true;

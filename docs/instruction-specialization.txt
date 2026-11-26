@@ -167,7 +167,7 @@ shared function before any helper that may invoke a guest observer.
 External chains and memory replay materialize the current block and use
 the normal dispatcher. Publication validates the entire snapshot. A
 member invalidation revokes every entry of that page's region and restores
-the independent LLVM handlers with their scalar replay slots.
+the interpreter entries at their first decoded slots.
 
 Set FIBERCPU_LLVM_SHARED_REGION_EXITS=ON at CMake configure time to share
 flag packing and exit code among region edges with the same exit action.
@@ -257,8 +257,9 @@ To add page regions, collect a block profile with JitMode=profile. Run the
 workload again with JitMode=region and FIBERCPU_LLVM_JIT_SCHEDULER_TRACE set
 to a file. The trace records the relative member offsets and exact recipes of
 published regions. Pass the trace as --regions to fibercpu_llvm_cache along
-with the block profile. The tool emits independent fallback objects and one
-object per compiled region.
+with the block profile. The tool emits standalone objects from the profile
+and one object per compiled region. Region members are selected from the
+trace independently of the standalone object limit.
 The consumer publishes a region once all registered member blocks match its
 recipes and backing page. FIBERCPU_LINKED_PAGE_REGIONS=0 keeps the
 independent cache active and skips region installation.

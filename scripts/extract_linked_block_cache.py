@@ -90,10 +90,8 @@ def read_bundle(path, abi, op_names):
             if key in entries:
                 raise ValueError("duplicate linked cache key")
             entries[key] = index
-    if not entries:
+    if not objects:
         raise ValueError("linked cache contains no blocks")
-    if any(key not in entries for _, members in regions for _, key in members):
-        raise ValueError("linked page member has no independent fallback")
     return cpu, entries, regions, objects
 
 
@@ -112,31 +110,35 @@ def write_build_inputs(output, cpu, entries, regions, objects):
     for index, members in regions:
         for ordinal in range(len(members)):
             table.append(f'extern "C" std::remove_pointer_t<HandlerFunc> FiberCachedPage_{index}_{ordinal};')
-    indexed_keys = sorted(entries.items())
+    keys = sorted(entries.keys() | {key for _, members in regions for _, key in members})
+    key_order = {key: i for i, key in enumerate(keys)}
     operations = ["constexpr block_recipe::BoundOperation linked_cache_operations[] = {"]
     operands = ["constexpr DecodedOperandShape linked_cache_operands[] = {"]
     eips = ["constexpr block_recipe::StepEip linked_cache_eips[] = {"]
-    rows = ["constexpr LinkedBlockEntry linked_cache_entries[] = {"]
+    recipes = ["constexpr block_recipe::BlockKeyView linked_cache_keys[] = {"]
     offset = 0
-    for (exit_kind, _, ops, shapes, steps), index in indexed_keys:
+    for exit_kind, _, ops, shapes, steps in keys:
         operations.append("    " + ", ".join(f"{{block_recipe::OpId{{{op}}}, {{{modrm}, {slots}}}}}" for op, modrm, slots in ops) + ",")
         for shape in shapes:
             operands.append("    {" + ", ".join(f"0x{field:08x}u" for field in shape) + "},")
         for next_offset, width in steps:
             eips.append(f"    {{0x{next_offset:08x}u, {width}}},")
         count = len(ops)
-        rows.append(f"    {{{{LLVMBlockExit{{{exit_kind}}}, {{linked_cache_operations + {offset}, {count}}}, "
-                    f"{{linked_cache_operands + {offset}, {count}}}, "
-                    f"{{linked_cache_eips + {offset}, {count}}}}}, FiberCachedBlock_{index}}},")
+        recipes.append(f"    {{LLVMBlockExit{{{exit_kind}}}, {{linked_cache_operations + {offset}, {count}}}, "
+                       f"{{linked_cache_operands + {offset}, {count}}}, "
+                       f"{{linked_cache_eips + {offset}, {count}}}}},")
         offset += count
-    for block in (operations, operands, eips, rows):
+    for block in (operations, operands, eips, recipes):
         table.extend([*block, "};", ""])
+    table.append(f"constexpr std::array<LinkedBlockEntry, {len(entries)}> linked_cache_entries = {{{{")
+    for key, index in sorted(entries.items()):
+        table.append(f"    {{linked_cache_keys[{key_order[key]}], FiberCachedBlock_{index}}},")
+    table.extend(["}};", ""])
     if regions:
-        key_order = {key: i for i, (key, _) in enumerate(indexed_keys)}
         table.append("constexpr LinkedPageMember linked_page_members[] = {")
         for index, members in regions:
             for ordinal, (offset, key) in enumerate(members):
-                table.append(f"    {{&linked_cache_entries[{key_order[key]}], FiberCachedPage_{index}_{ordinal}, {offset}}},")
+                table.append(f"    {{&linked_cache_keys[{key_order[key]}], FiberCachedPage_{index}_{ordinal}, {offset}}},")
         table.extend(["};", ""])
     table.append(f"constexpr std::array<LinkedPageRegion, {len(regions)}> linked_page_regions = {{{{")
     position = 0

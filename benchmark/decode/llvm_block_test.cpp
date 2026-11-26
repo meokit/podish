@@ -1265,9 +1265,12 @@ bool VerifyPageRegion(bool cross_page = false) {
     struct Observer {
         uint8_t* bytes;
         std::byte* data_page;
+        const BasicBlock* first;
+        const BasicBlock* alias;
         bool called = false;
+        bool restored = false;
         uint32_t flags = 0;
-    } observer{bytes.data(), data_page};
+    } observer{bytes.data(), data_page, a, alias};
     X86_SetFaultCallback(
         state.get(),
         +[](EmuState* s, uint32_t address, int write, void* userdata) -> int {
@@ -1278,10 +1281,12 @@ bool VerifyPageRegion(bool cross_page = false) {
             observer.flags = X86_GetEFLAGS(s);
             observer.bytes[(local_second - first) + 5] = 9;
             X86_ResetCodeCacheByRange(s, first, 4096);
+            observer.restored = observer.first->entry == observer.first->FirstOp()->handler &&
+                                observer.alias->entry == observer.alias->FirstOp()->handler;
             return X86_MemMapHostPage(s, data_address, observer.data_page, 3);
         },
         &observer);
-    return run(first, 8, 10, first, 11, cmp_flags) && observer.called &&
+    return run(first, 8, 10, first, 11, cmp_flags) && observer.called && observer.restored &&
            (observer.flags & flag_mask) == initial_flags && !region_context(alias);
 }
 #endif

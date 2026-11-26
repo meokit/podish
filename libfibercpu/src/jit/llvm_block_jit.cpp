@@ -657,7 +657,6 @@ public:
         int compiled = 0;
         block_recipe::Plan plan;
         const bool fold_operand_loads = DefaultFoldOperandLoads();
-        ankerl::unordered_dense::set<std::string_view> compiled_keys;
         for (const auto& recipe : recipes) {
             const auto record = recipe.key;
             bool exact;
@@ -673,7 +672,6 @@ public:
             if (!llvm_block_cache::WriteRecord(output, record) ||
                 !llvm_block_cache::WriteRecord(output, (*object)->getBuffer()))
                 return -1;
-            compiled_keys.insert(record);
             ++compiled;
             if (limit && static_cast<uint32_t>(compiled) == limit) break;
         }
@@ -689,7 +687,7 @@ public:
                 if (!llvm_block_cache::DecodeKey(record, plans[i], exact) || !exact ||
                     plans[i].exit == LLVMBlockExit::Dispatch)
                     return -1;
-                if (compiled_keys.contains(record)) members.push_back({plans[i].Key(true), offset});
+                members.push_back({plans[i].Key(true), offset});
             }
             if (members.size() < 2) continue;
             std::vector<size_t> included;
@@ -777,8 +775,7 @@ struct RegionResult {
 bool PublishRegion(EmuState& state, const RegionResult& result) {
     if (!state.mmu.publish_page_region(result.stamp, result.entries)) return false;
     for (auto [i, member] : llvm::enumerate(result.entries)) {
-        // Keep these replay slots installed when the region is revoked:
-        // the independent fallback was compiled for the same scalar slots.
+        // These scalar slots also serve the interpreter after region revocation.
         block_recipe::InstallBlockHandler(*member.block, result.replay[i], member.handler);
         member.block->chain.llvm_hot_count = 0;
     }
@@ -943,8 +940,6 @@ struct CapturedRegion {
             auto member = members[index].entry;
             const auto& plan = plans[index];
             member.handler = entry;
-            member.fallback = Compiler().FindOrCompile(plan.Key(true), epoch);
-            if (!member.fallback) return std::nullopt;
             if (tracing) WriteRegionMember(encoded, keys[compiled.included[i]]);
             out.entries.push_back(member);
             out.replay.emplace_back(plan.ReplayHandlers().begin(), plan.ReplayHandlers().end());
@@ -1032,7 +1027,7 @@ struct CompilationJob {
         auto output = result.lock();
         auto compiled_region = output && region && AcceptsJobs(epoch) ? region->Compile(epoch) : std::nullopt;
         output.reset();
-        const auto entry = Compile(plan);
+        const auto entry = compiled_region ? nullptr : Compile(plan);
         const auto cpu_ns = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) - cpu_start;
         if (tracing) {
             traced_worker_cpu_ns.fetch_add(cpu_ns, std::memory_order_relaxed);
@@ -1550,6 +1545,8 @@ void PollLLVMBlockCompilations(EmuState* state) {
             if (block != candidate.block) return true;
             if (block->invalidation_revision != candidate.revision) {
                 if (block->entry == block->FirstOp()->handler) block->chain.llvm_hot_count = 1;
+            } else if (candidate.result->region && block_recipe::CanPromoteBlock(*state, *block)) {
+                block->chain.llvm_hot_count = 1;
             } else if (candidate.result->entry && block_recipe::CanPromoteBlock(*state, *block)) {
                 block_recipe::InstallBlockHandler(*block, candidate.result->replay, candidate.result->entry);
                 if (trace) {
