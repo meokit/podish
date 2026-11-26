@@ -26,6 +26,7 @@ namespace mem {
 struct CodeCacheState;
 }
 struct LLVMAsyncState;
+struct LLVMArmJobs;
 struct CpuRunOptions;
 #if FIBERCPU_LLVM_JIT
 void CancelPendingLLVMBlockCompilations(LLVMAsyncState& state);
@@ -293,6 +294,49 @@ struct CodeCacheState {
         std::array<std::unique_ptr<BlockPageHashIndex<BlockCacheKey>>, (ArmTaskSize >> 32)> index;
         std::vector<BasicBlock*> entries;
         ankerl::unordered_dense::map<uintptr_t, std::vector<BasicBlock*>> pages;
+#if FIBERCPU_LLVM_JIT
+        struct RegionEntry {
+            BasicBlock* block;
+            uint64_t pc;
+            uint16_t revision;
+            aarch64::detail::HandlerFunc entry;
+        };
+
+        using Region = aarch64::detail::PageRegion;
+        ankerl::unordered_dense::map<uint64_t, std::unique_ptr<Region>> regions;
+        uint64_t invalidation_epoch = 0;
+
+        static void RestoreRegion(const Region& region) {
+            for (auto* block : std::span(region.members, region.count)) {
+                block->header.entry = block->FirstOp()->handler;
+                block->SetRegionContext(nullptr);
+            }
+        }
+
+        bool InstallRegion(uint64_t guest_page, uintptr_t backing, std::span<const RegionEntry> members) {
+            if (members.size() < 2 || members.size() > Region::MaxMembers || regions.contains(guest_page)) return false;
+            auto region = std::make_unique<Region>();
+            for (const auto& member : members) {
+                if ((member.pc & ~PAGE_MASK) != guest_page || !member.block || !member.entry ||
+                    (region->count && region->members[region->count - 1]->start_pc() >= member.pc) ||
+                    Find({backing, member.pc}) != member.block)
+                    return false;
+                const auto& block = *member.block;
+                if (!block.IsValid() || block.invalidation_revision != member.revision || !block.HasRegionContext() ||
+                    !block.inst_count() || member.pc + 4 * block.inst_count() - 1 > (guest_page | PAGE_MASK))
+                    return false;
+                region->members[region->count++] = member.block;
+            }
+            const auto* table = region->members;
+            regions.emplace(guest_page, std::move(region));
+            for (const auto& member : members) {
+                member.block->SetRegionContext(table);
+                member.block->header.chain.llvm_hot_count = 0;
+                member.block->header.entry = member.entry;
+            }
+            return true;
+        }
+#endif
         struct RecentEntry {
             ArmBlockCacheKey key{};
             BasicBlock* block = nullptr;
@@ -334,9 +378,29 @@ struct CodeCacheState {
         bool Invalidate(uintptr_t host_page) {
             const auto page = pages.find(host_page);
             if (page == pages.end()) return false;
-            for (auto* block : page->second) block->Invalidate();
+#if FIBERCPU_LLVM_JIT
+            ++invalidation_epoch;
+#endif
+            for (auto* block : page->second) {
+#if FIBERCPU_LLVM_JIT
+                if (block->RegionContext()) {
+                    const auto region = regions.find(block->start_pc() & ~PAGE_MASK);
+                    RestoreRegion(*region->second);
+                    regions.erase(region);
+                }
+#endif
+                block->Invalidate();
+            }
             pages.erase(page);
             return true;
+        }
+
+        void InvalidateAll() {
+#if FIBERCPU_LLVM_JIT
+            for (const auto& item : regions) RestoreRegion(*item.second);
+            regions.clear();
+#endif
+            for (auto* block : entries) block->Invalidate();
         }
     };
 #endif
@@ -378,11 +442,14 @@ struct CodeCacheState {
 #if FIBERCPU_GUEST_AARCH64
     std::unique_ptr<ArmBlocks> arm_blocks;
     size_t arm_block_allocations = 0;
+#if FIBERCPU_LLVM_JIT
+    std::shared_ptr<LLVMArmJobs> llvm_arm_jobs;
+#endif
 #endif
 
     CodeCacheState() { InitializeInvalidBasicBlock(dummy_invalid_block); }
     ~CodeCacheState() {
-#if FIBERCPU_LLVM_JIT
+#if FIBERCPU_LLVM_JIT && FIBERCPU_GUEST_I386
         if (has_weighted_profile) RetireLLVMWeightedProfile(*this);
         if (has_jit_trace) RetireLLVMJitTrace(*this);
 #endif
@@ -406,7 +473,7 @@ struct CodeCacheState {
     void InvalidateAll() {
 #if FIBERCPU_GUEST_AARCH64
         if (arm_blocks) {
-            for (auto* block : arm_blocks->entries) block->Invalidate();
+            arm_blocks->InvalidateAll();
             arm_blocks.reset();
         }
 #endif
@@ -1007,7 +1074,11 @@ public:
         const auto backing = reinterpret_cast<uintptr_t>(page);
 #if FIBERCPU_GUEST_AARCH64
         if (code_cache().arm_blocks && code_cache().arm_blocks->pages.contains(backing) &&
+#if FIBERCPU_LLVM_JIT
+            (old_perms & (Property::Exec | Property::Write)) != (new_perms & (Property::Exec | Property::Write))) {
+#else
             !has_property(new_perms, Property::Exec)) {
+#endif
             invalidate_code_cache_host_pages(&backing, 1);
             return;
         }
@@ -1960,6 +2031,42 @@ public:
     [[nodiscard]] HostAddr resolve_arm_safe_for_write(uint64_t address);
     [[nodiscard]] Property get_arm_property(uint64_t address) const;
     [[nodiscard]] MemResult<HostAddr> resolve_arm_ptr(uint64_t address, Property permission);
+#if FIBERCPU_LLVM_JIT
+    [[nodiscard]] const std::byte* try_arm_region_page(uint64_t address) const {
+        if (!has_arm_address_space() || has_arm_mem_hook()) return nullptr;
+        const auto* mapping = core_->arm_pages->Find(address);
+        if (!mapping || !has_property(mapping->permissions, Property::Exec) ||
+            has_property(mapping->permissions, Property::Write))
+            return nullptr;
+        return mapping->page;
+    }
+
+    struct ArmPageRegionStamp {
+        uintptr_t mmu_identity;
+        uintptr_t backing;
+        uint64_t guest_page;
+        uint64_t generation;
+        uint64_t invalidation_epoch;
+        uint64_t arena_epoch;
+
+        bool operator==(const ArmPageRegionStamp&) const = default;
+    };
+
+    [[nodiscard]] std::optional<ArmPageRegionStamp> arm_page_region_stamp(uint64_t guest_page) const {
+        if (!core_ || code_cache_flush_pending() || !code_cache().arm_blocks) return std::nullopt;
+        const auto* backing = try_arm_region_page(guest_page);
+        if (!backing) return std::nullopt;
+        const auto& cache = code_cache();
+        return ArmPageRegionStamp{core_->identity,  reinterpret_cast<uintptr_t>(backing), guest_page,
+                                  cache.generation, cache.arm_blocks->invalidation_epoch, cache.llvm_cache_epoch};
+    }
+
+    bool publish_arm_page_region(const ArmPageRegionStamp& snapshot,
+                                 std::span<const CodeCacheState::ArmBlocks::RegionEntry> members) {
+        if (arm_page_region_stamp(snapshot.guest_page) != snapshot) return false;
+        return code_cache().arm_blocks->InstallRegion(snapshot.guest_page, snapshot.backing, members);
+    }
+#endif
     [[nodiscard]] const std::byte* try_arm_executable_page(uint64_t address);
     [[nodiscard]] const std::byte* translate_arm_exec(EmuState* state, uint64_t address);
     template <bool Write>
@@ -1992,7 +2099,7 @@ public:
         auto& cache = code_cache();
         if (!cache.arm_blocks) cache.arm_blocks = std::make_unique<CodeCacheState::ArmBlocks>();
         const auto base = reinterpret_cast<uintptr_t>(block->executable_page);
-        cache.arm_blocks->Insert(block, {base, block->start_pc});
+        cache.arm_blocks->Insert(block, {base, block->start_pc()});
         ++cache.arm_block_allocations;
         refresh_smc_armed_for_host_page(reinterpret_cast<HostAddr>(base));
     }

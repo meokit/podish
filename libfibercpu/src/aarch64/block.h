@@ -91,56 +91,93 @@ inline const BlockSentinel& GetBlockSentinel(const DecodedOp& slot) {
 static_assert(sizeof(DecodedOp) == 16 && offsetof(DecodedOp, handler) == 0);
 static_assert(sizeof(DecodedOpWithDataSlot) == 32 && sizeof(BlockSentinel) == 32);
 
+struct BasicBlockChainPrefix {
+    uint32_t pc_low;
+    uint16_t metadata;
+    mutable uint16_t llvm_hot_count;
+
+    static constexpr unsigned CountShift = 7;
+    static constexpr uint16_t Valid = uint16_t{1} << 13;
+    static constexpr uint16_t HasBindings = uint16_t{1} << 14;
+    static constexpr uint16_t HasRegionContext = uint16_t{1} << 15;
+    static constexpr uint64_t StartPcMask = mem::ArmTaskSize - 1;
+
+    static constexpr BasicBlockChainPrefix Pack(uint64_t pc, unsigned count, bool bindings, bool region_context) {
+        return {uint32_t(pc),
+                uint16_t((pc >> 32) | (count << CountShift) | Valid | (bindings ? HasBindings : 0) |
+                         (region_context ? HasRegionContext : 0)),
+                0};
+    }
+
+    uint64_t Packed() const {
+        if constexpr (std::endian::native == std::endian::little) return std::bit_cast<uint64_t>(*this);
+        return (uint64_t{llvm_hot_count} << 48) | (uint64_t{metadata} << 32) | pc_low;
+    }
+
+    uint64_t start_pc() const { return Packed() & StartPcMask; }
+    unsigned inst_count() const { return (Packed() >> (32 + CountShift)) & 0x3f; }
+};
+
 struct alignas(16) BasicBlockHeader {
+    BasicBlockChainPrefix chain{};
     HandlerFunc entry = nullptr;
 #if INTPTR_MAX == INT32_MAX
     uint32_t entry_padding = 0;
 #endif
-    uint64_t chain = 0;
-
-    static constexpr uint64_t StartPcMask = mem::ArmTaskSize - 1;
-    static constexpr unsigned CountShift = std::countr_zero(mem::ArmTaskSize);
-    static constexpr unsigned SentinelSlotShift = CountShift + 8;
-    static constexpr uint64_t HasBindings = uint64_t{1} << (SentinelSlotShift + 8);
-    static constexpr uint64_t Valid = uint64_t{1} << 63;
-
-    static constexpr uint64_t Pack(uint64_t pc, unsigned count, unsigned units, bool has_bindings) {
-        return Valid | (has_bindings ? HasBindings : 0) | (uint64_t{units} << SentinelSlotShift) |
-               (uint64_t{count} << CountShift) | pc;
-    }
-
-    uint64_t start_pc() const { return chain & StartPcMask; }
-    unsigned inst_count() const { return (chain >> CountShift) & 0xff; }
-    unsigned SentinelSlotIndex() const { return (chain >> SentinelSlotShift) & 0xff; }
-    bool IsValid() const { return (chain & Valid) != 0; }
+    uint64_t start_pc() const { return chain.start_pc(); }
+    unsigned inst_count() const { return chain.inst_count(); }
+    bool IsValid() const { return chain.Packed() & (uint64_t{BasicBlockChainPrefix::Valid} << 32); }
 };
 
 struct alignas(16) BasicBlock {
     static const BasicBlock Invalid;
 
     BasicBlockHeader header;
-    uint64_t start_pc = 0;
     const uint8_t* executable_page = nullptr;
+    uint8_t sentinel_slot_index = 0;
+    uint16_t invalidation_revision = 0;
 
+    uint64_t start_pc() const { return header.start_pc(); }
     unsigned inst_count() const { return header.inst_count(); }
     bool IsValid() const { return header.IsValid(); }
-    bool HasBindings() const { return (header.chain & BasicBlockHeader::HasBindings) != 0; }
-    void Invalidate() { header.chain &= ~BasicBlockHeader::Valid; }
+    bool HasBindings() const { return header.chain.metadata & BasicBlockChainPrefix::HasBindings; }
+    void Invalidate() {
+        if (!IsValid()) return;
+        header.chain.metadata &= ~BasicBlockChainPrefix::Valid;
+        ++invalidation_revision;
+    }
 
     static constexpr size_t BindingsOffset(unsigned count) { return (count * sizeof(uint32_t) + 7) & ~size_t{7}; }
 
-    static size_t CalculateSize(unsigned units, unsigned count, unsigned bindings, unsigned fusions) {
-        const auto code_size = sizeof(BasicBlock) + units * sizeof(DecodedOp) + sizeof(BlockSentinel);
+    static constexpr size_t RegionContextOffset(unsigned units) {
+        return units * sizeof(DecodedOp) + sizeof(BlockSentinel);
+    }
+
+    static size_t CalculateSize(unsigned units, unsigned count, unsigned bindings, unsigned fusions,
+                                bool retain_region_context) {
+        const auto code_size =
+            sizeof(BasicBlock) + RegionContextOffset(units) + (retain_region_context ? sizeof(void*) : 0);
         if (!bindings) return code_size + count * sizeof(uint32_t);
         return code_size + BindingsOffset(count) + 2 * sizeof(uint32_t) + bindings * sizeof(ScalarHandlerFunc) +
                fusions;
     }
 
     const DecodedOp* FirstOp() const { return reinterpret_cast<const DecodedOp*>(this + 1); }
-    const DecodedOp* Sentinel() const { return FirstOp()->Advance(header.SentinelSlotIndex()); }
+    const DecodedOp* Sentinel() const { return FirstOp()->Advance(sentinel_slot_index); }
+    bool HasRegionContext() const { return header.chain.metadata & BasicBlockChainPrefix::HasRegionContext; }
+    const void* RegionContext() const {
+        return HasRegionContext() ? *reinterpret_cast<const void* const*>(&GetBlockSentinel(*Sentinel()) + 1) : nullptr;
+    }
+    void SetRegionContext(const void* context) {
+        *reinterpret_cast<const void**>(reinterpret_cast<std::byte*>(this + 1) +
+                                        RegionContextOffset(sentinel_slot_index)) = context;
+    }
 
     // The footer uses guest ordinals, so it includes instructions with no slot.
-    const uint32_t* Words() const { return reinterpret_cast<const uint32_t*>(&GetBlockSentinel(*Sentinel()) + 1); }
+    const uint32_t* Words() const {
+        const auto* footer = reinterpret_cast<const std::byte*>(&GetBlockSentinel(*Sentinel()) + 1);
+        return reinterpret_cast<const uint32_t*>(footer + (HasRegionContext() ? sizeof(void*) : 0));
+    }
 
     uint32_t Word(unsigned ordinal) const {
         const auto word = Words()[ordinal];
@@ -186,12 +223,25 @@ inline const BasicBlock* DecodedOp::OwningBlock() const {
                                                sentinel.OwnerUnits() * sizeof(DecodedOp));
 }
 
-inline uint64_t DecodedOp::GetStartPc() const { return OwningBlock()->start_pc + uint64_t{GuestIndex()} * 4; }
+inline uint64_t DecodedOp::GetStartPc() const { return OwningBlock()->start_pc() + uint64_t{GuestIndex()} * 4; }
 
 inline uint32_t DecodedOp::Word() const { return OwningBlock()->Word(GuestIndex()); }
 
 static_assert(alignof(BasicBlock) >= alignof(DecodedOp));
+static_assert(mem::ArmTaskSize == (uint64_t{1} << 39) && BlockMax < 64);
+static_assert(sizeof(BasicBlockChainPrefix) == 8);
+static_assert(offsetof(BasicBlockChainPrefix, llvm_hot_count) == 6);
 static_assert(sizeof(BasicBlockHeader) == 16);
+static_assert(offsetof(BasicBlockHeader, chain) == 0 && offsetof(BasicBlockHeader, entry) == 8);
 static_assert(offsetof(BasicBlock, header) == 0);
+static_assert(sizeof(BasicBlock) == 32);
+
+// The region entry passes the member ordinal in the low bits of this table's address.
+struct alignas(16) PageRegion {
+    static constexpr size_t MaxMembers = 12;
+    BasicBlock* members[MaxMembers];
+    size_t count;
+};
+static_assert(offsetof(PageRegion, members) == 0 && PageRegion::MaxMembers <= alignof(PageRegion));
 
 }  // namespace fiberish::aarch64::detail

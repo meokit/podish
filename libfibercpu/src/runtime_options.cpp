@@ -198,12 +198,16 @@ X86_RunContext* X86_CreateRun(const char* args, size_t size, char* error, size_t
 #if FIBERCPU_LLVM_JIT
     if (llvm_requested && !LLVMBlockJitSupported())
         return fail("LLVM CPU options require LLVM block JIT support on this host");
+#if FIBERCPU_GUEST_I386
     if (values[ProfilePath]) {
         std::error_code ec;
         run->profile_path = std::filesystem::absolute(std::filesystem::path(*values[ProfilePath]), ec).string();
         if (ec) return fail("WeightedProfilePath: " + ec.message());
         options->profile = CreateLLVMWeightedProfile(profile_same_page);
     }
+#else
+    if (values[ProfilePath]) return fail("WeightedProfilePath requires an i386 guest build");
+#endif
     if (shared.workers || shared.pipeline || shared.fold_operand_loads || shared.arena_bytes) {
         std::string diagnostic;
         if (!ConfigureLLVMBlockJit(shared, diagnostic)) return fail(diagnostic);

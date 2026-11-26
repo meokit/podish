@@ -2,15 +2,25 @@
 #include "jit/block_recipe.h"
 #include "jit/executable_arena.h"
 #include "jit/linked_block_cache_host.h"
+#include "jit/llvm_async_signals.h"
 #include "jit/llvm_block_cache.h"
 #include "jit/llvm_block_memory.h"
 #include "jit/llvm_operand_ir.h"
+#if FIBERCPU_GUEST_I386
 #include "linked_block_cache_abi.h"
+#endif
+#if FIBERCPU_GUEST_AARCH64
+#include "aarch64/softfloat_jit_helpers.h"
+#include "aarch64/system_handlers.h"
+#include "jit/llvm_arm_ir.h"
+#include "jit/llvm_arm_jit.h"
+#endif
 
 #include <ankerl/unordered_dense.h>
 #include <algorithm>
 #include <atomic>
 #include <bit>
+#include <cfenv>
 #include <charconv>
 #include <chrono>
 #include <cmath>
@@ -20,6 +30,7 @@
 #include <cstring>
 #include <ctime>
 #include <deque>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <mutex>
@@ -57,6 +68,11 @@
 
 namespace fiberish {
 
+#if FIBERCPU_GUEST_AARCH64
+extern "C" uint64_t FiberArmReadCounter() noexcept { return aarch64::detail::ReadCounterValue(); }
+#endif
+
+#if FIBERCPU_GUEST_I386
 using RecipeWeights = ankerl::unordered_dense::map<std::string, uint64_t>;
 
 struct WeightedProfile {
@@ -68,12 +84,17 @@ struct WeightedProfile {
     RecipeWeights retired;
 };
 
+#endif
+
 namespace {
 
+#if FIBERCPU_GUEST_I386
 #include "llvm_block_bitcode.inc"
 
 using block_recipe::BlockKeyView;
 using block_recipe::kMaxOps;
+#endif
+
 constexpr uint16_t kDefaultHotThreshold = 64;
 std::atomic<uint64_t> live_blocks{0};
 std::atomic<uint64_t> materializations{0};
@@ -128,6 +149,7 @@ const CpuRunOptions* RunOptions(const EmuState& state) {
     return core ? core->code_cache.run_options.get() : nullptr;
 }
 
+#if FIBERCPU_GUEST_I386
 void AddWeight(uint64_t& total, uint64_t count) {
     total += std::min(count, std::numeric_limits<uint64_t>::max() - total);
 }
@@ -160,10 +182,13 @@ void CollectPendingPageProfile(EmuState& state) {
     }
 }
 
+#endif
+
 bool AcceptsJobs(uint64_t epoch) {
     return !flush_requested.load(std::memory_order_acquire) && cache_epoch.load(std::memory_order_acquire) == epoch;
 }
 
+#if FIBERCPU_GUEST_I386
 struct BlockKey {
     explicit BlockKey(BlockKeyView key)
         : exit(key.exit),
@@ -304,6 +329,8 @@ void RecordBlock(BlockKeyView key) {
     }
 }
 
+#endif
+
 JitMode RuntimeMode(const EmuState& state) {
     if (const auto* options = RunOptions(state); options && options->jit_mode) return *options->jit_mode;
     static const auto mode = [] {
@@ -329,6 +356,7 @@ T ReadPositiveSetting(const char* name, T fallback) {
     return parsed.ec == std::errc{} && parsed.ptr == end && result != 0 ? result : fallback;
 }
 
+#if FIBERCPU_GUEST_I386
 std::string ObjectEntryName(uint64_t index) { return "FiberCachedBlock_" + std::to_string(index); }
 
 std::unique_ptr<llvm::Module> ReadBlockIR(llvm::LLVMContext& context) {
@@ -378,6 +406,8 @@ bool ReadRegionRecord(std::string_view input, std::vector<std::pair<uint32_t, st
     return chunks.size() >= 2;
 }
 
+#endif
+
 class BlockCompiler {
     std::unique_ptr<llvm::orc::LLJIT> jit_;
     BlockMemoryManager* memory_ = nullptr;
@@ -385,9 +415,16 @@ class BlockCompiler {
     std::mutex mutex_;
     std::mutex link_mutex_;
     std::condition_variable compilation_done_;
+#if FIBERCPU_GUEST_I386
     ankerl::unordered_dense::map<BlockKey, HandlerFunc, BlockKeyHash, BlockKeyEqual> compiled_;
     BlockKeySet compiling_;
     ankerl::unordered_dense::map<std::string, CompiledPageRegion> compiled_regions_;
+#endif
+
+#if FIBERCPU_GUEST_AARCH64
+    ankerl::unordered_dense::map<std::string, std::vector<aarch64::detail::HandlerFunc>> compiled_arm_;
+    ankerl::unordered_dense::set<std::string> compiling_arm_;
+#endif
     uint64_t next_symbol_ = 0;
 
     unsigned failed_links_ = 0;
@@ -397,8 +434,9 @@ class BlockCompiler {
         failed_links_ = 0;
     }
 
+    template <class Entry>
     bool Materialize(std::span<const std::string> names, std::unique_ptr<llvm::MemoryBuffer> object,
-                     std::span<HandlerFunc> entries) {
+                     std::span<Entry> entries) {
         memory_->BeginLink();
         // Use a scratch tracker so a failed link cannot remove earlier
         // objects. Successful objects leave only the generation tracker live.
@@ -421,7 +459,7 @@ class BlockCompiler {
                 fail_link();
                 return false;
             }
-            entries[i] = code->toPtr<HandlerFunc>();
+            entries[i] = code->toPtr<Entry>();
         }
         if (!generation_tracker_) generation_tracker_ = jit_->getMainJITDylib().createResourceTracker();
         tracker->transferTo(*generation_tracker_);
@@ -433,8 +471,11 @@ public:
 
     BlockCompiler() {
         if (!InitializeLLVMTarget()) return;
+#if FIBERCPU_GUEST_I386
         BlockIR ir;
         if (!ir.module) return;
+#endif
+
         auto page_size = llvm::sys::Process::getPageSize();
         if (!page_size) {
             llvm::consumeError(page_size.takeError());
@@ -470,6 +511,7 @@ public:
             slow_paths[mangle(name)] = {llvm::orc::ExecutorAddr::fromPtr(target),
                                         llvm::JITSymbolFlags::Exported | llvm::JITSymbolFlags::Callable};
         };
+#if FIBERCPU_GUEST_I386
         const std::pair<llvm::StringRef, HandlerFunc> helpers[] = {
             {"_ZN8fiberish15MemoryOpRestartE", MemoryOpRestart},
             {"_ZN8fiberish13MemoryOpRetryE", MemoryOpRetry},
@@ -525,13 +567,35 @@ public:
         bind("exp2", static_cast<double (*)(double)>(std::exp2));
         bind("log2", static_cast<double (*)(double)>(std::log2));
         bind("pow", static_cast<double (*)(double, double)>(std::pow));
+#endif
+
         bind("memcmp", &std::memcmp);
         bind("memcpy", &std::memcpy);
         bind("memmove", &std::memmove);
         bind("memset", &std::memset);
         bind("bzero", &::bzero);
+#if FIBERCPU_GUEST_I386
         bind("_Znam", static_cast<void* (*)(size_t)>(::operator new[]));
         bind("FiberReadRealtimeTsc", &FiberReadRealtimeTsc);
+#endif
+
+#if FIBERCPU_GUEST_AARCH64
+        bind("FiberArmJitRetry", &aarch64::detail::FiberArmJitRetry);
+        bind("FiberArmJitLeave", &aarch64::detail::FiberArmJitLeave);
+        bind("FiberArmJitChainMiss", &aarch64::detail::FiberArmJitChainMiss);
+        bind("FiberArmJitRefetch", &aarch64::detail::FiberArmJitRefetch);
+        bind("FiberArmReadCounter", &FiberArmReadCounter);
+#if FIBERCPU_AARCH64_SOFTFLOAT
+        bind("FiberArmSoftFloatArithmetic", &aarch64::detail::FiberArmSoftFloatArithmetic);
+        bind("FiberArmSoftFloatConvert", &aarch64::detail::FiberArmSoftFloatConvert);
+        bind("FiberArmSoftFloatIntToFP", &aarch64::detail::FiberArmSoftFloatIntToFP);
+#else
+        bind("feholdexcept", &std::feholdexcept);
+        bind("fesetenv", &std::fesetenv);
+        bind("fesetround", &std::fesetround);
+        bind("fetestexcept", &std::fetestexcept);
+#endif
+#endif
         if (auto error = (*engine)->getMainJITDylib().define(llvm::orc::absoluteSymbols(std::move(slow_paths)))) {
             llvm::consumeError(std::move(error));
             return;
@@ -540,6 +604,7 @@ public:
         memory_ = memory_ptr;
     }
 
+#if FIBERCPU_GUEST_I386
     HandlerFunc FindOrCompile(BlockKeyView key, uint64_t epoch) {
         if (!jit_ || !AcceptsJobs(epoch)) return nullptr;
         std::unique_lock lock(mutex_);
@@ -566,8 +631,7 @@ public:
 
         std::lock_guard link_lock(link_mutex_);
         HandlerFunc entry = nullptr;
-        if (object && AcceptsJobs(epoch) &&
-            !Materialize(std::span(&name, 1), std::move(object), std::span(&entry, 1)))
+        if (object && AcceptsJobs(epoch) && !Materialize(std::span(&name, 1), std::move(object), std::span(&entry, 1)))
             entry = nullptr;
         lock.lock();
         auto recipe = compiling_.extract(key);
@@ -617,19 +681,83 @@ public:
         std::lock_guard lock(mutex_);
         if (!AcceptsJobs(epoch)) return {};
         if (const auto found = compiled_regions_.find(key); found != compiled_regions_.end()) return found->second;
-        if (!Materialize(names, std::move(*object), compiled.entries)) return {};
+        if (!Materialize(names, std::move(*object), std::span(compiled.entries))) return {};
         live_blocks.fetch_add(compiled.entries.size(), std::memory_order_relaxed);
         materializations.fetch_add(compiled.entries.size(), std::memory_order_relaxed);
         return compiled_regions_.emplace(std::move(key), std::move(compiled)).first->second;
     }
+
+#endif
+
+#if FIBERCPU_GUEST_AARCH64
+    std::vector<aarch64::detail::HandlerFunc> FindOrCompileArm(std::span<const arm_jit::Member> members,
+                                                               uint64_t epoch) {
+        if (!jit_ || !AcceptsJobs(epoch)) return {};
+        std::string key;
+        for (const auto& member : members) {
+            const uint16_t offset = members.size() == 1 ? 0 : member.offset;
+            const uint16_t count = uint16_t(member.steps.size());
+            key.append(reinterpret_cast<const char*>(&offset), sizeof(offset));
+            key.append(reinterpret_cast<const char*>(&count), sizeof(count));
+            for (const auto& step : member.steps) {
+                key.append(reinterpret_cast<const char*>(&step.word), sizeof(step.word));
+                key.push_back(char(step.slots));
+            }
+        }
+        std::unique_lock lock(mutex_);
+        compilation_done_.wait(lock, [&] { return !AcceptsJobs(epoch) || !compiling_arm_.contains(key); });
+        if (!AcceptsJobs(epoch)) return {};
+        if (const auto found = compiled_arm_.find(key); found != compiled_arm_.end()) return found->second;
+        const auto name =
+            (members.size() == 1 ? "FiberArmJitBlock_" : "FiberArmJitPage_") + std::to_string(next_symbol_++);
+        compiling_arm_.insert(key);
+        lock.unlock();
+
+        const auto& options = Options();
+        std::unique_ptr<llvm::MemoryBuffer> object;
+        if (auto module = arm_jit::Prepare(members, name, options.pipeline, options.fold_operand_loads)) {
+            auto emitted = jit_->getIRCompileLayer().getCompiler()(*module);
+            if (emitted)
+                object = std::move(*emitted);
+            else
+                llvm::logAllUnhandledErrors(emitted.takeError(), llvm::errs(), "A64 JIT: ");
+        }
+
+        std::vector<std::string> names;
+        if (members.size() == 1)
+            names.push_back(name);
+        else
+            for (size_t i = 0; i < members.size(); ++i) names.push_back(name + "_" + std::to_string(i));
+        std::vector<aarch64::detail::HandlerFunc> entries(names.size());
+        std::lock_guard link_lock(link_mutex_);
+        if (!object || !AcceptsJobs(epoch) ||
+            !Materialize(std::span<const std::string>(names), std::move(object), std::span(entries)))
+            entries.clear();
+        lock.lock();
+        compiling_arm_.erase(key);
+        if (!entries.empty()) {
+            live_blocks.fetch_add(entries.size(), std::memory_order_relaxed);
+            materializations.fetch_add(entries.size(), std::memory_order_relaxed);
+            compiled_arm_.emplace(std::move(key), entries);
+        }
+        compilation_done_.notify_all();
+        return entries;
+    }
+#endif
 
     void ResetGeneration() {
         std::lock_guard link_lock(link_mutex_);
         std::lock_guard lock(mutex_);
         // Invalidate idle MMU caches before releasing their entry addresses.
         cache_epoch.fetch_add(1, std::memory_order_release);
+#if FIBERCPU_GUEST_I386
         compiled_.clear();
         compiled_regions_.clear();
+#endif
+
+#if FIBERCPU_GUEST_AARCH64
+        compiled_arm_.clear();
+#endif
         if (generation_tracker_) {
             if (auto error = generation_tracker_->remove())
                 llvm::logAllUnhandledErrors(std::move(error), llvm::errs(), "JIT cache flush: ");
@@ -641,6 +769,7 @@ public:
         compilation_done_.notify_all();
     }
 
+#if FIBERCPU_GUEST_I386
     static int BuildLinkedCache(std::span<const ProfileRecipe> recipes, std::span<const std::string> regions,
                                 llvm::raw_ostream& output, uint32_t limit, llvm::StringRef pipeline) {
         if (!InitializeLLVMTarget()) return -1;
@@ -715,6 +844,7 @@ public:
         }
         return compiled;
     }
+#endif
 };
 
 struct CompilerStorage {
@@ -733,13 +863,19 @@ BlockCompiler& Compiler() {
     return *storage.compiler;
 }
 
+#if FIBERCPU_GUEST_I386
 constexpr size_t kMaxCandidates = 128;
 constexpr uint16_t kCandidateCounter = UINT16_MAX;
 constexpr uint16_t kMinCandidateRetryCount = 1024;
+#endif
+
 using JitClock = std::chrono::steady_clock;
+#if FIBERCPU_GUEST_I386
 using namespace std::chrono_literals;
 constexpr auto kSampleInterval = 2ms;
 constexpr auto kCandidateExpiry = 60ms;
+
+#endif
 
 uint64_t Ns(JitClock::duration duration) {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(duration).count();
@@ -765,6 +901,7 @@ void ReportJitSchedulerTotals() {
                  (unsigned long long)traced_worker_cpu_ns.load(std::memory_order_relaxed));
 }
 
+#if FIBERCPU_GUEST_I386
 struct RegionResult {
     PageRegionStamp stamp;
     std::string recipe;
@@ -815,34 +952,6 @@ struct HotCandidate {
     bool sampled_once = false;
 
     float Score() const { return rate * benefit_per_cost; }
-};
-
-class AsyncSignals {
-    std::mutex mutex_;
-    std::condition_variable idle_;
-    size_t active_ = 0;
-    bool closing_ = false;
-
-public:
-    std::atomic<bool> ready{false};
-
-    bool Begin() {
-        std::lock_guard lock(mutex_);
-        if (closing_) return false;
-        ++active_;
-        return true;
-    }
-
-    void End() {
-        std::lock_guard lock(mutex_);
-        if (--active_ == 0) idle_.notify_one();
-    }
-
-    void Close() {
-        std::unique_lock lock(mutex_);
-        closing_ = true;
-        idle_.wait(lock, [&] { return active_ == 0; });
-    }
 };
 
 }  // namespace
@@ -964,8 +1073,7 @@ std::optional<CapturedRegion> CapturePage(EmuState& state, BasicBlock& root) {
         auto* block = item.block;
         if (block && block->is_valid() && block->chain.has_region_context && item.host_pages.size() == 1 &&
             item.cache_key.host_page_base == stamp->host_page &&
-            (block->start_eip() & ~mem::PAGE_MASK) == stamp->guest_page &&
-            block->end_eip > block->start_eip() &&
+            (block->start_eip() & ~mem::PAGE_MASK) == stamp->guest_page && block->end_eip > block->start_eip() &&
             ((block->end_eip - 1) & ~mem::PAGE_MASK) == stamp->guest_page)
             available.push_back(block);
     }
@@ -983,10 +1091,8 @@ std::optional<CapturedRegion> CapturePage(EmuState& state, BasicBlock& root) {
     for (size_t i = 0; i < selected.size() && selected.size() < max_members; ++i) {
         auto* from = selected[i];
         for (auto* candidate : available) {
-            if (candidate->start_eip() == from->branch_target_eip ||
-                candidate->start_eip() == from->fallthrough_eip ||
-                candidate->branch_target_eip == from->start_eip() ||
-                candidate->fallthrough_eip == from->start_eip())
+            if (candidate->start_eip() == from->branch_target_eip || candidate->start_eip() == from->fallthrough_eip ||
+                candidate->branch_target_eip == from->start_eip() || candidate->fallthrough_eip == from->start_eip())
                 add(candidate);
         }
     }
@@ -1013,7 +1119,6 @@ struct CompilationJob {
     uint64_t epoch;
     bool exact;
     JitClock::time_point queued{};
-    int64_t reserved_cpu_ns = 0;
     uintptr_t mmu_identity = 0;
     uint16_t revision = 0;
 
@@ -1054,10 +1159,16 @@ struct CompilationJob {
     }
 };
 
+#endif
+
 class CompilationPool {
     std::mutex mutex_;
     std::condition_variable queued_;
-    std::deque<CompilationJob> jobs_;
+    struct Job {
+        std::function<uint64_t()> run;
+        int64_t reserved_cpu_ns = 0;
+    };
+    std::deque<Job> jobs_;
     bool stopping_ = false;
     const unsigned worker_count_;
     // Spend half of the available worker CPU over time, while allowing a
@@ -1079,7 +1190,7 @@ class CompilationPool {
 
     void Run() {
         for (;;) {
-            CompilationJob job;
+            Job job;
             {
                 std::unique_lock lock(mutex_);
                 queued_.wait(lock, [&] { return stopping_ || !jobs_.empty(); });
@@ -1087,7 +1198,7 @@ class CompilationPool {
                 job = std::move(jobs_.front());
                 jobs_.pop_front();
             }
-            const auto cpu_ns = job.Run();
+            const auto cpu_ns = job.run();
             std::lock_guard lock(mutex_);
             credit_ns_ = std::min(kBurstNs, credit_ns_ + job.reserved_cpu_ns - int64_t(cpu_ns));
             if (cpu_ns) {
@@ -1116,17 +1227,22 @@ public:
         return lock.owns_lock() && HasCredit();
     }
 
-    bool Submit(CompilationJob job) {
+    bool Submit(std::function<uint64_t()> run) {
         {
             std::unique_lock lock(mutex_, std::try_to_lock);
             if (!lock.owns_lock() || !HasCredit()) return false;
-            job.reserved_cpu_ns = job_estimate_ns_;
-            credit_ns_ -= job.reserved_cpu_ns;
-            jobs_.push_back(std::move(job));
+            credit_ns_ -= job_estimate_ns_;
+            jobs_.push_back({std::move(run), job_estimate_ns_});
         }
         queued_.notify_one();
         return true;
     }
+
+#if FIBERCPU_GUEST_I386
+    bool Submit(CompilationJob job) {
+        return Submit([job = std::move(job)]() mutable { return job.Run(); });
+    }
+#endif
 };
 
 unsigned WorkerCount() { return Options().workers; }
@@ -1136,7 +1252,9 @@ CompilationPool& Workers() {
         // These statics must outlive the pool. Compiler construction
         // itself stays lazy so the VM thread does not parse bitcode here.
         (void)Storage();
+#if FIBERCPU_GUEST_I386
         block_recipe::InitializeOperationLookup();
+#endif
         return WorkerCount();
     }());
     return pool;
@@ -1148,6 +1266,7 @@ void FinishPendingFlush() {
     if (flush_requested.load(std::memory_order_acquire)) Compiler().ResetGeneration();
 }
 
+#if FIBERCPU_GUEST_I386
 enum class QueueResult { Submitted, Retry, Invalid };
 
 QueueResult QueueBlock(EmuState* state, LLVMAsyncState& async, BasicBlock* block, bool exact) {
@@ -1155,10 +1274,13 @@ QueueResult QueueBlock(EmuState* state, LLVMAsyncState& async, BasicBlock* block
     auto input = CaptureBlock(*state, *block);
     if (!input) return QueueResult::Invalid;
     auto region = RuntimeMode(*state) == JitMode::Region &&
-                          !std::ranges::any_of(async.pending, [&](const PendingBlock& pending) {
-                              return (pending.eip & ~mem::PAGE_MASK) == (block->start_eip() & ~mem::PAGE_MASK);
-                          })
-                      ? CapturePage(*state, *block) : std::nullopt;
+                          !std::ranges::any_of(async.pending,
+                                               [&](const PendingBlock& pending) {
+                                                   return (pending.eip & ~mem::PAGE_MASK) ==
+                                                          (block->start_eip() & ~mem::PAGE_MASK);
+                                               })
+                      ? CapturePage(*state, *block)
+                      : std::nullopt;
     CompilationJob job{
         .input = std::move(*input),
         .result = result,
@@ -1311,11 +1433,46 @@ void ObserveHotBlock(EmuState* state, BasicBlock* block, bool exact) {
     ScheduleCandidates(state, *async, now);
 }
 
+#endif
+
 }  // namespace
+
+#if FIBERCPU_GUEST_AARCH64
+namespace arm_jit {
+bool Enabled(const EmuState& state) {
+    const auto mode = RuntimeMode(state);
+    return mode == JitMode::Exact || mode == JitMode::Generic || mode == JitMode::Region;
+}
+
+std::vector<aarch64::detail::HandlerFunc> Compile(std::span<const Member> members, uint64_t epoch) {
+    return Compiler().FindOrCompileArm(members, epoch);
+}
+
+unsigned WorkerLimit() { return WorkerCount(); }
+
+bool CanQueue() { return Workers().CanSubmit(); }
+
+void TraceRegion(uint64_t page, size_t members) {
+    if (auto* trace = JitSchedulerTrace())
+        std::fprintf(trace, "arm_region_install,%llu,%zu\n", static_cast<unsigned long long>(page), members);
+}
+
+bool Queue(std::function<void()> work) {
+    return Workers().Submit([work = std::move(work)] {
+        const uint64_t start = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID);
+        work();
+        const auto elapsed = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) - start;
+        if (JitSchedulerTrace()) traced_worker_cpu_ns.fetch_add(elapsed, std::memory_order_relaxed);
+        return elapsed;
+    });
+}
+}  // namespace arm_jit
+#endif
 
 ScopedLLVMJitExecution::ScopedLLVMJitExecution(const EmuState& state) {
     const auto mode = RuntimeMode(state);
-    if (mode != JitMode::Exact && mode != JitMode::Generic && mode != JitMode::Region && mode != JitMode::Profile) return;
+    if (mode != JitMode::Exact && mode != JitMode::Generic && mode != JitMode::Region && mode != JitMode::Profile)
+        return;
 
     for (;;) {
         FinishPendingFlush();
@@ -1395,6 +1552,7 @@ bool ConfigureLLVMBlockJit(const SharedJitOptions& settings, std::string& error)
 
 bool LLVMPageRegionsEnabled(const EmuState& state) { return RuntimeMode(state) == JitMode::Region; }
 
+#if FIBERCPU_GUEST_I386
 bool LLVMWeightedProfileEnabled(const EmuState& state) {
     const auto* options = RunOptions(state);
     return options && options->profile;
@@ -1495,6 +1653,8 @@ bool WriteWeightedLLVMProfile(WeightedProfile& profile, const char* path, std::s
     return true;
 }
 
+#endif
+
 uint16_t LLVMJitHotThreshold(const EmuState& state) {
     if (RuntimeMode(state) == JitMode::Off) return 0;
     if (const auto* options = RunOptions(state); options && options->hot_threshold) return *options->hot_threshold;
@@ -1502,6 +1662,7 @@ uint16_t LLVMJitHotThreshold(const EmuState& state) {
     return threshold;
 }
 
+#if FIBERCPU_GUEST_I386
 void CompileHotLLVMBlock(EmuState* state, BasicBlock* block) {
     if (!block_recipe::CanPromoteBlock(*state, *block)) return;
     const auto mode = RuntimeMode(*state);
@@ -1513,8 +1674,7 @@ void CompileHotLLVMBlock(EmuState* state, BasicBlock* block) {
     }
     if (mode == JitMode::Region) {
         if (auto captured = CapturePage(*state, *block)) {
-            if (auto region = captured->Compile(LLVMJitCacheEpoch()); region && PublishRegion(*state, *region))
-                return;
+            if (auto region = captured->Compile(LLVMJitCacheEpoch()); region && PublishRegion(*state, *region)) return;
         }
     }
     block_recipe::Plan plan;
@@ -1644,6 +1804,8 @@ int BuildLinkedLLVMBlockCache(const char* profile_path, const char* cache_path, 
     }
     return count;
 }
+
+#endif
 
 uint64_t LLVMJitBlockCount() { return materializations.load(std::memory_order_relaxed); }
 

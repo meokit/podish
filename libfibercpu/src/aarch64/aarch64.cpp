@@ -24,7 +24,7 @@ DecodedInstruction ReadScalarOp(const DecodedOp& slot) {
     if (only_base_fields) op.kind = static_cast<Kind>(slot.Operands() >> 32);
     op.scalar_handler = block->ScalarBinding(slot.GuestIndex());
     if (!op.scalar_handler) op.scalar_handler = Lower(op).scalar_handler;
-    BindBlockOperands(op, block->start_pc + uint64_t{slot.GuestIndex()} * 4);
+    BindBlockOperands(op, block->start_pc() + uint64_t{slot.GuestIndex()} * 4);
     return op;
 }
 
@@ -53,10 +53,13 @@ FIBERCPU_AARCH64_HANDLER_ABI uint64_t ResolveBranchTargetSlow(A64_HANDLER_PARAMS
 #ifdef ENABLE_TLB_STATS
                 if (stats) {
                     ++stats->resolved_links;
-                    stats->cross_page_links += ((sentinel->OwningBlock()->start_pc ^ target_pc) & ~PageMask) != 0;
+                    stats->cross_page_links += ((sentinel->OwningBlock()->start_pc() ^ target_pc) & ~PageMask) != 0;
                 }
 #endif
                 frame.exit_edge = 2;
+#if FIBERCPU_LLVM_JIT
+                CountLLVMBlockEntry(state, *target, target->header.chain);
+#endif
                 ATTR_MUSTTAIL return target->header.entry(state, target->FirstOp(), instr_limit - target->inst_count(),
                                                           data_tlb, utlb_tags, utlb_addend,
                                                           flags_cache A64_HANDLER_PIN_ARGS);
@@ -70,8 +73,15 @@ FIBERCPU_AARCH64_HANDLER_ABI uint64_t ResolveBranchTargetSlow(A64_HANDLER_PARAMS
         if (stats) ++stats->link_misses;
 #endif
     }
-    const auto step = current->SentinelUnits() ? StepResult{Stop::Branch, Access::Execute, 0, target_pc} : StepResult{};
-    return ReturnFromBlock(state, current, instr_limit, flags_cache A64_HANDLER_PIN_ARGS, step);
+    if (current->SentinelUnits())
+        return ReturnFromBlock(state, current, instr_limit, flags_cache A64_HANDLER_PIN_ARGS,
+                               {Stop::Branch, Access::Execute, 0, target_pc});
+    // At the sentinel the source block has already retired, including its
+    // final branch. Resume at the target with the existing budget.
+    CommitDispatchState(state, target_pc, flags_cache A64_HANDLER_PIN_ARGS);
+    frame.exit_op = current;
+    frame.exit = {};
+    return instr_limit;
 }
 
 #endif
@@ -287,13 +297,18 @@ const BasicBlock* DecodeBlock(uint64_t pc, const uint8_t* executable, const Prof
 
     const auto fusions = std::popcount(fused_mask);
     const auto bindings = std::popcount(scalar_mask) + fusions;
-    const auto size = BasicBlock::CalculateSize(units, count, bindings, fusions);
+#if FIBERCPU_LLVM_JIT
+    const bool retain_region_context = memory.retain_region_context;
+#else
+    const bool retain_region_context = false;
+#endif
+    const auto size = BasicBlock::CalculateSize(units, count, bindings, fusions, retain_region_context);
     auto* storage = memory.allocate_block ? memory.allocate_block(memory.context, size, pc)
                                           : local->pool.allocate(size, alignof(BasicBlock));
     if (!storage) return nullptr;
     auto& block = *new (storage) BasicBlock;
-    block.start_pc = pc;
-    block.header.chain = BasicBlockHeader::Pack(pc, count, units, bindings != 0);
+    block.header.chain = BasicBlockChainPrefix::Pack(pc, count, bindings != 0, retain_region_context);
+    block.sentinel_slot_index = uint8_t(units);
     block.executable_page = executable;
 
     auto* bytes = reinterpret_cast<std::byte*>(&block + 1);
@@ -321,12 +336,13 @@ const BasicBlock* DecodeBlock(uint64_t pc, const uint8_t* executable, const Prof
     }
     const auto owner_units = sizeof(BasicBlock) / sizeof(DecodedOp) + units;
     const uint64_t fallthrough = pc + count * 4;
-    auto* sentinel = new (bytes) BlockSentinel{
+    new (bytes) BlockSentinel{
         {.handler = GetExitHandlerFallthrough(fallthrough),
          .payload = DecodedOp::Pack(fallthrough & DecodedOp::OperandMask, count, 0, uint8_t(owner_units))},
         {&BasicBlock::Invalid, &BasicBlock::Invalid},
     };
-    std::memcpy(sentinel + 1, words.data(), count * sizeof(uint32_t));
+    if (retain_region_context) block.SetRegionContext(nullptr);
+    std::memcpy(const_cast<uint32_t*>(block.Words()), words.data(), count * sizeof(uint32_t));
     if (bindings) {
         auto* masks = const_cast<uint32_t*>(block.BindingMasks());
         new (masks) uint32_t(scalar_mask);
@@ -362,7 +378,7 @@ StepResult DispatchSpan(State& state, const Memory& memory, const BasicBlock& bl
         }
         const auto* last = current->LastOp(fusion.length);
         const bool untrusted = current->Has(fusion.handler ? UntrustedFused : UntrustedScalar);
-        state.pc = block.start_pc + uint64_t{current->GuestIndex()} * 4;
+        state.pc = block.start_pc() + uint64_t{current->GuestIndex()} * 4;
         const auto execute = fusion.handler ? fusion.handler : scalar.scalar_handler;
         auto step = CompleteStep(state, last, execute(state, memory, scalar));
         if (untrusted) {
@@ -375,7 +391,7 @@ StepResult DispatchSpan(State& state, const Memory& memory, const BasicBlock& bl
         if (step.reason != Stop::Continue) return step;
         current = last->NextOp();
     }
-    state.pc = block.start_pc + uint64_t{count} * 4;
+    state.pc = block.start_pc() + uint64_t{count} * 4;
     return {};
 }
 
@@ -447,11 +463,14 @@ RunResult Run(State& state, const Memory& memory, uint64_t budget, const Profile
         if (full_block) {
             frame.exit_edge = 2;
             const auto* slots = block->FirstOp();
-            const auto remaining = slots->handler(state, slots, budget - executed - count, data_tlb,
-                                                  mem::InvalidMicroTlbAbiTags(), 0, state.nzcv
+#if FIBERCPU_LLVM_JIT
+            CountLLVMBlockEntry(state, *block, block->header.chain);
+#endif
+            const auto remaining = block->header.entry(state, slots, budget - executed - count, data_tlb,
+                                                       mem::InvalidMicroTlbAbiTags(), 0, state.nzcv
 #if FIBERCPU_AARCH64_PIN_REG >= 0
-                                                  ,
-                                                  state.x[FIBERCPU_AARCH64_PIN_REG]
+                                                       ,
+                                                       state.x[FIBERCPU_AARCH64_PIN_REG]
 #endif
             );
             executed = budget - remaining;
@@ -463,9 +482,13 @@ RunResult Run(State& state, const Memory& memory, uint64_t budget, const Profile
                     previous = source;
                     previous_edge = frame.exit_edge;
                     frame.executable = source->executable_page;
-                    mapped_page = source->start_pc & ~PageMask;
+                    mapped_page = source->start_pc() & ~PageMask;
                 }
             }
+#if FIBERCPU_LLVM_JIT
+            if (const auto* hot = std::exchange(frame.llvm_hot_block, nullptr))
+                memory.observe_hot_block(memory.context, *const_cast<BasicBlock*>(hot));
+#endif
         } else
 #endif
         {

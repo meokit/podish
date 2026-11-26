@@ -8,6 +8,10 @@
 #include "mem/mmu_impl.h"
 #include "runtime_options.h"
 #include "state.h"
+#if FIBERCPU_LLVM_JIT
+#include "jit/llvm_arm_jit.h"
+#include "jit/llvm_block_jit.h"
+#endif
 
 namespace fiberish {
 namespace {
@@ -139,7 +143,11 @@ void* AllocateBlock(void* opaque, size_t size, uint64_t pc) {
 }
 
 void CacheBlock(void* opaque, aarch64::detail::BasicBlock* block) {
-    static_cast<EmuState*>(opaque)->mmu.cache_arm_block(block);
+    auto& engine = *static_cast<EmuState*>(opaque);
+    engine.mmu.cache_arm_block(block);
+#if FIBERCPU_LLVM_JIT
+    InitializeLLVMArmBlock(engine, *block);
+#endif
 }
 
 bool Write(void* opaque, uint64_t address, const void* source, size_t size) {
@@ -246,12 +254,21 @@ int RunArmEngine(EmuState& engine, uint64_t end_pc, uint64_t budget, bool step) 
         profile.context = &capture.emplace(options->arm_profile);
         profile.record = ArmCapture::Record;
     }
+#if FIBERCPU_LLVM_JIT
+    memory.retain_region_context = LLVMPageRegionsEnabled(engine);
+    memory.observe_hot_block = [](void* opaque, aarch64::detail::BasicBlock& block) {
+        ObserveLLVMArmHotBlock(*static_cast<EmuState*>(opaque), block);
+    };
+#endif
     uint64_t remaining = budget ? budget : UINT64_MAX;
     while (engine.status == EmuStatus::Running && remaining && (!end_pc || cpu.pc != end_pc)) {
         if (engine.mmu.code_cache_flush_pending()) {
             engine.status = EmuStatus::CachePressure;
             break;
         }
+#if FIBERCPU_LLVM_JIT
+        PollLLVMArmCompilations(engine);
+#endif
         auto result = aarch64::Run(cpu, memory, end_pc ? 1 : remaining, profile);
         remaining -= result.executed;
         const bool cache_pressure = result.reason == aarch64::Stop::CachePressure;

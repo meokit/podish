@@ -117,7 +117,7 @@ static thread_local bool g_native_execution_active = false;
 
 void BasicBlock::Invalidate() {
     if (!is_valid()) return;
-#if FIBERCPU_LLVM_JIT
+#if FIBERCPU_LLVM_JIT && FIBERCPU_GUEST_I386
     if (chain.jit_execution_profile) {
         TraceLLVMJitRetirement(*this);
         chain.jit_execution_profile = false;
@@ -1271,6 +1271,9 @@ int AArch64_Run(EmuState* state, uint64_t end_pc, uint64_t budget, int step) {
     if (!state || g_native_execution_active || state->native_execution_active) return step ? -1 : 0;
     if (!state->mmu.has_arm_address_space()) [[unlikely]]
         state->mmu.enable_arm_address_space();
+#if FIBERCPU_LLVM_JIT
+    ScopedLLVMJitExecution jit_execution(*state);
+#endif
     state->mmu.flush_pending_code_cache_before_run();
     ScopedNativeExecution execution(state);
     if (!execution) return step ? -1 : 0;
@@ -1895,7 +1898,7 @@ int X86_FinishRun(const X86_RunContext* run, char* error, size_t error_size) {
         }
     }
 #endif
-#if FIBERCPU_LLVM_JIT
+#if FIBERCPU_LLVM_JIT && FIBERCPU_GUEST_I386
     if (run->options->profile) {
         std::string diagnostic;
         if (g_native_execution_active) {
@@ -1918,7 +1921,7 @@ int X86_BuildLinkedLLVMBlockCache(const char* profile_path, const char* cache_pa
 
 int X86_BuildLinkedLLVMBlockCacheWithOptions(const char* profile_path, const char* cache_path, uint32_t limit,
                                              const char* opt_level, const char* pass_pipeline) {
-#if FIBERCPU_LLVM_JIT
+#if FIBERCPU_LLVM_JIT && FIBERCPU_GUEST_I386
     return BuildLinkedLLVMBlockCache(profile_path, cache_path, limit, opt_level, pass_pipeline);
 #else
     (void)profile_path;

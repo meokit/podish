@@ -588,6 +588,12 @@ bool OptimizeLLVMModule(llvm::Function& entry, bool prune_dead_globals, llvm::St
 
 }  // namespace
 
+#if FIBERCPU_GUEST_AARCH64 && FIBERCPU_LLVM_JIT
+bool OptimizeLLVMArmModule(llvm::Function& entry, llvm::StringRef pipeline, bool fold_operand_loads) {
+    return OptimizeLLVMModule(entry, true, pipeline, fold_operand_loads);
+}
+#endif
+
 llvm::Expected<std::string> ParseLLVMBlockPipeline(llvm::StringRef level, llvm::StringRef passes) {
     if (!level.empty() && !passes.empty())
         return llvm::createStringError("select an LLVM optimization level or a pass pipeline");
@@ -605,7 +611,14 @@ llvm::Expected<std::string> ParseLLVMBlockPipeline(llvm::StringRef level, llvm::
 }
 
 bool InitializeLLVMTarget() {
-    static const bool initialized = !llvm::InitializeNativeTarget() && !llvm::InitializeNativeTargetAsmPrinter();
+    static const bool initialized = [] {
+        if (llvm::InitializeNativeTarget() || llvm::InitializeNativeTargetAsmPrinter()) return false;
+#if FIBERCPU_GUEST_AARCH64 && FIBERCPU_LLVM_JIT
+        // The A64 interpreter's kernels contain native NZCV instructions.
+        if (llvm::InitializeNativeTargetAsmParser()) return false;
+#endif
+        return true;
+    }();
     return initialized;
 }
 

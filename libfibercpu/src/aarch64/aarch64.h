@@ -81,6 +81,10 @@ struct Memory {
     detail::BasicBlock* (*lookup_cached_block)(void*, uint64_t, const uint8_t*) = nullptr;
     void* (*allocate_block)(void*, size_t, uint64_t) = nullptr;
     void (*cache_block)(void*, detail::BasicBlock*) = nullptr;
+#if FIBERCPU_LLVM_JIT
+    void (*observe_hot_block)(void*, detail::BasicBlock&) = nullptr;
+    bool retain_region_context = false;
+#endif
 #ifdef ENABLE_TLB_STATS
     mem::TlbStats* stats = nullptr;
     mem::DispatchStats* dispatch_stats = nullptr;

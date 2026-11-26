@@ -22,7 +22,7 @@ inline EmuState* Mmu::get_state() {
 inline bool Mmu::owning_engine_is_executing() { return get_state()->native_execution_active; }
 
 inline void Mmu::on_code_cache_hard_reset() {
-#if FIBERCPU_LLVM_JIT
+#if FIBERCPU_LLVM_JIT && FIBERCPU_GUEST_I386
     if (core_->llvm_async) CancelPendingLLVMBlockCompilations(*core_->llvm_async);
 #endif
     clear_block_lookup_cache();

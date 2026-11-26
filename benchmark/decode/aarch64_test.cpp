@@ -586,16 +586,18 @@ bool Va39BlockLink() {
 #if FIBERCPU_AARCH64_TAIL_DISPATCH
     constexpr uint64_t Pc = ArmTaskSize - 16;
     constexpr unsigned Count = 3;
+    State state;
     detail::BasicBlock block;
     block.header.entry = detail::GetExitHandlerFallthrough(Pc);
-    block.header.chain = detail::BasicBlockHeader::Pack(Pc, Count, 5, true);
+    block.header.chain = detail::BasicBlockChainPrefix::Pack(Pc, Count, true, false);
+    block.sentinel_slot_index = 5;
     detail::BlockSentinel sentinel{.links{&block, &detail::BasicBlock::Invalid}};
     const detail::BasicBlock* target = nullptr;
     uint64_t budget = 10;
-    if (detail::TryChainBlock(target, sentinel.head, 0, Pc & UINT32_MAX, budget) || budget != 10)
+    if (detail::TryChainBlock(state, target, sentinel.head, 0, Pc & UINT32_MAX, budget) || budget != 10)
         return false;
-    if (detail::TryChainBlock(target, sentinel.head, 0, Pc, budget) != block.header.entry || target != &block ||
-        budget != 10 - Count || block.header.SentinelSlotIndex() != 5 || !block.HasBindings())
+    if (detail::TryChainBlock(state, target, sentinel.head, 0, Pc, budget) != block.header.entry || target != &block ||
+        budget != 10 - Count || block.sentinel_slot_index != 5 || !block.HasBindings())
         return false;
 #endif
     return true;
@@ -1435,7 +1437,7 @@ bool CompactSlotsAndFoldedNopBudgets() {
     memory.lookup_cached_block = [](void* context, uint64_t pc, const uint8_t*) -> detail::BasicBlock* {
         const auto& backing = static_cast<const CachedBacking&>(*static_cast<const Backing*>(context));
         for (const auto* block : backing.blocks)
-            if (block && block->start_pc == pc)
+            if (block && block->start_pc() == pc)
                 return const_cast<detail::BasicBlock*>(block);
         return nullptr;
     };
@@ -1469,7 +1471,7 @@ bool CompactSlotsAndFoldedNopBudgets() {
     }
 
     const auto& block = *backing.blocks.front();
-    if (backing.allocations != 1 || block.inst_count() != 8 || block.header.SentinelSlotIndex() != 5 ||
+    if (backing.allocations != 1 || block.inst_count() != 8 || block.sentinel_slot_index != 5 ||
         backing.initial_size != 176 || block.Word(1) != Nop || block.Word(2) != Nop || block.Word(4) != Nop ||
         block.Word(6) != Nop)
         return false;
@@ -1487,7 +1489,7 @@ bool CompactSlotsAndFoldedNopBudgets() {
     state.pc = Branch;
     const auto result = Run(state, memory, 2);
     return result.reason == Stop::Budget && result.executed == 2 && state.pc == Base + 8 && state.x[1] == 0 &&
-           backing.allocations == 3 && backing.blocks[2]->start_pc == Base + 4 &&
+           backing.allocations == 3 && backing.blocks[2]->start_pc() == Base + 4 &&
            backing.blocks[2]->FirstOp()->Word() == Nop;
 }
 
