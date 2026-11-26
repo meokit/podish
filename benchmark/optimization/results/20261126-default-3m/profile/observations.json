@@ -1,0 +1,2474 @@
+{
+  "native_sha256": "57ac05a48b354254f42a344ae40422ba1c024602935971174370763f071837ad",
+  "unsampled_round_times_unit": "seconds for all repetitions per case; divide by repetitions in ../measurements.json",
+  "full_17": [
+    {
+      "i386": {
+        "gzip": 0.26915595900209155,
+        "gunzip": 0.14426120900316164,
+        "sed": 0.3264742500032298,
+        "sort": 0.08780070800276008,
+        "sha256": 0.3067569170088973,
+        "tar": 0.04970562498783693,
+        "du": 0.3383959580096416,
+        "ls": 0.11001745899557136,
+        "grep-fixed": 0.050550250001833774,
+        "grep-regex": 0.07637004100251943,
+        "node-minify": 1.7516045840020524,
+        "mawk-aggregate": 0.4547540409985231,
+        "diff-revisions": 0.18262350000441074,
+        "blind-perl-groups": 1.2879070409981068,
+        "blind-rev-lines": 0.6288205419987207,
+        "codegen-gzip-o1": 0.20926758300629444,
+        "codegen-gzip-o3": 0.219184250003309
+      },
+      "aarch64": {
+        "gzip": 0.1897890840045875,
+        "gunzip": 0.10423758398974314,
+        "sed": 0.2699432090012124,
+        "sort": 0.06843487500736956,
+        "sha256": 0.08751091599697247,
+        "tar": 0.03828541700204369,
+        "du": 0.2813089580013184,
+        "ls": 0.14718516600260045,
+        "grep-fixed": 0.04808241699356586,
+        "grep-regex": 0.07657262499560602,
+        "node-minify": 1.550912332997541,
+        "mawk-aggregate": 0.4110362920037005,
+        "diff-revisions": 0.19356704100209754,
+        "blind-perl-groups": 0.8994632499961881,
+        "blind-rev-lines": 0.6322269160009455,
+        "codegen-gzip-o1": 0.16331725000054576,
+        "codegen-gzip-o3": 0.15932600000815
+      }
+    },
+    {
+      "aarch64": {
+        "gzip": 0.1901274999981979,
+        "gunzip": 0.10419320799701381,
+        "sed": 0.2679910419974476,
+        "sort": 0.070958915996016,
+        "sha256": 0.08769291600037832,
+        "tar": 0.03917604200250935,
+        "du": 0.25532329200359527,
+        "ls": 0.149323416990228,
+        "grep-fixed": 0.049343834005412646,
+        "grep-regex": 0.07715941600326914,
+        "node-minify": 1.5697486249991925,
+        "mawk-aggregate": 0.4148724999977276,
+        "diff-revisions": 0.20037450001109391,
+        "blind-perl-groups": 0.8935368749953341,
+        "blind-rev-lines": 0.6394609580020187,
+        "codegen-gzip-o1": 0.1548332090023905,
+        "codegen-gzip-o3": 0.15850858300109394
+      },
+      "i386": {
+        "gzip": 0.27113529200141784,
+        "gunzip": 0.14552304199605715,
+        "sed": 0.32750779199704994,
+        "sort": 0.0895211669994751,
+        "sha256": 0.29311812500236556,
+        "tar": 0.047485707997111604,
+        "du": 0.3372909999889089,
+        "ls": 0.16767979199357796,
+        "grep-fixed": 0.05312941699230578,
+        "grep-regex": 0.07664570899214596,
+        "node-minify": 1.7692206670035375,
+        "mawk-aggregate": 0.4434932920121355,
+        "diff-revisions": 0.18206816600286402,
+        "blind-perl-groups": 1.137209000007715,
+        "blind-rev-lines": 0.6519786669960013,
+        "codegen-gzip-o1": 0.2132729580043815,
+        "codegen-gzip-o3": 0.2205299159977585
+      }
+    },
+    {
+      "i386": {
+        "gzip": 0.27090550000139046,
+        "gunzip": 0.14429683300841134,
+        "sed": 0.3246488339937059,
+        "sort": 0.09099804100696929,
+        "sha256": 0.31774216699704994,
+        "tar": 0.04885512500186451,
+        "du": 0.33916683300049044,
+        "ls": 0.16720941598759964,
+        "grep-fixed": 0.05591325000568759,
+        "grep-regex": 0.079363208002178,
+        "node-minify": 1.7872669999924256,
+        "mawk-aggregate": 0.4485580000036862,
+        "diff-revisions": 0.18309650001174305,
+        "blind-perl-groups": 1.1709366249997402,
+        "blind-rev-lines": 0.6380759169987869,
+        "codegen-gzip-o1": 0.2137066249997588,
+        "codegen-gzip-o3": 0.21959316699940246
+      },
+      "aarch64": {
+        "gzip": 0.19185666700650472,
+        "gunzip": 0.10554645799857099,
+        "sed": 0.26989633300399873,
+        "sort": 0.06840345800446812,
+        "sha256": 0.08756650000577793,
+        "tar": 0.03811395799857564,
+        "du": 0.3118766669940669,
+        "ls": 0.15884095799992792,
+        "grep-fixed": 0.051679417010745965,
+        "grep-regex": 0.08351366700662766,
+        "node-minify": 1.555973249996896,
+        "mawk-aggregate": 0.40996825000911485,
+        "diff-revisions": 0.19682825000199955,
+        "blind-perl-groups": 0.8817090420052409,
+        "blind-rev-lines": 0.6275364579923917,
+        "codegen-gzip-o1": 0.1546542089927243,
+        "codegen-gzip-o3": 0.16002312500495464
+      }
+    },
+    {
+      "aarch64": {
+        "gzip": 0.1908674160076771,
+        "gunzip": 0.10460316699754912,
+        "sed": 0.28311699999903794,
+        "sort": 0.06876083298993763,
+        "sha256": 0.08763750000798609,
+        "tar": 0.0377282080007717,
+        "du": 0.2737926249974407,
+        "ls": 0.14662466700247023,
+        "grep-fixed": 0.049055125011364,
+        "grep-regex": 0.07902333300444297,
+        "node-minify": 1.5585604579973733,
+        "mawk-aggregate": 0.4128865829989081,
+        "diff-revisions": 0.19779245799873024,
+        "blind-perl-groups": 0.8853405830013799,
+        "blind-rev-lines": 0.6379490830004215,
+        "codegen-gzip-o1": 0.15945958299562335,
+        "codegen-gzip-o3": 0.16307166698970832
+      },
+      "i386": {
+        "gzip": 0.27102320799895097,
+        "gunzip": 0.1442272080021212,
+        "sed": 0.3324664169922471,
+        "sort": 0.08936266700038686,
+        "sha256": 0.30130820799968205,
+        "tar": 0.05011575001117308,
+        "du": 0.2921634999947855,
+        "ls": 0.1657961669989163,
+        "grep-fixed": 0.05573487500078045,
+        "grep-regex": 0.07907516599516384,
+        "node-minify": 1.8141365409974242,
+        "mawk-aggregate": 0.44524479199026246,
+        "diff-revisions": 0.18445837500621565,
+        "blind-perl-groups": 1.1468252499907976,
+        "blind-rev-lines": 0.6366069170035189,
+        "codegen-gzip-o1": 0.21108525000454392,
+        "codegen-gzip-o3": 0.22119141700386535
+      }
+    },
+    {
+      "i386": {
+        "gzip": 0.2716699579905253,
+        "gunzip": 0.1453557089989772,
+        "sed": 0.3265936249954393,
+        "sort": 0.08916274999501184,
+        "sha256": 0.31918304100690875,
+        "tar": 0.04876037499343511,
+        "du": 0.3256859160028398,
+        "ls": 0.11112308299925644,
+        "grep-fixed": 0.05097870799363591,
+        "grep-regex": 0.0760494170099264,
+        "node-minify": 1.8046892499987734,
+        "mawk-aggregate": 0.44616337500337977,
+        "diff-revisions": 0.1840240419987822,
+        "blind-perl-groups": 1.1620545830082847,
+        "blind-rev-lines": 0.6395822500053328,
+        "codegen-gzip-o1": 0.2120170000125654,
+        "codegen-gzip-o3": 0.2208195830025943
+      },
+      "aarch64": {
+        "gzip": 0.19139300000097137,
+        "gunzip": 0.10539191699353978,
+        "sed": 0.2708146249933634,
+        "sort": 0.06831641600001603,
+        "sha256": 0.08797808300005272,
+        "tar": 0.03791283299506176,
+        "du": 0.2765117079979973,
+        "ls": 0.14648458300507627,
+        "grep-fixed": 0.049527582988957874,
+        "grep-regex": 0.07885512500070035,
+        "node-minify": 1.560895165996044,
+        "mawk-aggregate": 0.41788024999550544,
+        "diff-revisions": 0.1996659590076888,
+        "blind-perl-groups": 0.8887807080027414,
+        "blind-rev-lines": 0.6387993340031244,
+        "codegen-gzip-o1": 0.1541320839896798,
+        "codegen-gzip-o3": 0.15943933300150093
+      }
+    },
+    {
+      "aarch64": {
+        "gzip": 0.19294245798664633,
+        "gunzip": 0.10968512498948257,
+        "sed": 0.27271337500133086,
+        "sort": 0.06906204199185595,
+        "sha256": 0.08838979199936148,
+        "tar": 0.037997250008629635,
+        "du": 0.2628572919929866,
+        "ls": 0.14866441700723954,
+        "grep-fixed": 0.05144424999889452,
+        "grep-regex": 0.07808562500576954,
+        "node-minify": 1.5770720000000438,
+        "mawk-aggregate": 0.4229373339912854,
+        "diff-revisions": 0.2007474580022972,
+        "blind-perl-groups": 0.8833065830112901,
+        "blind-rev-lines": 0.6397327500017127,
+        "codegen-gzip-o1": 0.15335070800210815,
+        "codegen-gzip-o3": 0.15856408400577493
+      },
+      "i386": {
+        "gzip": 0.2709578330104705,
+        "gunzip": 0.14455008300137706,
+        "sed": 0.32649791598669253,
+        "sort": 0.08903295799973421,
+        "sha256": 0.31705329100077506,
+        "tar": 0.048069666998344474,
+        "du": 0.3242615420022048,
+        "ls": 0.11166016600327566,
+        "grep-fixed": 0.05110608298855368,
+        "grep-regex": 0.07639262500742916,
+        "node-minify": 1.76169904100243,
+        "mawk-aggregate": 0.4440423749911133,
+        "diff-revisions": 0.18218829200486653,
+        "blind-perl-groups": 1.1529590419959277,
+        "blind-rev-lines": 0.636228375005885,
+        "codegen-gzip-o1": 0.21286325000983197,
+        "codegen-gzip-o3": 0.22055012499913573
+      }
+    },
+    {
+      "i386": {
+        "gzip": 0.2744544169981964,
+        "gunzip": 0.14417787500133272,
+        "sed": 0.33631483299541287,
+        "sort": 0.09223287500208244,
+        "sha256": 0.32305945800908376,
+        "tar": 0.04903333399852272,
+        "du": 0.33666945798904635,
+        "ls": 0.1687692080013221,
+        "grep-fixed": 0.05789054199703969,
+        "grep-regex": 0.07989287500095088,
+        "node-minify": 1.7950069159996929,
+        "mawk-aggregate": 0.4486003749916563,
+        "diff-revisions": 0.18392125000536907,
+        "blind-perl-groups": 1.1625968750013271,
+        "blind-rev-lines": 0.6357519169978332,
+        "codegen-gzip-o1": 0.21482249999826308,
+        "codegen-gzip-o3": 0.22351820798940025
+      },
+      "aarch64": {
+        "gzip": 0.1985179170005722,
+        "gunzip": 0.10738458299601916,
+        "sed": 0.28295504199923016,
+        "sort": 0.07343899999978021,
+        "sha256": 0.0933992920035962,
+        "tar": 0.04165124999417458,
+        "du": 0.2932924580090912,
+        "ls": 0.15586133299802896,
+        "grep-fixed": 0.0515697920054663,
+        "grep-regex": 0.07991508400300518,
+        "node-minify": 1.589997000002768,
+        "mawk-aggregate": 0.4171980419923784,
+        "diff-revisions": 0.19781020800292026,
+        "blind-perl-groups": 0.9087247499992372,
+        "blind-rev-lines": 0.6389747500070371,
+        "codegen-gzip-o1": 0.15590308399987407,
+        "codegen-gzip-o3": 0.17387237500224728
+      }
+    },
+    {
+      "aarch64": {
+        "gzip": 0.19128891700529493,
+        "gunzip": 0.10668220900697634,
+        "sed": 0.2744212499965215,
+        "sort": 0.06891149999864865,
+        "sha256": 0.087951499997871,
+        "tar": 0.03782779200992081,
+        "du": 0.2721916249865899,
+        "ls": 0.14659962500445545,
+        "grep-fixed": 0.049664749996736646,
+        "grep-regex": 0.07874325000739191,
+        "node-minify": 1.5614957079960732,
+        "mawk-aggregate": 0.4121914999996079,
+        "diff-revisions": 0.19436991699330974,
+        "blind-perl-groups": 0.8729484159994172,
+        "blind-rev-lines": 0.6416367920028279,
+        "codegen-gzip-o1": 0.1521687919885153,
+        "codegen-gzip-o3": 0.1571142089960631
+      },
+      "i386": {
+        "gzip": 0.271453624998685,
+        "gunzip": 0.1455686249973951,
+        "sed": 0.32839741600037087,
+        "sort": 0.09015425000688992,
+        "sha256": 0.3121035420044791,
+        "tar": 0.04887258399685379,
+        "du": 0.32633129198802635,
+        "ls": 0.11170604100334458,
+        "grep-fixed": 0.05192708398681134,
+        "grep-regex": 0.07693679200019687,
+        "node-minify": 1.7597890420001931,
+        "mawk-aggregate": 0.4457037920074072,
+        "diff-revisions": 0.18322112500027288,
+        "blind-perl-groups": 1.1652365420013666,
+        "blind-rev-lines": 0.6367353750101756,
+        "codegen-gzip-o1": 0.21316204199683852,
+        "codegen-gzip-o3": 0.22228504199301824
+      }
+    },
+    {
+      "i386": {
+        "gzip": 0.271261041998514,
+        "gunzip": 0.14401583299331833,
+        "sed": 0.32527674999437295,
+        "sort": 0.08939074999943841,
+        "sha256": 0.3143600420007715,
+        "tar": 0.04819804200087674,
+        "du": 0.32735875000071246,
+        "ls": 0.11158133299613837,
+        "grep-fixed": 0.051861250001820736,
+        "grep-regex": 0.07730358299158979,
+        "node-minify": 1.7762128330068663,
+        "mawk-aggregate": 0.4463968339987332,
+        "diff-revisions": 0.184859624991077,
+        "blind-perl-groups": 1.134511707990896,
+        "blind-rev-lines": 0.6617199169995729,
+        "codegen-gzip-o1": 0.21747200000390876,
+        "codegen-gzip-o3": 0.22143474999757018
+      },
+      "aarch64": {
+        "gzip": 0.19122979200619739,
+        "gunzip": 0.1054101250047097,
+        "sed": 0.2695698750030715,
+        "sort": 0.06970170799468178,
+        "sha256": 0.0876155000005383,
+        "tar": 0.039700499997707084,
+        "du": 0.27876516700780485,
+        "ls": 0.1024687090102816,
+        "grep-fixed": 0.05077341700962279,
+        "grep-regex": 0.0796272500010673,
+        "node-minify": 1.571875125009683,
+        "mawk-aggregate": 0.4132957499969052,
+        "diff-revisions": 0.1952186660055304,
+        "blind-perl-groups": 0.9058857499912847,
+        "blind-rev-lines": 0.6383259170106612,
+        "codegen-gzip-o1": 0.15806829200300854,
+        "codegen-gzip-o3": 0.1627569159900304
+      }
+    },
+    {
+      "aarch64": {
+        "gzip": 0.19337049999739975,
+        "gunzip": 0.10645608299819287,
+        "sed": 0.2673113339988049,
+        "sort": 0.06826845799514558,
+        "sha256": 0.08877375000156462,
+        "tar": 0.03788499999791384,
+        "du": 0.2710549170005834,
+        "ls": 0.14698470800067298,
+        "grep-fixed": 0.05033312500745524,
+        "grep-regex": 0.07728325000789482,
+        "node-minify": 1.5670994999964023,
+        "mawk-aggregate": 0.44336954099708237,
+        "diff-revisions": 0.19696495799871627,
+        "blind-perl-groups": 0.8972013749880716,
+        "blind-rev-lines": 0.6381657090096269,
+        "codegen-gzip-o1": 0.15394795799511485,
+        "codegen-gzip-o3": 0.15939533300115727
+      },
+      "i386": {
+        "gzip": 0.27310966700315475,
+        "gunzip": 0.14482504200714175,
+        "sed": 0.32544029199925717,
+        "sort": 0.08874820799974259,
+        "sha256": 0.30847595899831504,
+        "tar": 0.04884829198999796,
+        "du": 0.32637966600304935,
+        "ls": 0.11222254099266138,
+        "grep-fixed": 0.05112412499147467,
+        "grep-regex": 0.07618379199993797,
+        "node-minify": 1.7651286670006812,
+        "mawk-aggregate": 0.453599916989333,
+        "diff-revisions": 0.1841142920020502,
+        "blind-perl-groups": 1.170824458997231,
+        "blind-rev-lines": 0.6533734170079697,
+        "codegen-gzip-o1": 0.21307287500530947,
+        "codegen-gzip-o3": 0.22180420900986064
+      }
+    },
+    {
+      "i386": {
+        "gzip": 0.2712087079999037,
+        "gunzip": 0.14455845799238887,
+        "sed": 0.3248658329976024,
+        "sort": 0.0881107500026701,
+        "sha256": 0.3167519999988144,
+        "tar": 0.048593500003335066,
+        "du": 0.3249522919941228,
+        "ls": 0.11180537499603815,
+        "grep-fixed": 0.051398458002950065,
+        "grep-regex": 0.07590254199749324,
+        "node-minify": 1.7684167080005864,
+        "mawk-aggregate": 0.44893404199683573,
+        "diff-revisions": 0.18300562500371598,
+        "blind-perl-groups": 1.1533600420079893,
+        "blind-rev-lines": 0.6455917080020299,
+        "codegen-gzip-o1": 0.21035720899817534,
+        "codegen-gzip-o3": 0.22238424999522977
+      },
+      "aarch64": {
+        "gzip": 0.19046470799366944,
+        "gunzip": 0.10427083300601225,
+        "sed": 0.26578608401177917,
+        "sort": 0.06820170799619518,
+        "sha256": 0.08895741699961945,
+        "tar": 0.03774162499757949,
+        "du": 0.24687616698793136,
+        "ls": 0.10163708399340976,
+        "grep-fixed": 0.051278875005664304,
+        "grep-regex": 0.07975120800256263,
+        "node-minify": 1.5867075420101173,
+        "mawk-aggregate": 0.41748854200704955,
+        "diff-revisions": 0.19699520799622405,
+        "blind-perl-groups": 0.8863632080028765,
+        "blind-rev-lines": 0.6364638749946607,
+        "codegen-gzip-o1": 0.15463879199523944,
+        "codegen-gzip-o3": 0.16161679101060145
+      }
+    },
+    {
+      "aarch64": {
+        "gzip": 0.1906399580038851,
+        "gunzip": 0.10589933401206508,
+        "sed": 0.2681476669968106,
+        "sort": 0.06848770800570492,
+        "sha256": 0.08812124999531079,
+        "tar": 0.03796229200088419,
+        "du": 0.27451808299520053,
+        "ls": 0.1471570419962518,
+        "grep-fixed": 0.05115650000516325,
+        "grep-regex": 0.07851520800613798,
+        "node-minify": 1.5895999160129577,
+        "mawk-aggregate": 0.41191100000287406,
+        "diff-revisions": 0.1974354999983916,
+        "blind-perl-groups": 0.8789140000008047,
+        "blind-rev-lines": 0.6469552079943242,
+        "codegen-gzip-o1": 0.15252483299991582,
+        "codegen-gzip-o3": 0.15828520900686271
+      },
+      "i386": {
+        "gzip": 0.2716832500009332,
+        "gunzip": 0.14518845899146982,
+        "sed": 0.32890779100125656,
+        "sort": 0.08941504100221209,
+        "sha256": 0.3084737919998588,
+        "tar": 0.04758945800131187,
+        "du": 0.33056962498812936,
+        "ls": 0.11129687500942964,
+        "grep-fixed": 0.05108716701215599,
+        "grep-regex": 0.07551041699480265,
+        "node-minify": 1.8297037500014994,
+        "mawk-aggregate": 0.4494059160060715,
+        "diff-revisions": 0.18367387499893084,
+        "blind-perl-groups": 1.1625282089953544,
+        "blind-rev-lines": 0.6403345840080874,
+        "codegen-gzip-o1": 0.21166145800088998,
+        "codegen-gzip-o3": 0.22098408300371375
+      }
+    }
+  ],
+  "short_5": [
+    {
+      "i386": {
+        "gzip": 0.26419349999923725,
+        "sha256": 0.3019669579953188,
+        "ls": 0.14190799999050796,
+        "grep-regex": 0.08122070900571998,
+        "diff-revisions": 0.20896683300088625
+      },
+      "aarch64": {
+        "gzip": 0.18732429201190826,
+        "sha256": 0.08933870799955912,
+        "ls": 0.11215170800278429,
+        "grep-regex": 0.08242449999670498,
+        "diff-revisions": 0.22769337499630637
+      }
+    },
+    {
+      "aarch64": {
+        "gzip": 0.18834295799024403,
+        "sha256": 0.09082370800024364,
+        "ls": 0.1233584159926977,
+        "grep-regex": 0.07866891600133386,
+        "diff-revisions": 0.22880291601177305
+      },
+      "i386": {
+        "gzip": 0.26440649999130983,
+        "sha256": 0.29901666700607166,
+        "ls": 0.13950054100132547,
+        "grep-regex": 0.08113395801046863,
+        "diff-revisions": 0.20848879100230988
+      }
+    },
+    {
+      "i386": {
+        "gzip": 0.26518458301143255,
+        "sha256": 0.3030114169960143,
+        "ls": 0.1375758750073146,
+        "grep-regex": 0.08004912499745842,
+        "diff-revisions": 0.207884292001836
+      },
+      "aarch64": {
+        "gzip": 0.18870033299026545,
+        "sha256": 0.08952154200233053,
+        "ls": 0.11087870798655786,
+        "grep-regex": 0.07883125000807922,
+        "diff-revisions": 0.2275295410072431
+      }
+    },
+    {
+      "aarch64": {
+        "gzip": 0.18616329198994208,
+        "sha256": 0.08935049999854527,
+        "ls": 0.11164687501150183,
+        "grep-regex": 0.07850187500298489,
+        "diff-revisions": 0.22800183400977403
+      },
+      "i386": {
+        "gzip": 0.2664265829953365,
+        "sha256": 0.3009159590001218,
+        "ls": 0.13745083298999816,
+        "grep-regex": 0.08164566699997522,
+        "diff-revisions": 0.2105294170032721
+      }
+    },
+    {
+      "i386": {
+        "gzip": 0.2655583339947043,
+        "sha256": 0.3051609579997603,
+        "ls": 0.13525279199529905,
+        "grep-regex": 0.08141149999573827,
+        "diff-revisions": 0.20611195800302085
+      },
+      "aarch64": {
+        "gzip": 0.19387262499367353,
+        "sha256": 0.08962791701196693,
+        "ls": 0.1113510419963859,
+        "grep-regex": 0.0799681249918649,
+        "diff-revisions": 0.2303534579987172
+      }
+    },
+    {
+      "aarch64": {
+        "gzip": 0.18814158299937844,
+        "sha256": 0.08899858299992047,
+        "ls": 0.1106829999916954,
+        "grep-regex": 0.07933783301268704,
+        "diff-revisions": 0.2288218329922529
+      },
+      "i386": {
+        "gzip": 0.2812322090030648,
+        "sha256": 0.3094264580140589,
+        "ls": 0.13861279099364765,
+        "grep-regex": 0.08162974999868311,
+        "diff-revisions": 0.21292774999164976
+      }
+    },
+    {
+      "i386": {
+        "gzip": 0.26872570799605455,
+        "sha256": 0.2961642500013113,
+        "ls": 0.13818562500819098,
+        "grep-regex": 0.08148833400628064,
+        "diff-revisions": 0.20919262499955948
+      },
+      "aarch64": {
+        "gzip": 0.1912767920002807,
+        "sha256": 0.08956545899854973,
+        "ls": 0.11204229200666305,
+        "grep-regex": 0.07832883400260471,
+        "diff-revisions": 0.22918962499534246
+      }
+    },
+    {
+      "aarch64": {
+        "gzip": 0.18693695799447596,
+        "sha256": 0.08922887500375509,
+        "ls": 0.11192620899237227,
+        "grep-regex": 0.07903879100922495,
+        "diff-revisions": 0.2310120409965748
+      },
+      "i386": {
+        "gzip": 0.26694279100047424,
+        "sha256": 0.31448245800856967,
+        "ls": 0.1485187920043245,
+        "grep-regex": 0.08201370800088625,
+        "diff-revisions": 0.20800237500225194
+      }
+    },
+    {
+      "i386": {
+        "gzip": 0.2671446250024019,
+        "sha256": 0.30814116599503905,
+        "ls": 0.13911208299396094,
+        "grep-regex": 0.08159650000743568,
+        "diff-revisions": 0.20982224999170285
+      },
+      "aarch64": {
+        "gzip": 0.1881102499901317,
+        "sha256": 0.08939600001031067,
+        "ls": 0.11132541700499132,
+        "grep-regex": 0.07949120900593698,
+        "diff-revisions": 0.23150933400029317
+      }
+    },
+    {
+      "aarch64": {
+        "gzip": 0.1872770420013694,
+        "sha256": 0.08903683300013654,
+        "ls": 0.11216750000312459,
+        "grep-regex": 0.07890141601092182,
+        "diff-revisions": 0.22844637499656528
+      },
+      "i386": {
+        "gzip": 0.2682112920010695,
+        "sha256": 0.29898245799995493,
+        "ls": 0.13591558299958706,
+        "grep-regex": 0.08161995800037403,
+        "diff-revisions": 0.21103016599954572
+      }
+    },
+    {
+      "i386": {
+        "gzip": 0.26703829200414475,
+        "sha256": 0.3118793339963304,
+        "ls": 0.14572291600052267,
+        "grep-regex": 0.08228304199292324,
+        "diff-revisions": 0.20998866599984467
+      },
+      "aarch64": {
+        "gzip": 0.18987583299167454,
+        "sha256": 0.08941450000565965,
+        "ls": 0.11193820799235255,
+        "grep-regex": 0.07861029199557379,
+        "diff-revisions": 0.23195270900032483
+      }
+    },
+    {
+      "aarch64": {
+        "gzip": 0.18907087499974295,
+        "sha256": 0.08888587499677669,
+        "ls": 0.11131641599058639,
+        "grep-regex": 0.0795065000129398,
+        "diff-revisions": 0.23447749999468215
+      },
+      "i386": {
+        "gzip": 0.26769566599978134,
+        "sha256": 0.31378625000070315,
+        "ls": 0.13828162499703467,
+        "grep-regex": 0.08532966701022815,
+        "diff-revisions": 0.20966970900190063
+      }
+    },
+    {
+      "i386": {
+        "gzip": 0.2700282920122845,
+        "sha256": 0.30747612500272226,
+        "ls": 0.13800274999812245,
+        "grep-regex": 0.08154058399668429,
+        "diff-revisions": 0.20983937500568572
+      },
+      "aarch64": {
+        "gzip": 0.18884912499925122,
+        "sha256": 0.09456654200039338,
+        "ls": 0.1116302909940714,
+        "grep-regex": 0.08032479201210663,
+        "diff-revisions": 0.23252075001073536
+      }
+    },
+    {
+      "aarch64": {
+        "gzip": 0.18908637500135228,
+        "sha256": 0.08867545799876098,
+        "ls": 0.11490908300038427,
+        "grep-regex": 0.07895283300604206,
+        "diff-revisions": 0.23275695799384266
+      },
+      "i386": {
+        "gzip": 0.27374066700576805,
+        "sha256": 0.3126700420107227,
+        "ls": 0.14360291601042263,
+        "grep-regex": 0.08181299999705516,
+        "diff-revisions": 0.20931962499162182
+      }
+    },
+    {
+      "i386": {
+        "gzip": 0.2697705419996055,
+        "sha256": 0.2957682910055155,
+        "ls": 0.13825554099457804,
+        "grep-regex": 0.08194025000557303,
+        "diff-revisions": 0.2116712079878198
+      },
+      "aarch64": {
+        "gzip": 0.18845699999656063,
+        "sha256": 0.08932916598860174,
+        "ls": 0.11215045899734832,
+        "grep-regex": 0.07936874999722932,
+        "diff-revisions": 0.2293088330043247
+      }
+    }
+  ],
+  "ls_tiering_controls_ms_per_command": [
+    {
+      "round": 0,
+      "mode": "default",
+      "guest": "i386",
+      "ms": {
+        "ls": 27.154944499973983,
+        "ls-next-6": 27.109097165521234,
+        "ls-next-36": 24.587135416772476
+      }
+    },
+    {
+      "round": 0,
+      "mode": "default",
+      "guest": "aarch64",
+      "ms": {
+        "ls": 26.32911816666213,
+        "ls-next-6": 25.441062498430256,
+        "ls-next-36": 16.550981471987647
+      }
+    },
+    {
+      "round": 0,
+      "mode": "no_tiering",
+      "guest": "i386",
+      "ms": {
+        "ls": 17.00738199967115,
+        "ls-next-6": 16.550680666114204,
+        "ls-next-36": 16.412744222179754
+      }
+    },
+    {
+      "round": 0,
+      "mode": "no_tiering",
+      "guest": "aarch64",
+      "ms": {
+        "ls": 13.80754166651362,
+        "ls-next-6": 12.89721516756496,
+        "ls-next-36": 12.90614583316104
+      }
+    },
+    {
+      "round": 1,
+      "mode": "no_tiering",
+      "guest": "aarch64",
+      "ms": {
+        "ls": 14.73076399997808,
+        "ls-next-6": 13.409555499189688,
+        "ls-next-36": 12.991163194076055
+      }
+    },
+    {
+      "round": 1,
+      "mode": "no_tiering",
+      "guest": "i386",
+      "ms": {
+        "ls": 17.0594513353232,
+        "ls-next-6": 18.86581950141893,
+        "ls-next-36": 16.470967583397094
+      }
+    },
+    {
+      "round": 1,
+      "mode": "default",
+      "guest": "aarch64",
+      "ms": {
+        "ls": 24.56672233286857,
+        "ls-next-6": 23.96697916750175,
+        "ls-next-36": 24.138917833220653
+      }
+    },
+    {
+      "round": 1,
+      "mode": "default",
+      "guest": "i386",
+      "ms": {
+        "ls": 18.733666666472953,
+        "ls-next-6": 17.473993165670738,
+        "ls-next-36": 17.436532416468253
+      }
+    },
+    {
+      "round": 2,
+      "mode": "default",
+      "guest": "i386",
+      "ms": {
+        "ls": 27.20762500151371,
+        "ls-next-6": 18.275402833144955,
+        "ls-next-36": 19.318986110900166
+      }
+    },
+    {
+      "round": 2,
+      "mode": "default",
+      "guest": "aarch64",
+      "ms": {
+        "ls": 15.768652832775842,
+        "ls-next-6": 15.012625000963453,
+        "ls-next-36": 23.20741897225768
+      }
+    },
+    {
+      "round": 2,
+      "mode": "no_tiering",
+      "guest": "i386",
+      "ms": {
+        "ls": 17.166902832589887,
+        "ls-next-6": 16.533597166320153,
+        "ls-next-36": 16.53931483330477
+      }
+    },
+    {
+      "round": 2,
+      "mode": "no_tiering",
+      "guest": "aarch64",
+      "ms": {
+        "ls": 13.913507000931228,
+        "ls-next-6": 13.004618000801807,
+        "ls-next-36": 12.999607638953925
+      }
+    },
+    {
+      "round": 3,
+      "mode": "no_tiering",
+      "guest": "aarch64",
+      "ms": {
+        "ls": 14.066430664873527,
+        "ls-next-6": 13.296138999673227,
+        "ls-next-36": 13.003775472397036
+      }
+    },
+    {
+      "round": 3,
+      "mode": "no_tiering",
+      "guest": "i386",
+      "ms": {
+        "ls": 17.19610416572929,
+        "ls-next-6": 16.662020832882263,
+        "ls-next-36": 16.63939697229782
+      }
+    },
+    {
+      "round": 3,
+      "mode": "default",
+      "guest": "aarch64",
+      "ms": {
+        "ls": 24.535597166201722,
+        "ls-next-6": 23.932291665308487,
+        "ls-next-36": 23.98452430538277
+      }
+    },
+    {
+      "round": 3,
+      "mode": "default",
+      "guest": "i386",
+      "ms": {
+        "ls": 18.433437498363975,
+        "ls-next-6": 17.43186100065941,
+        "ls-next-36": 17.388539361288874
+      }
+    },
+    {
+      "round": 4,
+      "mode": "default",
+      "guest": "i386",
+      "ms": {
+        "ls": 27.624055665607255,
+        "ls-next-6": 27.15818750099667,
+        "ls-next-36": 19.00487036133806
+      }
+    },
+    {
+      "round": 4,
+      "mode": "default",
+      "guest": "aarch64",
+      "ms": {
+        "ls": 16.00124316610163,
+        "ls-next-6": 15.311458332386488,
+        "ls-next-36": 23.656744222535053
+      }
+    },
+    {
+      "round": 4,
+      "mode": "no_tiering",
+      "guest": "i386",
+      "ms": {
+        "ls": 17.281020833858445,
+        "ls-next-6": 16.63677766676604,
+        "ls-next-36": 16.60499188882467
+      }
+    },
+    {
+      "round": 4,
+      "mode": "no_tiering",
+      "guest": "aarch64",
+      "ms": {
+        "ls": 14.11682633382346,
+        "ls-next-6": 13.023138999415096,
+        "ls-next-36": 13.086672472531468
+      }
+    },
+    {
+      "round": 5,
+      "mode": "no_tiering",
+      "guest": "aarch64",
+      "ms": {
+        "ls": 15.134611167013645,
+        "ls-next-6": 13.493423498099824,
+        "ls-next-36": 13.057243055502315
+      }
+    },
+    {
+      "round": 5,
+      "mode": "no_tiering",
+      "guest": "i386",
+      "ms": {
+        "ls": 17.312145833178267,
+        "ls-next-6": 16.671284667002812,
+        "ls-next-36": 18.276413194447134
+      }
+    },
+    {
+      "round": 5,
+      "mode": "default",
+      "guest": "aarch64",
+      "ms": {
+        "ls": 24.352673666726332,
+        "ls-next-6": 23.79302083378813,
+        "ls-next-36": 23.940392361206857
+      }
+    },
+    {
+      "round": 5,
+      "mode": "default",
+      "guest": "i386",
+      "ms": {
+        "ls": 26.679006999377936,
+        "ls-next-6": 18.645305501801584,
+        "ls-next-36": 17.935263888729324
+      }
+    }
+  ],
+  "ls_syscall_counts": {
+    "i386": {
+      "pid1_ls_after_final_exec": {
+        "brk": 5,
+        "access": 2,
+        "openat": 35,
+        "statx": 93,
+        "mmap2": 16,
+        "close": 36,
+        "read": 5,
+        "set_thread_area": 1,
+        "set_tid_address": 1,
+        "set_robust_list": 1,
+        "rseq": 1,
+        "mprotect": 5,
+        "ugetrlimit": 1,
+        "munmap": 1,
+        "statfs64": 2,
+        "getrandom": 1,
+        "ioctl": 1,
+        "getdents64": 58,
+        "write": 5,
+        "exit_group": 1
+      },
+      "shell_and_ls": {
+        "brk": 10,
+        "access": 3,
+        "openat": 39,
+        "statx": 96,
+        "mmap2": 23,
+        "close": 41,
+        "read": 6,
+        "set_thread_area": 2,
+        "set_tid_address": 2,
+        "set_robust_list": 2,
+        "rseq": 2,
+        "mprotect": 8,
+        "ugetrlimit": 2,
+        "munmap": 2,
+        "getuid32": 1,
+        "getgid32": 1,
+        "getpid": 1,
+        "rt_sigaction": 7,
+        "geteuid32": 2,
+        "getrandom": 2,
+        "getppid": 1,
+        "getcwd": 1,
+        "getegid32": 1,
+        "chdir": 1,
+        "getdents64": 60,
+        "fcntl64": 2,
+        "dup2": 1,
+        "execve": 4,
+        "statfs64": 2,
+        "ioctl": 1,
+        "write": 5,
+        "exit_group": 1
+      }
+    },
+    "aarch64": {
+      "pid1_ls_after_final_exec": {
+        "brk": 3,
+        "faccessat": 2,
+        "openat": 35,
+        "newfstatat": 35,
+        "mmap": 14,
+        "close": 36,
+        "read": 5,
+        "munmap": 7,
+        "mprotect": 8,
+        "set_tid_address": 1,
+        "set_robust_list": 1,
+        "syscall_293": 1,
+        "prlimit64": 1,
+        "statfs": 2,
+        "getrandom": 1,
+        "ioctl": 1,
+        "statx": 58,
+        "getdents64": 58,
+        "write": 5,
+        "exit_group": 1
+      },
+      "shell_and_ls": {
+        "brk": 6,
+        "faccessat": 3,
+        "openat": 39,
+        "newfstatat": 38,
+        "mmap": 20,
+        "close": 41,
+        "read": 6,
+        "munmap": 10,
+        "mprotect": 12,
+        "set_tid_address": 2,
+        "set_robust_list": 2,
+        "syscall_293": 2,
+        "prlimit64": 2,
+        "getuid32": 1,
+        "getgid32": 1,
+        "getpid": 1,
+        "rt_sigaction": 7,
+        "geteuid32": 2,
+        "getrandom": 2,
+        "getppid": 1,
+        "getcwd": 1,
+        "getegid32": 1,
+        "chdir": 1,
+        "getdents64": 60,
+        "fcntl": 2,
+        "dup3": 1,
+        "execve": 4,
+        "statfs": 2,
+        "ioctl": 1,
+        "statx": 58,
+        "write": 5,
+        "exit_group": 1
+      }
+    }
+  },
+  "profiles": {
+    "i386-sha256": {
+      "repetitions": 148,
+      "sha256": "a402f632e461036e11bbb6f623ef83c8235ec25c7f620d7c6d466d25d7abec25",
+      "sample_command_seconds": 7.319087291005417,
+      "guest_window_seconds": 14.859798708013841,
+      "worker_ticks": 5351,
+      "worker_self_categories": {
+        "native leaf": 5219,
+        "other": 48,
+        "syscall subtree": 84
+      },
+      "libfibercpu_worker_leaves": 5241,
+      "top_native_symbols": [
+        [
+          "fiberish::OpExitBlock<0, false>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          113
+        ],
+        [
+          "fiberish::DispatchWrapper<&fiberish::LogicFlow fiberish::baked_operand::OpAdd_EvGv<fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{33620206u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned char, unsigned int*, unsigned long long&, fiberish::GprCache), fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{33620206u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          90
+        ],
+        [
+          "fiberish::DispatchWrapper<&fiberish::LogicFlow fiberish::baked_operand::OpXor_EvGv<fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{33620206u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned char, unsigned int*, unsigned long long&, fiberish::GprCache), fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{33620206u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          84
+        ],
+        [
+          "fiberish::BindScalarHandler(fiberish::DecodedInstruction const&, fiberish::ScalarBindingIndex)",
+          60
+        ],
+        [
+          "fiberish::DispatchWrapper<&fiberish::LogicFlow fiberish::baked_operand::OpAdd_EvGv<fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{34668798u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned char, unsigned int*, unsigned long long&, fiberish::GprCache), fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{34668798u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          58
+        ],
+        [
+          "fiberish::DispatchWrapper<&fiberish::LogicFlow fiberish::baked_operand::OpAdd_EvGv<fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{33620222u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned char, unsigned int*, unsigned long long&, fiberish::GprCache), fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{33620222u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          56
+        ],
+        [
+          "fiberish::DispatchWrapper<&fiberish::LogicFlow fiberish::baked_operand::OpMov_EvGv<fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{33620207u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned char, unsigned int*, unsigned long long&, fiberish::GprCache), fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{33620207u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          51
+        ],
+        [
+          "fiberish::DispatchWrapper<&fiberish::LogicFlow fiberish::baked_operand::OpMov_EvGv<fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{33620175u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned char, unsigned int*, unsigned long long&, fiberish::GprCache), fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{33620175u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          50
+        ],
+        [
+          "fiberish::DispatchWrapper<&fiberish::LogicFlow fiberish::baked_operand::OpMov_EvGv<fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{33620191u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned char, unsigned int*, unsigned long long&, fiberish::GprCache), fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{33620191u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          47
+        ],
+        [
+          "fiberish::DispatchWrapper<&fiberish::LogicFlow fiberish::baked_operand::OpAdd_EvGv<fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{33620210u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned char, unsigned int*, unsigned long long&, fiberish::GprCache), fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{33620210u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          45
+        ],
+        [
+          "fiberish::DispatchWrapper<&fiberish::LogicFlow fiberish::baked_operand::OpAdd_EvGv<fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{33620209u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned char, unsigned int*, unsigned long long&, fiberish::GprCache), fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{33620209u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          43
+        ],
+        [
+          "fiberish::DispatchWrapper<&fiberish::LogicFlow fiberish::baked_operand::OpMov_EvGv<fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{33620183u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned char, unsigned int*, unsigned long long&, fiberish::GprCache), fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{33620183u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          39
+        ]
+      ],
+      "top_worker_leaves": [
+        [
+          "native: fiberish::OpExitBlock<0, false>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          113
+        ],
+        [
+          "native: fiberish::DispatchWrapper<&fiberish::LogicFlow fiberish::baked_operand::OpAdd_EvGv<fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{33620206u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned char, unsigned int*, unsigned long long&, fiberish::GprCache), fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{33620206u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          90
+        ],
+        [
+          "native: fiberish::DispatchWrapper<&fiberish::LogicFlow fiberish::baked_operand::OpXor_EvGv<fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{33620206u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned char, unsigned int*, unsigned long long&, fiberish::GprCache), fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{33620206u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          84
+        ],
+        [
+          "native: fiberish::BindScalarHandler(fiberish::DecodedInstruction const&, fiberish::ScalarBindingIndex)",
+          60
+        ],
+        [
+          "native: fiberish::DispatchWrapper<&fiberish::LogicFlow fiberish::baked_operand::OpAdd_EvGv<fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{34668798u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned char, unsigned int*, unsigned long long&, fiberish::GprCache), fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{34668798u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          58
+        ],
+        [
+          "native: fiberish::DispatchWrapper<&fiberish::LogicFlow fiberish::baked_operand::OpAdd_EvGv<fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{33620222u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned char, unsigned int*, unsigned long long&, fiberish::GprCache), fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{33620222u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          56
+        ],
+        [
+          "native: fiberish::DispatchWrapper<&fiberish::LogicFlow fiberish::baked_operand::OpMov_EvGv<fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{33620207u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned char, unsigned int*, unsigned long long&, fiberish::GprCache), fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{33620207u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          51
+        ],
+        [
+          "native: fiberish::DispatchWrapper<&fiberish::LogicFlow fiberish::baked_operand::OpMov_EvGv<fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{33620175u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned char, unsigned int*, unsigned long long&, fiberish::GprCache), fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{33620175u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          50
+        ]
+      ],
+      "top_syscall_subtrees": [
+        [
+          "instance void [Fiberish.Core] Fiberish.Syscalls.SyscallManager+<SysExecve>d__324::MoveNext(",
+          17
+        ],
+        [
+          "instance void [Fiberish.Core] Fiberish.Syscalls.SyscallManager+<DoReadVCore>d__59::MoveNext(",
+          12
+        ],
+        [
+          "void [Fiberish.Core] Fiberish.Syscalls.SyscallManager::MarkProcessExitAndReparent(class Fiberish.Core.FiberTask,int32,bool,int32,bool",
+          12
+        ],
+        [
+          "instance void [Fiberish.Core] Fiberish.Syscalls.SyscallManager+<CloneTask>d__308::MoveNext(",
+          11
+        ],
+        [
+          "instance void [Fiberish.Core] Fiberish.Syscalls.SyscallManager+<Mmap>d__287::MoveNext(",
+          8
+        ]
+      ]
+    },
+    "aarch64-sha256": {
+      "repetitions": 504,
+      "sha256": "a402f632e461036e11bbb6f623ef83c8235ec25c7f620d7c6d466d25d7abec25",
+      "sample_command_seconds": 7.239560332993278,
+      "guest_window_seconds": 14.324715333001222,
+      "worker_ticks": 5340,
+      "worker_self_categories": {
+        "native leaf": 5011,
+        "syscall subtree": 187,
+        "other": 142
+      },
+      "libfibercpu_worker_leaves": 5035,
+      "top_native_symbols": [
+        [
+          "fiberish::aarch64::detail::VectorHandler<(fiberish::aarch64::detail::VectorFamily)4>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          406
+        ],
+        [
+          "fiberish::aarch64::detail::OpExitBlock<true>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          367
+        ],
+        [
+          "fiberish::aarch64::Run(fiberish::aarch64::State&, fiberish::aarch64::Memory const&, unsigned long long, fiberish::aarch64::Profile const&)",
+          180
+        ],
+        [
+          "fiberish::FindBakedArmSequence(unsigned int const*, unsigned int, unsigned int*, unsigned int, unsigned long long (*&)(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int))",
+          82
+        ],
+        [
+          "fiberish::aarch64::detail::BakedHandler<0u, false, 1015088352u, 4043374815u, 1426063201u>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          70
+        ],
+        [
+          "fiberish::FindBakedArmHandler(fiberish::aarch64::DecodedInstruction const&, bool)",
+          68
+        ],
+        [
+          "fiberish::FindBakedArmPair(unsigned int, unsigned int, unsigned int, unsigned long long (*&)(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int))",
+          53
+        ],
+        [
+          "fiberish::aarch64::detail::DecodeFields(unsigned int)",
+          41
+        ],
+        [
+          "fiberish::aarch64::detail::BakedHandler<0u, false, 327365730u, 185008293u, 167969166u>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          39
+        ],
+        [
+          "fiberish::aarch64::detail::BakedHandler<0u, false, 327429278u, 704643132u, 185008953u, 1254366174u>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          28
+        ],
+        [
+          "fiberish::aarch64::detail::BakedHandler<0u, false, 327560414u, 704774268u, 184615737u, 1254497246u>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          26
+        ],
+        [
+          "fiberish::aarch64::detail::BakedHandler<0u, false, 184877122u, 1923838870u, 1255611205u, 185991382u>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          25
+        ]
+      ],
+      "top_worker_leaves": [
+        [
+          "native: fiberish::aarch64::detail::VectorHandler<(fiberish::aarch64::detail::VectorFamily)4>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          406
+        ],
+        [
+          "native: fiberish::aarch64::detail::OpExitBlock<true>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          367
+        ],
+        [
+          "native: fiberish::aarch64::Run(fiberish::aarch64::State&, fiberish::aarch64::Memory const&, unsigned long long, fiberish::aarch64::Profile const&)",
+          180
+        ],
+        [
+          "lstat",
+          133
+        ],
+        [
+          "native: fiberish::FindBakedArmSequence(unsigned int const*, unsigned int, unsigned int*, unsigned int, unsigned long long (*&)(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int))",
+          82
+        ],
+        [
+          "native: fiberish::aarch64::detail::BakedHandler<0u, false, 1015088352u, 4043374815u, 1426063201u>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          70
+        ],
+        [
+          "native: fiberish::FindBakedArmHandler(fiberish::aarch64::DecodedInstruction const&, bool)",
+          68
+        ],
+        [
+          "native: fiberish::FindBakedArmPair(unsigned int, unsigned int, unsigned int, unsigned long long (*&)(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int))",
+          53
+        ]
+      ],
+      "top_syscall_subtrees": [
+        [
+          "instance void [Fiberish.Core] Fiberish.Syscalls.SyscallManager+<SysExecve>d__324::MoveNext(",
+          32
+        ],
+        [
+          "instance void [Fiberish.Core] Fiberish.Syscalls.SyscallManager+<DoReadVCore>d__59::MoveNext(",
+          30
+        ],
+        [
+          "void [Fiberish.Core] Fiberish.Syscalls.SyscallManager::MarkProcessExitAndReparent(class Fiberish.Core.FiberTask,int32,bool,int32,bool",
+          29
+        ],
+        [
+          "int32 [Fiberish.Core] Fiberish.Syscalls.SyscallManager::ImplOpenCore(class Fiberish.Syscalls.SyscallManager,uint8[],int32,uint32,uint32,valuetype Fiberish.Syscalls.PathLocation,valuetype [System.Runtime]System.Nullable`1<valuetype [System.Runtime]System.Threading.Tasks.ValueTask`1<int32>>&",
+          27
+        ],
+        [
+          "instance void [Fiberish.Core] Fiberish.Syscalls.SyscallManager+<CloneTask>d__308::MoveNext(",
+          19
+        ]
+      ]
+    },
+    "i386-gzip": {
+      "repetitions": 55,
+      "sha256": "b6c8d023b153e79acf9f5b2fc69d4cb8be536fd3d91f78bba8378a6198265eeb",
+      "sample_command_seconds": 7.201292874990031,
+      "guest_window_seconds": 13.086276124988217,
+      "worker_ticks": 5395,
+      "worker_self_categories": {
+        "native leaf": 5327,
+        "other": 31,
+        "syscall subtree": 37
+      },
+      "libfibercpu_worker_leaves": 5334,
+      "top_native_symbols": [
+        [
+          "fiberish::OperandClone_032_SuperOpcode_4_029_OpAnd_EaxImm__OpMovzx_Word__OpCmp_EvGv__OpJcc_AE_Rel32(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          438
+        ],
+        [
+          "fiberish::OperandClone_030_SuperOpcode_4_027_OpLea__OpMovzx_Byte__OpCmp_EbGb__OpJcc_NE_Rel8(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          414
+        ],
+        [
+          "fiberish::OperandClone_044_SuperOpcode_4_040_OpMovzx_Word__OpTest_EvGv__OpLea__OpCmov_NS(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          141
+        ],
+        [
+          "fiberish::OperandClone_087_SuperOpcode_4_040_OpMovzx_Word__OpTest_EvGv__OpLea__OpCmov_NS(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          133
+        ],
+        [
+          "fiberish::OperandClone_082_SuperOpcode_2_071_OpGroup1_EvIb_Generic__OpJcc_E_Rel32(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          130
+        ],
+        [
+          "fiberish::OpExitBlock<0, false>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          129
+        ],
+        [
+          "fiberish::OperandClone_195_SuperOpcode_3_163_OpMovzx_Byte__OpCmp_EbGb__OpJcc_NE_Rel8(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          120
+        ],
+        [
+          "fiberish::OperandClone_159_SuperOpcode_4_115_OpMov_GvEv__OpMov_EvGv__OpTest_EvGv__OpJcc_E_Rel8(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          117
+        ],
+        [
+          "fiberish::OperandClone_086_SuperOpcode_4_012_OpMovzx_Byte__OpXor_GvEv__OpCmp_EvGv__OpJcc_NE_Rel8(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          102
+        ],
+        [
+          "fiberish::OperandClone_045_SuperOpcode_4_041_OpGroup1_EvIb_Generic__OpMov_EvGv__OpCmp_EvGv__OpJcc_NE_Rel8(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          92
+        ],
+        [
+          "fiberish::OperandClone_125_SuperOpcode_4_107_OpMov_GvEv__OpMovzx_Byte__OpCmp_EbGb__OpJcc_NE_Rel8(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          85
+        ],
+        [
+          "fiberish::OperandClone_088_SuperOpcode_4_041_OpGroup1_EvIb_Generic__OpMov_EvGv__OpCmp_EvGv__OpJcc_NE_Rel8(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          84
+        ]
+      ],
+      "top_worker_leaves": [
+        [
+          "native: fiberish::OperandClone_032_SuperOpcode_4_029_OpAnd_EaxImm__OpMovzx_Word__OpCmp_EvGv__OpJcc_AE_Rel32(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          438
+        ],
+        [
+          "native: fiberish::OperandClone_030_SuperOpcode_4_027_OpLea__OpMovzx_Byte__OpCmp_EbGb__OpJcc_NE_Rel8(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          414
+        ],
+        [
+          "native: fiberish::OperandClone_044_SuperOpcode_4_040_OpMovzx_Word__OpTest_EvGv__OpLea__OpCmov_NS(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          141
+        ],
+        [
+          "native: fiberish::OperandClone_087_SuperOpcode_4_040_OpMovzx_Word__OpTest_EvGv__OpLea__OpCmov_NS(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          133
+        ],
+        [
+          "native: fiberish::OperandClone_082_SuperOpcode_2_071_OpGroup1_EvIb_Generic__OpJcc_E_Rel32(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          130
+        ],
+        [
+          "native: fiberish::OpExitBlock<0, false>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          129
+        ],
+        [
+          "native: fiberish::OperandClone_195_SuperOpcode_3_163_OpMovzx_Byte__OpCmp_EbGb__OpJcc_NE_Rel8(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          120
+        ],
+        [
+          "native: fiberish::OperandClone_159_SuperOpcode_4_115_OpMov_GvEv__OpMov_EvGv__OpTest_EvGv__OpJcc_E_Rel8(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          117
+        ]
+      ],
+      "top_syscall_subtrees": [
+        [
+          "void [Fiberish.Core] Fiberish.Syscalls.SyscallManager::MarkProcessExitAndReparent(class Fiberish.Core.FiberTask,int32,bool,int32,bool",
+          9
+        ],
+        [
+          "instance void [Fiberish.Core] Fiberish.Syscalls.SyscallManager+<DoReadVCore>d__59::MoveNext(",
+          7
+        ],
+        [
+          "instance void [Fiberish.Core] Fiberish.Syscalls.SyscallManager+<Mmap>d__287::MoveNext(",
+          3
+        ],
+        [
+          "int32 [Fiberish.Core] Fiberish.Syscalls.SyscallManager::ImplOpenCore(class Fiberish.Syscalls.SyscallManager,uint8[],int32,uint32,uint32,valuetype Fiberish.Syscalls.PathLocation,valuetype [System.Runtime]System.Nullable`1<valuetype [System.Runtime]System.Threading.Tasks.ValueTask`1<int32>>&",
+          3
+        ],
+        [
+          "instance void [Fiberish.Core] Fiberish.Syscalls.SyscallManager+<DoWriteVCore>d__61::MoveNext(",
+          3
+        ]
+      ]
+    },
+    "aarch64-gzip": {
+      "repetitions": 79,
+      "sha256": "b6c8d023b153e79acf9f5b2fc69d4cb8be536fd3d91f78bba8378a6198265eeb",
+      "sample_command_seconds": 7.195204582996666,
+      "guest_window_seconds": 12.667619875006494,
+      "worker_ticks": 5384,
+      "worker_self_categories": {
+        "native leaf": 5289,
+        "syscall subtree": 59,
+        "other": 36
+      },
+      "libfibercpu_worker_leaves": 5291,
+      "top_native_symbols": [
+        [
+          "fiberish::aarch64::detail::OpExitBlock<true>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          581
+        ],
+        [
+          "fiberish::aarch64::detail::BakedHandler<0u, false, 945973349u, 1795817663u, 1426063009u>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          403
+        ],
+        [
+          "fiberish::aarch64::detail::BakedHandler<0u, false, 2453682209u, 2019653921u, 1795227935u, 1409288482u>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          374
+        ],
+        [
+          "fiberish::aarch64::detail::BakedHandler<0u, false, 943723521u, 1241645089u, 2453675041u, 4167137409u>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          211
+        ],
+        [
+          "fiberish::aarch64::detail::BakedHandler<0u, false, 704709604u, 2332295395u, 945973349u, 1795817663u, 1426063009u>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          198
+        ],
+        [
+          "fiberish::aarch64::detail::BakedHandler<0u, false, 2332164194u, 945811522u, 1796014175u, 1426062881u>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          166
+        ],
+        [
+          "fiberish::aarch64::detail::BakedHandler<0u, false, 2332426401u, 2019911881u, 2015918281u, 2015717571u, 1795162239u, 1426062913u>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          127
+        ],
+        [
+          "fiberish::aarch64::detail::BakedHandler<0u, false, 872415552u>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          113
+        ],
+        [
+          "fiberish::aarch64::detail::BakedHandler<0u, false, 3393331234u, 3942842399u, 1426063169u>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          107
+        ],
+        [
+          "fiberish::aarch64::detail::BakedHandler<0u, false, 1895826630u, 1409288416u>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          98
+        ],
+        [
+          "fiberish::aarch64::detail::BakedHandler<0u, false, 4182241153u, 285213718u, 945834018u, 906493363u>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          94
+        ],
+        [
+          "fiberish::aarch64::detail::BakedHandler<0u, false, 960496709u, 960496740u, 1795424447u, 1409287809u>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          86
+        ]
+      ],
+      "top_worker_leaves": [
+        [
+          "native: fiberish::aarch64::detail::OpExitBlock<true>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          581
+        ],
+        [
+          "native: fiberish::aarch64::detail::BakedHandler<0u, false, 945973349u, 1795817663u, 1426063009u>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          403
+        ],
+        [
+          "native: fiberish::aarch64::detail::BakedHandler<0u, false, 2453682209u, 2019653921u, 1795227935u, 1409288482u>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          374
+        ],
+        [
+          "native: fiberish::aarch64::detail::BakedHandler<0u, false, 943723521u, 1241645089u, 2453675041u, 4167137409u>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          211
+        ],
+        [
+          "native: fiberish::aarch64::detail::BakedHandler<0u, false, 704709604u, 2332295395u, 945973349u, 1795817663u, 1426063009u>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          198
+        ],
+        [
+          "native: fiberish::aarch64::detail::BakedHandler<0u, false, 2332164194u, 945811522u, 1796014175u, 1426062881u>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          166
+        ],
+        [
+          "native: fiberish::aarch64::detail::BakedHandler<0u, false, 2332426401u, 2019911881u, 2015918281u, 2015717571u, 1795162239u, 1426062913u>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          127
+        ],
+        [
+          "native: fiberish::aarch64::detail::BakedHandler<0u, false, 872415552u>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          113
+        ]
+      ],
+      "top_syscall_subtrees": [
+        [
+          "void [Fiberish.Core] Fiberish.Syscalls.SyscallManager::MarkProcessExitAndReparent(class Fiberish.Core.FiberTask,int32,bool,int32,bool",
+          10
+        ],
+        [
+          "instance void [Fiberish.Core] Fiberish.Syscalls.SyscallManager+<DoReadVCore>d__59::MoveNext(",
+          9
+        ],
+        [
+          "int32 [Fiberish.Core] Fiberish.Syscalls.SyscallManager::ImplOpenCore(class Fiberish.Syscalls.SyscallManager,uint8[],int32,uint32,uint32,valuetype Fiberish.Syscalls.PathLocation,valuetype [System.Runtime]System.Nullable`1<valuetype [System.Runtime]System.Threading.Tasks.ValueTask`1<int32>>&",
+          6
+        ],
+        [
+          "instance void [Fiberish.Core] Fiberish.Syscalls.SyscallManager+<Mmap>d__287::MoveNext(",
+          5
+        ],
+        [
+          "instance void [Fiberish.Core] Fiberish.Syscalls.SyscallManager+<DoWriteVCore>d__61::MoveNext(",
+          5
+        ]
+      ]
+    },
+    "i386-diff-revisions": {
+      "repetitions": 407,
+      "sha256": "6a077745c2bd8400b78a9f534e6db1a8c17e967543ceeceaca2996924352e19c",
+      "sample_command_seconds": 7.237196124988259,
+      "guest_window_seconds": 15.007998291999684,
+      "worker_ticks": 5282,
+      "worker_self_categories": {
+        "native leaf": 4463,
+        "syscall subtree": 574,
+        "other": 245
+      },
+      "libfibercpu_worker_leaves": 4573,
+      "top_native_symbols": [
+        [
+          "fiberish::DispatchWrapper<&fiberish::LogicFlow fiberish::baked_operand::OpJcc_NE_Rel8<fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{42729477u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned char, unsigned int*, unsigned long long&, fiberish::GprCache), fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{42729477u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          621
+        ],
+        [
+          "fiberish::DispatchWrapper<&fiberish::LogicFlow fiberish::baked_operand::OpGroup1_EbIb_Generic<fiberish::OperandSpec::PartialProfile<fiberish::DecodedOperandShape{50659578u}, 3u, 1u, 2u>>(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned char, unsigned int*, unsigned long long&, fiberish::GprCache), fiberish::OperandSpec::PartialProfile<fiberish::DecodedOperandShape{50659578u}, 3u, 1u, 2u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          455
+        ],
+        [
+          "fiberish::DispatchWrapper<&fiberish::LogicFlow fiberish::baked_operand::OpAdd_EvGv<fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{33620183u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned char, unsigned int*, unsigned long long&, fiberish::GprCache), fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{33620183u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          384
+        ],
+        [
+          "fiberish::BindScalarHandler(fiberish::DecodedInstruction const&, fiberish::ScalarBindingIndex)",
+          195
+        ],
+        [
+          "fiberish::DispatchWrapper<&fiberish::LogicFlow fiberish::baked_operand::OpMovzx_Byte<fiberish::OperandSpec::PartialProfile<fiberish::DecodedOperandShape{67305558u, 526360u}, 3u, 1u, 1u>>(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned char, unsigned int*, unsigned long long&, fiberish::GprCache), fiberish::OperandSpec::PartialProfile<fiberish::DecodedOperandShape{67305558u, 526360u}, 3u, 1u, 1u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          171
+        ],
+        [
+          "fiberish::DispatchWrapper<&fiberish::LogicFlow fiberish::baked_operand::OpGroup1_EvIb_Generic<fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{51708102u, 0u, 0u, 1u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned char, unsigned int*, unsigned long long&, fiberish::GprCache), fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{51708102u, 0u, 0u, 1u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          149
+        ],
+        [
+          "fiberish::DispatchWrapper<&fiberish::LogicFlow fiberish::baked_operand::OpGroup2_EvIb<fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{51708103u, 0u, 0u, 7u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned char, unsigned int*, unsigned long long&, fiberish::GprCache), fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{51708103u, 0u, 0u, 7u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          141
+        ],
+        [
+          "fiberish::GeneratedFindSuperOpcode(fiberish::DecodedInstruction const*)",
+          99
+        ],
+        [
+          "fiberish::DispatchWrapper<&fiberish::op::OpGroup1_EbIb_Generic(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned char, unsigned int*, unsigned long long&, fiberish::GprCache), fiberish::OperandSpec::WithModRM<fiberish::OperandSpec::SlotBound<1u, false>, (unsigned char)56, 0u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          96
+        ],
+        [
+          "fiberish::DecodeInstructionBounded(unsigned char const*, unsigned long, fiberish::DecodedInstTmp*, unsigned short*, unsigned short*, fiberish::DecodeHandlerMode)",
+          60
+        ],
+        [
+          "fiberish::OpExitBlock<0, false>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          55
+        ],
+        [
+          "fiberish::DispatchWrapper<&fiberish::op::OpCmp_EvGv(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned char, unsigned int*, unsigned long long&, fiberish::GprCache), fiberish::OperandSpec::SlotBound<1u, false>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          50
+        ]
+      ],
+      "top_worker_leaves": [
+        [
+          "native: fiberish::DispatchWrapper<&fiberish::LogicFlow fiberish::baked_operand::OpJcc_NE_Rel8<fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{42729477u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned char, unsigned int*, unsigned long long&, fiberish::GprCache), fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{42729477u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          621
+        ],
+        [
+          "native: fiberish::DispatchWrapper<&fiberish::LogicFlow fiberish::baked_operand::OpGroup1_EbIb_Generic<fiberish::OperandSpec::PartialProfile<fiberish::DecodedOperandShape{50659578u}, 3u, 1u, 2u>>(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned char, unsigned int*, unsigned long long&, fiberish::GprCache), fiberish::OperandSpec::PartialProfile<fiberish::DecodedOperandShape{50659578u}, 3u, 1u, 2u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          455
+        ],
+        [
+          "native: fiberish::DispatchWrapper<&fiberish::LogicFlow fiberish::baked_operand::OpAdd_EvGv<fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{33620183u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned char, unsigned int*, unsigned long long&, fiberish::GprCache), fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{33620183u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          384
+        ],
+        [
+          "native: fiberish::BindScalarHandler(fiberish::DecodedInstruction const&, fiberish::ScalarBindingIndex)",
+          195
+        ],
+        [
+          "native: fiberish::DispatchWrapper<&fiberish::LogicFlow fiberish::baked_operand::OpMovzx_Byte<fiberish::OperandSpec::PartialProfile<fiberish::DecodedOperandShape{67305558u, 526360u}, 3u, 1u, 1u>>(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned char, unsigned int*, unsigned long long&, fiberish::GprCache), fiberish::OperandSpec::PartialProfile<fiberish::DecodedOperandShape{67305558u, 526360u}, 3u, 1u, 1u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          171
+        ],
+        [
+          "native: fiberish::DispatchWrapper<&fiberish::LogicFlow fiberish::baked_operand::OpGroup1_EvIb_Generic<fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{51708102u, 0u, 0u, 1u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned char, unsigned int*, unsigned long long&, fiberish::GprCache), fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{51708102u, 0u, 0u, 1u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          149
+        ],
+        [
+          "native: fiberish::DispatchWrapper<&fiberish::LogicFlow fiberish::baked_operand::OpGroup2_EvIb<fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{51708103u, 0u, 0u, 7u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned char, unsigned int*, unsigned long long&, fiberish::GprCache), fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{51708103u, 0u, 0u, 7u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          141
+        ],
+        [
+          "lstat",
+          108
+        ]
+      ],
+      "top_syscall_subtrees": [
+        [
+          "instance void [Fiberish.Core] Fiberish.Syscalls.SyscallManager+<SysMunmap>d__288::MoveNext(",
+          167
+        ],
+        [
+          "instance void [Fiberish.Core] Fiberish.Syscalls.SyscallManager+<DoReadVCore>d__59::MoveNext(",
+          153
+        ],
+        [
+          "void [Fiberish.Core] Fiberish.Syscalls.SyscallManager::MarkProcessExitAndReparent(class Fiberish.Core.FiberTask,int32,bool,int32,bool",
+          66
+        ],
+        [
+          "instance void [Fiberish.Core] Fiberish.Syscalls.SyscallManager+<Mmap>d__287::MoveNext(",
+          39
+        ],
+        [
+          "int32 [Fiberish.Core] Fiberish.Syscalls.SyscallManager::ImplOpenCore(class Fiberish.Syscalls.SyscallManager,uint8[],int32,uint32,uint32,valuetype Fiberish.Syscalls.PathLocation,valuetype [System.Runtime]System.Nullable`1<valuetype [System.Runtime]System.Threading.Tasks.ValueTask`1<int32>>&",
+          36
+        ]
+      ]
+    },
+    "aarch64-diff-revisions": {
+      "repetitions": 380,
+      "sha256": "6a077745c2bd8400b78a9f534e6db1a8c17e967543ceeceaca2996924352e19c",
+      "sample_command_seconds": 7.219608750005136,
+      "guest_window_seconds": 14.5256722500053,
+      "worker_ticks": 5296,
+      "worker_self_categories": {
+        "native leaf": 4511,
+        "syscall subtree": 504,
+        "other": 281
+      },
+      "libfibercpu_worker_leaves": 4554,
+      "top_native_symbols": [
+        [
+          "fiberish::aarch64::detail::LoadStoreHandler<(fiberish::aarch64::Kind)21, 0u, -1, -1, -1, -1>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          1154
+        ],
+        [
+          "fiberish::aarch64::detail::IntegerHandler<(fiberish::aarch64::Kind)4, 64u, 0, -1, true>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          528
+        ],
+        [
+          "fiberish::aarch64::detail::BakedHandler<0u, false, 1426063233u>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          504
+        ],
+        [
+          "fiberish::aarch64::detail::IntegerHandler<(fiberish::aarch64::Kind)10, 0u, -1, -1, true>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          268
+        ],
+        [
+          "fiberish::aarch64::detail::BakedHandler<0u, true, 1895826111u>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          143
+        ],
+        [
+          "fiberish::aarch64::detail::IntegerHandler<(fiberish::aarch64::Kind)18, 0u, -1, -1, true>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          133
+        ],
+        [
+          "fiberish::aarch64::Run(fiberish::aarch64::State&, fiberish::aarch64::Memory const&, unsigned long long, fiberish::aarch64::Profile const&)",
+          119
+        ],
+        [
+          "fiberish::aarch64::detail::OpExitBlock<true>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          109
+        ],
+        [
+          "fiberish::aarch64::detail::LoadStoreHandler<(fiberish::aarch64::Kind)22, 64u, 1, 3, 3, 0>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          79
+        ],
+        [
+          "fiberish::aarch64::detail::LoadStoreHandler<(fiberish::aarch64::Kind)23, 64u, 1, 0, -1, 0>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          71
+        ],
+        [
+          "fiberish::aarch64::detail::BakedHandler<0u, false, 1426063169u>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          63
+        ],
+        [
+          "fiberish::FindBakedArmHandler(fiberish::aarch64::DecodedInstruction const&, bool)",
+          63
+        ]
+      ],
+      "top_worker_leaves": [
+        [
+          "native: fiberish::aarch64::detail::LoadStoreHandler<(fiberish::aarch64::Kind)21, 0u, -1, -1, -1, -1>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          1154
+        ],
+        [
+          "native: fiberish::aarch64::detail::IntegerHandler<(fiberish::aarch64::Kind)4, 64u, 0, -1, true>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          528
+        ],
+        [
+          "native: fiberish::aarch64::detail::BakedHandler<0u, false, 1426063233u>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          504
+        ],
+        [
+          "native: fiberish::aarch64::detail::IntegerHandler<(fiberish::aarch64::Kind)10, 0u, -1, -1, true>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          268
+        ],
+        [
+          "native: fiberish::aarch64::detail::BakedHandler<0u, true, 1895826111u>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          143
+        ],
+        [
+          "native: fiberish::aarch64::detail::IntegerHandler<(fiberish::aarch64::Kind)18, 0u, -1, -1, true>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          133
+        ],
+        [
+          "native: fiberish::aarch64::Run(fiberish::aarch64::State&, fiberish::aarch64::Memory const&, unsigned long long, fiberish::aarch64::Profile const&)",
+          119
+        ],
+        [
+          "native: fiberish::aarch64::detail::OpExitBlock<true>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          109
+        ]
+      ],
+      "top_syscall_subtrees": [
+        [
+          "instance void [Fiberish.Core] Fiberish.Syscalls.SyscallManager+<SysMunmap>d__288::MoveNext(",
+          143
+        ],
+        [
+          "instance void [Fiberish.Core] Fiberish.Syscalls.SyscallManager+<DoReadVCore>d__59::MoveNext(",
+          109
+        ],
+        [
+          "void [Fiberish.Core] Fiberish.Syscalls.SyscallManager::MarkProcessExitAndReparent(class Fiberish.Core.FiberTask,int32,bool,int32,bool",
+          81
+        ],
+        [
+          "instance void [Fiberish.Core] Fiberish.Syscalls.SyscallManager+<Mmap>d__287::MoveNext(",
+          32
+        ],
+        [
+          "int32 [Fiberish.Core] Fiberish.Syscalls.SyscallManager::ImplOpenCore(class Fiberish.Syscalls.SyscallManager,uint8[],int32,uint32,uint32,valuetype Fiberish.Syscalls.PathLocation,valuetype [System.Runtime]System.Nullable`1<valuetype [System.Runtime]System.Threading.Tasks.ValueTask`1<int32>>&",
+          28
+        ]
+      ]
+    },
+    "i386-ls": {
+      "repetitions": 779,
+      "sha256": "76ee0c39c77fe441c31c01b902817d4e220fef17194226f2e444d5f3c333395d",
+      "sample_command_seconds": 7.236452875004034,
+      "guest_window_seconds": 14.085904791994835,
+      "worker_ticks": 4991,
+      "worker_self_categories": {
+        "syscall subtree": 2678,
+        "other": 290,
+        "native leaf": 2023
+      },
+      "libfibercpu_worker_leaves": 2095,
+      "top_native_symbols": [
+        [
+          "fiberish::BindScalarHandler(fiberish::DecodedInstruction const&, fiberish::ScalarBindingIndex)",
+          376
+        ],
+        [
+          "fiberish::GeneratedFindSuperOpcode(fiberish::DecodedInstruction const*)",
+          148
+        ],
+        [
+          "fiberish::DecodeInstructionBounded(unsigned char const*, unsigned long, fiberish::DecodedInstTmp*, unsigned short*, unsigned short*, fiberish::DecodeHandlerMode)",
+          89
+        ],
+        [
+          "fiberish::BasicBlock::WriteOps(fiberish::BlockSlotLayout, std::span<fiberish::DecodedInstruction const, 18446744073709551615ul>, fiberish::BasicBlock*, bool, std::span<fiberish::ScalarBindingIndex const, 18446744073709551615ul>)",
+          87
+        ],
+        [
+          "fiberish::DecodeBlock(fiberish::EmuState*, unsigned int, unsigned int, unsigned long long, fiberish::BasicBlock*, bool*)",
+          77
+        ],
+        [
+          "fiberish::LowerFusionOperandHandler(fiberish::DecodedInstruction const*, long long (*)(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int))",
+          59
+        ],
+        [
+          "fiberish::(anonymous namespace)::FindScalarBinding(long long (*)(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int))",
+          56
+        ],
+        [
+          "fiberish::mem::Mmu::lookup_cached_block(unsigned int)",
+          54
+        ],
+        [
+          "fiberish::BasicBlock::ReadOp(unsigned long) const",
+          45
+        ],
+        [
+          "<deduplicated_symbol>",
+          35
+        ],
+        [
+          "fiberish::OpExitBlock<0, false>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          25
+        ],
+        [
+          "BuildBlockConcat(fiberish::EmuState*, fiberish::BasicBlock const*, fiberish::BasicBlock const*, bool)",
+          23
+        ]
+      ],
+      "top_worker_leaves": [
+        [
+          "lstat",
+          1415
+        ],
+        [
+          "native: fiberish::BindScalarHandler(fiberish::DecodedInstruction const&, fiberish::ScalarBindingIndex)",
+          376
+        ],
+        [
+          "__getdirentries64",
+          228
+        ],
+        [
+          "__open_nocancel",
+          220
+        ],
+        [
+          "JIT_CountProfile32(int volatile*)",
+          173
+        ],
+        [
+          "string [System.Private.CoreLib] System.IO.PathInternal::RemoveRelativeSegments(string,int32)[OptimizedTier1]",
+          164
+        ],
+        [
+          "native: fiberish::GeneratedFindSuperOpcode(fiberish::DecodedInstruction const*)",
+          148
+        ],
+        [
+          "native: fiberish::DecodeInstructionBounded(unsigned char const*, unsigned long, fiberish::DecodedInstTmp*, unsigned short*, unsigned short*, fiberish::DecodeHandlerMode)",
+          89
+        ]
+      ],
+      "top_syscall_subtrees": [
+        [
+          "instance valuetype [System.Runtime]System.Threading.Tasks.ValueTask`1<int32> [Fiberish.Core] Fiberish.Syscalls.SyscallManager::SysGetdents64(class Fiberish.Core.Engine,uint32,uint64,uint32,uint32,uint32,uint32",
+          2120
+        ],
+        [
+          "instance void [Fiberish.Core] Fiberish.Syscalls.SyscallManager+<Mmap>d__287::MoveNext(",
+          103
+        ],
+        [
+          "bool [Fiberish.Core] Fiberish.Syscalls.SyscallManager::WriteStatx(class Fiberish.Core.Engine,uint64,class Fiberish.VFS.Inode,uint32,class Fiberish.VFS.Mount",
+          98
+        ],
+        [
+          "void [Fiberish.Core] Fiberish.Syscalls.SyscallManager::MarkProcessExitAndReparent(class Fiberish.Core.FiberTask,int32,bool,int32,bool",
+          74
+        ],
+        [
+          "int32 [Fiberish.Core] Fiberish.Syscalls.SyscallManager::ImplOpenCore(class Fiberish.Syscalls.SyscallManager,uint8[],int32,uint32,uint32,valuetype Fiberish.Syscalls.PathLocation,valuetype [System.Runtime]System.Nullable`1<valuetype [System.Runtime]System.Threading.Tasks.ValueTask`1<int32>>&",
+          58
+        ]
+      ]
+    },
+    "aarch64-ls": {
+      "repetitions": 613,
+      "sha256": "76ee0c39c77fe441c31c01b902817d4e220fef17194226f2e444d5f3c333395d",
+      "sample_command_seconds": 7.231277459010016,
+      "guest_window_seconds": 9.511092917004135,
+      "worker_ticks": 4895,
+      "worker_self_categories": {
+        "syscall subtree": 3220,
+        "other": 304,
+        "native leaf": 1371
+      },
+      "libfibercpu_worker_leaves": 1412,
+      "top_native_symbols": [
+        [
+          "fiberish::aarch64::Run(fiberish::aarch64::State&, fiberish::aarch64::Memory const&, unsigned long long, fiberish::aarch64::Profile const&)",
+          217
+        ],
+        [
+          "fiberish::FindBakedArmHandler(fiberish::aarch64::DecodedInstruction const&, bool)",
+          131
+        ],
+        [
+          "fiberish::FindBakedArmSequence(unsigned int const*, unsigned int, unsigned int*, unsigned int, unsigned long long (*&)(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int))",
+          100
+        ],
+        [
+          "fiberish::aarch64::detail::OpExitBlock<true>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          66
+        ],
+        [
+          "fiberish::aarch64::detail::DecodeFields(unsigned int)",
+          61
+        ],
+        [
+          "fiberish::FindBakedArmPair(unsigned int, unsigned int, unsigned int, unsigned long long (*&)(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int))",
+          49
+        ],
+        [
+          "fiberish::(anonymous namespace)::LookupCachedBlock(void*, unsigned long long, unsigned char const*)",
+          45
+        ],
+        [
+          "fiberish::aarch64::(anonymous namespace)::BindDecodedOp(unsigned int, fiberish::aarch64::Profile const&)",
+          22
+        ],
+        [
+          "fiberish::mem::BlockPageHashIndex<fiberish::mem::BlockCacheKey>::Backing::try_emplace(unsigned short, unsigned int)",
+          21
+        ],
+        [
+          "fiberish::aarch64::detail::AtomicHandler<(fiberish::aarch64::Kind)25>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          15
+        ],
+        [
+          "<deduplicated_symbol>",
+          12
+        ],
+        [
+          "fiberish::aarch64::detail::BakedHandler<0u, false, 2432697955u, 1895825439u, 1426063020u>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          10
+        ]
+      ],
+      "top_worker_leaves": [
+        [
+          "lstat",
+          1722
+        ],
+        [
+          "JIT_CountProfile32(int volatile*)",
+          269
+        ],
+        [
+          "__getdirentries64",
+          254
+        ],
+        [
+          "native: fiberish::aarch64::Run(fiberish::aarch64::State&, fiberish::aarch64::Memory const&, unsigned long long, fiberish::aarch64::Profile const&)",
+          217
+        ],
+        [
+          "__open_nocancel",
+          205
+        ],
+        [
+          "string [System.Private.CoreLib] System.IO.PathInternal::RemoveRelativeSegments(string,int32)[OptimizedTier1]",
+          195
+        ],
+        [
+          "native: fiberish::FindBakedArmHandler(fiberish::aarch64::DecodedInstruction const&, bool)",
+          131
+        ],
+        [
+          "_tlv_get_addr",
+          103
+        ]
+      ],
+      "top_syscall_subtrees": [
+        [
+          "instance valuetype [System.Runtime]System.Threading.Tasks.ValueTask`1<int32> [Fiberish.Core] Fiberish.Syscalls.SyscallManager::SysGetdents64(class Fiberish.Core.Engine,uint32,uint64,uint32,uint32,uint32,uint32",
+          2634
+        ],
+        [
+          "bool [Fiberish.Core] Fiberish.Syscalls.SyscallManager::WriteStatx(class Fiberish.Core.Engine,uint64,class Fiberish.VFS.Inode,uint32,class Fiberish.VFS.Mount",
+          70
+        ],
+        [
+          "instance void [Fiberish.Core] Fiberish.Syscalls.SyscallManager+<Mmap>d__287::MoveNext(",
+          67
+        ],
+        [
+          "instance void [Fiberish.Core] Fiberish.Syscalls.SyscallManager+<SysExecve>d__324::MoveNext(",
+          66
+        ],
+        [
+          "int32 [Fiberish.Core] Fiberish.Syscalls.SyscallManager::ImplOpenCore(class Fiberish.Syscalls.SyscallManager,uint8[],int32,uint32,uint32,valuetype Fiberish.Syscalls.PathLocation,valuetype [System.Runtime]System.Nullable`1<valuetype [System.Runtime]System.Threading.Tasks.ValueTask`1<int32>>&",
+          66
+        ]
+      ]
+    },
+    "i386-grep-regex": {
+      "repetitions": 587,
+      "sha256": "41f610c24cd3eb47c8e7a404827190f003bacda359f3beb2debf85da76a6ee88",
+      "sample_command_seconds": 7.229499500012025,
+      "guest_window_seconds": 15.030335041999933,
+      "worker_ticks": 5303,
+      "worker_self_categories": {
+        "native leaf": 4731,
+        "syscall subtree": 318,
+        "other": 254
+      },
+      "libfibercpu_worker_leaves": 4800,
+      "top_native_symbols": [
+        [
+          "fiberish::DispatchWrapper<&fiberish::OpMov_GvEv_Baked32(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned char, unsigned int*, unsigned long long&, fiberish::GprCache), fiberish::OperandSpec::WithModRM<fiberish::OperandSpec::SlotBound<1u, false>, (unsigned char)56, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          435
+        ],
+        [
+          "fiberish::OperandClone_205_SuperOpcode_2_170_OpCmp_EvGv__OpJcc_E_Rel8(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          412
+        ],
+        [
+          "fiberish::BindScalarHandler(fiberish::DecodedInstruction const&, fiberish::ScalarBindingIndex)",
+          353
+        ],
+        [
+          "fiberish::DispatchWrapper<&fiberish::LogicFlow fiberish::baked_operand::OpGroup1_EvIb_Generic<fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{50659521u, 0u, 0u, 1u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned char, unsigned int*, unsigned long long&, fiberish::GprCache), fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{50659521u, 0u, 0u, 1u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          205
+        ],
+        [
+          "fiberish::DispatchWrapper<&fiberish::LogicFlow fiberish::baked_operand::OpJcc_LE_Rel32<fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{109838342u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned char, unsigned int*, unsigned long long&, fiberish::GprCache), fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{109838342u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          181
+        ],
+        [
+          "fiberish::GeneratedFindSuperOpcode(fiberish::DecodedInstruction const*)",
+          170
+        ],
+        [
+          "fiberish::DispatchWrapper<&fiberish::op::OpMovzx_Byte(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned char, unsigned int*, unsigned long long&, fiberish::GprCache), fiberish::OperandSpec::SlotBound<1u, false>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          122
+        ],
+        [
+          "fiberish::DispatchWrapper<&fiberish::LogicFlow fiberish::baked_operand::OpMovzx_Byte<fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{50528257u, 526340u}, 2u>>(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned char, unsigned int*, unsigned long long&, fiberish::GprCache), fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{50528257u, 526340u}, 2u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          111
+        ],
+        [
+          "fiberish::DispatchWrapper<&fiberish::op::OpCmp_EvGv(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned char, unsigned int*, unsigned long long&, fiberish::GprCache), fiberish::OperandSpec::SlotBound<1u, false>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          111
+        ],
+        [
+          "fiberish::DecodeInstructionBounded(unsigned char const*, unsigned long, fiberish::DecodedInstTmp*, unsigned short*, unsigned short*, fiberish::DecodeHandlerMode)",
+          103
+        ],
+        [
+          "fiberish::DispatchWrapper<&fiberish::LogicFlow fiberish::baked_operand::OpMov_EvGv<fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{33620173u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned char, unsigned int*, unsigned long long&, fiberish::GprCache), fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{33620173u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          93
+        ],
+        [
+          "fiberish::OperandClone_689_SuperOpcode_2_030_OpTest_EvGv__OpJcc_NE_Rel8(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          69
+        ]
+      ],
+      "top_worker_leaves": [
+        [
+          "native: fiberish::DispatchWrapper<&fiberish::OpMov_GvEv_Baked32(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned char, unsigned int*, unsigned long long&, fiberish::GprCache), fiberish::OperandSpec::WithModRM<fiberish::OperandSpec::SlotBound<1u, false>, (unsigned char)56, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          435
+        ],
+        [
+          "native: fiberish::OperandClone_205_SuperOpcode_2_170_OpCmp_EvGv__OpJcc_E_Rel8(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          412
+        ],
+        [
+          "native: fiberish::BindScalarHandler(fiberish::DecodedInstruction const&, fiberish::ScalarBindingIndex)",
+          353
+        ],
+        [
+          "native: fiberish::DispatchWrapper<&fiberish::LogicFlow fiberish::baked_operand::OpGroup1_EvIb_Generic<fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{50659521u, 0u, 0u, 1u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned char, unsigned int*, unsigned long long&, fiberish::GprCache), fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{50659521u, 0u, 0u, 1u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          205
+        ],
+        [
+          "lstat",
+          185
+        ],
+        [
+          "native: fiberish::DispatchWrapper<&fiberish::LogicFlow fiberish::baked_operand::OpJcc_LE_Rel32<fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{109838342u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned char, unsigned int*, unsigned long long&, fiberish::GprCache), fiberish::OperandSpec::Profile<fiberish::DecodedOperandShape{109838342u}, 3u>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          181
+        ],
+        [
+          "native: fiberish::GeneratedFindSuperOpcode(fiberish::DecodedInstruction const*)",
+          170
+        ],
+        [
+          "native: fiberish::DispatchWrapper<&fiberish::op::OpMovzx_Byte(fiberish::EmuState*, fiberish::DecodedOp*, fiberish::mem::MicroTLB*, unsigned int, unsigned char, unsigned int*, unsigned long long&, fiberish::GprCache), fiberish::OperandSpec::SlotBound<1u, false>>(fiberish::EmuState*, fiberish::DecodedOp*, long long, unsigned long long, unsigned long long, unsigned int, unsigned long long, unsigned int, unsigned int)",
+          122
+        ]
+      ],
+      "top_syscall_subtrees": [
+        [
+          "void [Fiberish.Core] Fiberish.Syscalls.SyscallManager::MarkProcessExitAndReparent(class Fiberish.Core.FiberTask,int32,bool,int32,bool",
+          64
+        ],
+        [
+          "instance void [Fiberish.Core] Fiberish.Syscalls.SyscallManager+<Mmap>d__287::MoveNext(",
+          61
+        ],
+        [
+          "int32 [Fiberish.Core] Fiberish.Syscalls.SyscallManager::ImplOpenCore(class Fiberish.Syscalls.SyscallManager,uint8[],int32,uint32,uint32,valuetype Fiberish.Syscalls.PathLocation,valuetype [System.Runtime]System.Nullable`1<valuetype [System.Runtime]System.Threading.Tasks.ValueTask`1<int32>>&",
+          47
+        ],
+        [
+          "instance void [Fiberish.Core] Fiberish.Syscalls.SyscallManager+<SysExecve>d__324::MoveNext(",
+          33
+        ],
+        [
+          "instance void [Fiberish.Core] Fiberish.Syscalls.SyscallManager+<DoReadVCore>d__59::MoveNext(",
+          30
+        ]
+      ]
+    },
+    "aarch64-grep-regex": {
+      "repetitions": 570,
+      "sha256": "41f610c24cd3eb47c8e7a404827190f003bacda359f3beb2debf85da76a6ee88",
+      "sample_command_seconds": 7.209107665999909,
+      "guest_window_seconds": 14.278760333007085,
+      "worker_ticks": 5322,
+      "worker_self_categories": {
+        "native leaf": 4875,
+        "syscall subtree": 259,
+        "other": 188
+      },
+      "libfibercpu_worker_leaves": 4893,
+      "top_native_symbols": [
+        [
+          "fiberish::aarch64::detail::BakedHandler<0u, false, 1426063200u>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          551
+        ],
+        [
+          "fiberish::aarch64::detail::LoadStoreHandler<(fiberish::aarch64::Kind)22, 64u, 1, 3, 3, 0>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          503
+        ],
+        [
+          "fiberish::aarch64::detail::LoadStoreHandler<(fiberish::aarch64::Kind)21, 8u, 1, 0, -1, 0>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          353
+        ],
+        [
+          "fiberish::aarch64::detail::IntegerHandler<(fiberish::aarch64::Kind)3, 64u, 3, 0, true>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          307
+        ],
+        [
+          "fiberish::aarch64::detail::IntegerHandler<(fiberish::aarch64::Kind)18, 0u, -1, -1, true>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          182
+        ],
+        [
+          "fiberish::aarch64::Run(fiberish::aarch64::State&, fiberish::aarch64::Memory const&, unsigned long long, fiberish::aarch64::Profile const&)",
+          181
+        ],
+        [
+          "fiberish::aarch64::detail::VectorHandler<(fiberish::aarch64::detail::VectorFamily)1>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          159
+        ],
+        [
+          "fiberish::aarch64::detail::OpExitBlock<true>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          143
+        ],
+        [
+          "fiberish::aarch64::detail::BakedHandler<0u, false, 2853372897u>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          139
+        ],
+        [
+          "fiberish::aarch64::detail::VectorHandler<(fiberish::aarch64::detail::VectorFamily)9>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          126
+        ],
+        [
+          "fiberish::aarch64::detail::IntegerHandler<(fiberish::aarch64::Kind)9, 0u, -1, -1, true>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          117
+        ],
+        [
+          "fiberish::aarch64::detail::IntegerHandler<(fiberish::aarch64::Kind)19, 64u, 0, -1, true>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          113
+        ]
+      ],
+      "top_worker_leaves": [
+        [
+          "native: fiberish::aarch64::detail::BakedHandler<0u, false, 1426063200u>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          551
+        ],
+        [
+          "native: fiberish::aarch64::detail::LoadStoreHandler<(fiberish::aarch64::Kind)22, 64u, 1, 3, 3, 0>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          503
+        ],
+        [
+          "native: fiberish::aarch64::detail::LoadStoreHandler<(fiberish::aarch64::Kind)21, 8u, 1, 0, -1, 0>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          353
+        ],
+        [
+          "native: fiberish::aarch64::detail::IntegerHandler<(fiberish::aarch64::Kind)3, 64u, 3, 0, true>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          307
+        ],
+        [
+          "native: fiberish::aarch64::detail::IntegerHandler<(fiberish::aarch64::Kind)18, 0u, -1, -1, true>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          182
+        ],
+        [
+          "native: fiberish::aarch64::Run(fiberish::aarch64::State&, fiberish::aarch64::Memory const&, unsigned long long, fiberish::aarch64::Profile const&)",
+          181
+        ],
+        [
+          "lstat",
+          171
+        ],
+        [
+          "native: fiberish::aarch64::detail::VectorHandler<(fiberish::aarch64::detail::VectorFamily)1>(fiberish::aarch64::State&, fiberish::aarch64::detail::DecodedOp const*, unsigned long long, fiberish::mem::SoftTlb const*, unsigned long long, unsigned long, unsigned int)",
+          159
+        ]
+      ],
+      "top_syscall_subtrees": [
+        [
+          "int32 [Fiberish.Core] Fiberish.Syscalls.SyscallManager::ImplOpenCore(class Fiberish.Syscalls.SyscallManager,uint8[],int32,uint32,uint32,valuetype Fiberish.Syscalls.PathLocation,valuetype [System.Runtime]System.Nullable`1<valuetype [System.Runtime]System.Threading.Tasks.ValueTask`1<int32>>&",
+          40
+        ],
+        [
+          "instance void [Fiberish.Core] Fiberish.Syscalls.SyscallManager+<SysExecve>d__324::MoveNext(",
+          40
+        ],
+        [
+          "void [Fiberish.Core] Fiberish.Syscalls.SyscallManager::MarkProcessExitAndReparent(class Fiberish.Core.FiberTask,int32,bool,int32,bool",
+          32
+        ],
+        [
+          "instance void [Fiberish.Core] Fiberish.Syscalls.SyscallManager+<DoReadVCore>d__59::MoveNext(",
+          30
+        ],
+        [
+          "instance void [Fiberish.Core] Fiberish.Syscalls.SyscallManager+<CloneTask>d__308::MoveNext(",
+          28
+        ]
+      ]
+    }
+  },
+  "grep_tiering_disabled_ms_per_command": [
+    {
+      "round": 0,
+      "mode": "full",
+      "guest": "i386",
+      "ms": 24.683111332706176
+    },
+    {
+      "round": 0,
+      "mode": "full",
+      "guest": "aarch64",
+      "ms": 23.779971995584976
+    },
+    {
+      "round": 0,
+      "mode": "short",
+      "guest": "i386",
+      "ms": 27.897514000263374
+    },
+    {
+      "round": 0,
+      "mode": "short",
+      "guest": "aarch64",
+      "ms": 27.35884733556304
+    },
+    {
+      "round": 1,
+      "mode": "short",
+      "guest": "aarch64",
+      "ms": 27.337138667159405
+    },
+    {
+      "round": 1,
+      "mode": "short",
+      "guest": "i386",
+      "ms": 28.08529166698766
+    },
+    {
+      "round": 1,
+      "mode": "full",
+      "guest": "aarch64",
+      "ms": 23.799639001178246
+    },
+    {
+      "round": 1,
+      "mode": "full",
+      "guest": "i386",
+      "ms": 26.23541666738068
+    },
+    {
+      "round": 2,
+      "mode": "full",
+      "guest": "i386",
+      "ms": 24.723499998799525
+    },
+    {
+      "round": 2,
+      "mode": "full",
+      "guest": "aarch64",
+      "ms": 24.206291665905155
+    },
+    {
+      "round": 2,
+      "mode": "short",
+      "guest": "i386",
+      "ms": 27.91427766593794
+    },
+    {
+      "round": 2,
+      "mode": "short",
+      "guest": "aarch64",
+      "ms": 27.455153001938015
+    },
+    {
+      "round": 3,
+      "mode": "short",
+      "guest": "aarch64",
+      "ms": 27.458235999802127
+    },
+    {
+      "round": 3,
+      "mode": "short",
+      "guest": "i386",
+      "ms": 28.214305333676748
+    },
+    {
+      "round": 3,
+      "mode": "full",
+      "guest": "aarch64",
+      "ms": 24.152083332107093
+    },
+    {
+      "round": 3,
+      "mode": "full",
+      "guest": "i386",
+      "ms": 24.86266666771068
+    },
+    {
+      "round": 4,
+      "mode": "full",
+      "guest": "i386",
+      "ms": 24.93030533272152
+    },
+    {
+      "round": 4,
+      "mode": "full",
+      "guest": "aarch64",
+      "ms": 25.430041666065033
+    },
+    {
+      "round": 4,
+      "mode": "short",
+      "guest": "i386",
+      "ms": 28.62140300082198
+    },
+    {
+      "round": 4,
+      "mode": "short",
+      "guest": "aarch64",
+      "ms": 27.553236000433873
+    },
+    {
+      "round": 5,
+      "mode": "short",
+      "guest": "aarch64",
+      "ms": 27.508583332140308
+    },
+    {
+      "round": 5,
+      "mode": "short",
+      "guest": "i386",
+      "ms": 28.16512500188158
+    },
+    {
+      "round": 5,
+      "mode": "full",
+      "guest": "aarch64",
+      "ms": 24.584110996026237
+    },
+    {
+      "round": 5,
+      "mode": "full",
+      "guest": "i386",
+      "ms": 25.78572233323939
+    },
+    {
+      "round": 6,
+      "mode": "full",
+      "guest": "i386",
+      "ms": 25.13302766601555
+    },
+    {
+      "round": 6,
+      "mode": "full",
+      "guest": "aarch64",
+      "ms": 24.385597328849446
+    },
+    {
+      "round": 6,
+      "mode": "short",
+      "guest": "i386",
+      "ms": 28.340333330561407
+    },
+    {
+      "round": 6,
+      "mode": "short",
+      "guest": "aarch64",
+      "ms": 27.53305566632965
+    },
+    {
+      "round": 7,
+      "mode": "short",
+      "guest": "aarch64",
+      "ms": 27.622305332139756
+    },
+    {
+      "round": 7,
+      "mode": "short",
+      "guest": "i386",
+      "ms": 28.392485997756012
+    },
+    {
+      "round": 7,
+      "mode": "full",
+      "guest": "aarch64",
+      "ms": 24.363763999038685
+    },
+    {
+      "round": 7,
+      "mode": "full",
+      "guest": "i386",
+      "ms": 25.061055668629706
+    }
+  ]
+}

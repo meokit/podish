@@ -68,3 +68,5 @@ with tempfile.TemporaryDirectory() as tmp, benchmark_lock(cfg["benchmark_lock"])
             print(json.dumps({"round": n + 1, "guest": guest, "seconds": seconds}))
 PYTHON
 ```
+
+The [paired reruns and disassembly profiles](profile/README.md) trace five workloads to guest code and host handlers and test the effect of host tiering on recursive ls.
