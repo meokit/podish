@@ -14,18 +14,14 @@ namespace {
 using aarch64::Access;
 using aarch64::Vector128;
 
-bool Representable(uint64_t address, size_t size) {
-    return address <= UINT32_MAX && size <= (uint64_t{1} << 32) - address;
-}
-
 template <class T, bool Write>
-bool Transfer(EmuState& engine, uint32_t address, void* bytes) {
+bool Transfer(EmuState& engine, uint64_t address, void* bytes) {
     if constexpr (Write) {
         T value;
         std::memcpy(&value, bytes, sizeof value);
-        return engine.mmu.write_no_utlb<T>(address, value).has_value();
+        return engine.mmu.write_arm_no_utlb<T>(address, value).has_value();
     } else {
-        auto value = engine.mmu.read_no_utlb<T>(address);
+        auto value = engine.mmu.read_arm_no_utlb<T>(address);
         if (!value) return false;
         std::memcpy(bytes, &*value, sizeof(T));
         return true;
@@ -34,33 +30,32 @@ bool Transfer(EmuState& engine, uint32_t address, void* bytes) {
 
 template <bool Write>
 bool TransferBytes(EmuState& engine, uint64_t address, void* bytes, size_t size) {
-    if (!Representable(address, size)) return false;
-    const auto addr = static_cast<uint32_t>(address);
+    if (!mem::ArmAddressRangeValid(address, size)) return false;
     switch (size) {
         case 1:
-            return Transfer<uint8_t, Write>(engine, addr, bytes);
+            return Transfer<uint8_t, Write>(engine, address, bytes);
         case 2:
-            return Transfer<uint16_t, Write>(engine, addr, bytes);
+            return Transfer<uint16_t, Write>(engine, address, bytes);
         case 4:
-            return Transfer<uint32_t, Write>(engine, addr, bytes);
+            return Transfer<uint32_t, Write>(engine, address, bytes);
         case 8:
-            return Transfer<uint64_t, Write>(engine, addr, bytes);
+            return Transfer<uint64_t, Write>(engine, address, bytes);
         case 16:
-            return Transfer<Vector128, Write>(engine, addr, bytes);
+            return Transfer<Vector128, Write>(engine, address, bytes);
         default: {
             if (size == 0 || size > 64) return false;
             // Validate every destination before a multi-register transfer can modify guest memory.
-            const auto last = addr + static_cast<uint32_t>(size - 1);
-            if ((addr ^ last) & ~mem::PAGE_MASK) {
+            const auto last = address + size - 1;
+            if (mem::ArmPageTag(address) != mem::ArmPageTag(last)) {
                 constexpr auto perm = Write ? mem::Property::Write : mem::Property::Read;
-                if (!engine.mmu.resolve_ptr(addr, perm) || !engine.mmu.resolve_ptr(last, perm)) return false;
+                if (!engine.mmu.resolve_arm_ptr(address, perm) || !engine.mmu.resolve_arm_ptr(last, perm)) return false;
             }
             auto* data = static_cast<uint8_t*>(bytes);
             uint32_t offset = 0;
             for (; offset + 16 <= size; offset += 16)
-                if (!Transfer<Vector128, Write>(engine, addr + offset, data + offset)) return false;
+                if (!Transfer<Vector128, Write>(engine, address + offset, data + offset)) return false;
             for (; offset < size; ++offset)
-                if (!Transfer<uint8_t, Write>(engine, addr + offset, data + offset)) return false;
+                if (!Transfer<uint8_t, Write>(engine, address + offset, data + offset)) return false;
             return true;
         }
     }
@@ -69,8 +64,8 @@ bool TransferBytes(EmuState& engine, uint64_t address, void* bytes, size_t size)
 bool Read(void* opaque, uint64_t address, void* dest, size_t size, Access access) {
     auto& engine = *static_cast<EmuState*>(opaque);
     if (access != Access::Execute) return TransferBytes<false>(engine, address, dest, size);
-    if (!Representable(address, size) || size != 4 || (address & 3)) return false;
-    auto source = engine.mmu.translate_exec(&engine, static_cast<uint32_t>(address));
+    if (!mem::ArmAddressRangeValid(address, size) || size != 4 || (address & 3)) return false;
+    auto source = engine.mmu.translate_arm_exec(&engine, address);
     if (!source) return false;
     std::memcpy(dest, source, 4);
     return true;
@@ -103,13 +98,14 @@ inline void CopyFast(void* dest, const void* source, size_t size) {
 }
 
 bool IsFastSpan(uint64_t address, size_t size) {
-    return address <= UINT32_MAX && size && size <= 64 && size <= mem::PAGE_SIZE - (address & mem::PAGE_MASK);
+    return address < mem::ArmTaskSize && size && size <= 64 &&
+           size <= aarch64::detail::PageBytes - (address & aarch64::detail::PageMask);
 }
 
 bool ReadFast(void* opaque, uint64_t address, void* dest, size_t size) {
     if (!IsFastSpan(address, size)) return false;
     auto& engine = *static_cast<EmuState*>(opaque);
-    const auto* source = engine.mmu.try_cached_data_page<false>(static_cast<uint32_t>(address));
+    const auto* source = engine.mmu.try_arm_cached_data_page<false>(address);
     if (!source) return false;
     CopyFast(dest, source, size);
     return true;
@@ -118,7 +114,7 @@ bool ReadFast(void* opaque, uint64_t address, void* dest, size_t size) {
 bool WriteFast(void* opaque, uint64_t address, const void* source, size_t size) {
     if (!IsFastSpan(address, size)) return false;
     auto& engine = *static_cast<EmuState*>(opaque);
-    auto* dest = engine.mmu.try_cached_data_page<true>(static_cast<uint32_t>(address));
+    auto* dest = engine.mmu.try_arm_cached_data_page<true>(address);
     if (!dest) return false;
     CopyFast(dest, source, size);
     return true;
@@ -126,18 +122,20 @@ bool WriteFast(void* opaque, uint64_t address, const void* source, size_t size) 
 
 const uint8_t* ExecutablePage(void* opaque, uint64_t address) {
     auto& engine = *static_cast<EmuState*>(opaque);
-    if (engine.mem_hook || address > UINT32_MAX || (address & mem::PAGE_MASK)) return nullptr;
-    return reinterpret_cast<const uint8_t*>(engine.mmu.try_executable_page(static_cast<uint32_t>(address)));
+    if (engine.mem_hook || engine.mmu.has_arm_mem_hook() || address >= mem::ArmTaskSize ||
+        (address & aarch64::detail::PageMask))
+        return nullptr;
+    return reinterpret_cast<const uint8_t*>(engine.mmu.try_arm_executable_page(address));
 }
 
 aarch64::detail::BasicBlock* LookupCachedBlock(void* opaque, uint64_t pc, const uint8_t* executable) {
     if (!executable) executable = ExecutablePage(opaque, pc & ~aarch64::detail::PageMask);
     if (!executable) return nullptr;
-    return static_cast<EmuState*>(opaque)->mmu.lookup_arm_block(static_cast<uint32_t>(pc), executable);
+    return static_cast<EmuState*>(opaque)->mmu.lookup_arm_block(pc, executable);
 }
 
 void* AllocateBlock(void* opaque, size_t size, uint64_t pc) {
-    return static_cast<EmuState*>(opaque)->mmu.try_allocate_block_bytes(size, uint32_t(pc));
+    return static_cast<EmuState*>(opaque)->mmu.try_allocate_arm_block_bytes(size, pc);
 }
 
 void CacheBlock(void* opaque, aarch64::detail::BasicBlock* block) {
@@ -180,12 +178,10 @@ int RunArmEngine(EmuState& engine, uint64_t end_pc, uint64_t budget, bool step) 
     engine.status = EmuStatus::Running;
     engine.fault_vector = 0xff;
     engine.arm_fault_address = 0;
-    engine.mmu.sync_runtime_tlb_shootdowns();
-    auto publish = engine.mmu.scoped_runtime_tlb_publish_batch();
     RestartableMemoryFaultScope restartable(&engine);
     if (!step) cpu.ClearExclusive();
     aarch64::Memory memory{
-        &engine,           Read,          Write,     ExecutablePage, ReadFast, WriteFast, engine.mmu.data_tlb(),
+        &engine,           Read,          Write,     ExecutablePage, ReadFast, WriteFast, engine.mmu.arm_data_tlb(),
         LookupCachedBlock, AllocateBlock, CacheBlock};
 #ifdef ENABLE_TLB_STATS
     memory.stats = &engine.mmu.stats;
@@ -280,6 +276,7 @@ int RunArmEngine(EmuState& engine, uint64_t end_pc, uint64_t budget, bool step) 
 }  // namespace fiberish
 
 void AArch64_Reset(EmuState* state) {
+    state->mmu.enable_arm_address_space();
     if (!state->arm)
         state->arm = std::make_shared<fiberish::aarch64::State>();
     else {

@@ -16,6 +16,7 @@
 #include "block_page_hash_index.h"
 #if FIBERCPU_GUEST_AARCH64
 #include "../aarch64/block.h"
+#include "arm_page_table.h"
 #endif
 #include "tlb.h"
 #include "types.h"
@@ -285,35 +286,55 @@ struct CodeCacheState {
     };
 
 #if FIBERCPU_GUEST_AARCH64
+    struct ArmBlockCacheKey {
+        uintptr_t host_page_base = 0;
+        uint64_t guest_pc = 0;
+        bool operator==(const ArmBlockCacheKey&) const = default;
+    };
+
     struct ArmBlocks {
         using BasicBlock = aarch64::detail::BasicBlock;
-        BlockPageHashIndex<BlockCacheKey> index;
+        // Reuse the host-backing and offset index for each four-GiB slice.
+        // Allocate a slice only when it contains a translated block.
+        std::array<std::unique_ptr<BlockPageHashIndex<BlockCacheKey>>, (ArmTaskSize >> 32)> index;
         std::vector<BasicBlock*> entries;
         ankerl::unordered_dense::map<uintptr_t, std::vector<BasicBlock*>> pages;
         struct RecentEntry {
-            BlockCacheKey key{};
+            ArmBlockCacheKey key{};
             BasicBlock* block = nullptr;
         };
         mutable std::array<RecentEntry, BlockLookupCacheSize> recent{};
 
-        BasicBlock* Find(const BlockCacheKey& key) const {
-            auto& cached = recent[BlockLookupCacheSlot(key.host_page_base, key.guest_eip)];
+        static size_t RecentSlot(const ArmBlockCacheKey& key) {
+            uint64_t hash = static_cast<uint64_t>(key.host_page_base);
+            hash ^= key.guest_pc * 0x9e3779b97f4a7c15ULL;
+            hash ^= hash >> 32;
+            return static_cast<size_t>(hash) & (BlockLookupCacheSize - 1);
+        }
+
+        BasicBlock* Find(const ArmBlockCacheKey& key) const {
+            auto& cached = recent[RecentSlot(key)];
             if (cached.block && cached.key == key) return cached.block;
-            const auto* entry = index.find(key);
+            const auto* slice = index[key.guest_pc >> 32].get();
+            if (!slice) return nullptr;
+            const auto* entry = slice->find({key.host_page_base, static_cast<uint32_t>(key.guest_pc)});
             if (!entry) return nullptr;
             auto* block = entries[*entry];
             cached = {key, block};
             return block;
         }
 
-        void Insert(BasicBlock* block, const BlockCacheKey& key) {
-            auto [entry, inserted] = index.try_emplace(key, static_cast<uint32_t>(entries.size()));
+        void Insert(BasicBlock* block, const ArmBlockCacheKey& key) {
+            auto& slice = index[key.guest_pc >> 32];
+            if (!slice) slice = std::make_unique<BlockPageHashIndex<BlockCacheKey>>();
+            auto [entry, inserted] = slice->try_emplace({key.host_page_base, static_cast<uint32_t>(key.guest_pc)},
+                                                        static_cast<uint32_t>(entries.size()));
             if (inserted)
                 entries.push_back(block);
             else
                 entries[*entry] = block;
             pages[key.host_page_base].push_back(block);
-            recent[BlockLookupCacheSlot(key.host_page_base, key.guest_eip)] = {key, block};
+            recent[RecentSlot(key)] = {key, block};
         }
 
         bool Invalidate(uintptr_t host_page) {
@@ -814,7 +835,27 @@ struct MmuCore {
     ankerl::unordered_dense::map<uintptr_t, HostPageAliases> host_page_aliases;
     RuntimeTlbShootdownRing runtime_tlb_shootdown_ring;
     std::shared_ptr<LLVMAsyncState> llvm_async;
+#if FIBERCPU_GUEST_AARCH64
+    // When page_directory is active, retain only the ARM-only high mappings.
+    std::unique_ptr<ArmPageTable> arm_pages;
+#endif
 };
+
+#if FIBERCPU_GUEST_AARCH64
+using ArmFaultHandler = int (*)(EmuState*, uint64_t, int, void*);
+using ArmMemHook = void (*)(EmuState*, uint64_t, uint32_t, int, uint64_t, void*);
+
+// Keep i386's inline MMU and EmuState member offsets intact.
+struct ArmMmuRuntime {
+    SoftTlb tlb;
+    uintptr_t identity = 0;
+    uint64_t tlb_read_seq = 0;
+    ArmFaultHandler fault_handler = nullptr;
+    void* fault_userdata = nullptr;
+    ArmMemHook mem_hook = nullptr;
+    void* mem_userdata = nullptr;
+};
+#endif
 
 class Mmu {
 public:
@@ -915,6 +956,12 @@ public:
     void refresh_smc_armed_for_host_page(HostAddr page) {
         if (!core_ || page == nullptr) return;
 
+#if FIBERCPU_GUEST_AARCH64
+        if (has_arm_address_space()) {
+            refresh_arm_smc_armed_for_host_page(page);
+            return;
+        }
+#endif
         auto* dir = current_page_directory();
         if (!dir) return;
 
@@ -1044,6 +1091,17 @@ private:
     // Slow Path: Resolve address, permissions and faults
     [[nodiscard]] MemResult<HostAddr> resolve_slow(GuestAddr addr, Property req_perm);
 
+#if FIBERCPU_GUEST_AARCH64
+    ArmMmuRuntime& arm_runtime();
+    void sync_arm_tlb_shootdowns(ArmMmuRuntime& runtime);
+    void invalidate_arm_tlb_page(uint64_t address);
+    void invalidate_arm_tlb_all();
+    void refresh_arm_smc_armed_for_host_page(HostAddr page);
+    EmuStatus signal_arm_fault(uint64_t address, Property access);
+    MemResult<HostAddr> resolve_arm_slow(uint64_t address, Property permission);
+    void call_arm_mem_hook(uint64_t address, const void* value, size_t size, bool write);
+#endif
+
     [[nodiscard]] PageDirectory* current_page_directory() {
         page_dir = core_ ? core_->page_directory.get() : nullptr;
         return page_dir;
@@ -1058,7 +1116,7 @@ private:
         return identity.fetch_add(1, std::memory_order_relaxed);
     }
 
-    static void IndexClonedHostPages(MmuCore& core) {
+    static void IndexI386HostPages(MmuCore& core) {
         auto* dir = core.page_directory.get();
         for (uint32_t l1_idx = 0; l1_idx < dir->l1_directory.size(); ++l1_idx) {
             const auto& chunk = dir->l1_directory[l1_idx];
@@ -1384,7 +1442,11 @@ public:
     static void ReleaseCore(MmuCore* core) { release_core(core); }
 
     static MmuCore* CloneCoreMappings(MmuCore* core) {
-        if (!core || !core->page_directory) return CreateEmptyCore();
+        if (!core) return CreateEmptyCore();
+#if FIBERCPU_GUEST_AARCH64
+        if (!core->page_directory && core->arm_pages) return CloneArmCoreMappings(*core);
+#endif
+        if (!core->page_directory) return CreateEmptyCore();
 
         auto cloned = std::make_unique<PageDirectory>();
         const auto& source = core->page_directory->l1_directory;
@@ -1392,8 +1454,14 @@ public:
             if (source[i]) cloned->l1_directory[i] = std::make_unique<PageTableChunk>(*source[i]);
         }
 
+#if FIBERCPU_GUEST_AARCH64
+        auto arm_pages = core->arm_pages ? std::make_unique<ArmPageTable>(*core->arm_pages) : nullptr;
+#endif
         auto* cloned_core = create_core(std::move(cloned), core);
-        IndexClonedHostPages(*cloned_core);
+#if FIBERCPU_GUEST_AARCH64
+        cloned_core->arm_pages = std::move(arm_pages);
+#endif
+        IndexI386HostPages(*cloned_core);
         return cloned_core;
     }
 
@@ -1798,8 +1866,19 @@ public:
             bind_core(CreateEmptyCore(), false);
             return true;
         }
-        core_->page_directory = std::make_unique<PageDirectory>();
-        page_dir = core_->page_directory.get();
+#if FIBERCPU_GUEST_AARCH64
+        if (has_arm_address_space()) {
+            core_->arm_pages = std::make_unique<ArmPageTable>();
+            invalidate_arm_tlb_all();
+        } else
+#endif
+        {
+            core_->page_directory = std::make_unique<PageDirectory>();
+            page_dir = core_->page_directory.get();
+#if FIBERCPU_GUEST_AARCH64
+            core_->arm_pages.reset();
+#endif
+        }
         core_->code_cache.HardResetReleaseAll(1, 0);
         on_code_cache_hard_reset();
         core_->host_page_aliases.clear();
@@ -1873,38 +1952,61 @@ public:
     }
 
 #if FIBERCPU_GUEST_AARCH64
-    [[nodiscard]] aarch64::detail::BasicBlock* lookup_arm_block(uint32_t pc, const uint8_t* executable) const {
+    [[nodiscard]] bool has_arm_address_space() const { return core_ && !core_->page_directory && core_->arm_pages; }
+    void enable_arm_address_space();
+#if FIBERCPU_GUEST_I386
+    void enable_i386_address_space();
+#endif
+    static MmuCore* CloneArmCoreMappings(MmuCore& core);
+    void set_arm_fault_callback(ArmFaultHandler handler, void* userdata);
+    void set_arm_mem_hook(ArmMemHook handler, void* userdata);
+    [[nodiscard]] bool has_arm_mem_hook() const;
+    void flush_arm_tlb_for_hook();
+
+    [[nodiscard]] const SoftTlb* arm_data_tlb();
+    [[nodiscard]] HostAddr resolve_arm_safe_for_read(uint64_t address, Property permission = Property::Read);
+    [[nodiscard]] HostAddr resolve_arm_safe_for_write(uint64_t address);
+    [[nodiscard]] Property get_arm_property(uint64_t address) const;
+    [[nodiscard]] MemResult<HostAddr> resolve_arm_ptr(uint64_t address, Property permission);
+    [[nodiscard]] const std::byte* try_arm_executable_page(uint64_t address);
+    [[nodiscard]] const std::byte* translate_arm_exec(EmuState* state, uint64_t address);
+    template <bool Write>
+    [[nodiscard]] HostAddr try_arm_cached_data_page(uint64_t address);
+    template <typename T>
+    [[nodiscard]] MemResult<T> read_arm_no_utlb(uint64_t address);
+    template <typename T>
+    [[nodiscard]] MemResult<void> write_arm_no_utlb(uint64_t address, T value);
+
+    bool map_arm_host_page(uint64_t address, HostAddr host_page, uint8_t permissions);
+    void protect_arm_mapped_range(uint64_t address, uint64_t size, uint8_t permissions);
+    void unmap_arm_range(uint64_t address, uint64_t size);
+    void invalidate_arm_code_cache_range(uint64_t address, uint64_t size);
+    void invalidate_arm_code_cache_page(uint64_t address);
+    template <class Visitor>
+    void visit_arm_mappings(uint64_t address, uint64_t size, Visitor visitor) {
+        if (!has_arm_address_space()) return;
+        core_->arm_pages->VisitMapped(address, size, [&](uint64_t page, const ArmPageTable::Entry& entry) {
+            return visitor(page, entry.page, entry.permissions);
+        });
+    }
+
+    [[nodiscard]] aarch64::detail::BasicBlock* lookup_arm_block(uint64_t pc, const uint8_t* executable) const {
         const auto& cache = code_cache();
         const auto base = reinterpret_cast<uintptr_t>(executable);
-        return cache.arm_blocks ? cache.arm_blocks->Find({base, pc}) : nullptr;
+        return cache.arm_blocks && pc < ArmTaskSize ? cache.arm_blocks->Find({base, pc}) : nullptr;
     }
 
     void cache_arm_block(aarch64::detail::BasicBlock* block) {
         auto& cache = code_cache();
         if (!cache.arm_blocks) cache.arm_blocks = std::make_unique<CodeCacheState::ArmBlocks>();
         const auto base = reinterpret_cast<uintptr_t>(block->executable_page);
-        const auto pc = static_cast<uint32_t>(block->start_pc);
-        cache.arm_blocks->Insert(block, {base, pc});
+        cache.arm_blocks->Insert(block, {base, block->start_pc});
         ++cache.arm_block_allocations;
         refresh_smc_armed_for_host_page(reinterpret_cast<HostAddr>(base));
     }
 
-    [[nodiscard]] const SoftTlb* data_tlb() const { return &tlb; }
+    [[nodiscard]] void* try_allocate_arm_block_bytes(size_t size, uint64_t pc);
 
-    template <bool Write>
-    [[nodiscard]] HostAddr try_cached_data_page(GuestAddr address) {
-        auto* target = try_bulk_page<Write>(address);
-        if (target) {
-            const auto tag = address & ~PAGE_MASK;
-            const auto index = (address >> PAGE_SHIFT) & TLB_INDEX_MASK;
-            auto& entry = (Write ? tlb.write_tlb : tlb.read_tlb)[index];
-            if ((Write ? entry.WriteTag() : entry.ReadTag()) != tag) {
-                const auto property = get_property(address);
-                tlb.fill(address, target - (address & PAGE_MASK), property);
-            }
-        }
-        return target;
-    }
 #endif
 
     template <typename T>

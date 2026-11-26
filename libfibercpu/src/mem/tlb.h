@@ -147,5 +147,31 @@ public:
             exec_tlb[ExecTlbIndex(vaddr)] = {tag, property, addend};
         }
     }
+
+    // AArch64 packs the 27-bit VPN in each existing tag word.
+    void flush_arm_page(uint32_t tag) {
+        const size_t index = tag & TLB_INDEX_MASK;
+        if (read_tlb[index].ReadTag() == tag) read_tlb[index].invalidate();
+        if (write_tlb[index].WriteTag() == tag) write_tlb[index].invalidate();
+        auto& exec_entry = exec_tlb[tag & (EXEC_TLB_ENTRIES - 1)];
+        if (exec_entry.tag == tag) exec_entry.tag = kInvalidMicroTlbTag;
+    }
+
+    void fill_arm(uint64_t address, HostAddr host_page, Property property) {
+        const uint32_t tag = ArmPageTag(address);
+        const size_t index = tag & TLB_INDEX_MASK;
+        const auto addend =
+            reinterpret_cast<uintptr_t>(host_page) - static_cast<uintptr_t>(address & ~uint64_t{PAGE_MASK});
+        const bool readable = has_property(property, Property::Read);
+        const bool writable = has_property(property, Property::Write | Property::Dirty) &&
+                              !has_property(property, Property::ForceWriteSlow);
+        const MicroTLB entry{
+            PackMicroTlbTags(readable ? tag : kInvalidMicroTlbTag, writable ? tag : kInvalidMicroTlbTag), addend};
+        if (readable) read_tlb[index] = entry;
+        if (writable) write_tlb[index] = entry;
+        if (has_property(property, Property::Exec)) {
+            exec_tlb[tag & (EXEC_TLB_ENTRIES - 1)] = {tag, property, addend};
+        }
+    }
 };
 }  // namespace fiberish::mem

@@ -39,7 +39,7 @@ constexpr StepResult Alignment(uint64_t address, Access access) { return {Stop::
 constexpr StepResult Undefined(uint64_t pc) { return {Stop::Undefined, Access::Execute, 0, pc}; }
 
 inline bool ReadMemory(const Memory& memory, uint64_t address, void* data, size_t bytes, Access access = Access::Read) {
-    return address <= UINT64_MAX - (bytes - 1) && memory.read &&
+    return mem::ArmAddressRangeValid(address, bytes) && memory.read &&
            memory.read(memory.context, address, data, bytes, access);
 }
 
@@ -50,7 +50,8 @@ inline void ClearOverlappingExclusive(State& state, uint64_t address, size_t byt
 }
 
 inline bool WriteMemory(State& state, const Memory& memory, uint64_t address, const void* data, size_t bytes) {
-    if (address > UINT64_MAX - (bytes - 1) || !memory.write || !memory.write(memory.context, address, data, bytes))
+    if (!mem::ArmAddressRangeValid(address, bytes) || !memory.write ||
+        !memory.write(memory.context, address, data, bytes))
         return false;
     ClearOverlappingExclusive(state, address, bytes);
     return true;
@@ -126,18 +127,17 @@ A64_MEMORY_INLINE bool ProbeDataTlb([[maybe_unused]] const State& state, uint64_
     auto* stats = state.active_run ? state.active_run->memory.stats : nullptr;
     if (stats) ++(write ? stats->total_writes : stats->total_reads);
 #endif
-    if (address <= UINT32_MAX && (address & mem::PAGE_MASK) <= mem::PAGE_SIZE - size) [[likely]] {
-        const auto addr = static_cast<uint32_t>(address);
-        const auto tag = addr & ~mem::PAGE_MASK;
+    if (address < mem::ArmTaskSize && (address & PageMask) <= PageBytes - size) [[likely]] {
+        const auto tag = mem::ArmPageTag(address);
         const auto cached = write ? uint32_t(utlb_tags >> 32) : uint32_t(utlb_tags);
         if (cached == tag) [[likely]] {
 #ifdef ENABLE_TLB_STATS
             if (stats) ++(write ? stats->l1_write_hits : stats->l1_read_hits);
 #endif
-            data = reinterpret_cast<uint8_t*>(utlb_addend + addr);
+            data = reinterpret_cast<uint8_t*>(utlb_addend + static_cast<uintptr_t>(address));
             return true;
         }
-        const auto index = (addr >> mem::PAGE_SHIFT) & mem::TLB_INDEX_MASK;
+        const auto index = tag & mem::TLB_INDEX_MASK;
         const auto entry = (write ? data_tlb->write_tlb : data_tlb->read_tlb)[index];
         if ((write ? entry.WriteTag() : entry.ReadTag()) == tag) [[likely]] {
 #ifdef ENABLE_TLB_STATS
@@ -145,7 +145,7 @@ A64_MEMORY_INLINE bool ProbeDataTlb([[maybe_unused]] const State& state, uint64_
 #endif
             utlb_tags = entry.tags;
             utlb_addend = entry.addend;
-            data = reinterpret_cast<uint8_t*>(entry.addend + addr);
+            data = reinterpret_cast<uint8_t*>(entry.addend + static_cast<uintptr_t>(address));
             return true;
         }
     }
@@ -228,7 +228,7 @@ A64_MEMORY_INLINE StepResult LoadStoreTransfer(State& state, const DecodedInstru
         StoreRegister<probe_only>(state, data, op.rd, width, vector, pinned);
         if constexpr (pair) StoreRegister<probe_only>(state, data + bytes, op.ra, width, vector, pinned);
         if constexpr (!probe_only) {
-            refetch = address > UINT64_MAX - (size - 1) || !memory->write_fast ||
+            refetch = !mem::ArmAddressRangeValid(address, size) || !memory->write_fast ||
                       !memory->write_fast(memory->context, address, data, size);
             if (refetch && !WriteMemory(state, *memory, address, data, size)) return Fault(address, access);
         }
@@ -238,7 +238,7 @@ A64_MEMORY_INLINE StepResult LoadStoreTransfer(State& state, const DecodedInstru
             const bool hit = memory->data_tlb && !memory->lookup_cached_block &&
                              ProbeDataTlb<false>(state, address, size, memory->data_tlb, utlb_tags, utlb_addend, data);
             if (!hit) {
-                refetch = address > UINT64_MAX - (size - 1) || !memory->read_fast ||
+                refetch = !mem::ArmAddressRangeValid(address, size) || !memory->read_fast ||
                           !memory->read_fast(memory->context, address, data, size);
                 if (refetch && !ReadMemory(*memory, address, data, size)) return Fault(address, access);
             }

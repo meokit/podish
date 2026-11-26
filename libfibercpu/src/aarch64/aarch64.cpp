@@ -42,7 +42,9 @@ FIBERCPU_AARCH64_HANDLER_ABI uint64_t ResolveBranchTargetSlow(A64_HANDLER_PARAMS
 #ifdef ENABLE_TLB_STATS
         auto* stats = memory.dispatch_stats;
 #endif
-        const auto* target = (target_pc & 3) ? nullptr : memory.lookup_cached_block(memory.context, target_pc, nullptr);
+        const auto* target = (target_pc & 3) || target_pc >= mem::ArmTaskSize
+                                 ? nullptr
+                                 : memory.lookup_cached_block(memory.context, target_pc, nullptr);
         if (target && target->IsValid()) {
             const auto* sentinel = current->Sentinel();
             GetBlockSentinel(*sentinel).links[frame.exit_edge] = target;
@@ -282,9 +284,7 @@ const BasicBlock* DecodeBlock(uint64_t pc, const uint8_t* executable, const Prof
     if (!storage) return nullptr;
     auto& block = *new (storage) BasicBlock;
     block.start_pc = pc;
-    block.header.chain =
-        BasicBlockHeader::Valid | (uint64_t{units} << 40) | (uint64_t{count} << 32) | static_cast<uint32_t>(pc);
-    if (bindings) block.header.chain |= BasicBlockHeader::HasBindings;
+    block.header.chain = BasicBlockHeader::Pack(pc, count, units, bindings != 0);
     block.executable_page = executable;
 
     auto* bytes = reinterpret_cast<std::byte*>(&block + 1);
@@ -394,6 +394,7 @@ RunResult Run(State& state, const Memory& memory, uint64_t budget, const Profile
     while (executed < budget) {
         const auto pc = state.pc;
         if (pc & 3) return {Stop::Alignment, executed, pc, 0, 0, Access::Execute};
+        if (pc >= mem::ArmTaskSize) return {Stop::Fault, executed, pc, 0, 0, Access::Execute};
 
         const BasicBlock* block = nullptr;
         const DecodedOpBinding* single = nullptr;

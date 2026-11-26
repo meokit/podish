@@ -18,6 +18,7 @@ link() {
 }
 
 link "$build_dir/startup.o" -o "$rootfs/startup"
+link --image-base=0x4000000000 "$build_dir/startup.o" -o "$rootfs/high-startup"
 link -pie --no-dynamic-linker "$build_dir/startup.o" -o "$rootfs/pie-startup"
 link -pie --dynamic-linker /interpreter "$build_dir/startup.o" -o "$rootfs/dynamic-startup"
 link -shared "$build_dir/interpreter.o" -o "$rootfs/interpreter"

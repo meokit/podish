@@ -605,4 +605,66 @@ template <typename T>
     return bytes;
 }
 
+#if FIBERCPU_GUEST_AARCH64
+template <bool Write>
+HostAddr Mmu::try_arm_cached_data_page(uint64_t address) {
+    if (!has_arm_address_space() || !ArmAddressRangeValid(address, 1) || has_arm_mem_hook()) return nullptr;
+    auto& runtime = arm_runtime();
+    sync_arm_tlb_shootdowns(runtime);
+    const auto tag = ArmPageTag(address);
+    const auto& entry = (Write ? runtime.tlb.write_tlb : runtime.tlb.read_tlb)[tag & TLB_INDEX_MASK];
+    if ((Write ? entry.WriteTag() : entry.ReadTag()) == tag)
+        return reinterpret_cast<HostAddr>(entry.addend + static_cast<uintptr_t>(address));
+
+    const auto* mapping = core_->arm_pages->Find(address);
+    const auto required = Write ? Property::Write | Property::Dirty : Property::Read;
+    if (!mapping || !mapping->page || !has_property(mapping->permissions, required) ||
+        (Write && has_property(mapping->permissions, Property::ForceWriteSlow)))
+        return nullptr;
+    runtime.tlb.fill_arm(address, mapping->page, mapping->permissions);
+    return mapping->page + (address & PAGE_MASK);
+}
+
+template <typename T>
+MemResult<T> Mmu::read_arm_no_utlb(uint64_t address) {
+    static_assert(sizeof(T) <= PAGE_SIZE);
+    if (!ArmAddressRangeValid(address, sizeof(T))) return std::unexpected(FaultCode::PageFault);
+
+    auto first = resolve_arm_ptr(address, Property::Read);
+    if (!first) return std::unexpected(first.error());
+    T value;
+    const auto first_count = std::min(sizeof(T), PAGE_SIZE - static_cast<size_t>(address & PAGE_MASK));
+    std::memcpy(&value, *first, first_count);
+    if (first_count < sizeof(T)) {
+        auto second = resolve_arm_ptr(address + first_count, Property::Read);
+        if (!second) return std::unexpected(second.error());
+        std::memcpy(reinterpret_cast<std::byte*>(&value) + first_count, *second, sizeof(T) - first_count);
+    }
+    if (has_arm_mem_hook()) call_arm_mem_hook(address, &value, sizeof(T), false);
+    return value;
+}
+
+template <typename T>
+MemResult<void> Mmu::write_arm_no_utlb(uint64_t address, T value) {
+    static_assert(sizeof(T) <= PAGE_SIZE);
+    if (!ArmAddressRangeValid(address, sizeof(T))) return std::unexpected(FaultCode::PageFault);
+    if (has_arm_mem_hook()) call_arm_mem_hook(address, &value, sizeof(T), true);
+
+    const auto first_count = std::min(sizeof(T), PAGE_SIZE - static_cast<size_t>(address & PAGE_MASK));
+    auto first = resolve_arm_ptr(address, Property::Write);
+    if (!first) return std::unexpected(first.error());
+    if (first_count < sizeof(T)) {
+        auto second = resolve_arm_ptr(address + first_count, Property::Write);
+        if (!second) return std::unexpected(second.error());
+        // A fault on the second page may also replace the first mapping.
+        auto* first_page = resolve_arm_safe_for_write(address);
+        if (!first_page) return std::unexpected(FaultCode::PageFault);
+        first = first_page;
+        std::memcpy(*second, reinterpret_cast<const std::byte*>(&value) + first_count, sizeof(T) - first_count);
+    }
+    std::memcpy(*first, &value, first_count);
+    return {};
+}
+#endif
+
 }  // namespace fiberish::mem

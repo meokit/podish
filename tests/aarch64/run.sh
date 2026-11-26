@@ -26,6 +26,7 @@ run_guest() {
 }
 
 run_guest "AArch64 startup ok" /startup ok
+run_guest "AArch64 startup ok" /high-startup ok
 run_guest "AArch64 startup ok" /pie-startup ok
 run_guest "AArch64 startup ok" /dynamic-startup ok
 run_guest "AArch64 startup ok" /exec-startup

@@ -32,6 +32,12 @@ constexpr size_t PAGE_SHIFT = 12;
 constexpr size_t PAGE_SIZE = 1 << PAGE_SHIFT;  // 4096
 constexpr size_t PAGE_MASK = PAGE_SIZE - 1;
 
+constexpr uint64_t ArmTaskSize = uint64_t{1} << 39;
+constexpr uint32_t ArmPageTag(uint64_t address) { return static_cast<uint32_t>(address >> PAGE_SHIFT); }
+constexpr bool ArmAddressRangeValid(uint64_t address, uint64_t size) {
+    return address < ArmTaskSize && size <= ArmTaskSize - address;
+}
+
 // Permission and Property Bits
 enum class Property : uint32_t {
     None = 0,

@@ -228,7 +228,8 @@ bool RelocatedBlockOperands() {
     };
     constexpr std::array program{adr,         adrp,        literal,     call,       0xd4200000u,
                                  0xd4200000u, 0xaa1e03e3u, 0xd4000001u, 0xe1234567u};
-    for (uint64_t pc : {0x20040ULL, 0x7ffe00001084ULL, 0x20040ULL}) {
+    constexpr auto HighPc = fiberish::mem::ArmTaskSize - 4096 + 0x84;
+    for (auto pc : std::array<uint64_t, 3>{0x20040, HighPc, 0x20040}) {
         mapping.base = pc & ~uint64_t{4095};
         const auto offset = pc - mapping.base;
         for (unsigned i = 0; i < program.size(); ++i)

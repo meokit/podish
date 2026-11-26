@@ -13,6 +13,9 @@ using namespace fiberish::aarch64;
 
 namespace {
 
+using fiberish::mem::ArmPageTag;
+using fiberish::mem::ArmTaskSize;
+
 constexpr uint64_t Base = 0x1'0040'0000;
 constexpr size_t Page = 4096;
 
@@ -241,7 +244,7 @@ bool DirectTlbTransfers() {
     std::fill_n(data.data() + 64, 32, 0xff);
     fiberish::mem::SoftTlb tlb;
     tlb.read_tlb[TlbIndex] = tlb.write_tlb[TlbIndex] = {
-        fiberish::mem::PackMicroTlbTags(Data, Data),
+        fiberish::mem::PackMicroTlbTags(ArmPageTag(Data), ArmPageTag(Data)),
         reinterpret_cast<uintptr_t>(data.data()) - Data,
     };
     auto memory = backing.Callbacks();
@@ -281,7 +284,7 @@ bool DirectTlbTransfers() {
     backing.Put(Base + Page, 31);
     memory = backing.Callbacks();
     memory.data_tlb = &tlb;
-    tlb.read_tlb[TlbIndex] = {fiberish::mem::PackMicroTlbTags(Data, fiberish::mem::kInvalidMicroTlbTag),
+    tlb.read_tlb[TlbIndex] = {fiberish::mem::PackMicroTlbTags(ArmPageTag(Data), fiberish::mem::kInvalidMicroTlbTag),
                               reinterpret_cast<uintptr_t>(data.data()) - Data};
     tlb.write_tlb[TlbIndex] = {};
     // Point the original callbacks at their backing while letting the probe use the low address.
@@ -357,6 +360,61 @@ bool VectorLaneBoundaries() {
             return false;
     }
     return true;
+}
+
+bool Va39DataBounds() {
+    constexpr uint64_t LastPage = ArmTaskSize - Page;
+    constexpr uint64_t LowAlias = LastPage & UINT32_MAX;
+    constexpr uint64_t Value = 0x0213'4567'89ab'cdef;
+    Backing backing;
+    backing.Code(Base, {0xf9400020, 0xd4000001}); // ldr x0, [x1]; svc #0
+    auto memory = backing.Callbacks();
+    memory.read = [](void* context, uint64_t, void* dest, size_t size, Access access) {
+        if (size != sizeof(uint64_t) || access != Access::Read)
+            return false;
+        ++static_cast<Backing*>(context)->observed_reads;
+        detail::WriteLittle(dest, Value);
+        return true;
+    };
+    fiberish::mem::SoftTlb tlb;
+    memory.data_tlb = &tlb;
+    std::array<uint8_t, Page> cached{};
+    detail::WriteLittle(cached.data() + Page - 8, ~Value);
+    const auto cache_page = [&](uint64_t address) {
+        const auto tag = ArmPageTag(address);
+        tlb.read_tlb[tag & fiberish::mem::TLB_INDEX_MASK] = {
+            fiberish::mem::PackMicroTlbTags(tag, fiberish::mem::kInvalidMicroTlbTag),
+            reinterpret_cast<uintptr_t>(cached.data()) - static_cast<uintptr_t>(address),
+        };
+    };
+
+    State state;
+    state.pc = Base;
+    state.x[1] = ArmTaskSize - 8;
+    cache_page(LowAlias);
+    const auto slow = Run(state, memory, 2);
+    if (slow.reason != Stop::Syscall || state.x[0] != Value || backing.observed_reads != 1)
+        return false;
+
+    state.pc = Base;
+    cache_page(LastPage);
+    const auto fast = Run(state, memory, 2);
+    if (fast.reason != Stop::Syscall || state.x[0] != ~Value || backing.observed_reads != 1)
+        return false;
+
+    for (const auto address : {ArmTaskSize - 4, ArmTaskSize, UINT64_MAX - 3}) {
+        state.pc = Base;
+        state.x[1] = address;
+        const auto fault = Run(state, memory, 2);
+        if (fault.reason != Stop::Fault || fault.access != Access::Read || fault.address != address || fault.executed ||
+            state.pc != Base || state.x[0] != ~Value || backing.observed_reads != 1)
+            return false;
+    }
+
+    state.pc = ArmTaskSize;
+    const auto fetch = Run(state, memory, 1);
+    return fetch.reason == Stop::Fault && fetch.access == Access::Execute && fetch.address == ArmTaskSize &&
+           !fetch.executed;
 }
 
 bool FloatingAndVector() {
@@ -465,6 +523,25 @@ bool DispatchAcrossPages() {
            backing.executes == 0;
 }
 
+bool Va39BlockLink() {
+#if FIBERCPU_AARCH64_TAIL_DISPATCH
+    constexpr uint64_t Pc = ArmTaskSize - 16;
+    constexpr unsigned Count = 3;
+    detail::BasicBlock block;
+    block.header.entry = detail::GetExitHandlerFallthrough(Pc);
+    block.header.chain = detail::BasicBlockHeader::Pack(Pc, Count, 5, true);
+    detail::BlockSentinel sentinel{.links{&block, &detail::BasicBlock::Invalid}};
+    const detail::BasicBlock* target = nullptr;
+    uint64_t budget = 10;
+    if (detail::TryChainBlock(target, sentinel.head, 0, Pc & UINT32_MAX, budget) || budget != 10)
+        return false;
+    if (detail::TryChainBlock(target, sentinel.head, 0, Pc, budget) != block.header.entry || target != &block ||
+        budget != 10 - Count || block.header.SentinelSlotIndex() != 5 || !block.HasBindings())
+        return false;
+#endif
+    return true;
+}
+
 template <unsigned Counter>
 detail::HandlerBinding CountProfiledAdd(const DecodedInstruction& op, bool) {
     constexpr uint32_t Add = 0x91000400; // add x0, x0, #1
@@ -570,7 +647,7 @@ bool PartialImmediateOperands() {
     std::array<uint32_t, Page / 4> data{};
     fiberish::mem::SoftTlb tlb{};
     tlb.read_tlb[(Data >> fiberish::mem::PAGE_SHIFT) & fiberish::mem::TLB_INDEX_MASK] = {
-        fiberish::mem::PackMicroTlbTags(Data, fiberish::mem::kInvalidMicroTlbTag),
+        fiberish::mem::PackMicroTlbTags(ArmPageTag(Data), fiberish::mem::kInvalidMicroTlbTag),
         reinterpret_cast<uintptr_t>(data.data()) - Data,
     };
     memory.data_tlb = &tlb;
@@ -794,7 +871,7 @@ bool FusedLoadReplay() {
     std::array<uint8_t, Page + 4> data{42};
     fiberish::mem::SoftTlb tlb;
     tlb.read_tlb[(HotData >> fiberish::mem::PAGE_SHIFT) & fiberish::mem::TLB_INDEX_MASK] = {
-        fiberish::mem::PackMicroTlbTags(HotData, fiberish::mem::kInvalidMicroTlbTag),
+        fiberish::mem::PackMicroTlbTags(ArmPageTag(HotData), fiberish::mem::kInvalidMicroTlbTag),
         reinterpret_cast<uintptr_t>(data.data()) - HotData,
     };
     memory.data_tlb = &tlb;
@@ -879,7 +956,7 @@ bool FusedStorePromotesReadWriteMicroTlb() {
     constexpr uint32_t Store = 0xb8004420;  // str w0, [x1], #4
     constexpr uint32_t Load = 0xb9400062;   // ldr w2, [x3]
     constexpr uint32_t Branch = 0x14000001; // b +4
-    constexpr uint32_t Data = 0x410000;
+    constexpr uint64_t Data = ArmTaskSize - Page;
     Backing backing;
     backing.Code(Base, {Store, Load, Branch});
     auto memory = backing.Callbacks();
@@ -890,7 +967,9 @@ bool FusedStorePromotesReadWriteMicroTlb() {
     // Only the write table holds this page. The following read needs the
     // read tag promoted into the handler ABI by the store.
     tlb.write_tlb[(Data >> fiberish::mem::PAGE_SHIFT) & fiberish::mem::TLB_INDEX_MASK] = {
-        fiberish::mem::PackMicroTlbTags(Data, Data), reinterpret_cast<uintptr_t>(&word) - Data};
+        fiberish::mem::PackMicroTlbTags(ArmPageTag(Data), ArmPageTag(Data)),
+        reinterpret_cast<uintptr_t>(&word) - static_cast<uintptr_t>(Data),
+    };
     memory.data_tlb = &tlb;
     Profile profile{.trusted_baking = true};
     profile.resolve_sequence = [](const uint32_t*, unsigned count, unsigned* length, uint32_t dead,
@@ -917,8 +996,8 @@ bool FusedStorePromotesReadWriteMicroTlb() {
 }
 
 bool BoundLiteralAddress() {
-    constexpr uint32_t GuestPage = 0x00400000;
-    constexpr uint32_t Start = GuestPage + 32;
+    constexpr uint64_t GuestPage = Base;
+    constexpr uint64_t Start = GuestPage + 32;
     constexpr uint32_t Add = 0x11000421;    // add w1, w1, #1
     constexpr uint32_t Load = 0x18ffffc2;   // ldr w2, pc - 8
     constexpr uint32_t Branch = 0x14000001; // b +4
@@ -927,8 +1006,8 @@ bool BoundLiteralAddress() {
     backing.Code(Base + 32, {Add, Load, Branch});
     fiberish::mem::SoftTlb tlb;
     tlb.read_tlb[(GuestPage >> fiberish::mem::PAGE_SHIFT) & fiberish::mem::TLB_INDEX_MASK] = {
-        fiberish::mem::PackMicroTlbTags(GuestPage, fiberish::mem::kInvalidMicroTlbTag),
-        reinterpret_cast<uintptr_t>(backing.data.data()) - GuestPage,
+        fiberish::mem::PackMicroTlbTags(ArmPageTag(GuestPage), fiberish::mem::kInvalidMicroTlbTag),
+        reinterpret_cast<uintptr_t>(backing.data.data()) - static_cast<uintptr_t>(GuestPage),
     };
     Memory memory{&backing};
     memory.data_tlb = &tlb;
@@ -1318,10 +1397,12 @@ int main() {
         {"exclusive monitor and atomic operations", ExclusivesAndAtomics()},
         {"direct SIMD, FP and system handlers keep live flags and pinned GPRs", RegisterOpsKeepDispatchState()},
         {"direct vector/atomic/cache-zero transfers and exclusive store replay", DirectTlbTransfers()},
+        {"VA39 high page, TLB alias and upper data/fetch limits", Va39DataBounds()},
         {"scalar FP and SIMD structure transfers", FloatingAndVector()},
         {"SIMD lane order, saturation, rounding and table index boundaries", VectorLaneBoundaries()},
         {"cached instructions after memory callbacks", CodeCoherence()},
         {"dispatch across many blocks and executable pages", DispatchAcrossPages()},
+        {"direct branch links compare all 39 PC bits", Va39BlockLink()},
         {"linked successor sees a replaced cache entry", ReplacedSuccessorUsesCurrentProfile()},
         {"truncated blocks and fusions at every budget", TruncatedBlocks()},
         {"baked dispatch and profiling", BakedDispatch()},

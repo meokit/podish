@@ -3,6 +3,7 @@
 #include <bit>
 #include <new>
 
+#include "../mem/types.h"
 #include "aarch64.h"
 
 namespace fiberish::aarch64::detail {
@@ -97,11 +98,20 @@ struct alignas(16) BasicBlockHeader {
 #endif
     uint64_t chain = 0;
 
+    static constexpr uint64_t StartPcMask = mem::ArmTaskSize - 1;
+    static constexpr unsigned CountShift = std::countr_zero(mem::ArmTaskSize);
+    static constexpr unsigned SentinelSlotShift = CountShift + 8;
+    static constexpr uint64_t HasBindings = uint64_t{1} << (SentinelSlotShift + 8);
     static constexpr uint64_t Valid = uint64_t{1} << 63;
-    static constexpr uint64_t HasBindings = uint64_t{1} << 48;
-    uint32_t start_pc() const { return static_cast<uint32_t>(chain); }
-    unsigned inst_count() const { return (chain >> 32) & 0xff; }
-    unsigned SentinelSlotIndex() const { return (chain >> 40) & 0xff; }
+
+    static constexpr uint64_t Pack(uint64_t pc, unsigned count, unsigned units, bool has_bindings) {
+        return Valid | (has_bindings ? HasBindings : 0) | (uint64_t{units} << SentinelSlotShift) |
+               (uint64_t{count} << CountShift) | pc;
+    }
+
+    uint64_t start_pc() const { return chain & StartPcMask; }
+    unsigned inst_count() const { return (chain >> CountShift) & 0xff; }
+    unsigned SentinelSlotIndex() const { return (chain >> SentinelSlotShift) & 0xff; }
     bool IsValid() const { return (chain & Valid) != 0; }
 };
 
