@@ -138,6 +138,14 @@ constexpr auto RegisterMemoryVariants(std::index_sequence<index...>) {
                           (index / 8) % 2 ? index / 16 : 0, 0>()...};
 }
 
+template <size_t... index>
+constexpr auto PairMemoryVariants(std::index_sequence<index...>) {
+    // The non-temporal and signed-offset encodings both use the offset address path.
+    constexpr std::array modes{Offset, PostIndex, Offset, PreIndex};
+    return std::array<HandlerBinding, sizeof...(index)>{
+        BindMemoryHandler<Kind::LoadStorePair, 64, index / modes.size(), modes[index % modes.size()], -1, 0>()...};
+}
+
 inline HandlerBinding Lower(const DecodedInstruction& op) {
     if (op.word == NopWord) {
 #if FIBERCPU_AARCH64_TAIL_DISPATCH
@@ -181,6 +189,10 @@ inline HandlerBinding Lower(const DecodedInstruction& op) {
             }
             break;
         case Kind::LoadStorePair:
+            if (op.width == 64 && !Field(op.word, 26, 1)) {
+                constexpr auto variants = PairMemoryVariants(std::make_index_sequence<8>{});
+                return variants[4 * op.operation + op.mode];
+            }
             // Both constituents have the same decoded width. A fixed transfer
             // size lets the compiler keep the pair in registers on a TLB hit.
             if (op.width == 64) return BindMemoryHandler<Kind::LoadStorePair, 64>();

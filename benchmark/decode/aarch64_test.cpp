@@ -175,6 +175,65 @@ bool MemoryFaults() {
     return Run(state, memory, 1).reason == Stop::Alignment;
 }
 
+bool PairAddressingModes(bool tlb_hit) {
+    using fiberish::mem::Property;
+    constexpr auto Data = Base + Page + 32;
+    constexpr auto First = 0x0123456789abcdefull;
+    constexpr auto Second = 0xfedcba9876543210ull;
+    constexpr uint32_t Svc = 0xd4000001;
+    constexpr struct {
+        uint32_t store;
+        uint32_t load;
+        int offset;
+        int writeback;
+    } cases[] = {
+        {0xa9010460, 0xa9411464, 16, 0},    // stp / ldp [x3, #16]
+        {0xa8810460, 0xa8c11464, 0, 16},    // stp / ldp [x3], #16
+        {0xa9bf0460, 0xa9ff1464, -16, -16}, // stp / ldp [x3, #-16]!
+        {0xa8010460, 0xa8411464, 16, 0},    // stnp / ldnp [x3, #16]
+    };
+    Backing backing;
+    auto memory = backing.Callbacks();
+    fiberish::mem::SoftTlb tlb;
+    if (tlb_hit) {
+        tlb.fill_arm(Base + Page, reinterpret_cast<std::byte*>(backing.data.data() + Page),
+                     Property::Read | Property::Write | Property::Dirty);
+        memory.data_tlb = &tlb;
+        memory.read = nullptr;
+        memory.write = nullptr;
+    }
+    for (const auto& test : cases) {
+        std::fill(backing.data.begin() + Page, backing.data.end(), 0);
+        backing.Code(Base, {test.store, Svc});
+        State state{};
+        state.pc = Base;
+        state.x[0] = First;
+        state.x[1] = Second;
+        state.x[3] = Data;
+        state.exclusive_address = Data + test.offset;
+        state.exclusive_size = 8;
+        const auto* target = backing.data.data() + (Data + test.offset - Base);
+        if (Run(state, memory, 2).reason != Stop::Syscall || state.x[3] != Data + test.writeback ||
+            state.exclusive_size || detail::ReadLittle<uint64_t>(target) != First ||
+            detail::ReadLittle<uint64_t>(target + 8) != Second)
+            return false;
+
+        backing.Code(Base, {test.load, Svc});
+        state.pc = Base;
+        state.x[3] = Data;
+        if (Run(state, memory, 2).reason != Stop::Syscall || state.x[3] != Data + test.writeback ||
+            state.x[4] != First || state.x[5] != Second)
+            return false;
+    }
+    // The specialized path must replay an overlapping writeback as undefined.
+    backing.Code(Base, {0xa9c11463, Svc}); // ldp x3, x5, [x3, #16]!
+    State state{};
+    state.pc = Base;
+    state.x[3] = Data;
+    const auto overlap = Run(state, memory, 2);
+    return overlap.reason == Stop::Undefined && overlap.executed == 0 && state.pc == Base && state.x[3] == Data;
+}
+
 bool ExclusivesAndAtomics() {
     Backing backing;
     backing.Code(Base, {
@@ -1394,6 +1453,10 @@ int main() {
         {"integer, branches and traps through callbacks", CoreAndTraps(false)},
         {"integer, branches and traps through executable pages", CoreAndTraps(true)},
         {"precise store, fetch and alignment faults", MemoryFaults()},
+        {"64-bit pair addressing and writeback through callbacks", PairAddressingModes(false)},
+#if FIBERCPU_AARCH64_TAIL_DISPATCH
+        {"64-bit pair addressing and writeback on TLB hits", PairAddressingModes(true)},
+#endif
         {"exclusive monitor and atomic operations", ExclusivesAndAtomics()},
         {"direct SIMD, FP and system handlers keep live flags and pinned GPRs", RegisterOpsKeepDispatchState()},
         {"direct vector/atomic/cache-zero transfers and exclusive store replay", DirectTlbTransfers()},
