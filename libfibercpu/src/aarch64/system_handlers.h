@@ -7,24 +7,9 @@
 namespace fiberish::aarch64::detail {
 
 enum class SystemOp {
-    Hint,
-    ClearExclusive,
-    DataBarrier,
-    Refetch,
-    ReadThreadId,
-    ReadThreadIdReadOnly,
-    ReadNzcv,
-    ReadFpcr,
-    ReadFpsr,
-    ReadCtr,
-    ReadDczid,
-    ReadCounterFrequency,
-    ReadCounter,
-    WriteThreadId,
-    WriteNzcv,
-    WriteFpcr,
-    WriteFpsr,
-    ZeroCacheLine,
+#define ARM_SYSTEM(Name) Name,
+#include "system_operations.def"
+#undef ARM_SYSTEM
     Undefined,
 };
 
@@ -81,7 +66,12 @@ inline SystemOp DecodeSystemOp(uint32_t word) {
 
 constexpr unsigned ZeroBlockBytes = 32;
 
-template <SystemOp operation, class Registers>
+inline uint64_t ReadCounterValue() noexcept {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+
+template <SystemOp operation, class Registers, auto read_counter = ReadCounterValue>
 inline void SystemRegisterOp(State& state, unsigned rd, uint32_t& flags, const Registers& registers) {
     if constexpr (operation == SystemOp::ClearExclusive)
         state.ClearExclusive();
@@ -104,10 +94,7 @@ inline void SystemRegisterOp(State& state, unsigned rd, uint32_t& flags, const R
     else if constexpr (operation == SystemOp::ReadCounterFrequency)
         registers.Write(rd, 64, 1'000'000'000);
     else if constexpr (operation == SystemOp::ReadCounter)
-        registers.Write(
-            rd, 64,
-            std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch())
-                .count());
+        registers.Write(rd, 64, read_counter());
     else if constexpr (operation == SystemOp::WriteThreadId)
         state.tpidr_el0 = registers.Read(rd, 64);
     else if constexpr (operation == SystemOp::WriteNzcv)
@@ -133,6 +120,17 @@ inline StepResult SystemInstruction(State& state, const Memory& memory, const De
 }
 
 #if FIBERCPU_AARCH64_TAIL_DISPATCH
+
+[[gnu::always_inline]] inline bool ProbeZeroCacheLine(State& state, unsigned rd, const HotRegisters& registers,
+                                                      const mem::SoftTlb* tlb, uint64_t& tags, uintptr_t& addend) {
+    const auto address = registers.Read(rd, 64) & ~uint64_t{ZeroBlockBytes - 1};
+    uint8_t* data = nullptr;
+    if (!ProbeDataTlb<true>(state, address, ZeroBlockBytes, tlb, tags, addend, data)) return false;
+    std::memset(data, 0, ZeroBlockBytes);
+    ClearOverlappingExclusive(state, address, ZeroBlockBytes);
+    return true;
+}
+
 template <SystemOp operation>
 FIBERCPU_AARCH64_HANDLER_ABI uint64_t SystemHandler(A64_HANDLER_PARAMS) {
     const auto rd = Field(uint32_t(current->Operands()), 0, 5);
@@ -140,13 +138,9 @@ FIBERCPU_AARCH64_HANDLER_ABI uint64_t SystemHandler(A64_HANDLER_PARAMS) {
     if constexpr (operation == SystemOp::Refetch) {
         return ReturnFromBlock(state, current, instr_limit, flags_cache A64_HANDLER_PIN_ARGS, {Stop::Refetch});
     } else if constexpr (operation == SystemOp::ZeroCacheLine) {
-        const auto address = registers.Read(rd, 64) & ~uint64_t{ZeroBlockBytes - 1};
-        uint8_t* data = nullptr;
-        if (!ProbeDataTlb<true>(state, address, ZeroBlockBytes, data_tlb, utlb_tags, utlb_addend, data)) [[unlikely]] {
+        if (!ProbeZeroCacheLine(state, rd, registers, data_tlb, utlb_tags, utlb_addend)) [[unlikely]] {
             A64_MEMORY_OP_GENERIC(current);
         }
-        std::memset(data, 0, ZeroBlockBytes);
-        ClearOverlappingExclusive(state, address, ZeroBlockBytes);
     } else {
         SystemRegisterOp<operation>(state, rd, flags_cache, registers);
     }
@@ -167,42 +161,11 @@ constexpr HandlerBinding BindSystemHandler() {
 
 inline HandlerBinding LowerSystem(uint32_t word) {
     switch (DecodeSystemOp(word)) {
-        case SystemOp::Hint:
-            return BindSystemHandler<SystemOp::Hint>();
-        case SystemOp::ClearExclusive:
-            return BindSystemHandler<SystemOp::ClearExclusive>();
-        case SystemOp::DataBarrier:
-            return BindSystemHandler<SystemOp::DataBarrier>();
-        case SystemOp::Refetch:
-            return BindSystemHandler<SystemOp::Refetch>();
-        case SystemOp::ReadThreadId:
-            return BindSystemHandler<SystemOp::ReadThreadId>();
-        case SystemOp::ReadThreadIdReadOnly:
-            return BindSystemHandler<SystemOp::ReadThreadIdReadOnly>();
-        case SystemOp::ReadNzcv:
-            return BindSystemHandler<SystemOp::ReadNzcv>();
-        case SystemOp::ReadFpcr:
-            return BindSystemHandler<SystemOp::ReadFpcr>();
-        case SystemOp::ReadFpsr:
-            return BindSystemHandler<SystemOp::ReadFpsr>();
-        case SystemOp::ReadCtr:
-            return BindSystemHandler<SystemOp::ReadCtr>();
-        case SystemOp::ReadDczid:
-            return BindSystemHandler<SystemOp::ReadDczid>();
-        case SystemOp::ReadCounterFrequency:
-            return BindSystemHandler<SystemOp::ReadCounterFrequency>();
-        case SystemOp::ReadCounter:
-            return BindSystemHandler<SystemOp::ReadCounter>();
-        case SystemOp::WriteThreadId:
-            return BindSystemHandler<SystemOp::WriteThreadId>();
-        case SystemOp::WriteNzcv:
-            return BindSystemHandler<SystemOp::WriteNzcv>();
-        case SystemOp::WriteFpcr:
-            return BindSystemHandler<SystemOp::WriteFpcr>();
-        case SystemOp::WriteFpsr:
-            return BindSystemHandler<SystemOp::WriteFpsr>();
-        case SystemOp::ZeroCacheLine:
-            return BindSystemHandler<SystemOp::ZeroCacheLine>();
+#define ARM_SYSTEM(Name) \
+    case SystemOp::Name: \
+        return BindSystemHandler<SystemOp::Name>();
+#include "system_operations.def"
+#undef ARM_SYSTEM
         case SystemOp::Undefined:
             return {};
     }

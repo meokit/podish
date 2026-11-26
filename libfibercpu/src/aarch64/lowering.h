@@ -94,24 +94,24 @@ constexpr HandlerBinding BindIntegerKernel() {
 #endif
 }
 
-constexpr std::array<HandlerBinding, size_t(Kind::Count)> Handlers{
-    BindTrapHandler<Stop::Undefined>(),           BindIntegerKernel<Kind::Address>(),
-    BindIntegerKernel<Kind::AddSubImmediate>(),   BindIntegerKernel<Kind::AddSubShifted>(),
-    BindIntegerKernel<Kind::AddSubExtended>(),    BindIntegerKernel<Kind::AddSubCarry>(),
-    BindIntegerKernel<Kind::LogicalImmediate>(),  BindIntegerKernel<Kind::LogicalShifted>(),
-    BindIntegerKernel<Kind::MoveWide>(),          BindIntegerKernel<Kind::Bitfield>(),
-    BindIntegerKernel<Kind::Extract>(),           BindIntegerKernel<Kind::ConditionalCompare>(),
-    BindIntegerKernel<Kind::ConditionalSelect>(), BindIntegerKernel<Kind::DataOneSource>(),
-    BindIntegerKernel<Kind::DataTwoSource>(),     BindIntegerKernel<Kind::Multiply>(),
-    BindIntegerKernel<Kind::BranchImmediate>(),   BindIntegerKernel<Kind::BranchRegister>(),
-    BindIntegerKernel<Kind::BranchCondition>(),   BindIntegerKernel<Kind::CompareBranch>(),
-    BindIntegerKernel<Kind::TestBranch>(),        BindMemoryHandler<Kind::LoadStoreImmediate>(),
-    BindMemoryHandler<Kind::LoadStoreRegister>(), BindMemoryHandler<Kind::LoadStorePair, 32>(),
-    BindMemoryHandler<Kind::LoadLiteral>(),       BindAtomicHandler<Kind::LoadStoreExclusive>(),
-    BindAtomicHandler<Kind::LoadStoreAtomic>(),   BindTrapHandler<Stop::Syscall>(),
-    BindTrapHandler<Stop::Breakpoint>(),          BindTrapHandler<Stop::Undefined>(),
-    BindTrapHandler<Stop::Undefined>(),           BindTrapHandler<Stop::Undefined>(),
-};
+constexpr auto Handlers = [] {
+    std::array<HandlerBinding, size_t(Kind::Count)> handlers;
+    handlers.fill(BindTrapHandler<Stop::Undefined>());
+#define ARM_INTEGER(Name) handlers[size_t(Kind::Name)] = BindIntegerKernel<Kind::Name>();
+#define ARM_BRANCH(Name, Form) ARM_INTEGER(Name)
+#define ARM_MEMORY(Name, FallbackWidth) handlers[size_t(Kind::Name)] = BindMemoryHandler<Kind::Name, FallbackWidth>();
+#define ARM_EXTRA(Name)
+#include "operation_catalog.def"
+#undef ARM_EXTRA
+#undef ARM_MEMORY
+#undef ARM_BRANCH
+#undef ARM_INTEGER
+    handlers[size_t(Kind::LoadStoreExclusive)] = BindAtomicHandler<Kind::LoadStoreExclusive>();
+    handlers[size_t(Kind::LoadStoreAtomic)] = BindAtomicHandler<Kind::LoadStoreAtomic>();
+    handlers[size_t(Kind::Syscall)] = BindTrapHandler<Stop::Syscall>();
+    handlers[size_t(Kind::Breakpoint)] = BindTrapHandler<Stop::Breakpoint>();
+    return handlers;
+}();
 
 template <Kind kind, unsigned operations, int shift, bool write_nzcv, IntegerForm form, size_t... index>
 constexpr auto IntegerVariants(std::index_sequence<index...>) {

@@ -1,12 +1,6 @@
 #pragma once
 
-#ifndef FIBERCPU_AARCH64_SIMDE
-#if defined(__aarch64__) || defined(__arm__) || defined(_M_ARM64) || defined(_M_ARM64EC) || defined(_M_ARM)
-#define FIBERCPU_AARCH64_SIMDE 0
-#else
-#define FIBERCPU_AARCH64_SIMDE 1
-#endif
-#endif
+#include "register_decoder.h"
 
 #if FIBERCPU_AARCH64_SIMDE
 #include <bit>

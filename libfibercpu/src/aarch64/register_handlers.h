@@ -1,6 +1,6 @@
 #pragma once
 
-#include "vector.h"
+#include "register_kernels.h"
 
 namespace fiberish::aarch64::detail {
 
@@ -46,55 +46,9 @@ FIBERCPU_AARCH64_HANDLER_ABI uint64_t VectorHandler(A64_HANDLER_PARAMS) {
 }
 
 #if (defined(__aarch64__) && !defined(_MSC_VER)) || FIBERCPU_AARCH64_SIMDE
-#if !FIBERCPU_AARCH64_SIMDE
-// Keep the host SIMD types local. The NEON and SoftFloat headers both
-// declare floating-point types with the same names.
-using HostBytes8 = uint8_t __attribute__((vector_size(8)));
-using HostBytes16 = uint8_t __attribute__((vector_size(16)));
-#endif
-
-enum class ByteVectorOp { PairMin, PairMax, Equal, EqualZero };
-
 template <ByteVectorOp op>
 FIBERCPU_AARCH64_HANDLER_ABI uint64_t ByteVectorHandler(A64_HANDLER_PARAMS) {
-    const auto word = uint32_t(current->Operands());
-    const auto rd = Field(word, 0, 5);
-    const auto rn = Field(word, 5, 5);
-#if FIBERCPU_AARCH64_SIMDE
-    const auto left = std::bit_cast<simde_uint8x16_t>(state.v[rn]);
-    if constexpr (op == ByteVectorOp::EqualZero) {
-        const auto result = simde_vceq_u8(simde_vget_low_u8(left), simde_vdup_n_u8(0));
-        state.v[rd] = {std::bit_cast<uint64_t>(result), 0};
-    } else {
-        const auto right = std::bit_cast<simde_uint8x16_t>(state.v[Field(word, 16, 5)]);
-        simde_uint8x16_t result;
-        if constexpr (op == ByteVectorOp::PairMin)
-            result = simde_vpminq_u8(left, right);
-        else if constexpr (op == ByteVectorOp::PairMax)
-            result = simde_vpmaxq_u8(left, right);
-        else
-            result = simde_vceqq_u8(left, right);
-        state.v[rd] = std::bit_cast<Vector128>(result);
-    }
-#else
-    if constexpr (op == ByteVectorOp::EqualZero) {
-        const auto left = std::bit_cast<HostBytes8>(state.v[rn].lo);
-        HostBytes8 result;
-        asm("cmeq %0.8b, %1.8b, #0" : "=w"(result) : "w"(left));
-        state.v[rd] = {std::bit_cast<uint64_t>(result), 0};
-    } else {
-        const auto left = std::bit_cast<HostBytes16>(state.v[rn]);
-        const auto right = std::bit_cast<HostBytes16>(state.v[Field(word, 16, 5)]);
-        HostBytes16 result;
-        if constexpr (op == ByteVectorOp::PairMin)
-            asm("uminp %0.16b, %1.16b, %2.16b" : "=w"(result) : "w"(left), "w"(right));
-        else if constexpr (op == ByteVectorOp::PairMax)
-            asm("umaxp %0.16b, %1.16b, %2.16b" : "=w"(result) : "w"(left), "w"(right));
-        else
-            asm("cmeq %0.16b, %1.16b, %2.16b" : "=w"(result) : "w"(left), "w"(right));
-        state.v[rd] = std::bit_cast<Vector128>(result);
-    }
-#endif
+    ExecuteByteVector<op>(state, uint32_t(current->Operands()));
     A64_DISPATCH_NEXT(current->NextOp<false>());
 }
 #endif
@@ -113,18 +67,20 @@ template <VectorFamily family>
 constexpr HandlerBinding BindVectorHandler([[maybe_unused]] uint32_t word) {
 #if FIBERCPU_AARCH64_TAIL_DISPATCH
 #if (defined(__aarch64__) && !defined(_MSC_VER)) || FIBERCPU_AARCH64_SIMDE
-    if constexpr (family == VectorFamily::Three && std::endian::native == std::endian::little) {
-        switch (word & 0xffe0fc00) {
-            case 0x6e20ac00:
-                return {&Vector<family>, &ByteVectorHandler<ByteVectorOp::PairMin>};
-            case 0x6e20a400:
-                return {&Vector<family>, &ByteVectorHandler<ByteVectorOp::PairMax>};
-            case 0x6e208c00:
-                return {&Vector<family>, &ByteVectorHandler<ByteVectorOp::Equal>};
-        }
-    }
-    if constexpr (family == VectorFamily::Misc && std::endian::native == std::endian::little) {
-        if ((word & 0xfffffc00) == 0x0e209800) return {&Vector<family>, &ByteVectorHandler<ByteVectorOp::EqualZero>};
+    switch (DecodeByteVectorOp(word, family)) {
+#define ARM_LowerFloat(Name)
+#define ARM_LowerVector(Name)
+#define ARM_LowerByteVector(Name) \
+    case ByteVectorOp::Name:      \
+        return {&Vector<family>, &ByteVectorHandler<ByteVectorOp::Name>};
+#define ARM_REGISTER(Category, Name) ARM_Lower##Category(Name)
+#include "operation_registers.def"
+#undef ARM_REGISTER
+#undef ARM_LowerByteVector
+#undef ARM_LowerVector
+#undef ARM_LowerFloat
+        case ByteVectorOp::None:
+            break;
     }
 #endif
     return {&Vector<family>, &VectorHandler<family>};
@@ -135,28 +91,17 @@ constexpr HandlerBinding BindVectorHandler([[maybe_unused]] uint32_t word) {
 
 inline HandlerBinding LowerFloat(uint32_t word) {
     switch (DecodeFloatFamily(word)) {
-        case FloatFamily::Convert:
-            return BindFloatHandler<FloatFamily::Convert>();
-        case FloatFamily::Fused:
-            return BindFloatHandler<FloatFamily::Fused>();
-        case FloatFamily::Compare:
-            return BindFloatHandler<FloatFamily::Compare>();
-        case FloatFamily::ConditionalCompare:
-            return BindFloatHandler<FloatFamily::ConditionalCompare>();
-        case FloatFamily::Select:
-            return BindFloatHandler<FloatFamily::Select>();
-        case FloatFamily::Binary:
-            return BindFloatHandler<FloatFamily::Binary>();
-        case FloatFamily::Immediate:
-            return BindFloatHandler<FloatFamily::Immediate>();
-        case FloatFamily::Unary:
-            return BindFloatHandler<FloatFamily::Unary>();
-        case FloatFamily::MoveFromVector:
-            return BindFloatHandler<FloatFamily::MoveFromVector>();
-        case FloatFamily::MoveToVector:
-            return BindFloatHandler<FloatFamily::MoveToVector>();
-        case FloatFamily::Integer:
-            return BindFloatHandler<FloatFamily::Integer>();
+#define ARM_LowerFloat(Name) \
+    case FloatFamily::Name:  \
+        return BindFloatHandler<FloatFamily::Name>();
+#define ARM_LowerVector(Name)
+#define ARM_LowerByteVector(Name)
+#define ARM_REGISTER(Category, Name) ARM_Lower##Category(Name)
+#include "operation_registers.def"
+#undef ARM_REGISTER
+#undef ARM_LowerByteVector
+#undef ARM_LowerVector
+#undef ARM_LowerFloat
         case FloatFamily::Undefined:
             return {};
     }
@@ -164,36 +109,17 @@ inline HandlerBinding LowerFloat(uint32_t word) {
 
 inline HandlerBinding LowerVector(uint32_t word) {
     switch (DecodeVectorFamily(word)) {
-        case VectorFamily::Structure:
-            return BindVectorHandler<VectorFamily::Structure>(word);
-        case VectorFamily::Three:
-            return BindVectorHandler<VectorFamily::Three>(word);
-        case VectorFamily::ThreeFloat:
-            return BindVectorHandler<VectorFamily::ThreeFloat>(word);
-        case VectorFamily::Widen:
-            return BindVectorHandler<VectorFamily::Widen>(word);
-        case VectorFamily::Misc:
-            return BindVectorHandler<VectorFamily::Misc>(word);
-        case VectorFamily::MiscFloat:
-            return BindVectorHandler<VectorFamily::MiscFloat>(word);
-        case VectorFamily::Reduction:
-            return BindVectorHandler<VectorFamily::Reduction>(word);
-        case VectorFamily::PairAdd:
-            return BindVectorHandler<VectorFamily::PairAdd>(word);
-        case VectorFamily::PairFloatAdd:
-            return BindVectorHandler<VectorFamily::PairFloatAdd>(word);
-        case VectorFamily::ModifiedImmediate:
-            return BindVectorHandler<VectorFamily::ModifiedImmediate>(word);
-        case VectorFamily::ShiftImmediate:
-            return BindVectorHandler<VectorFamily::ShiftImmediate>(word);
-        case VectorFamily::Copy:
-            return BindVectorHandler<VectorFamily::Copy>(word);
-        case VectorFamily::Extract:
-            return BindVectorHandler<VectorFamily::Extract>(word);
-        case VectorFamily::Table:
-            return BindVectorHandler<VectorFamily::Table>(word);
-        case VectorFamily::Permute:
-            return BindVectorHandler<VectorFamily::Permute>(word);
+#define ARM_LowerFloat(Name)
+#define ARM_LowerVector(Name) \
+    case VectorFamily::Name:  \
+        return BindVectorHandler<VectorFamily::Name>(word);
+#define ARM_LowerByteVector(Name)
+#define ARM_REGISTER(Category, Name) ARM_Lower##Category(Name)
+#include "operation_registers.def"
+#undef ARM_REGISTER
+#undef ARM_LowerByteVector
+#undef ARM_LowerVector
+#undef ARM_LowerFloat
         case VectorFamily::Undefined:
             return {};
     }

@@ -23,37 +23,43 @@ struct CachedAtomicTransfers {
     }
 };
 
+// Leave the slow edge in its caller. The threaded handler must tail-call
+// the memory replay, while the inlined JIT operation returns flow to its span.
+// Probe both permissions before changing registers or the exclusive monitor.
+#define A64_PREPARE_ATOMIC_ACCESS(on_alignment, on_replay)                                                         \
+    const auto address = registers.Read(op.rn, 64, true);                                                          \
+    const bool pair = !lse && (op.mode == ExclusivePair || op.mode == CompareSwapPair);                            \
+    const bool cas = !lse && (op.mode == CompareSwap || op.mode == CompareSwapPair);                               \
+    const bool exclusive = !lse && (op.mode == Exclusive || op.mode == ExclusivePair);                             \
+    const bool load = !lse && !cas && op.operation == Load;                                                        \
+    const unsigned size = op.width / 8 * (pair ? 2 : 1);                                                           \
+    if ((op.rn == 31 && (address & 15)) || (address & (size - 1))) [[unlikely]] {                                  \
+        on_alignment;                                                                                              \
+    }                                                                                                              \
+                                                                                                                   \
+    uint8_t* readable = nullptr;                                                                                   \
+    uint8_t* writable = nullptr;                                                                                   \
+    const bool unmatched_store =                                                                                   \
+        exclusive && !load && (state.exclusive_size != size || state.exclusive_address != address);                \
+    if (!unmatched_store) {                                                                                        \
+        if ((lse || cas || load || exclusive) &&                                                                   \
+            !ProbeDataTlb<false>(state, address, size, data_tlb, utlb_tags, utlb_addend, readable)) [[unlikely]] { \
+            on_replay;                                                                                             \
+        }                                                                                                          \
+        if (!load && !ProbeDataTlb<true>(state, address, size, data_tlb, utlb_tags, utlb_addend, writable))        \
+            [[unlikely]] {                                                                                         \
+            on_replay;                                                                                             \
+        }                                                                                                          \
+    }
+
 template <Kind kind>
 FIBERCPU_AARCH64_HANDLER_ABI uint64_t AtomicHandler(A64_HANDLER_PARAMS) {
     constexpr bool lse = kind == Kind::LoadStoreAtomic;
     const auto op = GetOpOperands<kind>(*current);
     const HotRegisters registers{state A64_HANDLER_PIN_ARGS};
-    const auto address = registers.Read(op.rn, 64, true);
-    const bool pair = !lse && (op.mode == ExclusivePair || op.mode == CompareSwapPair);
-    const bool cas = !lse && (op.mode == CompareSwap || op.mode == CompareSwapPair);
-    const bool exclusive = !lse && (op.mode == Exclusive || op.mode == ExclusivePair);
-    const bool load = !lse && !cas && op.operation == Load;
-    const unsigned size = op.width / 8 * (pair ? 2 : 1);
-    if ((op.rn == 31 && (address & 15)) || (address & (size - 1))) [[unlikely]] {
-        return ReturnFromBlock(state, current, instr_limit, flags_cache A64_HANDLER_PIN_ARGS,
-                               Alignment(address, load ? Access::Read : Access::Write));
-    }
-
-    uint8_t* readable = nullptr;
-    uint8_t* writable = nullptr;
-    const bool unmatched_store =
-        exclusive && !load && (state.exclusive_size != size || state.exclusive_address != address);
-    if (!unmatched_store) {
-        // Probe both permissions before the op can clear the monitor or change registers.
-        if ((lse || cas || load || exclusive) &&
-            !ProbeDataTlb<false>(state, address, size, data_tlb, utlb_tags, utlb_addend, readable)) [[unlikely]] {
-            A64_MEMORY_OP_GENERIC(current);
-        }
-        if (!load && !ProbeDataTlb<true>(state, address, size, data_tlb, utlb_tags, utlb_addend, writable))
-            [[unlikely]] {
-            A64_MEMORY_OP_GENERIC(current);
-        }
-    }
+    A64_PREPARE_ATOMIC_ACCESS(return ReturnFromBlock(state, current, instr_limit, flags_cache A64_HANDLER_PIN_ARGS,
+                                                     Alignment(address, load ? Access::Read : Access::Write)),
+                                     A64_MEMORY_OP_GENERIC(current));
 
     const CachedAtomicTransfers memory{state, readable, writable};
     if constexpr (lse) {
@@ -67,6 +73,23 @@ FIBERCPU_AARCH64_HANDLER_ABI uint64_t AtomicHandler(A64_HANDLER_PARAMS) {
     }
     A64_DISPATCH_NEXT(current->NextOp<false>());
 }
+
+template <Kind kind>
+[[gnu::always_inline]] inline StepResult ProbeAtomicOperation(State& state, const DecodedInstruction& op,
+                                                              const HotRegisters& registers,
+                                                              const mem::SoftTlb* data_tlb, uint64_t& utlb_tags,
+                                                              uintptr_t& utlb_addend) {
+    constexpr bool lse = kind == Kind::LoadStoreAtomic;
+    A64_PREPARE_ATOMIC_ACCESS(return Alignment(address, load ? Access::Read : Access::Write), return {Stop::Replay});
+
+    const CachedAtomicTransfers memory{state, readable, writable};
+    if constexpr (lse)
+        return AtomicMemoryOp(op, address, registers, memory);
+    else
+        return ExclusiveMemoryOp(state, op, address, registers, memory);
+}
+
+#undef A64_PREPARE_ATOMIC_ACCESS
 #endif
 
 template <Kind kind>

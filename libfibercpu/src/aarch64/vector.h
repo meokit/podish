@@ -85,7 +85,7 @@ inline uint64_t VectorLogical(uint64_t old, uint64_t a, uint64_t b, unsigned op)
     }
 }
 
-template <bool floating>
+template <bool floating, bool jit = false>
 A64_VECTOR_INLINE bool VectorThree(State& state, const DecodedInstruction& op, bool q, bool u, bool scalar,
                                    unsigned size) {
     const auto old = state.v[op.rd];
@@ -162,7 +162,8 @@ A64_VECTOR_INLINE bool VectorThree(State& state, const DecodedInstruction& op, b
                 b = Element(source, width, 2 * (i % half) + 1);
             }
             if (fp == FPOp::Fused && size_high) a ^= FPBits(width).sign;
-            SetElement(result, width, i, FPArithmetic(state, width, fp, a, b, Element(old, width, i)));
+            SetElement(result, width, i,
+                       BoundFPArithmetic<jit>(state, width, fp, a, b, Element(old, width, i), Nearest, false));
         }
         state.v[op.rd] = result;
         return true;
@@ -369,7 +370,7 @@ A64_VECTOR_INLINE bool VectorWiden(State& state, const DecodedInstruction& op, b
     return true;
 }
 
-template <bool floating>
+template <bool floating, bool jit = false>
 A64_VECTOR_INLINE bool VectorMisc(State& state, const DecodedInstruction& op, bool q, bool u, bool scalar,
                                   unsigned size) {
     const unsigned operation = Field(op.word, 12, 5);
@@ -388,11 +389,11 @@ A64_VECTOR_INLINE bool VectorMisc(State& state, const DecodedInstruction& op, bo
                 else
                     value &= ~FPBits(width).sign;
             } else if (operation == 31 && size >= 2 && u && !scalar) {
-                value = FPArithmetic(state, width, FPOp::Sqrt, value);
+                value = BoundFPArithmetic<jit>(state, width, FPOp::Sqrt, value, 0, 0, Nearest, false);
             } else if (operation == 27 && size >= 2) {
                 value = FPToInt(state, width, value, width, u, 0, TowardZero);
             } else if (operation == 29 && size < 2) {
-                value = IntToFP(state, width, value, width, u, 0);
+                value = BoundIntToFP<jit>(state, width, value, width, u, 0);
             } else {
                 return false;
             }
@@ -905,26 +906,7 @@ inline StepResult VectorStructure(State& state, const Memory* memory, const Deco
     return {};
 }
 
-enum class VectorFamily {
-    Undefined,
-    Structure,
-    Three,
-    Widen,
-    Misc,
-    Reduction,
-    PairAdd,
-    PairFloatAdd,
-    ModifiedImmediate,
-    ShiftImmediate,
-    Copy,
-    Extract,
-    Table,
-    Permute,
-    ThreeFloat,
-    MiscFloat
-};
-
-template <VectorFamily family, class Registers>
+template <VectorFamily family, bool jit = false, class Registers>
 inline bool VectorRegisterOp(State& state, const DecodedInstruction& op, const Registers& registers) {
     const auto word = op.word;
     const bool q = Field(word, 30, 1);
@@ -934,11 +916,11 @@ inline bool VectorRegisterOp(State& state, const DecodedInstruction& op, const R
 
     bool valid = false;
     if constexpr (family == VectorFamily::Three || family == VectorFamily::ThreeFloat) {
-        valid = VectorThree<family == VectorFamily::ThreeFloat>(state, op, q, u, scalar, size);
+        valid = VectorThree<family == VectorFamily::ThreeFloat, jit>(state, op, q, u, scalar, size);
     } else if constexpr (family == VectorFamily::Widen) {
         valid = VectorWiden(state, op, q, u, size);
     } else if constexpr (family == VectorFamily::Misc || family == VectorFamily::MiscFloat) {
-        valid = VectorMisc<family == VectorFamily::MiscFloat>(state, op, q, u, scalar, size);
+        valid = VectorMisc<family == VectorFamily::MiscFloat, jit>(state, op, q, u, scalar, size);
     } else if constexpr (family == VectorFamily::Reduction) {
         valid = VectorReduction(state, op, q, u, size);
     } else if constexpr (family == VectorFamily::PairAdd) {
@@ -948,7 +930,9 @@ inline bool VectorRegisterOp(State& state, const DecodedInstruction& op, const R
     } else if constexpr (family == VectorFamily::PairFloatAdd) {
         const unsigned width = (size & 1) ? 64 : 32;
         const auto a = state.v[op.rn];
-        state.v[op.rd] = {FPArithmetic(state, width, FPOp::Add, Element(a, width, 0), Element(a, width, 1)), 0};
+        state.v[op.rd] = {BoundFPArithmetic<jit>(state, width, FPOp::Add, Element(a, width, 0), Element(a, width, 1), 0,
+                                                 Nearest, false),
+                          0};
         valid = true;
     } else if constexpr (family == VectorFamily::ModifiedImmediate) {
         valid = VectorModifiedImmediate(state, op, q, u);
@@ -976,34 +960,6 @@ inline StepResult Vector(State& state, const Memory& memory, const DecodedInstru
     } else {
         return VectorRegisterOp<family>(state, op, ScalarRegisters{state}) ? StepResult{} : Undefined(state.pc);
     }
-}
-
-inline VectorFamily DecodeVectorFamily(uint32_t word) {
-    if ((word & 0xbe000000) == 0x0c000000) return VectorFamily::Structure;
-    if ((word & 0x8f200400) == 0x0e200400)
-        return Field(word, 11, 5) >= 24 ? VectorFamily::ThreeFloat : VectorFamily::Three;
-    if ((word & 0x9f200c00) == 0x0e200000) return VectorFamily::Widen;
-    if ((word & 0x8f3e0c00) == 0x0e200800) {
-        switch (Field(word, 12, 5)) {
-            case 15:
-            case 27:
-            case 29:
-            case 31:
-                return VectorFamily::MiscFloat;
-            default:
-                return VectorFamily::Misc;
-        }
-    }
-    if ((word & 0x9f3e0c00) == 0x0e300800) return VectorFamily::Reduction;
-    if ((word & 0xfffffc00) == 0x5ef1b800) return VectorFamily::PairAdd;
-    if ((word & 0xffbffc00) == 0x7e30d800) return VectorFamily::PairFloatAdd;
-    if ((word & 0x9ff80400) == 0x0f000400) return VectorFamily::ModifiedImmediate;
-    if ((word & 0x8f800400) == 0x0f000400) return VectorFamily::ShiftImmediate;
-    if ((word & 0x8fe08400) == 0x0e000400) return VectorFamily::Copy;
-    if ((word & 0xbfe08400) == 0x2e000000) return VectorFamily::Extract;
-    if ((word & 0xbfe08c00) == 0x0e000000) return VectorFamily::Table;
-    if ((word & 0xbf208c00) == 0x0e000800) return VectorFamily::Permute;
-    return VectorFamily::Undefined;
 }
 
 }  // namespace fiberish::aarch64::detail

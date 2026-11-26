@@ -1,0 +1,31 @@
+// Order is shared by the native fallback table and LLVM operation IDs.
+ARM_INTEGER(Address)
+ARM_INTEGER(AddSubImmediate)
+ARM_INTEGER(AddSubShifted)
+ARM_INTEGER(AddSubExtended)
+ARM_INTEGER(AddSubCarry)
+ARM_INTEGER(LogicalImmediate)
+ARM_INTEGER(LogicalShifted)
+ARM_INTEGER(MoveWide)
+ARM_INTEGER(Bitfield)
+ARM_INTEGER(Extract)
+ARM_INTEGER(ConditionalCompare)
+ARM_INTEGER(ConditionalSelect)
+ARM_INTEGER(DataOneSource)
+ARM_INTEGER(DataTwoSource)
+ARM_INTEGER(Multiply)
+ARM_BRANCH(BranchImmediate, Direct)
+ARM_BRANCH(BranchRegister, Indirect)
+ARM_BRANCH(BranchCondition, Conditional)
+ARM_BRANCH(CompareBranch, Conditional)
+ARM_BRANCH(TestBranch, Conditional)
+ARM_MEMORY(LoadStoreImmediate, 0)
+ARM_MEMORY(LoadStoreRegister, 0)
+ARM_MEMORY(LoadStorePair, 32)
+ARM_MEMORY(LoadLiteral, 0)
+
+#define ARM_REGISTER(Category, Family) ARM_EXTRA(Category##Family)
+#include "operation_registers.def"
+#undef ARM_REGISTER
+
+#include "operation_system.def"
