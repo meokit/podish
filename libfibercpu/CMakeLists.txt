@@ -58,6 +58,16 @@ CPMAddPackage(
 
 option(USE_SOFTFLOAT "Use Berkeley SoftFloat 3 for x87 FPU emulation" ON)
 option(ENABLE_TLB_STATS "Track TLB probes, memory replay and block dispatch" OFF)
+set(FIBERCPU_DATA_TLB_ENTRIES "1024" CACHE STRING "Entries in each software data TLB table")
+if(NOT FIBERCPU_DATA_TLB_ENTRIES MATCHES "^[1-9][0-9]*$" OR FIBERCPU_DATA_TLB_ENTRIES GREATER 1048576)
+    message(FATAL_ERROR "FIBERCPU_DATA_TLB_ENTRIES must be a power of two between 1 and 1048576")
+endif()
+math(EXPR _data_tlb_index_mask "${FIBERCPU_DATA_TLB_ENTRIES} - 1")
+math(EXPR _data_tlb_power_check "${FIBERCPU_DATA_TLB_ENTRIES} & ${_data_tlb_index_mask}")
+if(NOT _data_tlb_power_check EQUAL 0)
+    message(FATAL_ERROR "FIBERCPU_DATA_TLB_ENTRIES must be a power of two between 1 and 1048576")
+endif()
+add_compile_definitions(FIBERCPU_DATA_TLB_ENTRIES=${FIBERCPU_DATA_TLB_ENTRIES})
 option(FIBERCPU_BUILD_STATIC "Build fibercpu as a static library instead of shared" OFF)
 option(FIBERCPU_ENABLE_LTO "Enable interprocedural optimization (LTO/IPO)" ON)
 set(FIBERCPU_WASM_HOT_DISPATCH_HANDLERS "0" CACHE STRING "Profiled cases in the inlined Wasm dispatch loop")
@@ -475,6 +485,7 @@ if(_modrm_plan_input)
 endif()
 set(FIBERCPU_OPTIMIZATION_CONFIG "static=${FIBERCPU_STATIC_SPECIALIZATION};fusion=${FIBERCPU_FUSION_STRATEGY};enabled=${FIBERCPU_ENABLE_SUPEROPCODES};operand=${FIBERCPU_OPERAND_MODE};budget=${FIBERCPU_OPERAND_BUDGET};pin=${FIBERCPU_GPR_PIN};pins=${_pin_registers};coverage=${FIBERCPU_PIN_SPECIALIZATION};plan_source=${_operand_plan_source};plan=${_operand_plan_hash};modrm=${_modrm_hash}")
 string(APPEND FIBERCPU_OPTIMIZATION_CONFIG ";baking_preset=${FIBERCPU_BAKING_PRESET};i386=${FIBERCPU_GUEST_I386};aarch64=${FIBERCPU_GUEST_AARCH64}")
+string(APPEND FIBERCPU_OPTIMIZATION_CONFIG ";data_tlb_entries=${FIBERCPU_DATA_TLB_ENTRIES}")
 if(FIBERCPU_GUEST_AARCH64)
     string(APPEND FIBERCPU_OPTIMIZATION_CONFIG ";a64_dfe=${FIBERCPU_AARCH64_DFE};a64_pin=${FIBERCPU_AARCH64_PIN_REG}")
 endif()
@@ -866,7 +877,7 @@ if(FIBERCPU_ENABLE_LLVM_JIT OR FIBERCPU_LINKED_BLOCK_CACHE_FILE)
     foreach(setting CMAKE_CXX_COMPILER_VERSION CMAKE_OSX_DEPLOYMENT_TARGET
                     CMAKE_BUILD_TYPE CMAKE_CXX_FLAGS CMAKE_CXX_FLAGS_DEBUG
                     CMAKE_CXX_FLAGS_RELEASE CMAKE_CXX_FLAGS_MINSIZEREL CMAKE_CXX_FLAGS_RELWITHDEBINFO
-                    USE_SOFTFLOAT ENABLE_TLB_STATS FIBERCPU_ENABLE_BLOCK_PROFILE
+                    USE_SOFTFLOAT ENABLE_TLB_STATS FIBERCPU_DATA_TLB_ENTRIES FIBERCPU_ENABLE_BLOCK_PROFILE
                     FIBERCPU_GPR_PIN_MODE _pin_registers FIBERCPU_PIN_SPECIALIZATION
                     FIBERCPU_ENABLE_HANDLER_PROFILE FIBERCPU_ENABLE_SEQUENCE_PROFILE
                     FIBERCPU_LLVM_SHARED_REGION_EXITS

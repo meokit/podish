@@ -46,6 +46,12 @@ The GPR pin, instrumentation, JIT, and dynamic specialization settings
 remain independent. `X86_GetOptimizationConfig()` reports the selected
 preset as `baking_preset`.
 
+Set `-DFIBERCPU_DATA_TLB_ENTRIES=512` to change the capacity of each software
+read and write TLB table for both guests. The default is 1024 entries per table.
+The value must be a power of two up to the 4 GiB guest address space's page
+count (1,048,576). The software instruction TLB has 256 entries.
+`X86_GetOptimizationConfig()` reports the capacity as `data_tlb_entries`.
+
 Named native shared-library builds report the linked text size where the
 format can be measured. They use `__text` on macOS and `.text` on Linux and
 Windows, and report the largest slice of a universal Mach-O. The preset

@@ -563,8 +563,7 @@ template <typename T>
 // Read For Exec
 template <typename T>
 [[nodiscard]] inline T Mmu::read_for_exec(EmuState* state, GuestAddr addr) {
-    const size_t idx = (addr >> PAGE_SHIFT) & TLB_INDEX_MASK;
-    const auto& entry = tlb.exec_tlb[idx];
+    const auto& entry = tlb.exec_tlb[ExecTlbIndex(addr)];
     const uint32_t tag = addr & ~PAGE_MASK;
 
     HostAddr ptr = nullptr;
@@ -585,8 +584,7 @@ template <typename T>
 
 // Translate Exec
 [[nodiscard]] inline const std::byte* Mmu::translate_exec(EmuState* state, GuestAddr addr) {
-    const size_t idx = (addr >> PAGE_SHIFT) & TLB_INDEX_MASK;
-    const auto& entry = tlb.exec_tlb[idx];
+    const auto& entry = tlb.exec_tlb[ExecTlbIndex(addr)];
     const uint32_t tag = addr & ~PAGE_MASK;
 
     if (entry.tag == tag) {
@@ -598,7 +596,7 @@ template <typename T>
 }
 
 [[nodiscard]] inline const std::byte* Mmu::try_executable_page(GuestAddr page) {
-    auto& entry = tlb.exec_tlb[(page >> PAGE_SHIFT) & TLB_INDEX_MASK];
+    auto& entry = tlb.exec_tlb[ExecTlbIndex(page)];
     if (entry.tag == page) [[likely]]
         return reinterpret_cast<const std::byte*>(entry.addend + page);
 
