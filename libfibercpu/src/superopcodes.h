@@ -13,7 +13,7 @@ uint32_t FindFusionTrainingId(HandlerFunc handler);
 HandlerFunc GeneratedFindSuperOpcode(const DecodedInstruction* ops);
 #endif
 void ApplySuperOpcodesToBlockOps(DecodedInstruction* ops, uint32_t op_count, bool previously_lowered = false,
-                                std::span<const ScalarBindingIndex> binding_indices = {});
+                                 std::span<const ScalarBindingIndex> binding_indices = {});
 
 template <bool TakenOnZero, class Result>
 FORCE_INLINE LogicFlow BranchOnZeroResult(LogicFuncParams, Result flags) {
@@ -22,6 +22,17 @@ FORCE_INLINE LogicFlow BranchOnZeroResult(LogicFuncParams, Result flags) {
         return LogicFlow::Continue;
     }
     flags.Pack(flags_cache, TakenOnZero);
+    *branch = GetControlTargetEip(op);
+    return LogicFlow::ExitToBranch;
+}
+
+template <CompareRelation relation, bool taken_on_match, typename T>
+FORCE_INLINE LogicFlow BranchOnCompare(LogicFuncParams, SubtractionResultFlags<T> flags) {
+    if (flags.template Matches<relation>() != taken_on_match) {
+        flags.template PackRelation<relation>(flags_cache, !taken_on_match);
+        return LogicFlow::Continue;
+    }
+    flags.template PackRelation<relation>(flags_cache, taken_on_match);
     *branch = GetControlTargetEip(op);
     return LogicFlow::ExitToBranch;
 }

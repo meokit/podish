@@ -20,29 +20,47 @@ ZERO_BRANCHES = {
     "OpJcc_NE_Rel32": "false",
 }
 
+# The Boolean selects whether a true relation takes the guest branch.
+COMPARE_BRANCHES = {
+    f"OpJcc_{condition}_Rel{width}": f"BranchOnCompare<CompareRelation::{relation}, {taken}>"
+    for condition, relation, taken in (
+        ("B", "UnsignedLess", "true"), ("AE", "UnsignedLess", "false"),
+        ("BE", "UnsignedLessEqual", "true"), ("A", "UnsignedLessEqual", "false"),
+        ("L", "SignedLess", "true"), ("GE", "SignedLess", "false"),
+        ("LE", "SignedLessEqual", "true"), ("G", "SignedLessEqual", "false"),
+    )
+    for width in (8, 32)
+}
+
 BYTE_PRODUCERS = {
     "OpTest_EbGb", "OpTest_AlImm", "OpCmp_EbGb", "OpCmp_GbEb", "OpCmp_AlImm", "OpGroup1_EbIb_Generic",
     "OpGroup2_Eb1", "OpGroup2_EbIb",
 }
 
 
-def deferred_zero_producer(name, operand, policy):
+def deferred_branch(name, operand, policy, consumer):
     width = "uint8_t" if name in BYTE_PRODUCERS else f"FusedOperandWidth<{policy}>"
     if operand.meta & NO_FLAGS:
         return None
-    if name in ("OpTest_EbGb", "OpTest_EvGv"):
-        return f"LogicalResultFlags<{width}>", f"OpTestModRMDeferred<{policy}>"
-    if name in ("OpTest_AlImm", "OpTest_EaxImm"):
-        return f"LogicalResultFlags<{width}>", "OpTestAccumulatorDeferred"
+    zero = consumer in ZERO_BRANCHES
+    branch = f"BranchOnZeroResult<{ZERO_BRANCHES[consumer]}>" if zero else COMPARE_BRANCHES.get(consumer)
+    if not branch:
+        return None
+    extension = (operand.modrm >> 3) & 7
     if name in ("OpCmp_AlImm", "OpCmp_EaxImm"):
-        return f"SubtractionResultFlags<{width}>", "OpCompareAccumulatorDeferred"
+        return f"SubtractionResultFlags<{width}>", "OpCompareAccumulatorDeferred", branch
     if name in ("OpCmp_EbGb", "OpCmp_EvGv", "OpCmp_GbEb", "OpCmp_GvEv"):
         rm_destination = "true" if name in ("OpCmp_EbGb", "OpCmp_EvGv") else "false"
-        return f"SubtractionResultFlags<{width}>", f"(OpCompareModRMDeferred<{policy}, {rm_destination}>)"
-    extension = (operand.modrm >> 3) & 7
+        return f"SubtractionResultFlags<{width}>", f"(OpCompareModRMDeferred<{policy}, {rm_destination}>)", branch
     if extension == 7 and name in ("OpGroup1_EbIb_Generic", "OpGroup1_EvIb_Generic", "OpGroup1_EvIz_Generic"):
         extend = "true" if name == "OpGroup1_EvIb_Generic" else "false"
-        return f"SubtractionResultFlags<{width}>", f"(OpCompareImmediateDeferred<{policy}, {extend}>)"
+        return f"SubtractionResultFlags<{width}>", f"(OpCompareImmediateDeferred<{policy}, {extend}>)", branch
+    if not zero:
+        return None
+    if name in ("OpTest_EbGb", "OpTest_EvGv"):
+        return f"LogicalResultFlags<{width}>", f"OpTestModRMDeferred<{policy}>", branch
+    if name in ("OpTest_AlImm", "OpTest_EaxImm"):
+        return f"LogicalResultFlags<{width}>", "OpTestAccumulatorDeferred", branch
     if extension == 5 and operand.modrm >= 0xc0:
         if name in ("OpGroup2_Eb1", "OpGroup2_Ev1"):
             count = 1
@@ -51,7 +69,7 @@ def deferred_zero_producer(name, operand, policy):
         else:
             count = 0
         if count:
-            return f"RightShiftResultFlags<{width}>", f"(OpRightShiftDeferred<{policy}, {count}>)"
+            return f"RightShiftResultFlags<{width}>", f"(OpRightShiftDeferred<{policy}, {count}>)", branch
     return None
 
 
@@ -78,17 +96,18 @@ def generate(source, plan, catalog, budget, pin_mode, pin_mask):
         policies = [f"OperandSpec::Profile<{shape}>" for shape in shapes]
         body = specialize_fusion(body, original, clone, policies)
         deferred = None
-        if operations[-1] in ZERO_BRANCHES and supports_exact_operands(catalog, operations[-2], operands[-2]):
-            deferred = deferred_zero_producer(operations[-2], operands[-2], f"SlotPolicy{len(operations) - 2}")
+        if supports_exact_operands(catalog, operations[-2], operands[-2]):
+            deferred = deferred_branch(operations[-2], operands[-2], f"SlotPolicy{len(operations) - 2}", operations[-1])
         for position, (name, operand) in enumerate(zip(operations, operands)):
             if deferred and position == len(operations) - 2:
                 call = calls[position][0]
-                result_type, producer = deferred
+                result_type, producer, _ = deferred
                 body = body.replace(call, f"{result_type} deferred_flags;\n    "
                                     + call[:-1].replace(f"op::{name}", producer) + ", deferred_flags)")
             elif deferred and position == len(operations) - 1:
                 call = calls[position][0]
-                branch = f"BranchOnZeroResult<{ZERO_BRANCHES[name]}>"
+                _, _, branch = deferred
+                branch = f"({branch})"
                 body = body.replace(call, call[:-1].replace(f"op::{name}", branch) + ", deferred_flags)")
             elif supports_exact_operands(catalog, name, operand):
                 body = body.replace(f"(SlotPolicy{position}, op::{name},",
