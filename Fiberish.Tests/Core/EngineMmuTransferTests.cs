@@ -498,6 +498,40 @@ public class EngineMmuTransferTests : IDisposable
     }
 
 #if FIBER_GUEST_AARCH64
+#if FIBER_GUEST_I386
+    [Fact]
+    public void SelectArchitecture_RoundTripPreservesLowAndHighMappings()
+    {
+        var runtime = new TestRuntimeFactory();
+        using var x86Code = new UnmanagedPageFixture([0x40]); // inc eax
+        using var armCode = new UnmanagedPageFixture([0x20, 0x00, 0x80, 0xd2]); // mov x0, #1
+        using var engine = runtime.CreateEngine();
+        const ulong highCode = (1UL << 32) + CodeAddr;
+        const byte rx = (byte)(Protection.Read | Protection.Exec);
+        Assert.True(engine.MemMapHostPage(CodeAddr, x86Code.Pointer, rx));
+
+        engine.SelectArchitecture(GuestArchitecture.AArch64);
+        Assert.True(engine.MemMapHostPage(highCode, armCode.Pointer, rx));
+        engine.InstructionPointer = highCode;
+        engine.Run(highCode + 4, 1);
+        Assert.Equal(1UL, engine.ReadArmRegister(0));
+
+        engine.SelectArchitecture(GuestArchitecture.I386);
+        engine.InstructionPointer = CodeAddr;
+        engine.RegWrite(Reg.EAX, 7);
+        engine.Step();
+        Assert.Equal(CodeAddr + 1, engine.Eip);
+        Assert.Equal(8u, engine.RegRead(Reg.EAX));
+        Assert.Equal(IntPtr.Zero, engine.GetPhysicalAddressSafe(highCode, false));
+
+        engine.SelectArchitecture(GuestArchitecture.AArch64);
+        engine.InstructionPointer = highCode;
+        engine.WriteArmRegister(0, 0);
+        engine.Run(highCode + 4, 1);
+        Assert.Equal(1UL, engine.ReadArmRegister(0));
+    }
+#endif
+
     [Fact]
     public void AArch64_ExecutablePageCacheObservesAliasWritesAndPermissionChanges()
     {

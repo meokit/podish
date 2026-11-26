@@ -1426,9 +1426,9 @@ public partial class SyscallManager
             SyscallCpu cpu = engine;
             Span<ulong> args = stackalloc ulong[6];
             var number = cpu.ReadSyscall(args);
-            var (operation, pointers, sizes) = isAArch64
+            var (operation, sizes) = isAArch64
                 ? DecodeAArch64Syscall(number)
-                : (number, 0u, 0u);
+                : (number, 0u);
 
             var a1 = (uint)args[0];
             var a2 = (uint)args[1];
@@ -1450,7 +1450,7 @@ public partial class SyscallManager
             try
             {
                 retTask = isAArch64
-                    ? DispatchAArch64Syscall(number, operation, engine, args, pointers, sizes, out handled,
+                    ? DispatchAArch64Syscall(number, operation, engine, args, sizes, out handled,
                         out wideResult, out wideTask)
                     : DispatchSyscall(operation, engine, a1, a2, a3, (uint)args[3], (uint)args[4], (uint)args[5],
                         out handled);

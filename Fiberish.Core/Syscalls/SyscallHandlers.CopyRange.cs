@@ -19,7 +19,7 @@ public partial class SyscallManager
     ///     vmsplice(2): copy user pages into a pipe (or pipe data into user memory
     ///     for a pipe read end).
     /// </summary>
-    private ValueTask<int> SysVmsplice(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private ValueTask<int> SysVmsplice(Engine engine, uint a1, ulong a2, uint a3, uint a4, uint a5,
         uint a6)
     {
         var task = engine.Owner as FiberTask;
@@ -45,7 +45,7 @@ public partial class SyscallManager
     }
 
     private async ValueTask<int> DoVmsplice(Engine engine, FiberTask task, LinuxFile file, PipeInode pipe,
-        uint iovPtr, long nrSegs, int flags)
+        ulong iovPtr, long nrSegs, int flags)
     {
         var (iovs, iovErr) = await ReadFileIovecsAsync(engine, iovPtr, (int)nrSegs);
         if (iovs == null) return iovErr;
@@ -152,7 +152,7 @@ public partial class SyscallManager
     ///     copy_file_range(2): copy a byte range between two files without a trip
     ///     through user space.
     /// </summary>
-    private ValueTask<int> SysCopyFileRange(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private ValueTask<int> SysCopyFileRange(Engine engine, uint a1, ulong a2, uint a3, ulong a4, uint a5,
         uint a6)
     {
         if (engine.Owner is not FiberTask task) return ValueTask.FromResult(-(int)Errno.EPERM);
@@ -167,7 +167,7 @@ public partial class SyscallManager
     }
 
     private static async ValueTask<int> CopyFileRangeAsync(Engine engine, FiberTask task, LinuxFile fileIn,
-        LinuxFile fileOut, uint offInPtr, uint offOutPtr, uint len)
+        LinuxFile fileOut, ulong offInPtr, ulong offOutPtr, uint len)
     {
         if (fileIn.IsPathOnly || fileOut.IsPathOnly) return -(int)Errno.EBADF;
 

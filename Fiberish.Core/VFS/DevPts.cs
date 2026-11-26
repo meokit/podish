@@ -174,7 +174,7 @@ public class PtySlaveInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDis
         return null;
     }
 
-    public override int Ioctl(LinuxFile linuxFile, FiberTask task, uint request, uint arg)
+    public override int Ioctl(LinuxFile linuxFile, FiberTask task, uint request, ulong arg)
     {
         var discipline = PtyPair.Slave.Discipline;
         return discipline != null
@@ -385,7 +385,7 @@ public class PtmxInode : Inode, ITaskWaitSource, IDispatcherWaitSource, IDispatc
         return null;
     }
 
-    public override int Ioctl(LinuxFile linuxFile, FiberTask task, uint request, uint arg)
+    public override int Ioctl(LinuxFile linuxFile, FiberTask task, uint request, ulong arg)
     {
         if (linuxFile.PrivateData is not PtyPair pair)
             return -(int)Errno.EBADF;

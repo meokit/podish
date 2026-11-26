@@ -84,8 +84,8 @@ public partial class SyscallManager
         return result;
     }
 
-    private async ValueTask<int> SysPselect6Time64(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
-        uint a6)
+    private async ValueTask<int> SysPselect6Time64(Engine engine, uint a1, ulong a2, ulong a3, ulong a4, ulong a5,
+        ulong a6)
     {
         if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
 
@@ -103,7 +103,7 @@ public partial class SyscallManager
         return result;
     }
 
-    private async ValueTask<int> SysPpollTime64(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysPpollTime64(Engine engine, ulong a1, uint a2, ulong a3, ulong a4, uint a5,
         uint a6)
     {
         if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
@@ -122,8 +122,8 @@ public partial class SyscallManager
         return result;
     }
 
-    private static async ValueTask<int> DoSelect(SyscallManager sm, Engine engine, int n, uint inp, uint outp,
-        uint exp, uint tvp)
+    private static async ValueTask<int> DoSelect(SyscallManager sm, Engine engine, int n, ulong inp, ulong outp,
+        ulong exp, uint tvp)
     {
         if (n < 0 || n > 1024) return -(int)Errno.EINVAL;
 
@@ -139,8 +139,8 @@ public partial class SyscallManager
         return await DoSelectWithTimeout(sm, engine, n, inp, outp, exp, timeoutMs);
     }
 
-    private static async ValueTask<int> DoSelectWithTimeout(SyscallManager sm, Engine engine, int n, uint inp,
-        uint outp, uint exp, long timeoutMs)
+    private static async ValueTask<int> DoSelectWithTimeout(SyscallManager sm, Engine engine, int n, ulong inp,
+        ulong outp, ulong exp, long timeoutMs)
     {
         if (n < 0 || n > 1024) return -(int)Errno.EINVAL;
 
@@ -177,7 +177,7 @@ public partial class SyscallManager
         }
     }
 
-    private static async ValueTask<int> DoPoll(SyscallManager sm, Engine engine, uint fdsAddr, uint nfds,
+    private static async ValueTask<int> DoPoll(SyscallManager sm, Engine engine, ulong fdsAddr, uint nfds,
         int timeoutMs)
     {
         var task = engine.Owner as FiberTask;
@@ -187,6 +187,8 @@ public partial class SyscallManager
             : 1024UL;
         if (nfds > maxNfds)
             return -(int)Errno.EINVAL;
+        if (nfds != 0 && !engine.IsUserRange(fdsAddr, (ulong)nfds * (uint)Marshal.SizeOf<Pollfd>()))
+            return -(int)Errno.EFAULT;
 
         // 1. Scan
         var ready = ScanPoll(sm, engine, fdsAddr, nfds, task);
@@ -197,7 +199,7 @@ public partial class SyscallManager
         return await new PollAwaitable(task, sm.FDs, fdsAddr, nfds, timeoutMs);
     }
 
-    private static bool TryReadPselectSigmask(Engine engine, uint sigArgPtr, out bool hasMask, out ulong mask,
+    private static bool TryReadPselectSigmask(Engine engine, ulong sigArgPtr, out bool hasMask, out ulong mask,
         out int err)
     {
         hasMask = false;
@@ -215,15 +217,10 @@ public partial class SyscallManager
 
         var sigmaskPtr = ReadGuestWord(argBuf, wordSize);
         var sigsetsize = ReadGuestWord(argBuf[wordSize..], wordSize);
-        if (sigmaskPtr > uint.MaxValue)
-        {
-            err = -(int)Errno.EFAULT;
-            return false;
-        }
-        return TryReadDirectSigmask(engine, (uint)sigmaskPtr, sigsetsize, out hasMask, out mask, out err);
+        return TryReadDirectSigmask(engine, sigmaskPtr, sigsetsize, out hasMask, out mask, out err);
     }
 
-    private static bool TryReadDirectSigmask(Engine engine, uint sigmaskPtr, ulong sigsetsize, out bool hasMask,
+    private static bool TryReadDirectSigmask(Engine engine, ulong sigmaskPtr, ulong sigsetsize, out bool hasMask,
         out ulong mask, out int err)
     {
         hasMask = false;
@@ -322,14 +319,14 @@ public partial class SyscallManager
         return Math.Min(alignedFdCount, FD_SETSIZE) / NFDBITS;
     }
 
-    private static int ScanSelect(SyscallManager sm, Engine engine, int n, uint inp, uint outp, uint exp,
+    private static int ScanSelect(SyscallManager sm, Engine engine, int n, ulong inp, ulong outp, ulong exp,
         FiberTask? task,
         out uint[] resIn, out uint[] resOut, out uint[] resEx)
     {
         return ScanSelect(engine, sm.FDs, n, inp, outp, exp, task, out resIn, out resOut, out resEx);
     }
 
-    private static int ScanSelect(Engine engine, Dictionary<int, LinuxFile> fds, int n, uint inp, uint outp, uint exp,
+    private static int ScanSelect(Engine engine, Dictionary<int, LinuxFile> fds, int n, ulong inp, ulong outp, ulong exp,
         FiberTask? task, out uint[] resIn, out uint[] resOut, out uint[] resEx)
     {
         var ready = 0;
@@ -395,7 +392,7 @@ public partial class SyscallManager
         return ready;
     }
 
-    private static void WriteSelectResults(Engine engine, uint inp, uint outp, uint exp,
+    private static void WriteSelectResults(Engine engine, ulong inp, ulong outp, ulong exp,
         uint[] resIn, uint[] resOut, uint[] resEx)
     {
         if (inp != 0) WriteSpan(engine, inp, resIn);
@@ -403,12 +400,12 @@ public partial class SyscallManager
         if (exp != 0) WriteSpan(engine, exp, resEx);
     }
 
-    private static int ScanPoll(SyscallManager sm, Engine engine, uint fdsAddr, uint nfds, FiberTask? task)
+    private static int ScanPoll(SyscallManager sm, Engine engine, ulong fdsAddr, uint nfds, FiberTask? task)
     {
         return ScanPoll(engine, sm.FDs, fdsAddr, nfds, task);
     }
 
-    private static int ScanPoll(Engine engine, Dictionary<int, LinuxFile> fds, uint fdsAddr, uint nfds,
+    private static int ScanPoll(Engine engine, Dictionary<int, LinuxFile> fds, ulong fdsAddr, uint nfds,
         FiberTask? task)
     {
         var readyCount = 0;
@@ -416,7 +413,7 @@ public partial class SyscallManager
 
         for (uint i = 0; i < nfds; i++)
         {
-            var itemAddr = fdsAddr + i * (uint)sizeOfPollfd;
+            var itemAddr = fdsAddr + (ulong)i * (uint)sizeOfPollfd;
             Pollfd pfd;
             pfd = ReadStruct<Pollfd>(engine, itemAddr);
             pfd.Revents = 0;
@@ -463,7 +460,7 @@ public partial class SyscallManager
     private static unsafe T ReadStruct<
         [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors |
                                     DynamicallyAccessedMemberTypes.NonPublicConstructors)]
-        T>(Engine engine, uint addr) where T : struct
+        T>(Engine engine, ulong addr) where T : struct
     {
         var size = Marshal.SizeOf<T>();
         var buf = new byte[size];
@@ -479,7 +476,7 @@ public partial class SyscallManager
     private static unsafe void WriteStruct<
         [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors |
                                     DynamicallyAccessedMemberTypes.NonPublicConstructors)]
-        T>(Engine engine, uint addr, T val) where T : struct
+        T>(Engine engine, ulong addr, T val) where T : struct
     {
         var size = Marshal.SizeOf<T>();
         var buf = new byte[size];
@@ -492,7 +489,7 @@ public partial class SyscallManager
             throw new InvalidOperationException($"EFAULT: Failed to write struct {typeof(T).Name} to 0x{addr:x}");
     }
 
-    private static void ReadSpan(Engine engine, uint addr, uint[] dest)
+    private static void ReadSpan(Engine engine, ulong addr, uint[] dest)
     {
         var bytes = dest.Length * 4;
         var buf = new byte[bytes];
@@ -501,7 +498,7 @@ public partial class SyscallManager
         Buffer.BlockCopy(buf, 0, dest, 0, bytes);
     }
 
-    private static void WriteSpan(Engine engine, uint addr, uint[] src)
+    private static void WriteSpan(Engine engine, ulong addr, uint[] src)
     {
         var bytes = src.Length * 4;
         var buf = new byte[bytes];
@@ -516,7 +513,7 @@ public partial class SyscallManager
     {
         private readonly SelectAwaitState _state;
 
-        public SelectAwaitable(FiberTask task, Dictionary<int, LinuxFile> fds, int n, uint inp, uint outp, uint exp,
+        public SelectAwaitable(FiberTask task, Dictionary<int, LinuxFile> fds, int n, ulong inp, ulong outp, ulong exp,
             long timeoutMs)
         {
             _state = new SelectAwaitState(task, fds, n, inp, outp, exp, timeoutMs);
@@ -552,11 +549,11 @@ public partial class SyscallManager
 
     internal sealed class SelectAwaitState
     {
-        private readonly uint _exp;
+        private readonly ulong _exp;
         private readonly Dictionary<int, LinuxFile> _fds;
-        private readonly uint _inp;
+        private readonly ulong _inp;
         private readonly int _n;
-        private readonly uint _outp;
+        private readonly ulong _outp;
         private readonly FiberTask _task;
         private readonly long _timeoutMs;
         private readonly List<IDisposable> _waitRegistrations = [];
@@ -569,7 +566,7 @@ public partial class SyscallManager
         private Timer? _timer;
         private FiberTask.WaitToken? _token;
 
-        public SelectAwaitState(FiberTask task, Dictionary<int, LinuxFile> fds, int n, uint inp, uint outp, uint exp,
+        public SelectAwaitState(FiberTask task, Dictionary<int, LinuxFile> fds, int n, ulong inp, ulong outp, ulong exp,
             long timeoutMs)
         {
             _task = task;
@@ -738,7 +735,7 @@ public partial class SyscallManager
     {
         private readonly PollAwaitState _state;
 
-        public PollAwaitable(FiberTask task, Dictionary<int, LinuxFile> fds, uint fdsAddr, uint nfds, int timeoutMs)
+        public PollAwaitable(FiberTask task, Dictionary<int, LinuxFile> fds, ulong fdsAddr, uint nfds, int timeoutMs)
         {
             _state = new PollAwaitState(task, fds, fdsAddr, nfds, timeoutMs);
         }
@@ -774,7 +771,7 @@ public partial class SyscallManager
     internal sealed class PollAwaitState
     {
         private readonly Dictionary<int, LinuxFile> _fds;
-        private readonly uint _fdsAddr;
+        private readonly ulong _fdsAddr;
         private readonly uint _nfds;
         private readonly FiberTask _task;
         private readonly int _timeoutMs;
@@ -788,7 +785,7 @@ public partial class SyscallManager
         private Timer? _timer;
         private FiberTask.WaitToken? _token;
 
-        public PollAwaitState(FiberTask task, Dictionary<int, LinuxFile> fds, uint fdsAddr, uint nfds, int timeoutMs)
+        public PollAwaitState(FiberTask task, Dictionary<int, LinuxFile> fds, ulong fdsAddr, uint nfds, int timeoutMs)
         {
             _task = task;
             _fds = fds;
@@ -890,7 +887,7 @@ public partial class SyscallManager
 
             for (uint i = 0; i < _nfds; i++)
             {
-                var itemAddr = _fdsAddr + i * (uint)sizeOfPollfd;
+                var itemAddr = _fdsAddr + (ulong)i * (uint)sizeOfPollfd;
                 var pfd = ReadStruct<Pollfd>(_task.CPU, itemAddr);
                 if (pfd.Fd >= 0 && _fds.TryGetValue(pfd.Fd, out var file))
                 {

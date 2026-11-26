@@ -90,7 +90,7 @@ public partial class SyscallManager
         return remaining > 0 ? remaining : 0;
     }
 
-    private static int ReadItimerval(Engine engine, uint ptr, out long intervalMs, out long valueMs)
+    private static int ReadItimerval(Engine engine, ulong ptr, out long intervalMs, out long valueMs)
     {
         intervalMs = 0;
         valueMs = 0;
@@ -121,7 +121,7 @@ public partial class SyscallManager
         return true;
     }
 
-    private static bool WriteItimerval(Engine engine, uint ptr, long intervalMs, long valueMs)
+    private static bool WriteItimerval(Engine engine, ulong ptr, long intervalMs, long valueMs)
     {
         var wordSize = GuestWordSize(engine);
         Span<byte> buf = stackalloc byte[wordSize * 4];
@@ -182,7 +182,7 @@ public partial class SyscallManager
         return remainingSeconds;
     }
 
-    private async ValueTask<int> SysSetitimer(Engine engine, uint which, uint newValuePtr, uint oldValuePtr,
+    private async ValueTask<int> SysSetitimer(Engine engine, uint which, ulong newValuePtr, ulong oldValuePtr,
         uint a4, uint a5, uint a6)
     {
         if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
@@ -211,7 +211,7 @@ public partial class SyscallManager
         return 0;
     }
 
-    private async ValueTask<int> SysGetitimer(Engine engine, uint which, uint currValuePtr, uint a3, uint a4,
+    private async ValueTask<int> SysGetitimer(Engine engine, uint which, ulong currValuePtr, uint a3, uint a4,
         uint a5, uint a6)
     {
         if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
@@ -241,21 +241,21 @@ public partial class SyscallManager
         return (state.IntervalMs, remaining > 0 ? remaining : 0);
     }
 
-    private async ValueTask<int> SysClockSetTime64(Engine engine, uint clockId, uint tsPtr, uint a3, uint a4,
+    private async ValueTask<int> SysClockSetTime64(Engine engine, uint clockId, ulong tsPtr, uint a3, uint a4,
         uint a5, uint a6)
     {
         // Not permitted
         return -(int)Errno.EPERM;
     }
 
-    private async ValueTask<int> SysClockAdjTime64(Engine engine, uint clockId, uint txPtr, uint a3, uint a4,
+    private async ValueTask<int> SysClockAdjTime64(Engine engine, uint clockId, ulong txPtr, uint a3, uint a4,
         uint a5, uint a6)
     {
         // Not permitted / Stubbed
         return -(int)Errno.EPERM;
     }
 
-    private async ValueTask<int> SysClockGetResTime64(Engine engine, uint clockId, uint resPtr, uint a3, uint a4,
+    private async ValueTask<int> SysClockGetResTime64(Engine engine, uint clockId, ulong resPtr, uint a3, uint a4,
         uint a5, uint a6)
     {
         if (!TryGetClockResolution((int)clockId, out var resolutionNs)) return -(int)Errno.EINVAL;
@@ -369,7 +369,7 @@ public partial class SyscallManager
         return 0;
     }
 
-    private async ValueTask<int> SysTimerGetTime64(Engine engine, uint timerId, uint currPtr, uint a3, uint a4,
+    private async ValueTask<int> SysTimerGetTime64(Engine engine, uint timerId, ulong currPtr, uint a3, uint a4,
         uint a5, uint a6)
     {
         if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
@@ -469,8 +469,8 @@ public partial class SyscallManager
         return 0;
     }
 
-    private async ValueTask<int> SysTimerSetTime64(Engine engine, uint timerId, uint flags, uint newPtr,
-        uint oldPtr, uint a5, uint a6)
+    private async ValueTask<int> SysTimerSetTime64(Engine engine, uint timerId, uint flags, ulong newPtr,
+        ulong oldPtr, uint a5, uint a6)
     {
         if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
         var scheduler = (engine.Owner as FiberTask)?.CommonKernel;
@@ -533,7 +533,7 @@ public partial class SyscallManager
         return 0;
     }
 
-    private async ValueTask<int> SysTimerCreate(Engine engine, uint clockId, uint sevpPtr, uint timerIdPtr,
+    private async ValueTask<int> SysTimerCreate(Engine engine, uint clockId, ulong sevpPtr, ulong timerIdPtr,
         uint a4, uint a5, uint a6)
     {
         if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
@@ -602,7 +602,7 @@ public partial class SyscallManager
         return timer.OverrunCount;
     }
 
-    private async ValueTask<int> SysTimerFdGetTime64(Engine engine, uint fd, uint curValuePtr, uint a3, uint a4,
+    private async ValueTask<int> SysTimerFdGetTime64(Engine engine, uint fd, ulong curValuePtr, uint a3, uint a4,
         uint a5, uint a6)
     {
         if (!FDs.TryGetValue((int)fd, out var file)) return -(int)Errno.EBADF;
@@ -624,8 +624,8 @@ public partial class SyscallManager
         return 0;
     }
 
-    private async ValueTask<int> SysTimerFdSetTime64(Engine engine, uint fd, uint flags, uint newValuePtr,
-        uint oldValuePtr, uint a5, uint a6)
+    private async ValueTask<int> SysTimerFdSetTime64(Engine engine, uint fd, uint flags, ulong newValuePtr,
+        ulong oldValuePtr, uint a5, uint a6)
     {
         if (!FDs.TryGetValue((int)fd, out var file)) return -(int)Errno.EBADF;
         if (file.OpenedInode is not TimerFdInode timerFd) return -(int)Errno.EINVAL;

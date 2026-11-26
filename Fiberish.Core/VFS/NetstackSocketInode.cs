@@ -1252,7 +1252,7 @@ public sealed class NetstackSocketInode : Inode, IDispatcherWaitSource, IDispatc
         return revents;
     }
 
-    public override int Ioctl(LinuxFile linuxFile, FiberTask task, uint request, uint arg)
+    public override int Ioctl(LinuxFile linuxFile, FiberTask task, uint request, ulong arg)
     {
         var sm = task.CPU.CurrentSyscallManager;
         if (sm == null)

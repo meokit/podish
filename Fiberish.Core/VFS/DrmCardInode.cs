@@ -203,14 +203,14 @@ public sealed partial class DrmCardInode : Inode, ITaskWaitSource, IPollNotifica
         return 0;
     }
 
-    public override int Ioctl(LinuxFile file, FiberTask task, uint request, uint arg)
+    public override int Ioctl(LinuxFile file, FiberTask task, uint request, ulong arg)
     {
         var session = (Session)file.PrivateData!;
         if (request == QueryGpuBuffers)
         {
             Span<byte> flags = stackalloc byte[4];
             Put(flags, 0, file.OpenedInode is RenderNode ? (_allocateGpu != null ? 2u : 0) : (_gpuBuffers ? 1u : 0));
-            return arg != 0 && (ulong)arg + 4 <= 1UL << 32 && task.CPU.CopyToUser(arg, flags)
+            return arg != 0 && task.CPU.CopyToUser(arg, flags)
                 ? 0 : -(int)Errno.EFAULT;
         }
         if (request == SetMaster)
@@ -250,7 +250,7 @@ public sealed partial class DrmCardInode : Inode, ITaskWaitSource, IPollNotifica
         };
         if (size == 0) return -(int)Errno.ENOTTY;
         Span<byte> data = stackalloc byte[size];
-        if (arg == 0 || (ulong)arg + (uint)size > 1UL << 32 || !cpu.CopyFromUser(arg, data))
+        if (arg == 0 || !cpu.CopyFromUser(arg, data))
             return -(int)Errno.EFAULT;
 
         try
@@ -400,7 +400,7 @@ public sealed partial class DrmCardInode : Inode, ITaskWaitSource, IPollNotifica
         return 0;
     }
 
-    private int AllocateBuffer(Session session, FiberTask task, uint arg, Span<byte> data)
+    private int AllocateBuffer(Session session, FiberTask task, ulong arg, Span<byte> data)
     {
         var height = U32(data, 0);
         var width = U32(data, 4);
@@ -453,7 +453,7 @@ public sealed partial class DrmCardInode : Inode, ITaskWaitSource, IPollNotifica
         return 0;
     }
 
-    private int AddFramebuffer(Session session, Engine cpu, uint arg, Span<byte> data, bool extended)
+    private int AddFramebuffer(Session session, Engine cpu, ulong arg, Span<byte> data, bool extended)
     {
         var handle = U32(data, extended ? 20 : 24);
         if (!session.Buffers.TryGetValue(handle, out var buffer)) return -(int)Errno.ENOENT;
@@ -516,7 +516,7 @@ public sealed partial class DrmCardInode : Inode, ITaskWaitSource, IPollNotifica
             return -(int)Errno.EINVAL;
         Span<byte> connector = stackalloc byte[sizeof(uint)];
         var pointer = U64(data, 0);
-        if (pointer == 0 || pointer > uint.MaxValue - 3 || !cpu.CopyFromUser((uint)pointer, connector))
+        if (pointer == 0 || !cpu.CopyFromUser(pointer, connector))
             return -(int)Errno.EFAULT;
         if (U32(connector, 0) != ConnectorId) return -(int)Errno.ENOENT;
         if (buffer.Backing.Gpu is { Ready: false } || !PresentBuffer(buffer)) return -(int)Errno.EIO;
@@ -705,7 +705,7 @@ public sealed partial class DrmCardInode : Inode, ITaskWaitSource, IPollNotifica
 
     private static void CopyOut(Engine cpu, ulong address, ReadOnlySpan<byte> data)
     {
-        if (address == 0 || address > (1UL << 32) - (uint)data.Length || !cpu.CopyToUser((uint)address, data))
+        if (address == 0 || !cpu.CopyToUser(address, data))
             throw new UserMemoryFault();
     }
 

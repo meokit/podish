@@ -79,7 +79,7 @@ public class PtyMaster
     /// <summary>
     ///     Handles ioctl requests for the master side.
     /// </summary>
-    public int Ioctl(FiberTask task, uint request, uint arg)
+    public int Ioctl(FiberTask task, uint request, ulong arg)
     {
         var engine = task.CPU;
         switch (request)

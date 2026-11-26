@@ -55,7 +55,7 @@ public interface ISocketUserBufferOps
         LinuxFile file,
         FiberTask task,
         Engine engine,
-        uint userBufferPtr,
+        ulong userBufferPtr,
         int flags,
         int maxBytes = -1);
 }

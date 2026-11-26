@@ -8,7 +8,7 @@ namespace Fiberish.Core.Net;
 
 public static class NetDeviceIoctlHelper
 {
-    public static int Handle(SyscallManager sm, Engine engine, uint request, uint arg)
+    public static int Handle(SyscallManager sm, Engine engine, uint request, ulong arg)
     {
         var snapshot = NetDeviceSnapshotProvider.Capture(sm.NetworkMode, sm.TryGetPrivateNetNamespace());
         return request switch
@@ -24,41 +24,45 @@ public static class NetDeviceIoctlHelper
         };
     }
 
-    private static int HandleGetIfConf(Engine engine, uint arg, NetDeviceSetSnapshot snapshot)
+    private static int HandleGetIfConf(Engine engine, ulong arg, NetDeviceSetSnapshot snapshot)
     {
-        Span<byte> ifconf = stackalloc byte[8];
+        var wordSize = engine.IsAArch64 ? 8 : 4;
+        Span<byte> ifconf = stackalloc byte[wordSize * 2];
         if (!engine.CopyFromUser(arg, ifconf))
             return -(int)Errno.EFAULT;
 
         var maxLen = BinaryPrimitives.ReadInt32LittleEndian(ifconf[..4]);
-        var ifreqPtr = BinaryPrimitives.ReadUInt32LittleEndian(ifconf.Slice(4, 4));
+        var ifreqPtr = engine.IsAArch64
+            ? BinaryPrimitives.ReadUInt64LittleEndian(ifconf[wordSize..])
+            : BinaryPrimitives.ReadUInt32LittleEndian(ifconf[wordSize..]);
         if (ifreqPtr == 0)
             return -(int)Errno.EFAULT;
 
         var entries = snapshot.Devices.Where(d => d.Ipv4Address != null).ToList();
-        var required = entries.Count * 32;
+        var ifreqSize = IfreqSize(engine);
+        var required = entries.Count * ifreqSize;
         var writable = Math.Max(0, Math.Min(maxLen, required));
-        var writeCount = writable / 32;
+        var writeCount = writable / ifreqSize;
 
         for (var i = 0; i < writeCount; i++)
         {
             var device = entries[i];
-            var ifreq = new byte[32];
+            var ifreq = new byte[ifreqSize];
             WriteName(ifreq, device.Name);
             WriteSockaddrIn(ifreq.AsSpan(16, 16), device.Ipv4Address!);
-            if (!engine.CopyToUser(ifreqPtr + (uint)(i * 32), ifreq))
+            if (!engine.CopyToUser(ifreqPtr + (uint)(i * ifreqSize), ifreq))
                 return -(int)Errno.EFAULT;
         }
 
-        BinaryPrimitives.WriteInt32LittleEndian(ifconf[..4], writeCount * 32);
+        BinaryPrimitives.WriteInt32LittleEndian(ifconf[..4], writeCount * ifreqSize);
         if (!engine.CopyToUser(arg, ifconf))
             return -(int)Errno.EFAULT;
         return 0;
     }
 
-    private static int HandleGetIfFlags(Engine engine, uint arg, NetDeviceSetSnapshot snapshot)
+    private static int HandleGetIfFlags(Engine engine, ulong arg, NetDeviceSetSnapshot snapshot)
     {
-        var ifreq = new byte[32];
+        var ifreq = new byte[IfreqSize(engine)];
         if (!engine.CopyFromUser(arg, ifreq))
             return -(int)Errno.EFAULT;
         var dev = FindDevice(ifreq, snapshot);
@@ -69,9 +73,9 @@ public static class NetDeviceIoctlHelper
         return engine.CopyToUser(arg, ifreq) ? 0 : -(int)Errno.EFAULT;
     }
 
-    private static int HandleGetIfAddr(Engine engine, uint arg, NetDeviceSetSnapshot snapshot)
+    private static int HandleGetIfAddr(Engine engine, ulong arg, NetDeviceSetSnapshot snapshot)
     {
-        var ifreq = new byte[32];
+        var ifreq = new byte[IfreqSize(engine)];
         if (!engine.CopyFromUser(arg, ifreq))
             return -(int)Errno.EFAULT;
         var dev = FindDevice(ifreq, snapshot);
@@ -84,9 +88,9 @@ public static class NetDeviceIoctlHelper
         return engine.CopyToUser(arg, ifreq) ? 0 : -(int)Errno.EFAULT;
     }
 
-    private static int HandleGetIfNetmask(Engine engine, uint arg, NetDeviceSetSnapshot snapshot)
+    private static int HandleGetIfNetmask(Engine engine, ulong arg, NetDeviceSetSnapshot snapshot)
     {
-        var ifreq = new byte[32];
+        var ifreq = new byte[IfreqSize(engine)];
         if (!engine.CopyFromUser(arg, ifreq))
             return -(int)Errno.EFAULT;
         var dev = FindDevice(ifreq, snapshot);
@@ -100,9 +104,9 @@ public static class NetDeviceIoctlHelper
         return engine.CopyToUser(arg, ifreq) ? 0 : -(int)Errno.EFAULT;
     }
 
-    private static int HandleGetIfMtu(Engine engine, uint arg, NetDeviceSetSnapshot snapshot)
+    private static int HandleGetIfMtu(Engine engine, ulong arg, NetDeviceSetSnapshot snapshot)
     {
-        var ifreq = new byte[32];
+        var ifreq = new byte[IfreqSize(engine)];
         if (!engine.CopyFromUser(arg, ifreq))
             return -(int)Errno.EFAULT;
         var dev = FindDevice(ifreq, snapshot);
@@ -113,9 +117,9 @@ public static class NetDeviceIoctlHelper
         return engine.CopyToUser(arg, ifreq) ? 0 : -(int)Errno.EFAULT;
     }
 
-    private static int HandleGetIfIndex(Engine engine, uint arg, NetDeviceSetSnapshot snapshot)
+    private static int HandleGetIfIndex(Engine engine, ulong arg, NetDeviceSetSnapshot snapshot)
     {
-        var ifreq = new byte[32];
+        var ifreq = new byte[IfreqSize(engine)];
         if (!engine.CopyFromUser(arg, ifreq))
             return -(int)Errno.EFAULT;
         var name = ReadName(ifreq);
@@ -131,9 +135,9 @@ public static class NetDeviceIoctlHelper
         return -(int)Errno.ENODEV;
     }
 
-    private static int HandleGetIfTxQueueLen(Engine engine, uint arg, NetDeviceSetSnapshot snapshot)
+    private static int HandleGetIfTxQueueLen(Engine engine, ulong arg, NetDeviceSetSnapshot snapshot)
     {
-        var ifreq = new byte[32];
+        var ifreq = new byte[IfreqSize(engine)];
         if (!engine.CopyFromUser(arg, ifreq))
             return -(int)Errno.EFAULT;
         var dev = FindDevice(ifreq, snapshot);
@@ -143,6 +147,8 @@ public static class NetDeviceIoctlHelper
         BinaryPrimitives.WriteInt32LittleEndian(ifreq.AsSpan(16, 4), dev.TxQueueLen);
         return engine.CopyToUser(arg, ifreq) ? 0 : -(int)Errno.EFAULT;
     }
+
+    private static int IfreqSize(Engine engine) => engine.IsAArch64 ? 40 : 32;
 
     private static NetDeviceSnapshot? FindDevice(byte[] ifreq, NetDeviceSetSnapshot snapshot)
     {

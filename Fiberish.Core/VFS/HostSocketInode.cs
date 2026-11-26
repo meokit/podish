@@ -171,7 +171,7 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, IDispatcherE
         LinuxFile file,
         FiberTask task,
         Engine engine,
-        uint userBufferPtr,
+        ulong userBufferPtr,
         int flags,
         int maxBytes = -1)
     {
@@ -241,7 +241,7 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, IDispatcherE
         LinuxFile file,
         FiberTask task,
         Engine engine,
-        uint userBufferPtr,
+        ulong userBufferPtr,
         int flags,
         int recvLen,
         EndPoint remoteEpTemplate)
@@ -992,7 +992,7 @@ public sealed class HostSocketInode : Inode, IDispatcherWaitSource, IDispatcherE
         return _readiness.HasBufferedAcceptedSocket();
     }
 
-    public override int Ioctl(LinuxFile linuxFile, FiberTask task, uint request, uint arg)
+    public override int Ioctl(LinuxFile linuxFile, FiberTask task, uint request, ulong arg)
     {
         var engine = task.CPU;
         switch (request)

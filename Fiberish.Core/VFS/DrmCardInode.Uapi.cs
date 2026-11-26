@@ -171,7 +171,7 @@ public sealed partial class DrmCardInode
         return 0;
     }
 
-    private int ExportPrime(Session session, FiberTask task, uint arg, Span<byte> data)
+    private int ExportPrime(Session session, FiberTask task, ulong arg, Span<byte> data)
     {
         var flags = U32(data, 4);
         if ((flags & ~(PrimeCloseOnExec | PrimeReadWrite)) != 0) return -(int)Errno.EINVAL;
@@ -191,7 +191,7 @@ public sealed partial class DrmCardInode
         return -(int)Errno.EFAULT;
     }
 
-    private int AllocateGpuBuffer(LinuxFile file, FiberTask task, uint arg, Span<byte> data)
+    private int AllocateGpuBuffer(LinuxFile file, FiberTask task, ulong arg, Span<byte> data)
     {
         if (_allocateGpu == null || file.OpenedInode is not RenderNode) return -(int)Errno.EOPNOTSUPP;
         if (U32(data, 8) is not (Xrgb8888 or Argb8888)) return -(int)Errno.EINVAL;
@@ -224,7 +224,7 @@ public sealed partial class DrmCardInode
         return buffer;
     }
 
-    private int ImportPrime(Session session, FiberTask task, uint arg, Span<byte> data, bool gbm)
+    private int ImportPrime(Session session, FiberTask task, ulong arg, Span<byte> data, bool gbm)
     {
         if (!gbm && U32(data, 4) != 0) return -(int)Errno.EINVAL;
         var source = task.Process.Syscalls.GetFD((int)U32(data, gbm ? 0 : 8), task);
@@ -295,7 +295,7 @@ public sealed partial class DrmCardInode
             return offset >= 0 && (ulong)offset + length <= Buffer.Size ? 0 : -(int)Errno.EINVAL;
         }
 
-        public override int Ioctl(LinuxFile file, FiberTask task, uint request, uint arg)
+        public override int Ioctl(LinuxFile file, FiberTask task, uint request, ulong arg)
         {
             if (request != 0x40086200) return -(int)Errno.ENOTTY; // DMA_BUF_IOCTL_SYNC
             if (Buffer.File == null) return -(int)Errno.EOPNOTSUPP;
@@ -339,7 +339,7 @@ public sealed partial class DrmCardInode
             base.Release(file);
         }
 
-        public override int Ioctl(LinuxFile file, FiberTask task, uint request, uint arg) => request switch
+        public override int Ioctl(LinuxFile file, FiberTask task, uint request, ulong arg) => request switch
         {
             Version or VersionAArch64 or GetCap or PrimeImport or PrimeExport or GemClose or ImportGbmBo or
                 CreateDumb or MapDumb or DestroyDumb or QueryGpuBuffers or CreateGpuBo

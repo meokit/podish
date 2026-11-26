@@ -161,7 +161,7 @@ internal sealed class EvdevInode : Inode, ITaskWaitSource, IPollNotificationSour
         else bits[n / 8] &= (byte)~mask;
     }
 
-    public override int Ioctl(LinuxFile file, FiberTask task, uint request, uint address)
+    public override int Ioctl(LinuxFile file, FiberTask task, uint request, ulong address)
     {
         if ((request >> 8 & 0xff) != 0x45) return -(int)Errno.ENOTTY;
         var size = (int)(request >> 16 & 0x3fff);

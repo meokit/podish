@@ -171,7 +171,7 @@ public partial class SyscallManager
         return await SysClone(engine, LinuxConstants.CLONE_VM | LinuxConstants.CLONE_VFORK, 0, 0, 0, 0, 0);
     }
 
-    private async ValueTask<int> SysWait4(Engine engine, uint pid, uint statusPtr, uint options, uint rusagePtr,
+    private async ValueTask<int> SysWait4(Engine engine, uint pid, ulong statusPtr, uint options, ulong rusagePtr,
         uint a5, uint a6)
     {
         // Linux wait4 valid options: WNOHANG(1) | WUNTRACED(2) | WCONTINUED(8) | __WNOTHREAD(0x20000000) | __WALL(0x40000000) | __WCLONE(0x80000000)
@@ -296,8 +296,8 @@ public partial class SyscallManager
         return await SysWait4(engine, pid, statusPtr, options, 0, 0, 0);
     }
 
-    private async ValueTask<int> SysWaitId(Engine engine, uint idtype, uint id, uint infop, uint options,
-        uint rusagePtr, uint a6)
+    private async ValueTask<int> SysWaitId(Engine engine, uint idtype, uint id, ulong infop, uint options,
+        ulong rusagePtr, uint a6)
     {
         if (engine.Owner is not FiberTask fiberTask) return -(int)Errno.ECHILD;
 
@@ -505,7 +505,7 @@ public partial class SyscallManager
         return action.Handler != 1;
     }
 
-    private static bool WriteSigInfo(Engine engine, uint addr, SigInfo info)
+    private static bool WriteSigInfo(Engine engine, ulong addr, SigInfo info)
     {
         if (engine.IsAArch64)
         {
@@ -868,7 +868,7 @@ public partial class SyscallManager
         return task.Process.PGID;
     }
 
-    private async ValueTask<int> SysSetRlimit(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysSetRlimit(Engine engine, uint a1, ulong a2, uint a3, uint a4, uint a5, uint a6)
     {
         if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
         var read = engine.IsAArch64
@@ -885,7 +885,7 @@ public partial class SyscallManager
         return WriteRlimit32Signed(engine, a2, limit) ? 0 : -(int)Errno.EFAULT;
     }
 
-    private async ValueTask<int> SysUGetRlimit(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysUGetRlimit(Engine engine, uint a1, ulong a2, uint a3, uint a4, uint a5, uint a6)
     {
         if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
         if (!task.Process.TryGetResourceLimit((int)a1, out var limit)) return -(int)Errno.EINVAL;
@@ -893,7 +893,7 @@ public partial class SyscallManager
         return written ? 0 : -(int)Errno.EFAULT;
     }
 
-    private async ValueTask<int> SysPrlimit64(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysPrlimit64(Engine engine, uint a1, uint a2, ulong a3, ulong a4, uint a5, uint a6)
     {
         if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
 
@@ -950,7 +950,7 @@ public partial class SyscallManager
         return null;
     }
 
-    private static bool TryReadRlimit32(Engine engine, uint ptr, out ResourceLimit limit)
+    private static bool TryReadRlimit32(Engine engine, ulong ptr, out ResourceLimit limit)
     {
         var buf = new byte[8];
         if (!engine.CopyFromUser(ptr, buf))
@@ -964,7 +964,7 @@ public partial class SyscallManager
         return true;
     }
 
-    private static bool TryReadRlimit64(Engine engine, uint ptr, out ResourceLimit limit)
+    private static bool TryReadRlimit64(Engine engine, ulong ptr, out ResourceLimit limit)
     {
         var buf = new byte[16];
         if (!engine.CopyFromUser(ptr, buf))
@@ -978,7 +978,7 @@ public partial class SyscallManager
         return true;
     }
 
-    private static bool WriteRlimit32Signed(Engine engine, uint ptr, ResourceLimit limit)
+    private static bool WriteRlimit32Signed(Engine engine, ulong ptr, ResourceLimit limit)
     {
         var buf = new byte[8];
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(0, 4), NarrowSignedLegacyRlimit(limit.Soft));
@@ -986,7 +986,7 @@ public partial class SyscallManager
         return engine.CopyToUser(ptr, buf);
     }
 
-    private static bool WriteRlimit32(Engine engine, uint ptr, ResourceLimit limit)
+    private static bool WriteRlimit32(Engine engine, ulong ptr, ResourceLimit limit)
     {
         var buf = new byte[8];
         BinaryPrimitives.WriteUInt32LittleEndian(buf.AsSpan(0, 4), NarrowLegacyRlimit(limit.Soft));
@@ -994,7 +994,7 @@ public partial class SyscallManager
         return engine.CopyToUser(ptr, buf);
     }
 
-    private static bool WriteRlimit64(Engine engine, uint ptr, ResourceLimit limit)
+    private static bool WriteRlimit64(Engine engine, ulong ptr, ResourceLimit limit)
     {
         var buf = new byte[16];
         BinaryPrimitives.WriteUInt64LittleEndian(buf.AsSpan(0, 8), NarrowRlimit64(limit.Soft));

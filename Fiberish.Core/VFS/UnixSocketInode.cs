@@ -876,7 +876,7 @@ public class UnixSocketInode : Inode, ITaskWaitSource, IDispatcherWaitSource, ID
         }
     }
 
-    public override int Ioctl(LinuxFile linuxFile, FiberTask task, uint request, uint arg)
+    public override int Ioctl(LinuxFile linuxFile, FiberTask task, uint request, ulong arg)
     {
         var engine = task.CPU;
         switch (request)

@@ -782,7 +782,7 @@ public partial class SyscallManager
         return (long)targetAddr;
     }
 
-    private async ValueTask<int> SysRemapFilePages(Engine engine, ulong a1, ulong a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysRemapFilePages(Engine engine, ulong a1, ulong a2, uint a3, ulong a4, uint a5, uint a6)
     {
         var addr = a1;
         var size = a2;
@@ -813,7 +813,9 @@ public partial class SyscallManager
                 return -(int)Errno.EINVAL;
         }
 
+        if (pgoff > (ulong)(long.MaxValue / LinuxConstants.PageSize)) return -(int)Errno.EINVAL;
         var newOffset = (long)pgoff * LinuxConstants.PageSize;
+        if (size > (ulong)(long.MaxValue - newOffset)) return -(int)Errno.EINVAL;
         return ProcessAddressSpaceSync.RemapFileRange(Mem, engine, addr, size, newOffset, pgoff);
     }
 

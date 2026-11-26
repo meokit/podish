@@ -526,7 +526,7 @@ public class TtyDiscipline
     /// <summary>
     ///     Handle TTY ioctl operations. Returns negative errno on error, 0 on success.
     /// </summary>
-    public int Ioctl(FiberTask task, uint request, uint arg)
+    public int Ioctl(FiberTask task, uint request, ulong arg)
     {
         var engine = task.CPU;
         switch (request)

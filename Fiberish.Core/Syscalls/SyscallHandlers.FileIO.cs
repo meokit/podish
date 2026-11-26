@@ -40,7 +40,7 @@ public partial class SyscallManager
         return result;
     }
 
-    internal async ValueTask<int> SysSendfile64(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+    internal async ValueTask<int> SysSendfile64(Engine engine, uint a1, uint a2, ulong a3, uint a4, uint a5,
         uint a6)
     {
         // ssize_t sendfile64(int out_fd, int in_fd, off64_t *offset, size_t count);
@@ -269,7 +269,7 @@ public partial class SyscallManager
         }
     }
 
-    private async ValueTask<int> SysPipe2(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysPipe2(Engine engine, ulong a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var fdsAddr = a1;
         var flags = (FileFlags)(engine.IsAArch64 ? TranslateAArch64OpenFlags(a2) : a2);
@@ -354,7 +354,7 @@ public partial class SyscallManager
             a6);
     }
 
-    private async ValueTask<int> SysMemfdCreate(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysMemfdCreate(Engine engine, ulong a1, uint a2, uint a3, uint a4, uint a5,
         uint a6)
     {
         const uint MFD_CLOEXEC = 0x0001;

@@ -64,7 +64,7 @@ public partial class SyscallManager
         return (int)t;
     }
 
-    private async ValueTask<int> SysTimes(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysTimes(Engine engine, ulong a1, uint a2, uint a3, uint a4, uint a5, uint a6)
     {
         var task = engine.Owner as FiberTask;
         var self = task?.Process.GetSelfCpuTimeSnapshot() ?? default;
@@ -89,7 +89,7 @@ public partial class SyscallManager
         return ticks;
     }
 
-    private async ValueTask<int> SysGetRusage(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysGetRusage(Engine engine, uint a1, ulong a2, uint a3, uint a4, uint a5, uint a6)
     {
         var who = unchecked((int)a1);
         var usagePtr = a2;
@@ -257,7 +257,7 @@ public partial class SyscallManager
         return task?.TID ?? -1;
     }
 
-    private async ValueTask<int> SysSchedGetParam(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysSchedGetParam(Engine engine, uint a1, ulong a2, uint a3, uint a4, uint a5,
         uint a6)
     {
         var task = engine.Owner as FiberTask;
@@ -297,7 +297,7 @@ public partial class SyscallManager
         return LinuxConstants.SCHED_OTHER;
     }
 
-    private async ValueTask<int> SysSchedGetAffinity(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysSchedGetAffinity(Engine engine, uint a1, uint a2, ulong a3, uint a4, uint a5,
         uint a6)
     {
         var affinityMaskBytes = GuestWordSize(engine);
@@ -335,7 +335,7 @@ public partial class SyscallManager
         return CredentialService.SetUmask(task.Process, (int)a1);
     }
 
-    private async ValueTask<int> SysSethostname(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysSethostname(Engine engine, ulong a1, uint a2, uint a3, uint a4, uint a5,
         uint a6)
     {
         var task = engine.Owner as FiberTask;
@@ -346,7 +346,7 @@ public partial class SyscallManager
         return 0;
     }
 
-    private async ValueTask<int> SysSetdomainname(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysSetdomainname(Engine engine, ulong a1, uint a2, uint a3, uint a4, uint a5,
         uint a6)
     {
         var task = engine.Owner as FiberTask;
@@ -523,7 +523,7 @@ public partial class SyscallManager
         return 0;
     }
 
-    private async ValueTask<int> SysNanosleep(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysNanosleep(Engine engine, ulong a1, ulong a2, uint a3, uint a4, uint a5, uint a6)
     {
         var wordSize = GuestWordSize(engine);
         Span<byte> reqBuf = stackalloc byte[wordSize * 2];
@@ -575,13 +575,13 @@ public partial class SyscallManager
         return ClockNanosleep(engine, a1, a2, a3, a4, false);
     }
 
-    private ValueTask<int> SysClockNanosleepTime64(Engine engine, uint a1, uint a2, uint a3, uint a4,
+    private ValueTask<int> SysClockNanosleepTime64(Engine engine, uint a1, uint a2, ulong a3, ulong a4,
         uint a5, uint a6)
     {
         return ClockNanosleep(engine, a1, a2, a3, a4, true);
     }
 
-    private async ValueTask<int> ClockNanosleep(Engine engine, uint a1, uint a2, uint a3, uint a4, bool time64)
+    private async ValueTask<int> ClockNanosleep(Engine engine, uint a1, uint a2, ulong a3, ulong a4, bool time64)
     {
         var clockId = (int)a1;
         var flags = (int)a2;
@@ -745,7 +745,7 @@ public partial class SyscallManager
         }
     }
 
-    private static bool WriteTimespec32(Engine engine, uint ptr, long totalNs)
+    private static bool WriteTimespec32(Engine engine, ulong ptr, long totalNs)
     {
         var buf = new byte[8];
         BinaryPrimitives.WriteInt32LittleEndian(buf.AsSpan(0, 4), (int)(totalNs / 1_000_000_000L));
@@ -753,7 +753,7 @@ public partial class SyscallManager
         return engine.CopyToUser(ptr, buf);
     }
 
-    private static bool WriteRusage(Engine engine, uint ptr, CpuTimeSnapshot snapshot, int maxRssKiB = 0)
+    private static bool WriteRusage(Engine engine, ulong ptr, CpuTimeSnapshot snapshot, int maxRssKiB = 0)
     {
         if (ptr == 0) return false;
 
@@ -772,7 +772,7 @@ public partial class SyscallManager
         return engine.CopyToUser(ptr, buf);
     }
 
-    private static bool WriteTimespec64(Engine engine, uint ptr, long totalNs)
+    private static bool WriteTimespec64(Engine engine, ulong ptr, long totalNs)
     {
         var buf = new byte[16];
         BinaryPrimitives.WriteInt64LittleEndian(buf.AsSpan(0, 8), totalNs / NanosecondsPerSecond);
@@ -851,7 +851,7 @@ public partial class SyscallManager
         return (int)LinuxConstants.PER_LINUX;
     }
 
-    private async ValueTask<int> SysGetCpu(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysGetCpu(Engine engine, ulong a1, ulong a2, ulong a3, uint a4, uint a5, uint a6)
     {
         var cpuPtr = a1;
         var nodePtr = a2;
@@ -867,7 +867,7 @@ public partial class SyscallManager
         return 0;
     }
 
-    private async ValueTask<int> SysPrctl(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysPrctl(Engine engine, uint a1, ulong a2, uint a3, uint a4, uint a5, uint a6)
     {
         if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
 
@@ -1092,7 +1092,7 @@ public partial class SyscallManager
         return 0;
     }
 
-    private async ValueTask<int> SysCapget(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysCapget(Engine engine, ulong a1, ulong a2, uint a3, uint a4, uint a5, uint a6)
     {
         const uint LINUX_CAPABILITY_VERSION_1 = 0x19980330;
         const uint LINUX_CAPABILITY_VERSION_2 = 0x20071026;
@@ -1135,7 +1135,7 @@ public partial class SyscallManager
         return 0;
     }
 
-    private async ValueTask<int> SysCapset(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysCapset(Engine engine, ulong a1, ulong a2, uint a3, uint a4, uint a5, uint a6)
     {
         const uint LINUX_CAPABILITY_VERSION_1 = 0x19980330;
         const uint LINUX_CAPABILITY_VERSION_2 = 0x20071026;

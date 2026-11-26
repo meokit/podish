@@ -87,7 +87,7 @@ public partial class SyscallManager
         return 0;
     }
 
-    private async ValueTask<int> SysRtSigProcMask(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysRtSigProcMask(Engine engine, uint a1, ulong a2, ulong a3, uint a4, uint a5,
         uint a6)
     {
         // a1: how, a2: set, a3: oldset, a4: sigsetsize
@@ -164,7 +164,7 @@ public partial class SyscallManager
         return engine.CopyToUser(a1, buf) ? 0 : -(int)Errno.EFAULT;
     }
 
-    private async ValueTask<int> SysRtSigPending(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysRtSigPending(Engine engine, ulong a1, uint a2, uint a3, uint a4, uint a5,
         uint a6)
     {
         if (engine.Owner is not FiberTask task) return -(int)Errno.EPERM;
@@ -364,7 +364,7 @@ public partial class SyscallManager
         return (int)task.CPU.RegRead(Reg.EAX);
     }
 
-    private async ValueTask<int> SysRtSigSuspend(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysRtSigSuspend(Engine engine, ulong a1, uint a2, uint a3, uint a4, uint a5,
         uint a6)
     {
         var task = engine.Owner as FiberTask;
@@ -401,7 +401,7 @@ public partial class SyscallManager
         return rc;
     }
 
-    private async ValueTask<int> SysRtSigQueueInfo(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysRtSigQueueInfo(Engine engine, uint a1, uint a2, ulong a3, uint a4, uint a5,
         uint a6)
     {
         var pid = (int)a1;
@@ -438,7 +438,7 @@ public partial class SyscallManager
         return 0;
     }
 
-    private async ValueTask<int> SysRtTgSigQueueInfo(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysRtTgSigQueueInfo(Engine engine, uint a1, uint a2, uint a3, ulong a4, uint a5,
         uint a6)
     {
         var tgid = (int)a1;
@@ -506,7 +506,7 @@ public partial class SyscallManager
                (ulong)sender.CommonKernel.GetPendingSignalCountForUser(target.UID) < limit.Soft;
     }
 
-    private static bool TryReadSigInfo(Engine engine, uint ptr, int defaultSig, out SigInfo info, out int error)
+    private static bool TryReadSigInfo(Engine engine, ulong ptr, int defaultSig, out SigInfo info, out int error)
     {
         info = new SigInfo { Signo = defaultSig, Code = 0 };
         error = 0;
@@ -597,7 +597,7 @@ public partial class SyscallManager
     ///     rt_sigtimedwait_time64 - wait for a signal with timeout (64-bit timespec)
     ///     syscall 421
     /// </summary>
-    private async ValueTask<int> SysRtSigTimedWaitTime64(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysRtSigTimedWaitTime64(Engine engine, ulong a1, ulong a2, ulong a3, uint a4, uint a5,
         uint a6)
     {
         var setPtr = a1;
@@ -647,7 +647,7 @@ public partial class SyscallManager
     ///     Shared implementation for rt_sigtimedwait syscalls.
     /// </summary>
     private async ValueTask<int> DoRtSigTimedWait(Engine engine, FiberTask task, ulong waitSet, long? timeoutMs,
-        uint infoPtr)
+        ulong infoPtr)
     {
         // SIGKILL and SIGSTOP can never be caught, but an empty wait set is
         // valid: like Linux, the wait can still be interrupted by a handler.
@@ -678,7 +678,7 @@ public partial class SyscallManager
         return result.TimedOut ? -(int)Errno.EAGAIN : -(int)Errno.EINTR;
     }
 
-    private static bool WriteSigInfoForTask(Engine engine, FiberTask task, uint addr, SigInfo info)
+    private static bool WriteSigInfoForTask(Engine engine, FiberTask task, ulong addr, SigInfo info)
     {
         // Async syscall continuations may run without a current syscall manager.
         // Without it, an invalid user pointer would be routed through ordinary

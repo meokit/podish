@@ -84,12 +84,12 @@ public partial class SyscallManager
         return SysSetReGid(engine, a1, a2, a3, a4, a5, a6);
     }
 
-    private ValueTask<int> SysGetGroups32(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private ValueTask<int> SysGetGroups32(Engine engine, uint a1, ulong a2, uint a3, uint a4, uint a5, uint a6)
     {
         return SysGetGroups(engine, a1, a2, a3, a4, a5, a6);
     }
 
-    private ValueTask<int> SysSetGroups32(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private ValueTask<int> SysSetGroups32(Engine engine, uint a1, ulong a2, uint a3, uint a4, uint a5, uint a6)
     {
         return SysSetGroups(engine, a1, a2, a3, a4, a5, a6);
     }
@@ -126,7 +126,7 @@ public partial class SyscallManager
         return new ValueTask<int>(CredentialService.SetResUid(t.Process, ruid, euid, suid));
     }
 
-    private ValueTask<int> SysGetResUid(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private ValueTask<int> SysGetResUid(Engine engine, ulong a1, ulong a2, ulong a3, uint a4, uint a5, uint a6)
     {
         var t = engine.Owner as FiberTask;
         if (t == null) return new ValueTask<int>(-(int)Errno.EPERM);
@@ -161,7 +161,7 @@ public partial class SyscallManager
         return SysSetResUid(engine, a1, a2, a3, a4, a5, a6);
     }
 
-    private ValueTask<int> SysGetResUid32(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private ValueTask<int> SysGetResUid32(Engine engine, ulong a1, ulong a2, ulong a3, uint a4, uint a5, uint a6)
     {
         return SysGetResUid(engine, a1, a2, a3, a4, a5, a6);
     }
@@ -178,7 +178,7 @@ public partial class SyscallManager
         return new ValueTask<int>(CredentialService.SetResGid(t.Process, rgid, egid, sgid));
     }
 
-    private ValueTask<int> SysGetResGid(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private ValueTask<int> SysGetResGid(Engine engine, ulong a1, ulong a2, ulong a3, uint a4, uint a5, uint a6)
     {
         var t = engine.Owner as FiberTask;
         if (t == null) return new ValueTask<int>(-(int)Errno.EPERM);
@@ -213,7 +213,7 @@ public partial class SyscallManager
         return SysSetResGid(engine, a1, a2, a3, a4, a5, a6);
     }
 
-    private ValueTask<int> SysGetResGid32(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private ValueTask<int> SysGetResGid32(Engine engine, ulong a1, ulong a2, ulong a3, uint a4, uint a5, uint a6)
     {
         return SysGetResGid(engine, a1, a2, a3, a4, a5, a6);
     }
@@ -242,7 +242,7 @@ public partial class SyscallManager
         return SysSetFsGid(engine, a1, a2, a3, a4, a5, a6);
     }
 
-    private ValueTask<int> SysSetGroups(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private ValueTask<int> SysSetGroups(Engine engine, uint a1, ulong a2, uint a3, uint a4, uint a5, uint a6)
     {
         var t = engine.Owner as FiberTask;
         if (t == null) return new ValueTask<int>(-(int)Errno.EPERM);
@@ -265,7 +265,7 @@ public partial class SyscallManager
         return new ValueTask<int>(CredentialService.SetGroups(t.Process, groups));
     }
 
-    private ValueTask<int> SysGetGroups(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private ValueTask<int> SysGetGroups(Engine engine, uint a1, ulong a2, uint a3, uint a4, uint a5, uint a6)
     {
         var t = engine.Owner as FiberTask;
         if (t == null) return new ValueTask<int>(-(int)Errno.EPERM);

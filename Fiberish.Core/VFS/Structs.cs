@@ -1836,7 +1836,7 @@ public abstract class Inode : IAddressSpaceOperations, IBackingPageHandleRelease
     /// <summary>
     ///     Handle ioctl requests for this inode. Default implementation returns ENOTTY.
     /// </summary>
-    public virtual int Ioctl(LinuxFile linuxFile, FiberTask task, uint request, uint arg)
+    public virtual int Ioctl(LinuxFile linuxFile, FiberTask task, uint request, ulong arg)
     {
         return -(int)Errno.ENOTTY;
     }

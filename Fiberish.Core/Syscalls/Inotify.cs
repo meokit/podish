@@ -289,7 +289,7 @@ public sealed class InotifyInode : TmpfsInode
         }
     }
 
-    public override int Ioctl(LinuxFile file, FiberTask task, uint request, uint arg)
+    public override int Ioctl(LinuxFile file, FiberTask task, uint request, ulong arg)
     {
         if (request != LinuxConstants.FIONREAD) return base.Ioctl(file, task, request, arg);
         int bytes;

@@ -12,7 +12,7 @@ public partial class SyscallManager
     private static readonly ILogger IoctlLogger = Logging.CreateLogger<SyscallManager>();
 
 #pragma warning disable CS1998 // Async method lacks await operators - syscall handlers require async signature
-    private async ValueTask<int> SysIoctl(Engine engine, uint fd, uint request, uint arg, uint a4, uint a5,
+    private async ValueTask<int> SysIoctl(Engine engine, uint fd, uint request, ulong arg, uint a4, uint a5,
         uint a6)
     {
         if (!FDs.TryGetValue((int)fd, out var file)) return -(int)Errno.EBADF;
@@ -36,7 +36,7 @@ public partial class SyscallManager
         return -(int)Errno.ENOTTY;
     }
 
-    private async ValueTask<int> SysFcntl64(Engine engine, uint fd, uint cmd, uint arg, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysFcntl64(Engine engine, uint fd, uint cmd, ulong arg, uint a4, uint a5, uint a6)
     {
         var targetFd = (int)fd;
         if (!FDs.TryGetValue(targetFd, out var file)) return -(int)Errno.EBADF;
@@ -83,12 +83,12 @@ public partial class SyscallManager
             case F_GETFD:
                 return IsFdCloseOnExec(targetFd) ? (int)FD_CLOEXEC : 0;
             case F_SETFD:
-                return SetFdFlags(this, targetFd, arg);
+                return SetFdFlags(this, targetFd, (uint)arg);
             case F_GETFL:
                 var flags = (uint)(file.Flags & ~FileFlags.O_CLOEXEC);
                 return (int)(engine.IsAArch64 ? TranslateAArch64OpenFlags(flags) : flags);
             case F_SETFL:
-                return SetStatusFlags(file, engine.IsAArch64 ? TranslateAArch64OpenFlags(arg) : arg);
+                return SetStatusFlags(file, engine.IsAArch64 ? TranslateAArch64OpenFlags((uint)arg) : (uint)arg);
             case F_SETOWN:
                 return SetOwn(file, unchecked((int)arg));
             case F_GETOWN:
@@ -160,7 +160,7 @@ public partial class SyscallManager
                 return setPipe.SetPipeSize(unchecked((int)arg), isPrivileged);
             }
             case F_ADD_SEALS:
-                return AddSeals(file, arg);
+                return AddSeals(file, (uint)arg);
             case F_GET_SEALS:
                 return GetSeals(file);
             default:
@@ -173,7 +173,7 @@ public partial class SyscallManager
             return 0;
         }
 
-        static int SetStatusFlags(LinuxFile file, uint arg)
+        static int SetStatusFlags(LinuxFile file, ulong arg)
         {
             // Linux: F_SETFL only updates a subset of status flags.
             var settableMask = FileFlags.O_APPEND | FileFlags.O_NONBLOCK | (FileFlags)O_ASYNC;
@@ -213,7 +213,7 @@ public partial class SyscallManager
             return 0;
         }
 
-        static int SetOwnEx(Engine engine, LinuxFile file, uint arg)
+        static int SetOwnEx(Engine engine, LinuxFile file, ulong arg)
         {
             if (arg == 0) return -(int)Errno.EFAULT;
             Span<byte> buf = stackalloc byte[8];
@@ -230,7 +230,7 @@ public partial class SyscallManager
             return 0;
         }
 
-        static int GetOwnEx(Engine engine, LinuxFile file, uint arg)
+        static int GetOwnEx(Engine engine, LinuxFile file, ulong arg)
         {
             if (arg == 0) return -(int)Errno.EFAULT;
             Span<byte> buf = stackalloc byte[8];
@@ -239,7 +239,7 @@ public partial class SyscallManager
             return engine.CopyToUser(arg, buf) ? 0 : -(int)Errno.EFAULT;
         }
 
-        async ValueTask<int> HandleRecordLockAsync(Engine eng, LinuxFile targetFile, uint lockCmd, uint lockArg)
+        async ValueTask<int> HandleRecordLockAsync(Engine eng, LinuxFile targetFile, uint lockCmd, ulong lockArg)
         {
             if (lockArg == 0)
                 return -(int)Errno.EFAULT;

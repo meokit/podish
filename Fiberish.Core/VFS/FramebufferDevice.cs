@@ -233,7 +233,7 @@ public sealed class FramebufferDevice
 
     private static byte ExpandColor(int value, int bits) => (byte)(value * 255 / ((1 << bits) - 1));
 
-    internal int Ioctl(Engine cpu, uint request, uint arg)
+    internal int Ioctl(Engine cpu, uint request, ulong arg)
     {
         lock (_gate)
         {
@@ -246,13 +246,13 @@ public sealed class FramebufferDevice
                 0x4605 => TransferPalette(cpu, arg, true),  // FBIOPUTCMAP
                 0x4606 => PanDisplay(cpu, arg),            // FBIOPAN_DISPLAY
                 0x460f => GetConsoleMapping(cpu, arg),     // FBIOGET_CON2FBMAP
-                0x4611 => SetBlank(arg),                   // FBIOBLANK
+                0x4611 => SetBlank((uint)arg),                   // FBIOBLANK
                 _ => -(int)Errno.ENOTTY
             };
         }
     }
 
-    private int GetFixedInfo(Engine cpu, uint arg)
+    private int GetFixedInfo(Engine cpu, ulong arg)
     {
         // fb_fix_screeninfo contains two unsigned long addresses.
         var isAArch64 = cpu.IsAArch64;
@@ -268,7 +268,7 @@ public sealed class FramebufferDevice
         return cpu.CopyToUser(arg, data) ? 0 : -(int)Errno.EFAULT;
     }
 
-    private int GetVariableInfo(Engine cpu, uint arg)
+    private int GetVariableInfo(Engine cpu, ulong arg)
     {
         Span<byte> data = stackalloc byte[160];
         WriteVariableInfo(data, _mode, 0);
@@ -315,7 +315,7 @@ public sealed class FramebufferDevice
         Put32(data, 92, -1);
     }
 
-    private int SetVariableInfo(Engine cpu, uint arg)
+    private int SetVariableInfo(Engine cpu, ulong arg)
     {
         Span<byte> data = stackalloc byte[160];
         if (!cpu.CopyFromUser(arg, data)) return -(int)Errno.EFAULT;
@@ -354,7 +354,7 @@ public sealed class FramebufferDevice
         return 0;
     }
 
-    private int PanDisplay(Engine cpu, uint arg)
+    private int PanDisplay(Engine cpu, ulong arg)
     {
         Span<byte> data = stackalloc byte[160];
         if (!cpu.CopyFromUser(arg, data)) return -(int)Errno.EFAULT;
@@ -368,7 +368,7 @@ public sealed class FramebufferDevice
         return 0;
     }
 
-    private int TransferPalette(Engine cpu, uint arg, bool put)
+    private int TransferPalette(Engine cpu, ulong arg, bool put)
     {
         var pointerSize = cpu.IsAArch64 ? 8 : 4;
         Span<byte> cmap = stackalloc byte[8 + 4 * pointerSize];
@@ -389,18 +389,18 @@ public sealed class FramebufferDevice
                 : BinaryPrimitives.ReadUInt32LittleEndian(pointer);
             if (channelCount == 3 && address == 0)
                 break;
-            if (address == 0 || address > (1UL << 32) - (uint)(length * 2))
+            if (address == 0 || !cpu.IsUserRange(address, (uint)(length * 2)))
                 return -(int)Errno.EFAULT;
             var bytes = channels.Slice(channelCount * length * 2, length * 2);
             if (put)
             {
-                if (!cpu.CopyFromUser((uint)address, bytes)) return -(int)Errno.EFAULT;
+                if (!cpu.CopyFromUser(address, bytes)) return -(int)Errno.EFAULT;
             }
             else
             {
                 for (var i = 0; i < length; i++)
                     BinaryPrimitives.WriteUInt16LittleEndian(bytes[(i * 2)..], _palette[channelCount][start + i]);
-                if (!cpu.CopyToUser((uint)address, bytes)) return -(int)Errno.EFAULT;
+                if (!cpu.CopyToUser(address, bytes)) return -(int)Errno.EFAULT;
             }
         }
 
@@ -415,7 +415,7 @@ public sealed class FramebufferDevice
         return 0;
     }
 
-    private static int GetConsoleMapping(Engine cpu, uint arg)
+    private static int GetConsoleMapping(Engine cpu, ulong arg)
     {
         Span<byte> mapping = stackalloc byte[8];
         if (!cpu.CopyFromUser(arg, mapping)) return -(int)Errno.EFAULT;
@@ -473,7 +473,7 @@ internal sealed class FramebufferInode : MappingBackedInode
         return offset >= 0 && (ulong)offset + length <= Size ? 0 : -(int)Errno.EINVAL;
     }
 
-    public override int Ioctl(LinuxFile linuxFile, FiberTask task, uint request, uint arg) =>
+    public override int Ioctl(LinuxFile linuxFile, FiberTask task, uint request, ulong arg) =>
         _device.Ioctl(task.CPU, request, arg);
 
     internal unsafe void CopyVideoMemory(int offset, Span<byte> destination)

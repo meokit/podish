@@ -82,7 +82,7 @@ public partial class SyscallManager
         return AllocFD(file);
     }
 
-    private async ValueTask<int> SysEpollCtl(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6)
+    private async ValueTask<int> SysEpollCtl(Engine engine, uint a1, uint a2, uint a3, ulong a4, uint a5, uint a6)
     {
         var task = engine.Owner as FiberTask;
         if (task == null) return -(int)Errno.EPERM;
@@ -133,7 +133,7 @@ public partial class SyscallManager
     private ValueTask<int> SysEpollWait(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5, uint a6) =>
         DoEpollWait(this, engine, a1, a2, a3, (int)a4, X86SyscallNumbers.epoll_wait);
 
-    private async ValueTask<int> SysEpollPwait(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysEpollPwait(Engine engine, uint a1, ulong a2, uint a3, uint a4, ulong a5,
         uint a6)
     {
         // a1: epfd, a2: events, a3: maxevents, a4: timeout, a5: sigmask, a6: sigsetsize
@@ -153,7 +153,7 @@ public partial class SyscallManager
         return result;
     }
 
-    private async ValueTask<int> SysEpollPwait2(Engine engine, uint a1, uint a2, uint a3, uint a4, uint a5,
+    private async ValueTask<int> SysEpollPwait2(Engine engine, uint a1, ulong a2, uint a3, ulong a4, ulong a5,
         uint a6)
     {
         // a1: epfd, a2: events, a3: maxevents, a4: timespec64*, a5: sigmask, a6: sigsetsize
@@ -175,7 +175,7 @@ public partial class SyscallManager
         return result;
     }
 
-    private static ValueTask<int> DoEpollWait(SyscallManager sm, Engine engine, uint epfdArg, uint eventsPtr,
+    private static ValueTask<int> DoEpollWait(SyscallManager sm, Engine engine, uint epfdArg, ulong eventsPtr,
         uint maxeventsArg, int timeoutMs, uint syscallNr)
     {
         var task = engine.Owner as FiberTask;
@@ -202,7 +202,7 @@ public partial class SyscallManager
         return DoEpollWaitSlow(task, epollInode, eventsPtr, maxevents, bytesNeeded, timeoutMs, syscallNr);
     }
 
-    private static int TryHarvestEpollEvents(FiberTask task, EpollInode epollInode, uint eventsPtr, int maxevents,
+    private static int TryHarvestEpollEvents(FiberTask task, EpollInode epollInode, ulong eventsPtr, int maxevents,
         int bytesNeeded, out int error)
     {
         byte[]? rented = null;
@@ -229,7 +229,7 @@ public partial class SyscallManager
         }
     }
 
-    private static async ValueTask<int> DoEpollWaitSlow(FiberTask task, EpollInode epollInode, uint eventsPtr,
+    private static async ValueTask<int> DoEpollWaitSlow(FiberTask task, EpollInode epollInode, ulong eventsPtr,
         int maxevents, int bytesNeeded, int timeoutMs, uint syscallNr)
     {
         var rented = ArrayPool<byte>.Shared.Rent(bytesNeeded);
@@ -246,7 +246,7 @@ public partial class SyscallManager
             ArrayPool<byte>.Shared.Return(rented, clearArray: false);
         }
     }
-    private static bool CopyEpollEvents(Engine engine, uint destination, Span<byte> buffer, int count)
+    private static bool CopyEpollEvents(Engine engine, ulong destination, Span<byte> buffer, int count)
     {
         if (!engine.IsAArch64)
             return engine.CopyToUser(destination, buffer[..(count * EpollEventSize)]);

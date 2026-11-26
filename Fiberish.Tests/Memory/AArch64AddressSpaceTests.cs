@@ -160,6 +160,81 @@ public class AArch64AddressSpaceTests
         Assert.Equal(-(long)Errno.ENOENT, Invoke(env, 78, atFdcwd, link, buffer, 16));
     }
 
+    [Fact]
+    public void PipeAndPollUseUserBuffersAtFourGiB()
+    {
+        using var env = new SyscallTestEnv(architecture: GuestArchitecture.AArch64);
+        const ulong page = 1UL << 32;
+        Assert.Equal((long)page, Invoke(env, 222, page, LinuxConstants.PageSize, 3, 0x32, ulong.MaxValue, 0));
+        Assert.Equal(FaultResult.Handled, env.Mem.HandleFaultDetailed(page, true, env.Engine));
+
+        Assert.Equal(0, Invoke(env, 59, page, 0));
+        var readFd = BinaryPrimitives.ReadUInt32LittleEndian(ReadUserBytes(env, page, 4));
+        var writeFd = BinaryPrimitives.ReadUInt32LittleEndian(ReadUserBytes(env, page + 4, 4));
+        WriteUserBytes(env, page + 16, "pipe"u8);
+        Assert.Equal(4, Invoke(env, 64, writeFd, page + 16, 4));
+
+        Span<byte> pollfd = stackalloc byte[8];
+        pollfd.Clear();
+        BinaryPrimitives.WriteUInt32LittleEndian(pollfd, readFd);
+        BinaryPrimitives.WriteUInt16LittleEndian(pollfd[4..], 1); // POLLIN
+        WriteUserBytes(env, page + 32, pollfd);
+        WriteUserBytes(env, page + 48, new byte[16]); // Zero timeout
+        Assert.Equal(1, Invoke(env, 73, page + 32, 1, page + 48, 0, 0));
+        Assert.Equal(1, BinaryPrimitives.ReadUInt16LittleEndian(ReadUserBytes(env, page + 38, 2)));
+
+        Assert.Equal(0, Invoke(env, 29, readFd, 0x541b, page + 64)); // FIONREAD
+        Assert.Equal(4, BinaryPrimitives.ReadInt32LittleEndian(ReadUserBytes(env, page + 64, 4)));
+        Assert.Equal(4, Invoke(env, 63, readFd, page + 80, 4));
+        Assert.Equal("pipe"u8.ToArray(), ReadUserBytes(env, page + 80, 4));
+        Assert.Equal(-(long)Errno.EFAULT, Invoke(env, 59, LinuxConstants.TaskSizeAArch64, 0));
+    }
+
+    [Fact]
+    public void SleepSyscallsReadHighTimespec()
+    {
+        using var env = new SyscallTestEnv(architecture: GuestArchitecture.AArch64);
+        var page = MapHighUserPage(env);
+        Span<byte> request = stackalloc byte[16];
+        BinaryPrimitives.WriteInt64LittleEndian(request, 0);
+        BinaryPrimitives.WriteInt64LittleEndian(request[8..], 1_000_000_000);
+        WriteUserBytes(env, page, request);
+
+        Assert.Equal(-(long)Errno.EINVAL, Invoke(env, 101, page, 0));
+        Assert.Equal(-(long)Errno.EINVAL, Invoke(env, 115, LinuxConstants.CLOCK_MONOTONIC, 0, page, 0));
+    }
+
+    [Fact]
+    public void SocketMessagesUseHighHeadersVectorsAndPayloads()
+    {
+        using var env = new SyscallTestEnv(architecture: GuestArchitecture.AArch64);
+        var page = MapHighUserPage(env);
+        Assert.Equal(0, Invoke(env, 199, LinuxConstants.AF_UNIX, LinuxConstants.SOCK_DGRAM, 0, page));
+        var sendFd = BinaryPrimitives.ReadUInt32LittleEndian(ReadUserBytes(env, page, 4));
+        var recvFd = BinaryPrimitives.ReadUInt32LittleEndian(ReadUserBytes(env, page + 4, 4));
+        var headerAddress = page + 0x100;
+        var vectorAddress = page + 0x200;
+        var sendAddress = page + 0x300;
+        var recvAddress = page + 0x400;
+        Span<byte> header = stackalloc byte[56];
+        header.Clear();
+        BinaryPrimitives.WriteUInt64LittleEndian(header[16..], vectorAddress);
+        BinaryPrimitives.WriteUInt64LittleEndian(header[24..], 1);
+        WriteUserBytes(env, headerAddress, header);
+
+        Span<byte> vector = stackalloc byte[16];
+        BinaryPrimitives.WriteUInt64LittleEndian(vector, sendAddress);
+        BinaryPrimitives.WriteUInt64LittleEndian(vector[8..], 4);
+        WriteUserBytes(env, vectorAddress, vector);
+        WriteUserBytes(env, sendAddress, "sock"u8);
+        Assert.Equal(4, Invoke(env, 211, sendFd, headerAddress, 0));
+
+        BinaryPrimitives.WriteUInt64LittleEndian(vector, recvAddress);
+        WriteUserBytes(env, vectorAddress, vector);
+        Assert.Equal(4, Invoke(env, 212, recvFd, headerAddress, 0));
+        Assert.Equal("sock"u8.ToArray(), ReadUserBytes(env, recvAddress, 4));
+    }
+
     private static ulong MapHighUserPage(SyscallTestEnv env)
     {
         const ulong page = (1UL << 37) + 0x1000;
