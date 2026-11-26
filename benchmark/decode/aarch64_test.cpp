@@ -676,6 +676,38 @@ bool TruncatedBlocks() {
     return true;
 }
 
+bool CompareBranchPair() {
+    // Different encodings exercise both register-31 meanings and the W/X widths.
+    constexpr std::array<uint32_t, 4> compares{0xf1000fff, 0x71000c1f, 0xeb01001f, 0x6b0103ff};
+    constexpr std::array operands{uint64_t{0}, uint64_t{3}, uint64_t{1} << 31, uint64_t{1} << 63, UINT64_MAX};
+    for (auto compare : compares) {
+        for (uint32_t cond = 0; cond < 16; ++cond) {
+            Backing backing;
+            backing.Code(Base, {compare, 0x54000040 | cond, 0x91000442, 0x91000842}); // b.cond +8
+            for (auto left : operands) {
+                for (auto right : operands) {
+                    for (unsigned budget = 1; budget <= 4; ++budget) {
+                        State expected;
+                        expected.pc = Base;
+                        expected.sp = left;
+                        expected.x[0] = left;
+                        expected.x[1] = right;
+                        expected.nzcv = 0xf0000000;
+                        State actual = expected;
+                        const auto scalar = Run(expected, backing.Callbacks(false), budget);
+                        const auto blocked = Run(actual, backing.Callbacks(), budget);
+                        if (blocked.reason != scalar.reason || blocked.executed != scalar.executed ||
+                            actual.pc != expected.pc || actual.nzcv != expected.nzcv || actual.x != expected.x ||
+                            actual.sp != expected.sp)
+                            return false;
+                    }
+                }
+            }
+        }
+    }
+    return true;
+}
+
 bool BakedDispatch() {
     constexpr uint32_t Add1 = 0x91000400;
     constexpr uint32_t Add2 = 0x91000800;
@@ -1471,6 +1503,7 @@ int main() {
         {"baked dispatch and profiling", BakedDispatch()},
         {"partial immediate shapes retain the decoded arithmetic value and scaled offset", PartialImmediateOperands()},
         {"fused dispatch branch, budget and fault accounting", FusedDispatch()},
+        {"compare and conditional branch preserve flags and budget boundaries", CompareBranchPair()},
         {"fused PC-relative address, link and conditional branch use each member PC", FusedPCRelativeMembers()},
         {"fused load fault and instruction refetch", FusedLoadRefetch()},
         {"fused load replay preserves the prefix and commits writeback once", FusedLoadReplay()},
