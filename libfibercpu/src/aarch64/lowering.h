@@ -3,6 +3,7 @@
 #include <chrono>
 #include <utility>
 
+#include "block_operands.h"
 #include "floating.h"
 #include "memory.h"
 #include "threading.h"
@@ -102,15 +103,19 @@ inline StepResult SystemInstruction(State& state, const Memory& memory, const De
     return {};
 }
 
+inline StepResult NopInstruction(State&, const Memory&, const DecodedInstruction&) { return {}; }
+
 #if FIBERCPU_AARCH64_TAIL_DISPATCH
+FIBERCPU_AARCH64_THREAD_ABI inline uint64_t NopThread(A64_THREAD_PARAMS) { A64_THREAD_NEXT(current->Next<false>()); }
+
 template <Kind kind, unsigned width, int operation, int mode, int shift, int vector>
 FIBERCPU_AARCH64_THREAD_ABI uint64_t DispatchMemory(A64_THREAD_PARAMS) {
+    const auto op = SlotOperands<kind>(*current);
     if (!ProbeLoadStore<kind, width, operation, mode, shift, vector>(
-            state, current->op, BlockTarget<kind>(current->op), data_tlb, tlb_tags, tlb_addend A64_THREAD_PIN_PASS))
-        [[unlikely]] {
+            state, op, BlockTarget<kind>(op), data_tlb, tlb_tags, tlb_addend A64_THREAD_PIN_PASS)) [[unlikely]] {
         A64_THREAD_REPLAY(current);
     }
-    A64_THREAD_NEXT(1);
+    A64_THREAD_NEXT(current->Next<HasWideOperands(kind)>());
 }
 #endif
 
@@ -127,18 +132,21 @@ constexpr HandlerBinding BindMemoryHandler() {
 #if FIBERCPU_AARCH64_TAIL_DISPATCH
 template <Kind kind, unsigned width, int operation, int shift, bool write_nzcv>
 FIBERCPU_AARCH64_THREAD_ABI uint64_t IntegerThread(A64_THREAD_PARAMS) {
-    const auto result = HotInteger<kind, width, operation, shift, write_nzcv>(
-        state, current->op, current->pc, BlockTarget<kind>(current->op), nzcv A64_THREAD_PIN_PASS);
+    const auto op = SlotOperands<kind>(*current);
+    uint64_t pc = 0;
+    if constexpr (kind == Kind::BranchImmediate || kind == Kind::BranchRegister) pc = WideOperands(*current).secondary;
+    const auto result = HotInteger<kind, width, operation, shift, write_nzcv>(state, op, pc, BlockTarget<kind>(op),
+                                                                              nzcv A64_THREAD_PIN_PASS);
     if constexpr (kind >= Kind::BranchImmediate && kind <= Kind::TestBranch) {
         if (result.reason == Stop::Branch) {
             if constexpr (kind == Kind::BranchRegister) {
-                A64_THREAD_BRANCH(result.address);
+                A64_THREAD_LINK(current->Next<true>(), result.address == pc + 4, result.address);
             } else {
                 A64_THREAD_DIRECT();
             }
         }
     }
-    A64_THREAD_NEXT(1);
+    A64_THREAD_NEXT(current->Next<HasWideOperands(kind)>());
 }
 #endif
 
@@ -214,6 +222,13 @@ constexpr auto RegisterMemoryVariants(std::index_sequence<index...>) {
 }
 
 inline HandlerBinding Lower(const DecodedInstruction& op) {
+    if (op.word == NopWord) {
+#if FIBERCPU_AARCH64_TAIL_DISPATCH
+        return {&NopInstruction, &NopThread};
+#else
+        return {&NopInstruction, nullptr};
+#endif
+    }
     switch (op.kind) {
         case Kind::ScalarFloat:
             if (auto handler = LowerFloat(op.word)) return {handler, nullptr};

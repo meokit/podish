@@ -1,5 +1,6 @@
 #pragma once
 
+#include "block_operands.h"
 #include "flag_liveness.h"
 #include "memory.h"
 #include "threading.h"
@@ -82,22 +83,28 @@ A64_BAKED_INLINE BakedStop ExecuteBakedThread(State& state, const detail::Dispat
                                               const mem::SoftTlb* data_tlb, uint64_t& tlb_tags, uintptr_t& tlb_addend,
                                               uint32_t& nzcv A64_HOT_PIN_REF) {
     constexpr auto op = detail::DecodeFields(Word);
-    const auto& operands = BakedOperands<Word, dynamic_imm12>(member->op);
+    auto operands = op;
+    if constexpr (dynamic_imm12) operands = BakedOperands<Word, true>(SlotOperands<op.kind>(*member));
+    uint64_t target = 0;
+    if constexpr (HasBlockTarget(op.kind)) target = WideOperands(*member).primary;
     if constexpr (IsBakedTransfer(op.kind)) {
         if (!detail::ProbeLoadStore<op.kind, op.width, op.operation, op.mode, op.shift, detail::Field(Word, 26, 1)>(
-                state, operands, BlockTarget<op.kind>(member->op), data_tlb, tlb_tags, tlb_addend A64_THREAD_PIN_PASS))
+                state, operands, target, data_tlb, tlb_tags, tlb_addend A64_THREAD_PIN_PASS))
             return {member, {Stop::Replay}};
     } else {
+        uint64_t pc = 0;
+        if constexpr ((op.kind == Kind::BranchImmediate || op.kind == Kind::BranchRegister) && op.operation != 0)
+            pc = WideOperands(*member).secondary;
         const auto step = detail::HotInteger<op.kind, op.width, op.operation, op.shift, !(dead & 1)>(
-            state, operands, member->pc, BlockTarget<op.kind>(member->op), nzcv A64_THREAD_PIN_PASS);
+            state, operands, pc, target, nzcv A64_THREAD_PIN_PASS);
         if constexpr (op.kind >= Kind::BranchImmediate && op.kind <= Kind::TestBranch) return {member, step};
     }
     if constexpr (sizeof...(Rest) == 0) {
         return {member, {}};
     } else {
         static_assert(!dynamic_imm12 && CanFollowInBakedSequence(Word));
-        return ExecuteBakedThread<(dead >> 1), false, Rest...>(state, member + 1, data_tlb, tlb_tags, tlb_addend,
-                                                               nzcv A64_THREAD_PIN_PASS);
+        return ExecuteBakedThread<(dead >> 1), false, Rest...>(
+            state, member->Next<HasWideOperands(op.kind)>(), data_tlb, tlb_tags, tlb_addend, nzcv A64_THREAD_PIN_PASS);
     }
 }
 
@@ -115,13 +122,14 @@ FIBERCPU_AARCH64_THREAD_ABI uint64_t BakedThreadRun(A64_THREAD_PARAMS) {
         if (result.step.reason == Stop::Branch) {
             current = result.member;
             if constexpr (terminal == Kind::BranchRegister) {
-                A64_THREAD_BRANCH(result.step.address);
+                A64_THREAD_LINK(current->Next<true>(), result.step.address == WideOperands(*current).secondary + 4,
+                                result.step.address);
             } else {
                 A64_THREAD_DIRECT();
             }
         }
     }
-    A64_THREAD_NEXT(sizeof...(Words));
+    A64_THREAD_NEXT(result.member->template Next<HasWideOperands(terminal)>());
 }
 
 }  // namespace detail

@@ -191,7 +191,7 @@ constexpr Encoding LookupEncoding(uint32_t word) {
     return Encoding::Unallocated;
 }
 
-constexpr DecodedInstruction DecodeFields(uint32_t word) {
+constexpr DecodedInstruction BaseInstruction(uint32_t word) {
     DecodedInstruction op;
     op.word = word;
     op.rd = Field(word, 0, 5);
@@ -199,7 +199,11 @@ constexpr DecodedInstruction DecodeFields(uint32_t word) {
     op.rm = Field(word, 16, 5);
     op.ra = Field(word, 10, 5);
     op.width = Field(word, 31, 1) ? 64 : 32;
+    return op;
+}
 
+constexpr DecodedInstruction DecodeFields(uint32_t word) {
+    auto op = BaseInstruction(word);
     switch (LookupEncoding(word)) {
         case Encoding::Address: {
             op.kind = Kind::Address;

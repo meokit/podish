@@ -1027,6 +1027,113 @@ bool FlagElisionFloatingCompare() {
     return true;
 }
 
+bool CompactBitfieldOperands() {
+    Backing backing;
+    backing.Code(Base, {0xd360fe81, 0x9360fe82, 0xd4000001}); // lsr x1, x20, #32; asr x2, x20, #32; svc #0
+    State state;
+    state.pc = Base;
+    state.x[20] = 0x80000006'00000402;
+    const auto result = Run(state, backing.Callbacks(), 3);
+    return result.reason == Stop::Syscall && result.executed == 3 && state.x[1] == 0x80000006 &&
+           state.x[2] == 0xffffffff'80000006;
+}
+
+bool CompactSlotsAndFoldedNopBudgets() {
+    constexpr uint32_t Add = 0x91000421; // add x1, x1, #1
+    constexpr uint32_t Nop = 0xd503201f;
+    constexpr uint32_t Mov = 0xd2e24680;  // movz x0, #0x1234, lsl #48
+    constexpr uint32_t Load = 0xf9400043; // ldr x3, [x2]
+    constexpr uint32_t Svc = 0xd4000001;
+    constexpr auto Branch = Base + 128;
+    constexpr auto FaultAddress = Base + 2 * Page;
+
+    struct CachedBacking : Backing {
+        alignas(detail::Block) std::array<std::array<std::byte, 1024>, 4> storage;
+        std::array<detail::Block*, 4> blocks{};
+        unsigned allocations = 0;
+        size_t initial_size = 0;
+    } backing;
+    backing.Code(Base, {Add, Nop, Nop, Mov, Nop, Load, Nop, Svc});
+    backing.Code(Branch, {0x17ffffe1}); // b Base + 4
+
+    auto memory = backing.Callbacks();
+    memory.find_block = [](void* context, uint64_t pc, const uint8_t*) -> detail::Block* {
+        const auto& backing = static_cast<const CachedBacking&>(*static_cast<const Backing*>(context));
+        for (const auto* block : backing.blocks)
+            if (block && block->pc == pc)
+                return const_cast<detail::Block*>(block);
+        return nullptr;
+    };
+    memory.allocate_block = [](void* context, size_t size, uint64_t) -> void* {
+        auto& backing = static_cast<CachedBacking&>(*static_cast<Backing*>(context));
+        if (backing.allocations >= backing.storage.size() || size > backing.storage.front().size())
+            return nullptr;
+        if (!backing.allocations)
+            backing.initial_size = size;
+        return backing.storage[backing.allocations].data();
+    };
+    memory.cache_block = [](void* context, detail::Block* block) {
+        auto& backing = static_cast<CachedBacking&>(*static_cast<Backing*>(context));
+        backing.blocks[backing.allocations++] = block;
+    };
+
+    for (unsigned budget = 1; budget <= 8; ++budget) {
+        State state;
+        state.pc = Base;
+        state.x[2] = FaultAddress;
+        const auto result = Run(state, memory, budget);
+        if (budget <= 5) {
+            if (result.reason != Stop::Budget || result.executed != budget || state.pc != Base + 4 * budget)
+                return false;
+        } else if (result.reason != Stop::Fault || result.executed != 5 || result.address != FaultAddress ||
+                   result.instruction != Load || state.pc != Base + 20) {
+            return false;
+        }
+        if (state.x[1] != 1 || state.x[0] != (budget >= 4 ? 0x1234'0000'0000'0000ull : 0))
+            return false;
+    }
+
+    const auto& block = *backing.blocks.front();
+    if (backing.allocations != 1 || block.Count() != 8 || block.header.SlotUnits() != 5 ||
+        backing.initial_size != 176 || block.Word(1) != Nop || block.Word(2) != Nop || block.Word(4) != Nop ||
+        block.Word(6) != Nop)
+        return false;
+    const auto* slot = block.Slots();
+    for (const unsigned ordinal : {0u, 3u, 5u, 7u}) {
+        if (slot->Ordinal() != ordinal || slot->PC() != Base + 4 * ordinal || slot->Has(detail::Wide) != (ordinal == 3))
+            return false;
+        slot = slot->Next();
+    }
+    if (slot != block.Sentinel() || slot->PC() != Base + 32)
+        return false;
+
+    State state;
+    state.pc = Branch;
+    const auto result = Run(state, memory, 2);
+    return result.reason == Stop::Budget && result.executed == 2 && state.pc == Base + 8 && state.x[1] == 0 &&
+           backing.allocations == 3 && backing.blocks[2]->pc == Base + 4 && backing.blocks[2]->Slots()->Word() == Nop;
+}
+
+bool RefetchChangedFoldedNop() {
+    Backing backing;
+    backing.Code(Base, {
+                           0x91000421, // add x1, x1, #1
+                           0xd503201f, // nop, replaced by the first load callback
+                           0xf9400040, // ldr x0, [x2]
+                           0xf1000463, // subs x3, x3, #1
+                           0x54ffff81, // b.ne Base
+                           0xd4000001, // svc #0
+                       });
+    backing.replace_after_read = Base + 4;
+    State state;
+    state.pc = Base;
+    state.x[2] = Base + Page;
+    state.x[3] = 2;
+    const auto result = Run(state, backing.Callbacks(), 11);
+    return result.reason == Stop::Syscall && result.executed == 11 && result.address == Base + 20 &&
+           state.pc == Base + 24 && state.x[1] == 5;
+}
+
 } // namespace
 
 int main() {
@@ -1056,6 +1163,9 @@ int main() {
         {"NZCV at a conditional branch and for reused instruction words", FlagElisionBranchAndCache()},
         {"NZCV visible to faults, memory callbacks, SVC and undefined instructions", FlagElisionEvents()},
         {"FCMP FPSR effect when its NZCV is overwritten", FlagElisionFloatingCompare()},
+        {"compact bitfield preserves the six-bit endpoint", CompactBitfieldOperands()},
+        {"compact slots, NOP folding, precise guest budgets and branch entry", CompactSlotsAndFoldedNopBudgets()},
+        {"local cache refetches a modified folded NOP", RefetchChangedFoldedNop()},
     };
     for (const auto& test : tests) {
         if (!test.result) {
