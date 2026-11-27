@@ -53,11 +53,12 @@ fusions. More distinct neighboring instruction shapes or more observed operand
 encodings for a partial scalar reduce the discount. Both evidence counts
 saturate at 32. Each entry records its per-family gain at insertion.
 
-To train both guests with the shared workload config and hold out grep and Node:
+To train both guests with the shared workload config and reserve grep alongside
+the default Node holdout, run
 
 ```sh
 python3 scripts/train_nested_presets.py --config training.json --output out/training \
-  --holdout-family grep --holdout-family node
+  --holdout-family grep
 ```
 
 To use the CMake training target:
@@ -100,12 +101,14 @@ archive includes the ranking and manifest for the verified prefixes.
 
 ### Held-out evaluation
 
-Repeat `--holdout-family` to reserve more than one software family.
-The manifest groups gzip and gunzip together, both grep cases together, and
-the GNU coreutils programs together. Cases without an explicit `family`
-default to their individual IDs. Reserve every related case under a common
-family name when supplying a custom manifest. Held-out cases are excluded
-before capture, pool construction, cost fitting and finalist measurement.
+A manifest entry with `"holdout": true` reserves its whole family. The shared
+suite reserves `node` this way. Repeat `--holdout-family` to reserve additional
+families. The suite groups gzip and gunzip as `gzip`, both grep cases as
+`grep`, and sort and sha256 as `coreutils`. Sed has its own family. Cases
+without an explicit `family` default to their individual IDs. Use a common
+family name for related cases in a custom manifest. Held-out cases are
+excluded before capture, pool construction, cost fitting and finalist
+measurement.
 
 After freezing, evaluate an archive directly. The command verifies the manifest,
 profile identities and frozen artifact hashes, and writes case ratios, family
@@ -131,15 +134,29 @@ to `Podish.PerfTools.dll` for i386, and provide the `cmake` executable,
 
 For shared training, set `rootfs` to an object with `i386` and `aarch64`
 paths. Populate both root filesystems with the architecture's binaries and
-the same input files. The shared suite expects GNU tools on `PATH`, the
-fixtures under `/opt/nested-training`, Node at `/opt/bench/node` and the
-JavaScript dependencies under `/opt/bench/webpack`.
+the same input files. The shared suite expects GNU tools and Bash on `PATH`,
+the existing `input.txt` and `input.gz` fixtures under `/opt/nested-training`,
+Node at `/opt/bench/node` and the JavaScript dependencies under
+`/opt/bench/webpack`. The Node case resolves `fast-deep-equal` with
+`enhanced-resolve` and minifies it repeatedly in one Node process.
 Set `workloads` to the path of the
 [shared training suite](../benchmark/optimization/manifests/baking-workloads.json)
 or supply the workload array inline. Relative manifest paths resolve against
-the config directory. Each entry supplies `id`, descriptive `group`, software `family`, guest `cwd`, `shell`,
-`repetitions` and an expected output `sha256`. Optional `verify` selects
-the output representation to hash. Both guests use the same entries.
+the config directory. Each entry supplies `id`, descriptive `group`, software
+`family`, guest `cwd`, `shell`, `repetitions` and an expected output
+`sha256`. Optional `verify` selects the output representation to hash.
+Both guests use the same entries.
+
+Every shared case launches its benchmarked program once. It increases work
+inside that process through extra input operands, a heavier sed script, or
+repeated minification in Node. Gzip streams compressed bytes to `cksum`,
+and gunzip prints a status line after gzip verifies every input. Sed prints
+the reformatted needle records, sort deduplicates its input, and grep,
+sha256sum and Node emit counts or digests. The runner hashes these stdout
+files as bytes. Older and custom manifests can still select their original
+canonical output formats. When recalibrating the shared suite, time both
+guests with `JitMode=off` under the configured benchmark lock and target at
+least two seconds per case.
 
 ```json
 {

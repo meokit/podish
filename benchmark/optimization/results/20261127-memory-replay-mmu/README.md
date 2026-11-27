@@ -18,7 +18,7 @@
 
 每套构建按两个 Guest 和两个 JIT 模式跑六轮。偶数轮反转执行顺序，每两轮轮换首个配置。每次启动运行 GNU 十项，使用 `run_workloads` 校验全部输出的 SHA-256。绝对时间为中位数，Δ 为同轮配对比值的中位数。GM-9 排除 `du`。CLI 时间包含启动及退出。RSS 为宿主峰值及六轮范围。Mach-O `__text` 是同一双 Guest dylib 的节大小。
 
-统计版启用 `ENABLE_TLB_STATS=ON`，引擎退出时写出计数，合计 shell 及其子进程。L1、L2、Miss 的分母为统计到的读写探测总数。块内存是本次运行累计分配的解码块字节数。统计版额外插桩的耗时单独列出。 [逐轮数据与二进制 SHA-256](measurements.json) · [GNU 基准清单](../../manifests/baking-workloads.json)
+统计版启用 `ENABLE_TLB_STATS=ON`，引擎退出时写出计数，合计 shell 及其子进程。L1、L2、Miss 的分母为统计到的读写探测总数。块内存是本次运行累计分配的解码块字节数。统计版额外插桩的耗时单独列出。 [逐轮数据与二进制 SHA-256](measurements.json) · [GNU 基准清单](https://github.com/meokit/podish/blob/12f9f5e68a1be159b5633e3ea7a131e2051662d7/benchmark/optimization/manifests/baking-workloads.json)
 
 ## Release 计时与内存
 

@@ -9,10 +9,21 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import train_nested_presets as trainer
-from nested_baking_workloads import file_digest, read_json, write_json
+from nested_baking_workloads import file_digest, read_json, split_families, write_json
 
 
 class RankedTrainingTests(unittest.TestCase):
+    def test_shared_manifest_reserves_node_and_runs_each_case_once(self):
+        manifest = trainer.REPO / "benchmark/optimization/manifests/baking-workloads.json"
+        cases = read_json(manifest)
+        training, held_out = split_families(cases, [])
+        self.assertEqual({case["id"] for case in training},
+                         {"gzip", "gunzip", "sed", "grep-fixed", "grep-regex", "sort", "sha256"})
+        self.assertEqual([(case["id"], case["family"]) for case in held_out], [("node-minify", "node")])
+        self.assertTrue(all(case["repetitions"] == 1 for case in cases))
+        _, held_out = split_families(cases, ["gzip", "grep", "coreutils"])
+        self.assertEqual({case["id"] for case in held_out}, {case["id"] for case in cases} - {"sed"})
+
     def test_default_cli_trains_each_guest_with_generalization_weight(self):
         cases = [{"id": "compress", "family": "gzip"}, {"id": "grep", "family": "grep"}]
         with tempfile.TemporaryDirectory() as tmp:

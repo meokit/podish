@@ -572,7 +572,8 @@ def main():
     parser.add_argument("--risk", type=float, default=.5, help="Family concentration and specificity discount (0..1, default 0.5)")
     parser.add_argument("--min-family-ratio", type=float, default=0.,
                         help="Minimum repeated finalist family speedup vs unbaked (0 disables)")
-    parser.add_argument("--holdout-family", action="append", default=[], help="Reserve a whole software family (repeatable)")
+    parser.add_argument("--holdout-family", action="append", default=[],
+                        help="Reserve a software family in addition to manifest holdouts (repeatable)")
     parser.add_argument("--capture-source", type=Path, help="Reuse verified captures from a prior trainer output")
     parser.add_argument("--partial-operands", action=argparse.BooleanOptionalAction, default=True,
                         help="Include scalar forms with dynamic displacement or immediate (default)")

@@ -100,7 +100,7 @@ def stage_cli(managed, directory, library):
     return directory / "Podish.Cli.dll"
 
 
-def run_workloads(cfg, cli, cases, log, capture=None, *, native_defaults=False):
+def run_workloads(cfg, cli, cases, log, capture=None, *, native_defaults=False, jit_mode=None):
     rootfs = Path(cfg["rootfs"])
     shell = ["set -eu"]
     files = []
@@ -110,20 +110,25 @@ def run_workloads(cfg, cli, cases, log, capture=None, *, native_defaults=False):
         output.unlink(missing_ok=True)
         files.append(output)
         repetitions = case["repetitions"] if capture is None else 1
-        shell.extend([
-            f"cd {shlex.quote(case['cwd'])}",
-            f"printf 'BAKE_BEGIN {i}\\n'",
-            "i=0",
-            f'while [ "$i" -lt {repetitions} ]; do',
-            f"  ({case['shell']}) > {filename}",
-            "  i=$((i+1))",
-            "done",
-            f"printf 'BAKE_END {i}\\n'",
-        ])
+        command = f"({case['shell']}) > {filename}"
+        shell.extend([f"cd {shlex.quote(case['cwd'])}", f"printf 'BAKE_BEGIN {i}\\n'"])
+        if repetitions == 1:
+            shell.append(command)
+        else:
+            shell.extend([
+                "i=0",
+                f'while [ "$i" -lt {repetitions} ]; do',
+                f"  {command}",
+                "  i=$((i+1))",
+                "done",
+            ])
+        shell.append(f"printf 'BAKE_END {i}\\n'")
     argv = [cfg.get("dotnet", "dotnet"), str(cli), "run", "--rm",
             "--rootfs", str(rootfs), "--log-driver", "none", "--memory", "1G"]
+    if jit_mode is not None or not native_defaults:
+        argv.append(f"-XX:JitMode={jit_mode if jit_mode is not None else 'off'}")
     if not native_defaults:
-        argv.extend(["-XX:JitMode=off", "-XX:BlockCacheSize=400m"])
+        argv.append("-XX:BlockCacheSize=400m")
     argv.extend(["-e", "LC_ALL=C", "-e", "LANG=C", "-e", "TZ=UTC"])
     if capture is not None:
         capture.mkdir(parents=True, exist_ok=True)
@@ -135,7 +140,9 @@ def run_workloads(cfg, cli, cases, log, capture=None, *, native_defaults=False):
     env = {key: value for key, value in os.environ.items()
            if not key.startswith(("FIBERCPU_", "PODISH_", "DYLD_", "DOTNET_STARTUP_HOOKS"))}
     if not native_defaults:
-        env.update(FIBERCPU_LLVM_JIT="0", FIBERCPU_DYNAMIC_SPECIALIZATION="0", FIBERCPU_LINKED_BLOCK_CACHE="0")
+        env.update(FIBERCPU_DYNAMIC_SPECIALIZATION="0", FIBERCPU_LINKED_BLOCK_CACHE="0")
+        if jit_mode in (None, "off"):
+            env["FIBERCPU_LLVM_JIT"] = "0"
     env["PODISH_SKIP_BLOCKS_EXPORT"] = "1" if capture is None else "0"
     marks = {}
     pending = b""
@@ -189,8 +196,10 @@ def split_families(cases, held_out):
     families = {case.get("family", case["id"]) for case in cases}
     if len(ids) != len(set(ids)):
         raise ValueError("workload IDs must be unique")
-    if set(held_out) - families:
-        raise ValueError(f"unknown holdout families: {sorted(set(held_out) - families)}")
+    held_out = set(held_out)
+    if held_out - families:
+        raise ValueError(f"unknown holdout families: {sorted(held_out - families)}")
+    held_out.update(case.get("family", case["id"]) for case in cases if case.get("holdout"))
     training = [c for c in cases if c.get("family", c["id"]) not in held_out]
     if not training:
         raise ValueError("at least one training family is required")

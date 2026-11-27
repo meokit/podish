@@ -2,19 +2,19 @@
   {
     "id": "gzip",
     "group": "compression",
-    "shell": "gzip -n -6 -c input.txt",
-    "sha256": "b6c8d023b153e79acf9f5b2fc69d4cb8be536fd3d91f78bba8378a6198265eeb",
+    "shell": "bash -o pipefail -c 'gzip -n -9 -c input.txt input.txt input.txt input.txt input.txt input.txt input.txt input.txt | cksum'",
+    "sha256": "cf4bdd06daffd3cacc97d9d1a89ed606cc565e652b755710955e96173390ef35",
     "repetitions": 1,
-    "verify": "gzip",
+    "verify": "bytes",
     "cwd": "/opt/nested-training",
     "family": "gzip"
   },
   {
     "id": "gunzip",
     "group": "compression",
-    "shell": "gzip -dc input.gz",
-    "sha256": "b6c8d023b153e79acf9f5b2fc69d4cb8be536fd3d91f78bba8378a6198265eeb",
-    "repetitions": 3,
+    "shell": "set --; n=0; while [ \"$n\" -lt 90 ]; do set -- \"$@\" input.gz; n=$((n + 1)); done; gzip -t \"$@\" && printf 'gzip stream verified\\n'",
+    "sha256": "45fd29e000aa77913a2126021f5bf6e15e788e1742c6444edb34f6abaf6a7afc",
+    "repetitions": 1,
     "verify": "bytes",
     "cwd": "/opt/nested-training",
     "family": "gzip"
@@ -22,9 +22,9 @@
   {
     "id": "sed",
     "group": "text",
-    "shell": "sed -e 's/row=/record=/g' -e 's/otherxx/plainxx/g' input.txt",
-    "sha256": "f825b9c6c7bdb5a8963d223dbdfb9abf2d95d478e363ac1c4efaaec4f6f0248e",
-    "repetitions": 2,
+    "shell": "sed -n -E -e 's/^row=0*([0-9]+)/record=\\1/' -e 's/group=([0-9]{2})/bucket[\\1]/' -e 's/otherxx/plainxx/' -e 's/(needle|plainxx) ([[:alnum:]]{8})([[:alnum:]]{8})([[:alnum:]]{8})([[:alnum:]]{8})$/\\1 \\2-\\3-\\4-\\5/' -e 's/^([^ ]+) ([^ ]+) (.*)$/\\2 \\1 \\3/' -e 's/needle/NEEDLE/' -e '/ NEEDLE /p' input.txt",
+    "sha256": "b1c539f12dcace5af9dfd9175f2beeb0e12010f467fb0db331537a214012a340",
+    "repetitions": 1,
     "verify": "bytes",
     "cwd": "/opt/nested-training",
     "family": "sed"
@@ -32,9 +32,9 @@
   {
     "id": "grep-fixed",
     "group": "search",
-    "shell": "grep -F -c needle input.txt",
-    "sha256": "1cdffe0aecec97b9e00f54f7f29e10fbdc53cee147a1e7394b87d41b6307a278",
-    "repetitions": 4,
+    "shell": "set --; n=0; while [ \"$n\" -lt 96 ]; do set -- \"$@\" input.txt; n=$((n + 1)); done; grep -F -i -w -h -c -e needle -e row= -e group= \"$@\"",
+    "sha256": "a8b32fb494aa690f1ce3c647582df95ab2e6afb75d0921f2fc3078e2f0e27ebf",
+    "repetitions": 1,
     "verify": "bytes",
     "cwd": "/opt/nested-training",
     "family": "grep"
@@ -42,9 +42,9 @@
   {
     "id": "grep-regex",
     "group": "search",
-    "shell": "grep -E -c 'group=(07|13|42)' input.txt",
-    "sha256": "41f610c24cd3eb47c8e7a404827190f003bacda359f3beb2debf85da76a6ee88",
-    "repetitions": 3,
+    "shell": "set --; n=0; while [ \"$n\" -lt 128 ]; do set -- \"$@\" input.txt; n=$((n + 1)); done; grep -E -h -c '^row=[0-9]{7} group=(07|13|42) (needle|otherxx) [[:alnum:]]+$' \"$@\"",
+    "sha256": "5102ea2ca876e4efc5cf52674db105914f41a32e0ccff18bd9e1bb02b0a3ae47",
+    "repetitions": 1,
     "verify": "bytes",
     "cwd": "/opt/nested-training",
     "family": "grep"
@@ -52,9 +52,9 @@
   {
     "id": "sort",
     "group": "sort",
-    "shell": "sort input.txt",
-    "sha256": "e8006c09e8b716ab11a0dd901cf03e7d2a6cbb92aebbeae3b1ceac89a5cdae55",
-    "repetitions": 2,
+    "shell": "set --; n=0; while [ \"$n\" -lt 9 ]; do set -- \"$@\" input.txt; n=$((n + 1)); done; sort --parallel=1 -S 96M -u -t ' ' -k2,2 -k3,3 -k1,1 \"$@\"",
+    "sha256": "18237aa1840551365d81f4dfbdac8c1ead385af49a6ffa74191943b708807458",
+    "repetitions": 1,
     "verify": "bytes",
     "cwd": "/opt/nested-training",
     "family": "coreutils"
@@ -62,51 +62,22 @@
   {
     "id": "sha256",
     "group": "integrity",
-    "shell": "sha256sum input.txt",
-    "sha256": "a402f632e461036e11bbb6f623ef83c8235ec25c7f620d7c6d466d25d7abec25",
-    "repetitions": 3,
+    "shell": "set --; n=0; while [ \"$n\" -lt 112 ]; do set -- \"$@\" input.txt; n=$((n + 1)); done; sha256sum \"$@\"",
+    "sha256": "3c1f7bdf62b4c138c21d429c0a2e2f4d7d8a0c3a9688cc7af7c93cc67dd92867",
+    "repetitions": 1,
     "verify": "bytes",
-    "cwd": "/opt/nested-training",
-    "family": "coreutils"
-  },
-  {
-    "id": "tar",
-    "group": "archive",
-    "shell": "tar --format=ustar -cf - tar-input",
-    "sha256": "069c18e5c0bc2356a386e83f8c5de99b0e282a05ec093977338ed058c5fe08bf",
-    "repetitions": 3,
-    "verify": "tar",
-    "cwd": "/opt/nested-training",
-    "family": "tar"
-  },
-  {
-    "id": "du",
-    "group": "filesystem",
-    "shell": "du -ab project-*",
-    "sha256": "6fac0d8624658d3fac296a73b81ea1597dc962d43cc5d1d7d86a0754f066d5b7",
-    "repetitions": 6,
-    "verify": "du",
-    "cwd": "/opt/nested-training",
-    "family": "coreutils"
-  },
-  {
-    "id": "ls",
-    "group": "filesystem",
-    "shell": "ls -1R project-*",
-    "sha256": "76ee0c39c77fe441c31c01b902817d4e220fef17194226f2e444d5f3c333395d",
-    "repetitions": 6,
-    "verify": "ls",
     "cwd": "/opt/nested-training",
     "family": "coreutils"
   },
   {
     "id": "node-minify",
     "group": "node",
-    "shell": "/opt/bench/node --random-seed=20261119 -e \"$(cat /opt/nested-training/minify.cjs)\"",
-    "sha256": "c3afbc1b1fd39657e9b9d6b6eff840c432269ce199b5911dec81fe9a9bfd4c62",
+    "shell": "/opt/bench/node --random-seed=20261119 -e '\nconst assert = require(\"assert\");\nconst hash = require(\"crypto\").createHash(\"sha256\");\nconst resolve = require(\"enhanced-resolve\").create.sync({\n  extensions: [\".js\", \".json\"],\n  mainFields: [\"browser\", \"module\", \"main\"],\n});\nconst input = require(\"fs\").readFileSync(resolve(process.cwd(), \"fast-deep-equal\"), \"utf8\");\nconst { minify } = require(\"terser\");\nasync function main() {\n  for (let i = 0; i < 8; i++) {\n    const { code } = await minify(input, { compress: true, mangle: true });\n    assert(code && code.length < input.length);\n    hash.update(code);\n  }\n  console.log(hash.digest(\"hex\"));\n}\nmain().catch(error => { console.error(error); process.exitCode = 1; });'",
+    "sha256": "51ebc9346d91edca10447746b6b02efaf7bcf615755eb96cdf083f08580b3148",
     "repetitions": 1,
     "verify": "bytes",
     "cwd": "/opt/bench/webpack",
-    "family": "node"
+    "family": "node",
+    "holdout": true
   }
 ]
