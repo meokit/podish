@@ -1,11 +1,14 @@
 #pragma once
 
 #include <bit>
-#include <cstring>
 
 #include "../mem/tlb.h"
 #include "../musttail.h"
 #include "block.h"
+
+#if FIBERCPU_AARCH64_UNMANAGED_CACHE
+#include <cstring>
+#endif
 
 #if FIBERCPU_HAS_MUSTTAIL && !defined(FIBERCPU_AARCH64_LOOP_DISPATCH)
 #define FIBERCPU_AARCH64_TAIL_DISPATCH 1
@@ -42,6 +45,7 @@ constexpr bool RetiresOnExit(Stop reason) {
     return reason == Stop::Branch || reason == Stop::Refetch || reason == Stop::Syscall;
 }
 
+#if FIBERCPU_AARCH64_UNMANAGED_CACHE
 template <class Word>
 inline Word CodeWord(const uint8_t* code) {
     Word word;
@@ -70,6 +74,7 @@ inline bool MatchesWords(const BasicBlock& block, const uint8_t* code) {
     }
     return !(count & 1) || CodeWord<uint32_t>(code) == CodeWord<uint32_t>(words);
 }
+#endif
 
 #if FIBERCPU_AARCH64_TAIL_DISPATCH
 

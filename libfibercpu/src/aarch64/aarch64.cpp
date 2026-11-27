@@ -2,14 +2,18 @@
 
 #include <array>
 #include <cassert>
+#include <cstring>
 #include <limits>
 #include <memory>
-#include <memory_resource>
 #include <mutex>
-#include <optional>
 #include <type_traits>
 #include <unordered_map>
 #include <utility>
+
+#if FIBERCPU_AARCH64_UNMANAGED_CACHE
+#include <memory_resource>
+#include <optional>
+#endif
 
 #include "compare_branch.h"
 #include "flag_liveness.h"
@@ -93,7 +97,11 @@ FIBERCPU_AARCH64_HANDLER_ABI int64_t ResolveBranchTargetSlow(A64_HANDLER_PARAMS)
     auto& frame = *state.active_run;
     const auto target_pc = frame.exit_target;
     const auto& memory = frame.memory;
-    if (instr_limit + frame.budget_reserve >= 0 && memory.lookup_cached_block) {
+    if (instr_limit + frame.budget_reserve >= 0
+#if FIBERCPU_AARCH64_UNMANAGED_CACHE
+        && memory.lookup_cached_block
+#endif
+    ) {
 #ifdef ENABLE_TLB_STATS
         auto* stats = memory.dispatch_stats;
 #endif
@@ -213,10 +221,12 @@ const DecodedOpBinding& DecodeOpBinding(uint32_t word, const Profile& profile) {
     return entry.slot;
 }
 
+#if FIBERCPU_AARCH64_UNMANAGED_CACHE
 struct LocalBlockCache {
     std::pmr::monotonic_buffer_resource pool;
     std::unordered_map<uint64_t, BasicBlock*> by_pc;
 };
+#endif
 
 struct RunScope {
     static inline thread_local bool active = false;
@@ -248,24 +258,37 @@ struct RunScope {
     }
 };
 
-const BasicBlock* DecodeBlock(uint64_t pc, const uint8_t* executable, const Profile& profile, const Memory& memory,
-                              LocalBlockCache* local) {
+const BasicBlock* DecodeBlock(uint64_t pc, const uint8_t* executable, const Profile& profile, const Memory& memory
+#if FIBERCPU_AARCH64_UNMANAGED_CACHE
+                              ,
+                              LocalBlockCache* local
+#endif
+) {
     const auto* code = executable + (pc & PageMask);
+#if FIBERCPU_AARCH64_UNMANAGED_CACHE
     const bool managed = memory.lookup_cached_block != nullptr;
     auto* cached = managed ? memory.lookup_cached_block(memory.context, pc, executable) : nullptr;
     if (!managed) {
         const auto it = local->by_pc.find(pc);
         if (it != local->by_pc.end()) cached = it->second;
     }
-    if (cached && cached->IsValid() && cached->executable_page == executable) {
-        if (managed || MatchesWords(*cached, code)) {
-#ifdef ENABLE_TLB_STATS
-            if (auto* stats = memory.dispatch_stats) ++stats->block_lookup_hits;
+#else
+    const auto* cached = memory.lookup_cached_block(memory.context, pc, executable);
 #endif
-            return cached;
-        }
-        cached->Invalidate();
+    const bool valid = cached && cached->IsValid() && cached->executable_page == executable;
+    if (valid
+#if FIBERCPU_AARCH64_UNMANAGED_CACHE
+        && (managed || MatchesWords(*cached, code))
+#endif
+    ) {
+#ifdef ENABLE_TLB_STATS
+        if (auto* stats = memory.dispatch_stats) ++stats->block_lookup_hits;
+#endif
+        return cached;
     }
+#if FIBERCPU_AARCH64_UNMANAGED_CACHE
+    if (valid) cached->Invalidate();
+#endif
 
 #ifdef ENABLE_TLB_STATS
     if (auto* stats = memory.dispatch_stats) ++stats->block_lookup_misses;
@@ -394,8 +417,12 @@ const BasicBlock* DecodeBlock(uint64_t pc, const uint8_t* executable, const Prof
                                                  : BlockHandlerStorage::Indexed;
     const auto size =
         BasicBlock::CalculateSize(units, count, bindings, fusions, binding_storage, retain_region_context);
+#if FIBERCPU_AARCH64_UNMANAGED_CACHE
     auto* storage = memory.allocate_block ? memory.allocate_block(memory.context, size, pc)
                                           : local->pool.allocate(size, alignof(BasicBlock));
+#else
+    auto* storage = memory.allocate_block(memory.context, size, pc);
+#endif
     if (!storage) return nullptr;
     auto& block = *new (storage) BasicBlock;
     block.header.chain = BasicBlockChainPrefix::Pack(pc, count, bindings != 0, retain_region_context);
@@ -455,10 +482,14 @@ const BasicBlock* DecodeBlock(uint64_t pc, const uint8_t* executable, const Prof
             write_bindings(reinterpret_cast<ScalarHandlerFunc*>(masks + 2));
     }
     block.header.entry = block.FirstOp()->handler;
+#if FIBERCPU_AARCH64_UNMANAGED_CACHE
     if (memory.cache_block)
         memory.cache_block(memory.context, &block);
     else
         local->by_pc[pc] = &block;
+#else
+    memory.cache_block(memory.context, &block);
+#endif
     return &block;
 }
 
@@ -509,8 +540,10 @@ RunResult Run(State& state, const Memory& memory, uint64_t budget, const Profile
     uint64_t mapped_page = 0;
     const BasicBlock* previous = nullptr;
     uint64_t* previous_link = nullptr;
+#if FIBERCPU_AARCH64_UNMANAGED_CACHE
     std::optional<LocalBlockCache> local;
     if (!memory.lookup_cached_block && memory.executable_page) local.emplace();
+#endif
     while (executed < budget) {
         const auto pc = state.pc;
         if (pc & 3) return {Stop::Alignment, executed, pc, 0, 0, Access::Execute};
@@ -522,15 +555,27 @@ RunResult Run(State& state, const Memory& memory, uint64_t budget, const Profile
         unsigned count = 1;
         bool full_block = false;
         if (scope.outer && memory.executable_page && !profile.record) {
+#if !FIBERCPU_AARCH64_UNMANAGED_CACHE
+            assert(memory.lookup_cached_block && memory.allocate_block && memory.cache_block);
+#endif
             const auto page = pc & ~PageMask;
             if (!frame.executable || page != mapped_page) {
                 frame.executable = memory.executable_page(memory.context, page);
                 mapped_page = page;
             }
             if (frame.executable) {
+#if FIBERCPU_AARCH64_UNMANAGED_CACHE
                 block = DecodeBlock(pc, frame.executable, profile, memory, local ? &*local : nullptr);
+#else
+                block = DecodeBlock(pc, frame.executable, profile, memory);
+#endif
                 if (!block) return {Stop::CachePressure, executed, pc, 0, 0, Access::Execute};
-                if (previous && previous->IsValid() && memory.lookup_cached_block) *previous_link = BlockLink(block);
+                if (previous && previous->IsValid()
+#if FIBERCPU_AARCH64_UNMANAGED_CACHE
+                    && memory.lookup_cached_block
+#endif
+                )
+                    *previous_link = BlockLink(block);
                 count = block->inst_count();
                 if (exact) count = unsigned(std::min<uint64_t>(count, budget - executed));
                 full_block = count == block->inst_count();

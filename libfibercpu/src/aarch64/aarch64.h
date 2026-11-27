@@ -6,6 +6,10 @@
 
 #include "../musttail.h"
 
+#ifndef FIBERCPU_AARCH64_UNMANAGED_CACHE
+#define FIBERCPU_AARCH64_UNMANAGED_CACHE 0
+#endif
+
 // Apple Clang's address sanitizer does not preserve its shadow-address
 // temporaries across preserve_none calls. Keep tail dispatch with the standard
 // ABI when compiling with address instrumentation.

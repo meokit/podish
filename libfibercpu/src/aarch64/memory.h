@@ -231,8 +231,12 @@ A64_MEMORY_INLINE StepResult LoadStoreTransfer(State& state, const DecodedInstru
         ClearOverlappingExclusive(state, address, size);
     } else {
         if constexpr (!probe_only) {
+#if FIBERCPU_AARCH64_UNMANAGED_CACHE
             const bool hit = memory->data_tlb && !memory->lookup_cached_block &&
                              ProbeDataTlb<false>(state, address, size, memory->data_tlb, utlb_tags, utlb_addend, data);
+#else
+            constexpr bool hit = false;
+#endif
             if (!hit) {
                 refetch = !mem::ArmAddressRangeValid(address, size) || !memory->read_fast ||
                           !memory->read_fast(memory->context, address, data, size);

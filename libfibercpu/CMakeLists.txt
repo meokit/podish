@@ -1153,6 +1153,7 @@ option(FIBERCPU_TEST_AARCH64 "Build the native AArch64 instruction conformance t
 if(FIBERCPU_GUEST_AARCH64 AND FIBERCPU_TEST_AARCH64)
     enable_testing()
     add_executable(fibercpu_aarch64_test ../benchmark/decode/aarch64_test.cpp src/aarch64/aarch64.cpp)
+    target_compile_definitions(fibercpu_aarch64_test PRIVATE FIBERCPU_AARCH64_UNMANAGED_CACHE=1)
     target_include_directories(fibercpu_aarch64_test PRIVATE src "${CMAKE_CURRENT_BINARY_DIR}/generated")
     target_include_directories(fibercpu_aarch64_test SYSTEM PRIVATE ${simde_SOURCE_DIR})
     if(EMSCRIPTEN)
