@@ -2,8 +2,8 @@
 
 #include <llvm/ADT/SmallVector.h>
 #include <algorithm>
-#include <array>
 #include <atomic>
+#include <bitset>
 #include <memory>
 #include <optional>
 
@@ -155,21 +155,31 @@ std::optional<CapturedRegion> CapturePage(const EmuState& engine, ArmBlock& root
 
     const auto address = [](const RegionCandidate& item) { return item.block->start_pc(); };
     const auto has_edge = [](const RegionCandidate& source, const RegionCandidate& target) {
-        return std::ranges::find(source.targets, target.block->start_pc() & PageMask) != source.targets.end();
+        const auto pc = target.block->start_pc();
+        return (pc > source.block->start_pc() && pc < source.block->end_pc()) ||
+               std::ranges::find(source.targets, pc & PageMask) != source.targets.end();
+    };
+    // Sequential execution can enter a member partway through another member.
+    // Charge each guest instruction once, as the IR does at those boundaries.
+    const auto footprint = [](const ArmBlock& block) {
+        std::bitset<PageBytes / 4> words;
+        const auto start = (block.start_pc() & PageMask) / 4;
+        for (unsigned i = 0; i < block.inst_count(); ++i) words.set(start + i);
+        return words;
     };
     std::ranges::sort(available, {}, address);
     std::vector<RegionCandidate> selected{RegionEdges(root)};
-    size_t instructions = root.inst_count();
+    auto words = footprint(root);
     for (size_t i = 0; i < selected.size() && selected.size() < kMaxRegionMembers; ++i) {
         const auto source = selected[i];
         for (const auto& candidate : available) {
             if (selected.size() == kMaxRegionMembers) break;
-            if (instructions + candidate.block->inst_count() > kMaxRegionInstructions ||
-                std::ranges::find(selected, candidate.block, &RegionCandidate::block) != selected.end())
-                continue;
+            if (std::ranges::find(selected, candidate.block, &RegionCandidate::block) != selected.end()) continue;
             if (!has_edge(source, candidate) && !has_edge(candidate, source)) continue;
+            const auto extended = words | footprint(*candidate.block);
+            if (extended.count() > kMaxRegionInstructions) continue;
             selected.push_back(candidate);
-            instructions += candidate.block->inst_count();
+            words = extended;
         }
     }
     if (selected.size() < 2) return std::nullopt;

@@ -74,6 +74,15 @@ llvm::Constant* ConstantOperands(llvm::Module& module, const DecodedInstruction&
     return global;
 }
 
+unsigned EmittedStepCount(std::span<const Member> members, size_t index) {
+    const auto& member = members[index];
+    auto count = unsigned(member.steps.size());
+    // Capture sorts members by their page offsets. Keep the complete member
+    // for its entry budget and slot layout, including the region context.
+    if (index + 1 < members.size()) count = std::min(count, unsigned(members[index + 1].offset - member.offset) / 4);
+    return count;
+}
+
 class Builder {
     llvm::Module& module_;
     llvm::IRBuilder<> ir_;
@@ -324,7 +333,7 @@ public:
             } else {
                 ir_.SetInsertPoint(run_bodies[i]);
             }
-            EmitMember(members, bodies, members[i], first);
+            EmitMember(members, bodies, i, first);
         }
 
         ir_.SetInsertPoint(leave_);
@@ -358,8 +367,10 @@ public:
         if (next) ir_.SetInsertPoint(next);
     }
 
-    void EmitMember(std::span<const Member> members, std::span<llvm::BasicBlock* const> bodies, const Member& member,
+    void EmitMember(std::span<const Member> members, std::span<llvm::BasicBlock* const> bodies, size_t index,
                     llvm::Value* first) {
+        const auto& member = members[index];
+        const auto count = EmittedStepCount(members, index);
         auto* budget = Load64(remaining_);
         const auto retire = [&](unsigned count) {
             ir_.CreateStore(ir_.CreateSub(budget, ir_.getInt64(count)), remaining_);
@@ -374,14 +385,14 @@ public:
         uint32_t dead_flags = 0;
 #if FIBERCPU_AARCH64_DFE
         uint32_t live = FlagMask;
-        for (unsigned i = unsigned(member.steps.size()); i-- > 0;) {
+        for (unsigned i = count; i-- > 0;) {
             const auto word = member.steps[i].word;
             if (word != NopWord && OmitNZCV(DecodeFields(word), live)) dead_flags |= uint32_t{1} << i;
         }
 #endif
         auto offset = uint64_t(member.offset);
         unsigned slot_offset = 0;
-        for (unsigned i = 0; i < member.steps.size(); ++i, offset += 4) {
+        for (unsigned i = 0; i < count; ++i, offset += 4) {
             const auto& step = member.steps[i];
             auto* slot = Slot(first, slot_offset);
             slot_offset += step.slots;
@@ -434,7 +445,7 @@ public:
                 return;
             }
         }
-        retire(unsigned(member.steps.size()));
+        retire(count);
         branch_to(offset, Slot(first, slot_offset), BlockExitLink::Fallthrough);
     }
 
@@ -469,8 +480,8 @@ std::unique_ptr<llvm::Module> Prepare(std::span<const Member> members, llvm::Str
     llvm::SmallSetVector<const llvm::GlobalValue*, 32> kernels;
     kernels.insert(source.getFunction("FiberArmJitABI"));
     kernels.insert(source.getFunction("FiberArmJitTryLink"));
-    for (const auto& member : members) {
-        for (const auto& step : member.steps) {
+    for (size_t i = 0; i < members.size(); ++i) {
+        for (const auto& step : std::span(members[i].steps).first(EmittedStepCount(members, i))) {
             const auto binding = BindOperation(DecodeFields(step.word));
             if (binding.id == OperationId::Unsupported) break;
             if (const auto* name = KernelName(binding.id)) {

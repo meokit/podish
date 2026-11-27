@@ -661,7 +661,12 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
 
     uint32_t end_eip = start_eip;
     bool success = true;
-    bool continuing_jcc = false;
+    unsigned fallthrough_limit = 2;
+#if FIBERCPU_LLVM_JIT
+    // Larger members can amortize i386 region compilation and dispatch.
+    if (LLVMPageRegionsEnabled(*state)) fallthrough_limit = BlockMax;
+#endif
+    unsigned continued_branches = 0;
     BlockStopReason stop_reason = BlockStopReason::Unknown;
 
     while (op_count < effective_limit) {
@@ -676,9 +681,9 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
         // to a fresh block without invoking a guest fault resolver speculatively.
         if (op_count != 0) {
             const uint32_t remaining = 0x1000u - (current_eip & 0xFFFu);
-            if ((continuing_jcc && ((current_eip ^ start_eip) & ~mem::PAGE_MASK)) ||
+            if ((continued_branches && ((current_eip ^ start_eip) & ~mem::PAGE_MASK)) ||
                 !state->mmu.probe_exec(current_eip) ||
-                (!continuing_jcc && remaining < 15 && !state->mmu.probe_exec(current_eip + remaining))) {
+                (!continued_branches && remaining < 15 && !state->mmu.probe_exec(current_eip + remaining))) {
                 stop_reason = BlockStopReason::PageCross;
                 break;
             }
@@ -687,8 +692,9 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
         DecodedInstTmp inst{};
         uint16_t handler_index = 0;
         uint16_t raw_opcode = 0;
-        const auto decode_result = FetchAndDecodeInstruction(state, current_eip, buf, &inst, &handler_index,
-                                                             &raw_opcode, DecodeHandlerMode::Native, continuing_jcc);
+        const auto decode_result =
+            FetchAndDecodeInstruction(state, current_eip, buf, &inst, &handler_index, &raw_opcode,
+                                      DecodeHandlerMode::Native, continued_branches != 0);
         if (decode_result == InstructionDecodeResult::NeedMoreBytes) {
             stop_reason = BlockStopReason::PageCross;
             break;
@@ -762,16 +768,17 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
 
         // An undefined instruction reached through fallthrough cannot
         // execute its suffix, whether decoded explicitly or as a fallback.
-        if (continuing_jcc && inst.head.handler == g_Handlers[0x10B]) {
+        if (continued_branches && inst.head.handler == g_Handlers[0x10B]) {
             stop_reason = BlockStopReason::ControlFlow;
             break;
         }
         if (IsControlFlow(inst)) {
-            if (!IsJccHandlerIndex(raw_opcode) || ((current_eip ^ start_eip) & ~mem::PAGE_MASK)) {
+            if (!IsJccHandlerIndex(raw_opcode) || continued_branches == fallthrough_limit ||
+                ((current_eip ^ start_eip) & ~mem::PAGE_MASK)) {
                 stop_reason = BlockStopReason::ControlFlow;
                 break;
             }
-            continuing_jcc = true;
+            ++continued_branches;
         }
     }
 

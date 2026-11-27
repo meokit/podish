@@ -249,9 +249,40 @@ void CheckConditionalFallthrough(EmuState* state, bool region) {
         check(1, 1, 3, 0, Pc + 0x80, Negative);
     };
     verify_paths();
-    assert(Lookup(state, Pc, code.data())->inst_count() == 5);
+    assert(Lookup(state, Pc, code.data())->inst_count() == (region ? 3 : 5));
     WaitForJit(state, Pc, 20, code.data(), region ? 2 : 1);
     verify_paths();
+    AArch64_MemUnmap(state, Pc, PageBytes);
+}
+
+void CheckRegionOverlappingFallthrough(EmuState* state) {
+    alignas(PageBytes) std::array<uint8_t, PageBytes> code{};
+    Put(code.data(), std::array{0xb4000200u,   // cbz x0, Pc+0x40
+                                0xb1000421u,   // adds x1, x1, #1
+                                0xd503201fu,   // nop, folded in the first member
+                                0xf100045fu,   // cmp x2, #1
+                                0x140003fcu}); // b to the next page
+    assert(AArch64_MemMapHostPage(state, Pc, code.data(), 5));
+    AArch64_RegWrite(state, 0, 1);
+    AArch64_RegWrite(state, 2, 0);
+    Run(state, Pc, 2);
+    Run(state, Pc + 8, 1);
+    assert(Lookup(state, Pc, code.data())->inst_count() == 5);
+    assert(Lookup(state, Pc + 8, code.data())->inst_count() == 3);
+    WaitForJit(state, Pc, 5, code.data(), 2);
+
+    AArch64_RegWrite(state, 1, UINT64_MAX);
+    AArch64_RegWrite(state, 32, Pc);
+    assert(AArch64_RunSlice(state, 2));
+    assert(AArch64_RegRead(state, 32) == Pc + 8);
+    assert(AArch64_RegRead(state, 1) == 0 && state->arm->nzcv == (Zero | Carry));
+    assert(AArch64_RunSlice(state, 2));
+    assert(AArch64_RegRead(state, 32) == Pc + PageBytes && state->arm->nzcv == Negative);
+
+    AArch64_RegWrite(state, 1, UINT64_MAX);
+    Run(state, Pc, 5);
+    assert(AArch64_RegRead(state, 32) == Pc + PageBytes);
+    assert(AArch64_RegRead(state, 1) == 0 && state->arm->nzcv == Negative);
     AArch64_MemUnmap(state, Pc, PageBytes);
 }
 
@@ -496,6 +527,7 @@ int main(int argc, char**) {
     CheckVectorStructureReplay(state);
     if (region) {
         CheckRegionReplay(state);
+        CheckRegionOverlappingFallthrough(state);
         CheckRegionExternalLink(state, false);
         CheckRegionExternalLink(state, true);
     } else {

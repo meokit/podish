@@ -275,6 +275,12 @@ const BasicBlock* DecodeBlock(uint64_t pc, const uint8_t* executable, const Prof
     std::array<uint32_t, BlockMax> words;
     unsigned count = 0;
     unsigned slot_count = 0;
+    unsigned fallthrough_limit = 3;
+#if FIBERCPU_LLVM_JIT
+    // Keep region members short so hot pages can compile during a guest run.
+    if (memory.retain_region_context) fallthrough_limit = 1;
+#endif
+    unsigned continued_branches = 0;
     while (count < limit) {
         uint32_t raw_word;
         std::memcpy(&raw_word, code + count * 4, sizeof(raw_word));
@@ -289,7 +295,12 @@ const BasicBlock* DecodeBlock(uint64_t pc, const uint8_t* executable, const Prof
         slot = binding;
         slot.ordinal = ordinal;
         BindBlockOperands(slot.op, pc + ordinal * 4);
-        if (!slot.can_follow && !(IsConditionalBranch(slot.op.kind) && !slot.Has(UntrustedScalar))) break;
+        if (!slot.can_follow) {
+            if (!IsConditionalBranch(slot.op.kind) || slot.Has(UntrustedScalar) ||
+                continued_branches == fallthrough_limit)
+                break;
+            ++continued_branches;
+        }
     }
 
     uint32_t dead = 0;
