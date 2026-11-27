@@ -363,14 +363,11 @@ FORCE_INLINE LogicFlow Helper_Group4(EmuState* state, GprCache& gpr, DecodedOp* 
         case 0:    // INC
         case 1: {  // DEC
             uint64_t updated_flags = flags_cache;
-            const T result = subop == 0 ? AluAdd<T, UpdateFlags>(state, updated_flags, val, 1)
-                                        : AluSub<T, UpdateFlags>(state, updated_flags, val, 1);
+            const T result = AluIncDec<T, UpdateFlags>(state, updated_flags, val, subop == 1);
+            // A faulting destination write must leave the old flags visible.
             if (!operand.Write<T, OpOnTLBMiss::BlockingRestartable>(state, gpr, op, result, utlb))
                 return LogicFlow::ExitOnCurrentEIP;
-            if constexpr (UpdateFlags) {
-                AssignCF(updated_flags, ReadCF(flags_cache));
-                flags_cache = updated_flags;
-            }
+            if constexpr (UpdateFlags) flags_cache = updated_flags;
             break;
         }
         default:
@@ -394,16 +391,11 @@ FORCE_INLINE LogicFlow Helper_Group5(EmuState* state, GprCache& gpr, DecodedOp* 
         case 0:    // INC Ev
         case 1: {  // DEC Ev
             uint64_t updated_flags = flags_cache;
-            const T result = subop == 0 ? AluAdd<T, UpdateFlags>(state, updated_flags, val, 1)
-                                        : AluSub<T, UpdateFlags>(state, updated_flags, val, 1);
+            const T result = AluIncDec<T, UpdateFlags>(state, updated_flags, val, subop == 1);
             // A faulting destination write must leave the old flags visible.
             if (!operand.Write<T, OpOnTLBMiss::BlockingRestartable>(state, gpr, op, result, utlb))
                 return LogicFlow::ExitOnCurrentEIP;
-            if constexpr (UpdateFlags) {
-                const uint32_t carry = GetFlags32(flags_cache) & CF_MASK;
-                SetFlags32(updated_flags, (GetFlags32(updated_flags) & ~CF_MASK) | carry);
-                flags_cache = updated_flags;
-            }
+            if constexpr (UpdateFlags) flags_cache = updated_flags;
             break;
         }
         case 2:  // CALL Ev (Near Indirect)

@@ -1382,6 +1382,58 @@ bool VerifyPageRegion(bool cross_page = false) {
            (observer.flags & flag_mask) == initial_flags && !region_context(alias);
 }
 
+bool VerifyRegionFlagsAtExits() {
+    constexpr uint32_t next = code_address + 0x10;
+    // ADD EAX,[ESI]; DEC ECX; JMP next
+    constexpr uint8_t first[] = {0x03, 0x06, 0x49, 0xeb, 0x0b};
+    // XOR EAX,EDX; LEA ESI,[ESI+4]; JMP code_address
+    constexpr uint8_t second[] = {0x31, 0xd0, 0x8d, 0x76, 4, 0xeb, 0xe9};
+    alignas(4096) std::array<uint8_t, 4096> code{};
+    std::ranges::copy(first, code.begin());
+    std::ranges::copy(second, code.begin() + (next - code_address));
+    State state{X86_CreateWithOptions(X86_CREATE_NO_FATAL_SIGNAL_HANDLERS)};
+    auto* cpu = state.get();
+    auto* data = state.MapPage(data_address, 3);
+    if (!X86_MemMapHostPage(cpu, code_address, code.data(), 5) || !data)
+        return false;
+    data[4092] = std::byte{1};
+
+    constexpr uint32_t sticky = 0x602; // DF, IF and the reserved bit.
+    constexpr uint32_t mask = sticky | 0x8d5;
+    const auto run = [&](uint32_t source, int64_t budget) {
+        X86_SetEIP(cpu, code_address);
+        X86_RegWrite(cpu, 0, UINT32_MAX);
+        X86_RegWrite(cpu, 1, 0x80000000);
+        X86_RegWrite(cpu, 2, 0x80000003);
+        X86_RegWrite(cpu, 6, source);
+        X86_SetEFLAGS(cpu, sticky | 0x41);
+        return X86_Run(cpu, 0, budget);
+    };
+    const auto flags = [&] { return X86_GetEFLAGS(cpu) & mask; };
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    do {
+        if (!run(data_address, 12))
+            return false;
+        const auto* a = FindCompiledBlock(cpu);
+        const auto* b = FindCompiledBlock(cpu, next);
+        if (a && b && a->RegionContext() && a->RegionContext() == b->RegionContext()) {
+            constexpr uint32_t last_word = data_address + 4092;
+            // DEC preserves ADD's CF, sets OF and AF, and has even parity.
+            if (!run(last_word, 3) || X86_GetEIP(cpu) != next || flags() != (sticky | 0x815))
+                return false;
+            // XOR replaces the arithmetic flags on the backedge budget exit.
+            if (!run(last_word, 6) || X86_GetEIP(cpu) != code_address || flags() != (sticky | 0x84))
+                return false;
+            // A fault on the following iteration observes the same XOR flags.
+            return run(last_word, 9) && X86_GetFaultVector(cpu) == 14 &&
+                   X86_GetFaultAddress(cpu) == data_address + 4096 && X86_GetEIP(cpu) == code_address &&
+                   flags() == (sticky | 0x84);
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    } while (std::chrono::steady_clock::now() < deadline);
+    return false;
+}
+
 bool VerifyMultiplePageRegions() {
     using Region = fiberish::mem::PageRegion<BasicBlock>;
     constexpr unsigned blocks = 18;
@@ -1542,7 +1594,7 @@ int main(int argc, char** argv) {
 #if FIBERCPU_LLVM_JIT
     if (argc == 2 && std::strcmp(argv[1], "region") == 0) {
         if (VerifyPageRegion() && VerifyPageRegion(true) && VerifyConditionalFallthrough(true) &&
-            VerifyMultiplePageRegions())
+            VerifyRegionFlagsAtExits() && VerifyMultiplePageRegions())
             return 0;
         std::fprintf(stderr, "LLVM page region publication, relocation or memory restart mismatch\n");
         return 1;

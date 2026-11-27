@@ -167,6 +167,7 @@ constexpr uint32_t ARITHMETIC_FLAGS_MASK = CF_MASK | PF_MASK | AF_MASK | ZF_MASK
 // Block assembly lowers them before the resulting code is emitted.
 extern "C" uint64_t FiberLLVMWriteArithmeticFlags(uint64_t, uint32_t, uint8_t) __attribute__((const));
 extern "C" uint64_t FiberLLVMWriteLogicalFlags(uint64_t, uint32_t, unsigned) __attribute__((const));
+extern "C" uint64_t FiberLLVMWriteIncDecFlags(uint64_t, uint32_t, unsigned, bool) __attribute__((const));
 extern "C" bool FiberLLVMReadFlag(uint64_t, unsigned) __attribute__((const));
 #endif
 
@@ -755,6 +756,12 @@ FORCE_INLINE T AluAdd(EmuState* state, uint64_t& flags_cache, T dest, T src) {
     if constexpr (UpdateFlags) {
         uint32_t msb_idx = sizeof(T) * 8 - 1;
         T sign_mask = (T)1 << msb_idx;
+#ifdef FIBERCPU_LLVM_BLOCK_TEMPLATE
+        const uint32_t flags =
+            (res == 0 ? ZF_MASK : 0) | ((res >> msb_idx) ? SF_MASK : 0) | (res < dest ? CF_MASK : 0) |
+            (!((dest ^ src) & sign_mask) && ((dest ^ res) & sign_mask) ? OF_MASK : 0) | ((dest ^ src ^ res) & AF_MASK);
+        WriteArithmeticFlags(flags_cache, flags, static_cast<uint8_t>(res));
+#else
         ClearArithmeticFlags(flags_cache);
         AssignZF(flags_cache, res == 0);
         AssignSF(flags_cache, ((res >> msb_idx) & 1) != 0);
@@ -762,6 +769,7 @@ FORCE_INLINE T AluAdd(EmuState* state, uint64_t& flags_cache, T dest, T src) {
         AssignOF(flags_cache, !((dest ^ src) & sign_mask) && ((dest ^ res) & sign_mask));
         AssignAF(flags_cache, ((dest ^ src ^ res) & AF_MASK) != 0);
         SetParityState(flags_cache, static_cast<uint8_t>(res));
+#endif
     }
     return res;
 }
@@ -849,6 +857,21 @@ FORCE_INLINE T AluSub(EmuState* state, uint64_t& flags_cache, T dest, T src) {
 }
 
 template <typename T, bool UpdateFlags = true>
+FORCE_INLINE T AluIncDec(EmuState* state, uint64_t& flags_cache, T dest, bool decrement) {
+#ifdef FIBERCPU_LLVM_BLOCK_TEMPLATE
+    const T result = decrement ? dest - T{1} : dest + T{1};
+    if constexpr (UpdateFlags) flags_cache = FiberLLVMWriteIncDecFlags(flags_cache, result, sizeof(T) * 8, decrement);
+    return result;
+#else
+    const bool carry = ReadCF(flags_cache);
+    const T result = decrement ? AluSub<T, UpdateFlags>(state, flags_cache, dest, T{1})
+                               : AluAdd<T, UpdateFlags>(state, flags_cache, dest, T{1});
+    if constexpr (UpdateFlags) AssignCF(flags_cache, carry);
+    return result;
+#endif
+}
+
+template <typename T, bool UpdateFlags = true>
 FORCE_INLINE T AluAdc(EmuState* state, uint64_t& flags_cache, T dest, T src) {
     uint32_t cf_in = ReadCF(flags_cache) ? 1u : 0u;
 
@@ -932,12 +955,7 @@ template <typename T, bool UpdateFlags = true>
 inline T AluOr(EmuState* state, uint64_t& flags_cache, T dest, T src) {
     T res = dest | src;
 
-    if constexpr (UpdateFlags) {
-        ClearArithmeticFlags(flags_cache);
-        AssignZF(flags_cache, res == 0);
-        AssignSF(flags_cache, ((res >> (sizeof(T) * 8 - 1)) & 1) != 0);
-        SetParityState(flags_cache, static_cast<uint8_t>(res));
-    }
+    if constexpr (UpdateFlags) SetLogicalResultFlags(flags_cache, res);
     return res;
 }
 
@@ -945,12 +963,7 @@ template <typename T, bool UpdateFlags = true>
 FORCE_INLINE T AluXor(EmuState* state, uint64_t& flags_cache, T dest, T src) {
     T res = dest ^ src;
 
-    if constexpr (UpdateFlags) {
-        ClearArithmeticFlags(flags_cache);
-        AssignZF(flags_cache, res == 0);
-        AssignSF(flags_cache, ((res >> (sizeof(T) * 8 - 1)) & 1) != 0);
-        SetParityState(flags_cache, static_cast<uint8_t>(res));
-    }
+    if constexpr (UpdateFlags) SetLogicalResultFlags(flags_cache, res);
     return res;
 }
 

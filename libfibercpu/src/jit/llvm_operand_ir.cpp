@@ -488,6 +488,7 @@ bool InlineLLVMKernel(llvm::CallInst& call, llvm::Function& kernel, BoundOperand
 
 constexpr llvm::StringLiteral kWriteArithmeticFlags = "FiberLLVMWriteArithmeticFlags";
 constexpr llvm::StringLiteral kWriteLogicalFlags = "FiberLLVMWriteLogicalFlags";
+constexpr llvm::StringLiteral kWriteIncDecFlags = "FiberLLVMWriteIncDecFlags";
 constexpr llvm::StringLiteral kReadFlag = "FiberLLVMReadFlag";
 #ifdef FIBERCPU_LLVM_SHARED_REGION_EXITS
 constexpr llvm::StringLiteral kPackRegionFlags = "FiberLLVMPackRegionFlags";
@@ -495,11 +496,29 @@ constexpr llvm::StringLiteral kPackRegionFlags = "FiberLLVMPackRegionFlags";
 
 // Keep the arithmetic flag fields independent across control-flow joins.
 // Their positions are the same as in the ABI word, so packing is just an OR.
-constexpr uint64_t kFlagsBaseMask = ~(uint64_t(ARITHMETIC_FLAGS_MASK & ~PF_MASK) | FLAGS_CACHE_PF_STATE_MASK);
+constexpr uint64_t kFlagsArithmeticMask = uint64_t(ARITHMETIC_FLAGS_MASK) | FLAGS_CACHE_PF_STATE_MASK;
+constexpr uint64_t kFlagsBaseMask = ~kFlagsArithmeticMask;
+
 constexpr std::array kFlagFields = {
     kFlagsBaseMask,    uint64_t(CF_MASK), uint64_t(ZF_MASK),         uint64_t(SF_MASK),
     uint64_t(OF_MASK), uint64_t(AF_MASK), FLAGS_CACHE_PF_STATE_MASK,
 };
+
+bool IsFlagWriter(llvm::StringRef name) {
+    return name == kWriteArithmeticFlags || name == kWriteLogicalFlags || name == kWriteIncDecFlags;
+}
+
+template <typename Materialize>
+void AddFlagPhiInputs(llvm::PHINode& flags, llvm::PHINode& part, Materialize materialize) {
+    for (auto [index, incoming] : llvm::enumerate(flags.incoming_values())) {
+        auto* predecessor = flags.getIncomingBlock(index);
+        llvm::IRBuilder<> edge(predecessor->getTerminator());
+        // Multiple switch edges from the same block must reuse the same SSA value.
+        const auto previous = part.getBasicBlockIndex(predecessor);
+        auto* value = previous < 0 ? materialize(incoming, edge) : part.getIncomingValue(previous);
+        part.addIncoming(value, predecessor);
+    }
+}
 
 class DeferredFlags {
 public:
@@ -508,10 +527,19 @@ public:
 private:
     struct ValueFields {
         llvm::CallInst* producer = nullptr;
+        llvm::Value* arithmetic = nullptr;
+        llvm::Value* logical_result = nullptr;
+        llvm::ConstantInt* logical_width = nullptr;
         std::array<llvm::Value*, kFlagFields.size()> values{};
     };
 
     llvm::Value* Field(llvm::Value* packed, size_t index, llvm::IRBuilder<>& builder);
+    static llvm::Value* ResultField(llvm::Value* result, llvm::Value* width, uint64_t mask, llvm::IRBuilder<>& builder,
+                                    llvm::Value* decrement = nullptr);
+    static llvm::Value* ResultFlags(llvm::Value* result, llvm::Value* width, llvm::IRBuilder<>& builder,
+                                    llvm::Value* decrement = nullptr);
+    llvm::Value* Arithmetic(llvm::Value* packed, llvm::IRBuilder<>& builder);
+    llvm::Value* MergeLogicalResults(llvm::PHINode& phi, ValueFields& fields);
     llvm::Value* Pack(llvm::Value* packed, llvm::IRBuilder<>& builder);
     llvm::DenseMap<llvm::Value*, ValueFields> fields_;
 };
@@ -528,11 +556,8 @@ llvm::Value* DeferredFlags::Field(llvm::Value* packed, size_t index, llvm::IRBui
     if (auto* phi = llvm::dyn_cast<llvm::PHINode>(packed)) {
         auto* part = builder.CreatePHI(builder.getInt64Ty(), phi->getNumIncomingValues(), "flag");
         cached = part;  // A loop may use this field on one of its own incoming edges.
-        for (auto [i, incoming] : llvm::enumerate(phi->incoming_values())) {
-            auto* predecessor = phi->getIncomingBlock(i);
-            llvm::IRBuilder<> edge(predecessor->getTerminator());
-            part->addIncoming(Field(incoming, index, edge), predecessor);
-        }
+        AddFlagPhiInputs(*phi, *part,
+                         [&](llvm::Value* incoming, llvm::IRBuilder<>& edge) { return Field(incoming, index, edge); });
     } else if (auto* choice = llvm::dyn_cast<llvm::SelectInst>(packed)) {
         auto* yes = Field(choice->getTrueValue(), index, builder);
         auto* no = Field(choice->getFalseValue(), index, builder);
@@ -540,35 +565,154 @@ llvm::Value* DeferredFlags::Field(llvm::Value* packed, size_t index, llvm::IRBui
     } else {
         auto& call = *fields.producer;
         auto* value = call.getArgOperand(1);
-        const bool logical = call.getCalledFunction()->getName() == kWriteLogicalFlags;
+        const auto name = call.getCalledFunction()->getName();
         if (mask == kFlagsBaseMask) {
-            auto* base = Field(call.getArgOperand(0), index, builder);
-            cached = builder.CreateAnd(base, builder.getInt64(~uint64_t(PF_MASK)));
-        } else if (mask == FLAGS_CACHE_PF_STATE_MASK) {
-            auto* parity = logical ? builder.CreateTrunc(value, builder.getInt8Ty()) : call.getArgOperand(2);
-            cached = builder.CreateShl(builder.CreateZExt(parity, builder.getInt64Ty()), FLAGS_CACHE_PF_STATE_SHIFT);
-        } else if (!logical) {
-            cached = builder.CreateZExt(builder.CreateAnd(value, uint32_t(mask)), builder.getInt64Ty());
-        } else if (mask == ZF_MASK) {
-            auto* zero = builder.CreateICmpEQ(value, builder.getInt32(0));
-            cached = builder.CreateSelect(zero, builder.getInt64(ZF_MASK), builder.getInt64(0));
-        } else if (mask == SF_MASK) {
-            // The bit width is a constant supplied by the C++ kernel.
-            auto* top = builder.CreateSub(call.getArgOperand(2), builder.getInt32(8));
-            auto* sign = builder.CreateAnd(builder.CreateLShr(value, top), SF_MASK);
-            cached = builder.CreateZExt(sign, builder.getInt64Ty());
+            cached = Field(call.getArgOperand(0), index, builder);
+        } else if (name == kWriteArithmeticFlags) {
+            if (mask == FLAGS_CACHE_PF_STATE_MASK) {
+                cached = builder.CreateShl(builder.CreateZExt(call.getArgOperand(2), builder.getInt64Ty()),
+                                           FLAGS_CACHE_PF_STATE_SHIFT);
+            } else {
+                cached = builder.CreateZExt(builder.CreateAnd(value, uint32_t(mask)), builder.getInt64Ty());
+            }
+        } else if (name == kWriteIncDecFlags && mask == CF_MASK) {
+            cached = Field(call.getArgOperand(0), index, builder);
         } else {
-            cached = builder.getInt64(0);
+            auto* width = call.getArgOperand(2);
+            auto* decrement = name == kWriteIncDecFlags ? call.getArgOperand(3) : nullptr;
+            cached = ResultField(value, width, mask, builder, decrement);
         }
     }
     return cached;
 }
 
-llvm::Value* DeferredFlags::Pack(llvm::Value* packed, llvm::IRBuilder<>& builder) {
+llvm::Value* DeferredFlags::ResultField(llvm::Value* result, llvm::Value* width, uint64_t mask,
+                                        llvm::IRBuilder<>& builder, llvm::Value* decrement) {
+    if (mask == ZF_MASK) {
+        auto* zero = builder.CreateICmpEQ(result, builder.getInt32(0));
+        return builder.CreateSelect(zero, builder.getInt64(ZF_MASK), builder.getInt64(0));
+    }
+    if (mask == SF_MASK) {
+        auto* shift = builder.CreateSub(width, builder.getInt32(8));
+        auto* sign = builder.CreateAnd(builder.CreateLShr(result, shift), SF_MASK);
+        return builder.CreateZExt(sign, builder.getInt64Ty());
+    }
+    if (mask == FLAGS_CACHE_PF_STATE_MASK) {
+        auto* byte = builder.CreateTrunc(result, builder.getInt8Ty());
+        return builder.CreateShl(builder.CreateZExt(byte, builder.getInt64Ty()), FLAGS_CACHE_PF_STATE_SHIFT);
+    }
+    if (decrement && mask == OF_MASK) {
+        // INC overflows to the signed minimum and DEC to the signed maximum.
+        auto* top_bit = builder.CreateSub(width, builder.getInt32(1));
+        auto* sign = builder.CreateShl(builder.getInt32(1), top_bit);
+        auto* limit = builder.CreateSelect(decrement, builder.CreateSub(sign, builder.getInt32(1)), sign);
+        return builder.CreateSelect(builder.CreateICmpEQ(result, limit), builder.getInt64(OF_MASK),
+                                    builder.getInt64(0));
+    }
+    if (decrement && mask == AF_MASK) {
+        // The result's low nibble is 0 after a carry and 15 after a borrow.
+        auto* nibble = builder.CreateAnd(result, 15);
+        auto* limit = builder.CreateSelect(decrement, builder.getInt32(15), builder.getInt32(0));
+        return builder.CreateSelect(builder.CreateICmpEQ(nibble, limit), builder.getInt64(AF_MASK),
+                                    builder.getInt64(0));
+    }
+    return builder.getInt64(0);
+}
+
+llvm::Value* DeferredFlags::ResultFlags(llvm::Value* result, llvm::Value* width, llvm::IRBuilder<>& builder,
+                                        llvm::Value* decrement) {
     llvm::Value* word = builder.getInt64(0);
-    for (size_t index = 0; index < kFlagFields.size(); ++index)
-        word = builder.CreateOr(word, Field(packed, index, builder));
+    for (auto mask : {uint64_t(ZF_MASK), uint64_t(SF_MASK), FLAGS_CACHE_PF_STATE_MASK})
+        word = builder.CreateOr(word, ResultField(result, width, mask, builder));
+    if (decrement) {
+        for (auto mask : {uint64_t(OF_MASK), uint64_t(AF_MASK)})
+            word = builder.CreateOr(word, ResultField(result, width, mask, builder, decrement));
+    }
     return word;
+}
+
+// A join between a logical writer and an incoming ABI word can carry the
+// result of the guest operation across the hot edge. Tag the incoming
+// arithmetic bits in bit 63, which is outside their mask.
+llvm::Value* DeferredFlags::MergeLogicalResults(llvm::PHINode& phi, ValueFields& fields) {
+    if (fields.logical_result) return fields.logical_result;
+    llvm::ConstantInt* width = nullptr;
+    for (llvm::Value* incoming : phi.incoming_values()) {
+        if (incoming == &phi) continue;
+        const auto found = fields_.find(incoming);
+        if (found == fields_.end()) continue;
+        const auto* call = found->second.producer;
+        if (!call || call->getCalledFunction()->getName() != kWriteLogicalFlags) return nullptr;
+        auto* bits = llvm::dyn_cast<llvm::ConstantInt>(call->getArgOperand(2));
+        if (!bits || (width && width != bits)) return nullptr;
+        width = bits;
+    }
+    if (!width) return nullptr;
+
+    constexpr uint64_t tag = uint64_t{1} << 63;
+    llvm::IRBuilder<> builder(&phi);
+    auto* result = builder.CreatePHI(builder.getInt64Ty(), phi.getNumIncomingValues(), "flag.result");
+    AddFlagPhiInputs(phi, *result, [&](llvm::Value* incoming, llvm::IRBuilder<>& edge) -> llvm::Value* {
+        if (incoming == &phi) return result;
+        if (const auto writer = fields_.find(incoming); writer != fields_.end())
+            return edge.CreateZExt(writer->second.producer->getArgOperand(1), edge.getInt64Ty());
+        auto* bits = edge.CreateAnd(incoming, edge.getInt64(kFlagsArithmeticMask));
+        return edge.CreateOr(bits, edge.getInt64(tag));
+    });
+    fields.logical_width = width;
+    return fields.logical_result = result;
+}
+
+llvm::Value* DeferredFlags::Arithmetic(llvm::Value* packed, llvm::IRBuilder<>& builder) {
+    auto found = fields_.find(packed);
+    if (found == fields_.end()) return builder.CreateAnd(packed, builder.getInt64(kFlagsArithmeticMask));
+    auto& fields = found->second;
+    if (fields.arithmetic) return fields.arithmetic;
+
+    if (auto* phi = llvm::dyn_cast<llvm::PHINode>(packed)) {
+        if (auto* encoded = MergeLogicalResults(*phi, fields)) {
+            auto* result = builder.CreateTrunc(encoded, builder.getInt32Ty());
+            auto* word = ResultFlags(result, fields.logical_width, builder);
+            auto* raw = builder.CreateAnd(encoded, builder.getInt64(kFlagsArithmeticMask));
+            return builder.CreateSelect(builder.CreateICmpSLT(encoded, builder.getInt64(0)), raw, word);
+        }
+        llvm::IRBuilder<> join(phi);
+        auto* part = join.CreatePHI(join.getInt64Ty(), phi->getNumIncomingValues(), "arithmetic.flags");
+        fields.arithmetic = part;
+        AddFlagPhiInputs(*phi, *part,
+                         [&](llvm::Value* incoming, llvm::IRBuilder<>& edge) { return Arithmetic(incoming, edge); });
+        return part;
+    }
+    if (auto* choice = llvm::dyn_cast<llvm::SelectInst>(packed)) {
+        // Both input words are already available before the select.
+        llvm::IRBuilder<> select(choice);
+        auto* yes = Arithmetic(choice->getTrueValue(), select);
+        auto* no = Arithmetic(choice->getFalseValue(), select);
+        return fields.arithmetic = select.CreateSelect(choice->getCondition(), yes, no);
+    }
+
+    auto& call = *fields.producer;
+    const auto name = call.getCalledFunction()->getName();
+    auto* result = call.getArgOperand(1);
+    if (name == kWriteArithmeticFlags) {
+        // The kernel supplied a packed set of low bits. Keep it together at a
+        // full-word use, even if a separate consumer also requested one bit.
+        auto* parity = builder.CreateZExt(call.getArgOperand(2), builder.getInt64Ty());
+        return builder.CreateOr(builder.CreateZExt(result, builder.getInt64Ty()),
+                                builder.CreateShl(parity, FLAGS_CACHE_PF_STATE_SHIFT));
+    }
+    auto* width = call.getArgOperand(2);
+    if (name == kWriteLogicalFlags) return ResultFlags(result, width, builder);
+
+    constexpr auto carry_index = std::ranges::find(kFlagFields, CF_MASK) - kFlagFields.begin();
+    auto* carry = Field(call.getArgOperand(0), carry_index, builder);
+    return builder.CreateOr(carry, ResultFlags(result, width, builder, call.getArgOperand(3)));
+}
+
+llvm::Value* DeferredFlags::Pack(llvm::Value* packed, llvm::IRBuilder<>& builder) {
+    // Keep sticky bits and arithmetic bits independent through region joins.
+    auto* base = Field(packed, 0, builder);
+    return builder.CreateOr(base, Arithmetic(packed, builder));
 }
 
 void DeferredFlags::Lower(llvm::Function& entry) {
@@ -578,7 +722,7 @@ void DeferredFlags::Lower(llvm::Function& entry) {
         auto* call = llvm::dyn_cast<llvm::CallInst>(&instruction);
         const auto* fn = call ? call->getCalledFunction() : nullptr;
         if (!fn) continue;
-        if (fn->getName() == kWriteLogicalFlags || fn->getName() == kWriteArithmeticFlags) {
+        if (IsFlagWriter(fn->getName())) {
             fields_[call].producer = call;
             deferred.push_back(call);
         } else if (fn->getName() == kReadFlag) {
@@ -958,11 +1102,11 @@ bool CanInlinePageMember(const llvm::Function& entry) {
         const auto name = callee->getName();
         // These calls cannot run a guest observer or invalidate the page.
         // GetNextEip receives the block itself, which is bound before inlining.
-        if (!callee->isIntrinsic() && name != kWriteArithmeticFlags && name != kWriteLogicalFlags &&
-            name != kReadFlag && name != "FiberLLVMRegionEdge" && name != "FiberLLVMRegionExit" &&
-            name != "FiberLLVMRegionBase" && name != "_ZNK8fiberish10BasicBlock10GetNextEipEm" &&
-            name != "FiberLLVMGuestAddress" && name != "FiberLLVMChainTarget" && name != "memcpy" &&
-            name != "memmove" && name != "memset" && name != "memcmp")
+        if (!callee->isIntrinsic() && !IsFlagWriter(name) && name != kReadFlag && name != "FiberLLVMRegionEdge" &&
+            name != "FiberLLVMRegionExit" && name != "FiberLLVMRegionBase" &&
+            name != "_ZNK8fiberish10BasicBlock10GetNextEipEm" && name != "FiberLLVMGuestAddress" &&
+            name != "FiberLLVMChainTarget" && name != "memcpy" && name != "memmove" && name != "memset" &&
+            name != "memcmp")
             return false;
     }
     return true;
@@ -1124,6 +1268,27 @@ std::optional<uint32_t> ConstantPageOffset(llvm::Value* target, llvm::Value* pag
         }
     }
     return std::nullopt;
+}
+
+llvm::Value* RegionEdgeTarget(llvm::CallInst& edge) {
+    auto* target = edge.getArgOperand(5);
+    auto* choice = llvm::dyn_cast<llvm::SelectInst>(target);
+    if (!choice) return target;
+    // A conditional branch may select an unused EIP for the other edge.
+    // Resolve the select while building the region so dead predecessors
+    // cannot keep flag state live through the resulting PHIs.
+    auto* block = edge.getParent();
+    for (unsigned depth = 0; depth < 4; ++depth) {
+        auto* predecessor = block->getSinglePredecessor();
+        if (!predecessor) break;
+        auto* branch = llvm::dyn_cast<llvm::BranchInst>(predecessor->getTerminator());
+        if (!branch) break;
+        if (branch->isConditional() && branch->getCondition() == choice->getCondition() &&
+            branch->getSuccessor(0) != branch->getSuccessor(1))
+            return branch->getSuccessor(0) == block ? choice->getTrueValue() : choice->getFalseValue();
+        block = predecessor;
+    }
+    return target;
 }
 
 bool FoldRegionPageOffsets(llvm::Function& body, llvm::Value* page) {
@@ -1404,7 +1569,7 @@ std::unique_ptr<llvm::Module> PrepareLLVMPageRegion(const LLVMOperandTemplates& 
         call->eraseFromParent();
     }
     for (auto* call : edges) {
-        const auto known_offset = ConstantPageOffset(call->getArgOperand(5), page);
+        const auto known_offset = ConstantPageOffset(RegionEdgeTarget(*call), page);
         const auto known =
             known_offset ? std::ranges::find(labels, *known_offset, &RegionLabel::page_offset) : labels.end();
         if (!known_offset || known != labels.end()) {

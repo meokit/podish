@@ -253,18 +253,13 @@ FORCE_INLINE LogicFlow OpInc_Reg_Internal(LogicFuncParams, const Operands& opera
                             ? operand_modrm & 7
                             : static_cast<uint8_t>(FixedReg) - static_cast<uint8_t>(RmOperandSpec::Reg0);
 
-    // INC does not affect CF
-    bool old_cf = ReadCF(flags_cache);
-
     if (OperandIs16<Opsize>(op, operands)) {
         uint16_t val = (uint16_t)gpr.GetReg(state, reg);
-        uint16_t res = AluAdd<uint16_t, UpdateFlags>(state, flags_cache, val, 1);
-        if constexpr (UpdateFlags) AssignCF(flags_cache, old_cf);
+        uint16_t res = AluIncDec<uint16_t, UpdateFlags>(state, flags_cache, val, false);
         gpr.SetReg(state, reg, (gpr.GetReg(state, reg) & 0xFFFF0000) | res);
     } else {
         uint32_t val = gpr.GetReg(state, reg);
-        uint32_t res = AluAdd<uint32_t, UpdateFlags>(state, flags_cache, val, 1U);
-        if constexpr (UpdateFlags) AssignCF(flags_cache, old_cf);
+        uint32_t res = AluIncDec<uint32_t, UpdateFlags>(state, flags_cache, val, false);
         gpr.SetReg(state, reg, res);
     }
     return LogicFlow::Continue;
@@ -279,18 +274,13 @@ FORCE_INLINE LogicFlow OpDec_Reg_Internal(LogicFuncParams, const Operands& opera
                             ? operand_modrm & 7
                             : static_cast<uint8_t>(FixedReg) - static_cast<uint8_t>(RmOperandSpec::Reg0);
 
-    // DEC does not affect CF
-    bool old_cf = ReadCF(flags_cache);
-
     if (OperandIs16<Opsize>(op, operands)) {
         uint16_t val = (uint16_t)gpr.GetReg(state, reg);
-        uint16_t res = AluSub<uint16_t, UpdateFlags>(state, flags_cache, val, 1);
-        if constexpr (UpdateFlags) AssignCF(flags_cache, old_cf);
+        uint16_t res = AluIncDec<uint16_t, UpdateFlags>(state, flags_cache, val, true);
         gpr.SetReg(state, reg, (gpr.GetReg(state, reg) & 0xFFFF0000) | res);
     } else {
         uint32_t val = gpr.GetReg(state, reg);
-        uint32_t res = AluSub<uint32_t, UpdateFlags>(state, flags_cache, val, 1U);
-        if constexpr (UpdateFlags) AssignCF(flags_cache, old_cf);
+        uint32_t res = AluIncDec<uint32_t, UpdateFlags>(state, flags_cache, val, true);
         gpr.SetReg(state, reg, res);
     }
     return LogicFlow::Continue;
