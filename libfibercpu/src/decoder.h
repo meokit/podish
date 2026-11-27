@@ -1,4 +1,5 @@
 #pragma once
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cassert>
@@ -433,11 +434,6 @@ static_assert(sizeof(DecodedOp) == 16, "DecodedOp must be exactly 16 bytes");
 static_assert(offsetof(DecodedOp, handler) == 0);
 static_assert(offsetof(DecodedOp, payload) == 8);
 
-ATTR_PRESERVE_NONE int64_t ForwardMemoryImmediateSlot(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                      int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags,
-                                                      mem::MicroTlbAbiWord utlb_addend, uint32_t branch,
-                                                      uint64_t flags_cache FIBERCPU_PIN_PARAMS);
-
 FORCE_INLINE const DecodedInstruction* NextOp(const DecodedInstruction* op) { return op + 1; }
 
 FORCE_INLINE ExtKind GetExtKind(const DecodedOp* op) { return op->GetExtKind(); }
@@ -500,11 +496,6 @@ struct BlockSlotLayout {
     static BlockSlotLayout Inspect(uint32_t start_eip, std::span<const DecodedInstruction> ops);
 };
 
-struct BlockDataSlotMask {
-    uint64_t logical;
-    uint64_t physical[2];
-};
-
 struct BasicBlockChainPrefix {
     uint64_t start_eip : 32;
     uint64_t inst_count : 8;
@@ -541,11 +532,15 @@ struct alignas(16) BasicBlock {
 
     static constexpr size_t AlignFooter(size_t offset) { return (offset + 7) & ~size_t{7}; }
 
+    // Relative to FirstOp(), also used by the LLVM region entry wrapper.
+    static constexpr size_t SlotStorageSize(size_t physical_slots, bool has_data_slots) {
+        return sizeof(DecodedOp) * physical_slots + (has_data_slots ? sizeof(uint64_t) : 0);
+    }
+
     static constexpr size_t CalculateSize(BlockSlotLayout layout, bool retain_scalar_handlers = false,
                                           bool retain_region_context = false) {
         if (!layout.logical_slot_count) return sizeof(BasicBlock);
-        size_t size = offsetof(BasicBlock, slots) + sizeof(DecodedOp) * layout.PhysicalSlotCount();
-        if (layout.data_slot_count) size = AlignFooter(size) + sizeof(BlockDataSlotMask);
+        size_t size = offsetof(BasicBlock, slots) + SlotStorageSize(layout.PhysicalSlotCount(), layout.data_slot_count);
         if (retain_region_context) size += sizeof(void*);
         size +=
             (layout.logical_slot_count - 1) * (sizeof(uint16_t) + (retain_scalar_handlers ? sizeof(HandlerFunc) : 0));
@@ -560,36 +555,45 @@ struct alignas(16) BasicBlock {
 
     FORCE_INLINE bool HasDataSlots() const { return slot_count > inst_count() + 1; }
 
-    FORCE_INLINE size_t SlotsEndOffset() const { return offsetof(BasicBlock, slots) + sizeof(DecodedOp) * slot_count; }
-    size_t DataSlotMaskOffset() const { return AlignFooter(SlotsEndOffset()); }
+    size_t DataSlotMaskOffset() const { return offsetof(BasicBlock, slots) + sizeof(DecodedOp) * slot_count; }
 
     FORCE_INLINE bool IsLinkOnlyReturn(const DecodedOp* op) const {
         return (link_only_return_prefixes & prefix::LOCK) && op + 1 == Sentinel();
     }
-    const BlockDataSlotMask* DataSlotMask() const {
-        return reinterpret_cast<const BlockDataSlotMask*>(reinterpret_cast<const std::byte*>(this) +
-                                                          DataSlotMaskOffset());
+    uint64_t DataSlotMask() const {
+        return *reinterpret_cast<const uint64_t*>(reinterpret_cast<const std::byte*>(this) + DataSlotMaskOffset());
     }
 
-    static FORCE_INLINE uint64_t SlotsBefore(size_t ordinal) {
-        return ordinal == 64 ? UINT64_MAX : (uint64_t{1} << ordinal) - 1;
+    static FORCE_INLINE size_t PhysicalIndex(size_t logical, uint64_t mask) {
+        return logical + std::popcount(mask & ((uint64_t{1} << logical) - 1));
     }
 
     FORCE_INLINE size_t LogicalIndex(const DecodedOp* op) const {
         const size_t physical = op - FirstOp();
         if (!HasDataSlots()) [[likely]]
             return physical;
-        if (physical == sentinel_slot_index) return inst_count();
-        const auto* mask = DataSlotMask();
-        const auto word = physical / 64;
-        const auto earlier_words = word ? std::popcount(mask->physical[0]) : 0;
-        return physical - earlier_words - std::popcount(mask->physical[word] & SlotsBefore(physical % 64));
+        const size_t count = inst_count();
+        if (physical == sentinel_slot_index) return count;
+        // Invert the monotonic head positions within the range allowed by the
+        // total number of data slots. Each instruction can add at most one.
+        const auto mask = DataSlotMask();
+        size_t first = physical - std::min(physical / 2, sentinel_slot_index - count);
+        size_t last = std::min(physical, count - 1);
+        while (first < last) {
+            const size_t mid = first + (last - first) / 2;
+            if (PhysicalIndex(mid, mask) < physical)
+                first = mid + 1;
+            else
+                last = mid;
+        }
+        return first;
     }
 
     FORCE_INLINE const DecodedOp* LogicalOp(size_t slot) const {
-        if (HasDataSlots()) [[unlikely]]
-            slot += std::popcount(DataSlotMask()->logical & SlotsBefore(slot));
-        return FirstOp() + slot;
+        if (!HasDataSlots()) [[likely]]
+            return FirstOp() + slot;
+        if (slot == inst_count()) return Sentinel();
+        return FirstOp() + PhysicalIndex(slot, DataSlotMask());
     }
     FORCE_INLINE DecodedOp* LogicalOp(size_t slot) {
         return const_cast<DecodedOp*>(std::as_const(*this).LogicalOp(slot));
@@ -597,10 +601,9 @@ struct alignas(16) BasicBlock {
 
     FORCE_INLINE const DecodedOp* NextOp(const DecodedOp* op) const {
         const auto* next = op + 1;
-        if (HasDataSlots() && next != Sentinel()) {
-            const auto physical = next - FirstOp();
-            next += (DataSlotMask()->physical[physical / 64] >> (physical % 64)) & 1;
-        }
+        // A link-only RET immediately precedes the sentinel and stores a
+        // pointer in its payload. Only inspect instruction payloads here.
+        if (next != Sentinel() && (op->HasMemoryImmediate() || op->HasBranchOperands())) ++next;
         return next;
     }
     FORCE_INLINE DecodedOp* NextOp(DecodedOp* op) { return const_cast<DecodedOp*>(std::as_const(*this).NextOp(op)); }
@@ -613,7 +616,7 @@ struct alignas(16) BasicBlock {
     }
 
     size_t RegionContextOffset() const {
-        return HasDataSlots() ? DataSlotMaskOffset() + sizeof(BlockDataSlotMask) : SlotsEndOffset();
+        return offsetof(BasicBlock, slots) + SlotStorageSize(slot_count, HasDataSlots());
     }
 
     HandlerFunc* UnfusedHandlers() { return const_cast<HandlerFunc*>(std::as_const(*this).UnfusedHandlers()); }

@@ -1054,8 +1054,7 @@ void BasicBlock::WriteOps(BlockSlotLayout layout, std::span<const DecodedInstruc
     auto* anchors =
         anchor_count ? reinterpret_cast<uint64_t*>(reinterpret_cast<std::byte*>(this) + anchor_offset) : nullptr;
     auto* adjustments = anchors ? reinterpret_cast<uint32_t*>(anchors + 1) : nullptr;
-    auto* data_mask = HasDataSlots() ? const_cast<BlockDataSlotMask*>(DataSlotMask()) : nullptr;
-    if (data_mask) *data_mask = {};
+    uint64_t data_mask = 0;
     if (anchors) *anchors = 0;
     uint16_t offset = 0;
     uint32_t expected = start_eip();
@@ -1089,19 +1088,19 @@ void BasicBlock::WriteOps(BlockSlotLayout layout, std::span<const DecodedInstruc
         const bool branch_link = HasBranchLinkSlot(op.meta.all);
         const bool memory_immediate = compact_imm::NeedsSeparateSlot(op);
         if (branch_link || memory_immediate) {
-            data_mask->logical |= bit;
-            data_mask->physical[physical_index / 64] |= uint64_t{1} << (physical_index % 64);
+            data_mask |= bit;
             auto& data = FirstOp()[physical_index++];
+            data.SetDispatchHandler(nullptr);
             if (branch_link) {
-                data.SetDispatchHandler(nullptr);
                 data.StoreBlockLink(invalid);
             } else {
-                data.SetDispatchHandler(ForwardMemoryImmediateSlot);
                 data.payload = GetImm(&op);
             }
         }
     }
     assert(physical_index == sentinel_slot_index);
+    if (HasDataSlots())
+        *reinterpret_cast<uint64_t*>(reinterpret_cast<std::byte*>(this) + DataSlotMaskOffset()) = data_mask;
     Sentinel()->SetDispatchHandler(ops.back().handler);
     entry = FirstOp()->handler;
     SetFallthroughLink(invalid);

@@ -28,6 +28,7 @@ namespace {
 constexpr uint32_t code_address = 0x10000;
 constexpr uint32_t data_address = 0x20000;
 constexpr int ss_segment = 2;
+constexpr size_t kStatsBufferSize = 2048; // Include the dispatch counters when ENABLE_TLB_STATS is set.
 class State {
 public:
     explicit State(EmuState* cpu)
@@ -858,7 +859,7 @@ bool VerifyCodeReuse() {
 }
 
 uint64_t ReadJitCacheBytes(EmuState* state) {
-    char stats[512];
+    char stats[kStatsBufferSize];
     X86_DumpStats(state, stats, sizeof(stats));
     constexpr char key[] = "\"llvm_code_cache_bytes\":";
     const char* field = std::strstr(stats, key);
@@ -877,7 +878,7 @@ bool VerifyPackedArena() {
         X86_ConfigureCodeCache(peer.get(), 0, arena_bytes * 2))
         return false;
 
-    char stats[512];
+    char stats[kStatsBufferSize];
     X86_DumpStats(a.get(), stats, sizeof(stats));
     if (!std::strstr(stats, "\"jit_arena_capacity_bytes\":33554432"))
         return false;
@@ -1000,7 +1001,7 @@ bool VerifyPackedBudget() {
     state.MapPage(data_address, 3);
     X86_RegWrite(state.get(), 1, data_address);
     auto forked = state.Clone(false);
-    char stats[512];
+    char stats[kStatsBufferSize];
     X86_DumpStats(forked.get(), stats, sizeof(stats));
     if (!std::strstr(stats, "\"code_cache_limit_bytes\":1048576") || !std::strstr(stats, arena_field.c_str()))
         return false;

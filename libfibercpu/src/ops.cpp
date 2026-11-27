@@ -226,17 +226,6 @@ ATTR_PRESERVE_NONE int64_t ResolveBranchTargetSlowDoubleSlot(EmuState* RESTRICT 
                                                         flags_cache FIBERCPU_PIN_RELOAD);
 }
 
-// Scalar handlers use physical next-slot dispatch. The data slot only forwards the
-// threaded state, and logical traversals skip it.
-ATTR_PRESERVE_NONE int64_t ForwardMemoryImmediateSlot(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                      int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags,
-                                                      mem::MicroTlbAbiWord utlb_addend, uint32_t branch,
-                                                      uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
-    auto* next = op + 1;
-    ATTR_MUSTTAIL return next->handler(state, next, instr_limit, utlb_tags, utlb_addend, branch,
-                                       flags_cache FIBERCPU_PIN_ARGS);
-}
-
 // Sentinel Handlers
 template <int I, bool UseBranch>
 ATTR_PRESERVE_NONE int64_t OpExitBlock(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,

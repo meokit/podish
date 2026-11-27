@@ -1219,8 +1219,8 @@ std::unique_ptr<llvm::Module> PrepareLLVMPageRegion(const LLVMOperandTemplates& 
         const auto& key = candidates[included[i]].key;
         size_t physical_count = 1;  // Include the sentinel.
         for (const auto& step : key.operations) physical_count += step.shape.slots;
-        const auto context_offset = physical_count * sizeof(DecodedOp) +
-                                    (physical_count > key.operations.size() + 1 ? sizeof(BlockDataSlotMask) : 0);
+        const auto context_offset =
+            BasicBlock::SlotStorageSize(physical_count, physical_count > key.operations.size() + 1);
         auto* slot = builder.CreateGEP(builder.getInt8Ty(), args[1], builder.getInt64(context_offset));
         auto* base = builder.CreateAnd(LoadBlockEip(builder, args[1]), builder.getInt32(~uint32_t(mem::PAGE_MASK)));
         // Pass the immutable member table in the Op register, and the guest

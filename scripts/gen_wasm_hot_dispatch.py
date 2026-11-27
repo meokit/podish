@@ -51,7 +51,7 @@ def generate(plan, budget, scalar_sources, fusion_source):
 
     declarations = []
     required_kernels = set()
-    handlers = ["g_ExitHandlersFallthrough[0]", "g_ExitHandlersBranch[0]", "ForwardMemoryImmediateSlot"]
+    handlers = ["g_ExitHandlersFallthrough[0]", "g_ExitHandlersBranch[0]"]
     cases = [
         "            case 1:",
         "                locals.branch = state->last_block->sentinel_eip;",
@@ -59,9 +59,6 @@ def generate(plan, budget, scalar_sources, fusion_source):
         "            case 2:",
         "                RecordBlockHandlersUntil(state, locals.op);",
         "                goto follow_single_link;",
-        "            case 3:",
-        "                ++locals.op;",
-        "                continue;",
     ]
     # Binaryen can merge several C++ bindings into one sampled Wasm body.
     # Include all of its table-slot identities, with each binding's own policy.
@@ -135,7 +132,7 @@ def main():
         content = "\n".join(lines) + "\n"
         if not output.exists() or output.read_text() != content:
             output.write_text(content)
-    print(f"Generated {count} Wasm hot cases ({count - 3} handler bindings and 3 dispatch helpers)")
+    print(f"Generated {count} Wasm hot cases ({count - 2} handler bindings and 2 dispatch helpers)")
 
 
 if __name__ == "__main__":

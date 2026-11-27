@@ -81,8 +81,7 @@ static bool CheckCompactSlots(EmuState* state) {
         if (HasMem(&expected) && (GetAddressDescriptor(&got) != GetAddressDescriptor(&expected) ||
                                   GetDisplacement(&got) != GetDisplacement(&expected)))
             return false;
-        if (cases[i].separate_immediate &&
-            ((slot + 1)->handler != ForwardMemoryImmediateSlot || GetImm(slot) != GetImm(&expected)))
+        if (cases[i].separate_immediate && ((slot + 1)->handler != nullptr || GetImm(slot) != GetImm(&expected)))
             return false;
         if (GetExtKind(&expected) == ExtKind::ControlFlow) {
             auto* link = slot + 1;
