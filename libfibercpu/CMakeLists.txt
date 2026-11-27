@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.20)
 
 option(FIBERCPU_ENABLE_LLVM_JIT "Enable the experimental LLVM basic-block JIT" OFF)
-option(FIBERCPU_LLVM_SHARED_REGION_EXITS "Share exit code and flag packing within LLVM page regions" OFF)
+option(FIBERCPU_LLVM_SHARED_REGION_EXITS "Share cold exits within LLVM page regions" ON)
 set(FIBERCPU_LINKED_BLOCK_CACHE_FILE "" CACHE FILEPATH "Offline LLVM block cache to link into the interpreter")
 # Keep native objects aligned with the NativeAOT macOS deployment target.
 if(APPLE AND NOT FIBERCPU_ENABLE_LLVM_JIT AND NOT FIBERCPU_LINKED_BLOCK_CACHE_FILE)
@@ -1020,7 +1020,7 @@ if(FIBERCPU_DYNAMIC_OPERANDS OR FIBERCPU_ENABLE_LLVM_JIT)
     target_include_directories(fibercpu_llvm_codegen SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
     target_link_libraries(fibercpu_llvm_codegen PRIVATE unordered_dense::unordered_dense)
 
-    if(FIBERCPU_GUEST_I386 AND FIBERCPU_LLVM_SHARED_REGION_EXITS)
+    if(FIBERCPU_ENABLE_LLVM_JIT AND FIBERCPU_GUEST_I386 AND FIBERCPU_LLVM_SHARED_REGION_EXITS)
         target_compile_definitions(fibercpu_block_ir PRIVATE FIBERCPU_LLVM_SHARED_REGION_EXITS=1)
         target_compile_definitions(fibercpu_llvm_codegen PRIVATE FIBERCPU_LLVM_SHARED_REGION_EXITS=1)
     endif()
@@ -1105,6 +1105,8 @@ if(FIBERCPU_ENABLE_LLVM_JIT)
             DEPENDS fibercpu_arm_block_ir $<TARGET_OBJECTS:fibercpu_arm_block_ir> "${_embed_script}"
             COMMAND_EXPAND_LISTS VERBATIM)
         target_sources(fibercpu PRIVATE src/jit/llvm_arm_ir.cpp src/jit/llvm_arm_jit.cpp "${_arm_bitcode}")
+        set_property(SOURCE src/jit/llvm_arm_ir.cpp APPEND PROPERTY COMPILE_DEFINITIONS
+            FIBERCPU_LLVM_SHARED_REGION_EXITS=$<BOOL:${FIBERCPU_LLVM_SHARED_REGION_EXITS}>)
     endif()
     target_link_libraries(fibercpu PRIVATE fibercpu_llvm_codegen ${_llvm_components})
     if(FIBERCPU_GUEST_I386)

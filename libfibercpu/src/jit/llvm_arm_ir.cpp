@@ -96,6 +96,16 @@ class Builder {
     llvm::PHINode* leave_pc_;
     llvm::PHINode* leave_op_;
 
+    struct ColdExit {
+        llvm::BasicBlock* block = nullptr;
+        llvm::PHINode* op = nullptr;
+        llvm::PHINode* pc = nullptr;
+    };
+
+    ColdExit replay_;
+    ColdExit refetch_;
+    ColdExit resolve_;
+
     llvm::BasicBlock* Block(const char* name) { return llvm::BasicBlock::Create(module_.getContext(), name, &entry_); }
 
     llvm::Value* Saved(llvm::Value* initial, const char* name) {
@@ -171,6 +181,33 @@ class Builder {
         TailExit(ExitFunction(name), Load64(remaining_), slot);
     }
 
+    void TailToColdExit(ColdExit& exit, const char* name, llvm::Value* op, llvm::Value* pc = nullptr) {
+        if (!FIBERCPU_LLVM_SHARED_REGION_EXITS || !region_ops_) {
+            if (pc) CommitPc(pc);
+            TailExit(ExitFunction(name), Load64(remaining_), op);
+            return;
+        }
+
+        // Every predecessor has saved its instruction budget and live ABI
+        // state. Only the decoded slot and optional PC need explicit PHIs.
+        auto* source = ir_.GetInsertBlock();
+        if (!exit.block) {
+            exit.block = Block("region.cold.exit");
+            ir_.SetInsertPoint(exit.block);
+            exit.op = ir_.CreatePHI(ir_.getPtrTy(), 2, "exit.op");
+            if (pc) {
+                exit.pc = ir_.CreatePHI(ir_.getInt64Ty(), 2, "exit.pc");
+                CommitPc(exit.pc);
+            }
+            TailExit(ExitFunction(name), Load64(remaining_), exit.op);
+            ir_.SetInsertPoint(source);
+        }
+
+        exit.op->addIncoming(op, source);
+        if (pc) exit.pc->addIncoming(pc, source);
+        ir_.CreateBr(exit.block);
+    }
+
     void ChainBlock(llvm::Value* sentinel, BranchForm branch, llvm::Value* taken = nullptr) {
         auto* form = ir_.getInt8(static_cast<uint8_t>(BlockExitLink::Fallthrough));
         llvm::Value* kind = form;
@@ -193,7 +230,7 @@ class Builder {
         ir_.SetInsertPoint(linked);
         TailExit(llvm::FunctionCallee(entry_.getFunctionType(), entry), Load64(remaining_), next);
         ir_.SetInsertPoint(miss);
-        TailExit(ExitFunction("FiberArmResolveBranchTargetSlow"), Load64(remaining_), next);
+        TailToColdExit(resolve_, "FiberArmResolveBranchTargetSlow", next);
     }
 
 public:
@@ -323,9 +360,9 @@ public:
         ir_.CreateCondBr(ir_.CreateICmpEQ(flow, Flow(OperationFlow::Refetch)), refetch, replay);
 
         ir_.SetInsertPoint(replay);
-        ExitMember("FiberArmJitRetry", slot, pc);
+        TailToColdExit(replay_, "FiberArmJitRetry", slot, pc);
         ir_.SetInsertPoint(refetch);
-        ExitMember("FiberArmJitRefetch", slot, pc);
+        TailToColdExit(refetch_, "FiberArmJitRefetch", slot, pc);
         if (next) ir_.SetInsertPoint(next);
     }
 
@@ -358,7 +395,7 @@ public:
             const auto* name = KernelName(binding.id);
             if (!name) {
                 retire(i);
-                ExitMember("FiberArmJitRetry", slot, PC(offset));
+                TailToColdExit(replay_, "FiberArmJitRetry", slot, PC(offset));
                 return;
             }
 

@@ -5,6 +5,7 @@
 #include "jit/llvm_async_signals.h"
 #include "jit/llvm_block_cache.h"
 #include "jit/llvm_block_memory.h"
+#include "jit/llvm_hotness.h"
 #include "jit/llvm_operand_ir.h"
 #if FIBERCPU_GUEST_I386
 #include "linked_block_cache_abi.h"
@@ -864,19 +865,7 @@ BlockCompiler& Compiler() {
     return *storage.compiler;
 }
 
-#if FIBERCPU_GUEST_I386
-constexpr size_t kMaxCandidates = 128;
-constexpr uint16_t kCandidateCounter = UINT16_MAX;
-constexpr uint16_t kMinCandidateRetryCount = 1024;
-#endif
-
-using JitClock = std::chrono::steady_clock;
-#if FIBERCPU_GUEST_I386
-using namespace std::chrono_literals;
-constexpr auto kSampleInterval = 2ms;
-constexpr auto kCandidateExpiry = 60ms;
-
-#endif
+using JitClock = jit_hotness::Clock;
 
 uint64_t Ns(JitClock::duration duration) {
     return std::chrono::duration_cast<std::chrono::nanoseconds>(duration).count();
@@ -941,18 +930,15 @@ struct PendingBlock {
     uint16_t revision;
 };
 
-struct HotCandidate {
+struct HotBlock {
     BasicBlock* block;
     uint32_t eip;
     uint16_t revision;
-    float benefit_per_cost;
-    JitClock::time_point sampled;
-    JitClock::time_point last_active;
-    uint16_t counter = kCandidateCounter;
-    float rate = 1;
-    bool sampled_once = false;
 
-    float Score() const { return rate * benefit_per_cost; }
+    bool operator==(const HotBlock&) const = default;
+    BasicBlock* Block() const { return block; }
+    uint16_t Count() const { return block->chain.llvm_hot_count; }
+    void SetCount(uint16_t count) const { block->chain.llvm_hot_count = count; }
 };
 
 }  // namespace
@@ -960,8 +946,7 @@ struct HotCandidate {
 struct LLVMAsyncState {
     std::shared_ptr<AsyncSignals> signals = std::make_shared<AsyncSignals>();
     std::vector<PendingBlock> pending;
-    std::vector<HotCandidate> candidates;
-    JitClock::time_point next_sample{};
+    jit_hotness::HotCandidates<HotBlock> candidates;
     unsigned poll_ticks = 0;
 
     ~LLVMAsyncState() {
@@ -977,8 +962,7 @@ void CancelPendingLLVMBlockCompilations(LLVMAsyncState& state) {
     // Queued jobs hold weak result pointers. The same MMU's shutdown token
     // stays live so an eventual destroy can drain old and new in-flight jobs.
     state.pending.clear();
-    state.candidates.clear();
-    state.next_sample = {};
+    state.candidates.Clear();
 }
 
 namespace {
@@ -1268,7 +1252,7 @@ void FinishPendingFlush() {
 }
 
 #if FIBERCPU_GUEST_I386
-enum class QueueResult { Submitted, Retry, Invalid };
+using jit_hotness::QueueResult;
 
 QueueResult QueueBlock(EmuState* state, LLVMAsyncState& async, BasicBlock* block, bool exact) {
     auto result = std::make_shared<AsyncResult>();
@@ -1348,53 +1332,33 @@ float EstimateBenefit(const BasicBlock& block, bool exact) {
     const unsigned saved = dispatches - (dispatches && !whole_block);
     // A small residual value permits wins from register/operand folding even
     // when the static interpreter already has a single fused dispatch.
-    return float(1 + 4 * saved + covered / 4) / (8 + covered + 2 * memory_ops);
+    return jit_hotness::BenefitPerCost(covered, memory_ops, saved);
 }
 
-void RefreshCandidate(HotCandidate& candidate, JitClock::time_point now) {
-    const auto counter = candidate.block->chain.llvm_hot_count;
-    const auto visits = candidate.counter >= counter ? unsigned(candidate.counter) - counter : 0u;
-    candidate.counter = counter;
-    if (visits) candidate.last_active = now;
-    const auto window = std::max(1ms, std::chrono::duration_cast<std::chrono::milliseconds>(now - candidate.sampled));
-    const float current = float(visits) / window.count();
-    candidate.rate = 0.5f * (candidate.rate + current);
-    candidate.sampled = now;
-    candidate.sampled_once = true;
+bool IsCurrentCandidate(EmuState& state, const HotBlock& candidate, uint16_t revision_retry = 0) {
+    auto* block = state.mmu.lookup_cached_block(candidate.eip);
+    if (block != candidate.block || !block->is_valid()) return false;
+    if (block->invalidation_revision == candidate.revision) return true;
+    if (revision_retry && block->entry == block->FirstOp()->handler) block->chain.llvm_hot_count = revision_retry;
+    return false;
 }
 
 void ScheduleCandidates(EmuState* state, LLVMAsyncState& async, JitClock::time_point now) {
-    if (async.candidates.empty() || now < async.next_sample || state->mmu.code_cache_flush_pending()) return;
-    async.next_sample = now + kSampleInterval;
-    const auto retry = std::max(kMinCandidateRetryCount, LLVMJitHotThreshold(*state));
-    std::erase_if(async.candidates, [&](HotCandidate& candidate) {
-        auto* block = state->mmu.lookup_cached_block(candidate.eip);
-        if (block != candidate.block || !block->is_valid()) return true;
-        if (block->invalidation_revision != candidate.revision) {
-            if (block->entry == block->FirstOp()->handler) block->chain.llvm_hot_count = retry;
-            return true;
-        }
-        RefreshCandidate(candidate, now);
-        if (now - candidate.last_active < kCandidateExpiry) return false;
-        block->chain.llvm_hot_count = retry;
-        return true;
-    });
-
+    if (state->mmu.code_cache_flush_pending() || !async.candidates.BeginSample(now)) return;
+    const auto retry = jit_hotness::CandidateRetryCount(LLVMJitHotThreshold(*state));
     const bool exact = RuntimeMode(*state) != JitMode::Generic;
-    while (!async.candidates.empty() && async.pending.size() < WorkerCount() && Workers().CanSubmit()) {
-        auto best = std::ranges::max_element(async.candidates, {}, &HotCandidate::Score);
-        auto* block = best->block;
-        if (!block_recipe::CanPromoteBlock(*state, *block)) {
-            async.candidates.erase(best);
-            continue;
-        }
-        const auto result = QueueBlock(state, async, block, exact);
-        // The executable fetch may request a cache flush.
-        if (state->mmu.code_cache_flush_pending()) return;
-        if (result == QueueResult::Retry) break;
-        block->chain.llvm_hot_count = 0;
-        async.candidates.erase(best);
-    }
+    async.candidates.Schedule(
+        now, retry, [&](const HotBlock& target) { return IsCurrentCandidate(*state, target, retry); },
+        [&] { return async.pending.size() < WorkerCount() && Workers().CanSubmit(); },
+        [](const HotBlock&) { return true; },
+        [&](const HotBlock& target) {
+            if (!block_recipe::CanPromoteBlock(*state, *target.block)) return QueueResult::Invalid;
+            const auto result = QueueBlock(state, async, target.block, exact);
+            // The executable fetch may request a cache flush.
+            if (state->mmu.code_cache_flush_pending()) return QueueResult::Stop;
+            if (result == QueueResult::Invalid) target.SetCount(0);
+            return result;
+        });
 }
 
 void ObserveHotBlock(EmuState* state, BasicBlock* block, bool exact) {
@@ -1404,33 +1368,13 @@ void ObserveHotBlock(EmuState* state, BasicBlock* block, bool exact) {
             return item.block == block && item.revision == block->invalidation_revision;
         }))
         return;
+    const HotBlock target{block, block->start_eip(), block->invalidation_revision};
     const auto now = JitClock::now();
-    auto existing = std::ranges::find(async->candidates, block, &HotCandidate::block);
-    if (existing != async->candidates.end()) {
-        if (existing->revision == block->invalidation_revision) {
-            RefreshCandidate(*existing, now);
-            block->chain.llvm_hot_count = existing->counter = kCandidateCounter;
-            return;
-        }
-        async->candidates.erase(existing);
-    }
-    if (async->candidates.size() == kMaxCandidates) {
-        const auto retry = std::max(kMinCandidateRetryCount, LLVMJitHotThreshold(*state));
-        auto weakest = std::ranges::min_element(async->candidates, {}, &HotCandidate::Score);
-        // Give blocks that just arrived one window to establish a rate.
-        if (weakest->Score() > 1.f || !weakest->sampled_once) {
-            block->chain.llvm_hot_count = retry;
-            return;
-        }
-        auto* old = state->mmu.lookup_cached_block(weakest->eip);
-        if (old == weakest->block && old->is_valid() && old->invalidation_revision == weakest->revision)
-            old->chain.llvm_hot_count = retry;
-        async->candidates.erase(weakest);
-    }
-    block->chain.llvm_hot_count = kCandidateCounter;
-    async->candidates.push_back(
-        {block, block->start_eip(), block->invalidation_revision, EstimateBenefit(*block, exact), now, now});
-    ScheduleCandidates(state, *async, now);
+    const auto observation = async->candidates.Observe(
+        target, now, jit_hotness::CandidateRetryCount(LLVMJitHotThreshold(*state)),
+        [&](const HotBlock& item) { return IsCurrentCandidate(*state, item); },
+        [&] { return EstimateBenefit(*block, exact); });
+    if (observation == jit_hotness::Observation::New) ScheduleCandidates(state, *async, now);
 }
 
 #endif
@@ -1721,7 +1665,7 @@ void PollLLVMBlockCompilations(EmuState* state) {
             return true;
         });
     }
-    if (!async->candidates.empty() && (++async->poll_ticks & 63) == 0)
+    if (!async->candidates.Empty() && (++async->poll_ticks & 63) == 0)
         ScheduleCandidates(state, *async, JitClock::now());
 }
 

@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
-#include <chrono>
 #include <memory>
 #include <optional>
 
@@ -13,6 +12,7 @@
 #include "jit/llvm_arm_ir.h"
 #include "jit/llvm_async_signals.h"
 #include "jit/llvm_block_jit.h"
+#include "jit/llvm_hotness.h"
 #include "state.h"
 
 namespace fiberish::aarch64::detail {
@@ -62,13 +62,8 @@ using namespace aarch64::detail;
 
 constexpr size_t kMaxRegionMembers = mem::PageRegion<ArmBlock>::MaxMembers;
 constexpr size_t kMaxRegionInstructions = 192;
-using JitClock = std::chrono::steady_clock;
-using namespace std::chrono_literals;
-constexpr size_t kMaxCandidates = 128;
-constexpr uint16_t kCandidateCounter = UINT16_MAX;
-constexpr uint16_t kMinCandidateRetryCount = 1024;
-constexpr auto kSampleInterval = 2ms;
-constexpr auto kCandidateExpiry = 60ms;
+using JitClock = jit_hotness::Clock;
+using jit_hotness::QueueResult;
 
 using ArmRegionStamp = mem::Mmu::ArmPageRegionStamp;
 using ArmRegionEntry = mem::CodeCacheState::ArmBlocks::RegionEntry;
@@ -77,6 +72,8 @@ struct CapturedBlock {
     ArmBlock* block;
     uint64_t pc;
     uint16_t revision;
+
+    bool operator==(const CapturedBlock&) const = default;
 };
 
 CapturedBlock CaptureBlock(ArmBlock& block) { return {&block, block.start_pc(), block.invalidation_revision}; }
@@ -252,29 +249,19 @@ void Publish(EmuState& engine, const ArmCompilation& job) {
     }
 }
 
-struct HotCandidate {
+struct HotBlock {
     CapturedBlock target;
     const uint8_t* backing;
-    float benefit_per_cost;
-    JitClock::time_point sampled;
-    JitClock::time_point last_active;
-    uint16_t counter = kCandidateCounter;
-    float rate = 1;
-    bool sampled_once = false;
 
-    float Score() const { return rate * benefit_per_cost; }
-
-    void Sample(JitClock::time_point now) {
-        const auto current = target.block->header.chain.llvm_hot_count;
-        const unsigned visits = counter >= current ? unsigned(counter) - current : 0;
-        counter = current;
-        if (visits) last_active = now;
-        const auto window = std::max(1ms, std::chrono::duration_cast<std::chrono::milliseconds>(now - sampled));
-        rate = 0.5f * (rate + float(visits) / window.count());
-        sampled = now;
-        sampled_once = true;
-    }
+    bool operator==(const HotBlock&) const = default;
+    ArmBlock* Block() const { return target.block; }
+    uint16_t Count() const { return Block()->header.chain.llvm_hot_count; }
+    void SetCount(uint16_t count) const { Block()->header.chain.llvm_hot_count = count; }
 };
+
+bool IsCurrentCandidate(const EmuState& engine, const HotBlock& block) {
+    return IsCurrent(engine, block.target, block.backing) && CanPromote(*block.Block());
+}
 
 float EstimateBenefit(const ArmBlock& block) {
     unsigned covered = 0;
@@ -296,18 +283,17 @@ float EstimateBenefit(const ArmBlock& block) {
         op = last->NextOp();
     }
     const unsigned saved = dispatches - (dispatches && covered != block.inst_count());
-    return float(1 + 4 * saved + covered / 4) / (8 + covered + 2 * memory_ops);
+    return jit_hotness::BenefitPerCost(covered, memory_ops, saved);
 }
 
-uint16_t RetryCount(const EmuState& engine) { return std::max(kMinCandidateRetryCount, LLVMJitHotThreshold(engine)); }
+uint16_t RetryCount(const EmuState& engine) { return jit_hotness::CandidateRetryCount(LLVMJitHotThreshold(engine)); }
 
 }  // namespace
 
 struct LLVMArmJobs {
     std::shared_ptr<AsyncSignals> signals = std::make_shared<AsyncSignals>();
     std::vector<std::shared_ptr<ArmCompilation>> pending;
-    std::vector<HotCandidate> candidates;
-    JitClock::time_point next_sample{};
+    jit_hotness::HotCandidates<HotBlock> candidates;
 
     ~LLVMArmJobs() {
         pending.clear();
@@ -331,7 +317,6 @@ bool QueueBlock(LLVMArmJobs& jobs, const EmuState& engine, ArmBlock& block) {
     };
     if (!arm_jit::Queue(work)) return false;
     jobs.pending.push_back(std::move(job));
-    block.header.chain.llvm_hot_count = 0;
     return true;
 }
 
@@ -342,28 +327,15 @@ bool PagePending(const LLVMArmJobs& jobs, const ArmBlock& block) {
 }
 
 void ScheduleCandidates(EmuState& engine, LLVMArmJobs& jobs, JitClock::time_point now) {
-    if (jobs.candidates.empty() || now < jobs.next_sample || engine.mmu.code_cache_flush_pending()) return;
-    jobs.next_sample = now + kSampleInterval;
-    const auto retry = RetryCount(engine);
-    std::erase_if(jobs.candidates, [&](HotCandidate& candidate) {
-        if (!IsCurrent(engine, candidate.target, candidate.backing) || !CanPromote(*candidate.target.block))
-            return true;
-        candidate.Sample(now);
-        if (now - candidate.last_active < kCandidateExpiry) return false;
-        candidate.target.block->header.chain.llvm_hot_count = retry;
-        return true;
-    });
-
+    if (engine.mmu.code_cache_flush_pending() || !jobs.candidates.BeginSample(now)) return;
     const auto region = LLVMPageRegionsEnabled(engine);
-    while (!jobs.candidates.empty() && jobs.pending.size() < arm_jit::WorkerLimit() && arm_jit::CanQueue()) {
-        auto best = jobs.candidates.end();
-        for (auto it = jobs.candidates.begin(); it != jobs.candidates.end(); ++it) {
-            if (region && PagePending(jobs, *it->target.block)) continue;
-            if (best == jobs.candidates.end() || it->Score() > best->Score()) best = it;
-        }
-        if (best == jobs.candidates.end() || !QueueBlock(jobs, engine, *best->target.block)) break;
-        jobs.candidates.erase(best);
-    }
+    jobs.candidates.Schedule(
+        now, RetryCount(engine), [&](const HotBlock& target) { return IsCurrentCandidate(engine, target); },
+        [&] { return jobs.pending.size() < arm_jit::WorkerLimit() && arm_jit::CanQueue(); },
+        [&](const HotBlock& target) { return !region || !PagePending(jobs, *target.Block()); },
+        [&](const HotBlock& target) {
+            return QueueBlock(jobs, engine, *target.Block()) ? QueueResult::Submitted : QueueResult::Retry;
+        });
 }
 
 }  // namespace
@@ -378,7 +350,7 @@ void PollLLVMArmCompilations(EmuState& engine) {
             return true;
         });
     }
-    if (!jobs->candidates.empty()) ScheduleCandidates(engine, *jobs, JitClock::now());
+    if (!jobs->candidates.Empty()) ScheduleCandidates(engine, *jobs, JitClock::now());
 }
 
 void ObserveLLVMArmHotBlock(EmuState& engine, ArmBlock& block) {
@@ -398,27 +370,15 @@ void ObserveLLVMArmHotBlock(EmuState& engine, ArmBlock& block) {
     auto& jobs = engine.mmu.code_cache().llvm_arm_jobs;
     if (!jobs) jobs = std::make_shared<LLVMArmJobs>();
     if (std::ranges::any_of(jobs->pending, [&](const auto& job) { return job->root.block == &block; })) return;
+
+    const HotBlock target{CaptureBlock(block), block.executable_page};
     const auto now = JitClock::now();
-    const auto existing =
-        std::ranges::find_if(jobs->candidates, [&](const auto& item) { return item.target.block == &block; });
-    if (existing != jobs->candidates.end()) {
-        existing->Sample(now);
-        block.header.chain.llvm_hot_count = existing->counter = kCandidateCounter;
-    } else {
-        if (jobs->candidates.size() == kMaxCandidates) {
-            const auto retry = RetryCount(engine);
-            auto weakest = std::ranges::min_element(jobs->candidates, {}, &HotCandidate::Score);
-            if (weakest->Score() > 1.f || !weakest->sampled_once) {
-                block.header.chain.llvm_hot_count = retry;
-                ScheduleCandidates(engine, *jobs, now);
-                return;
-            }
-            if (IsCurrent(engine, weakest->target, weakest->backing) && CanPromote(*weakest->target.block))
-                weakest->target.block->header.chain.llvm_hot_count = retry;
-            jobs->candidates.erase(weakest);
-        }
-        block.header.chain.llvm_hot_count = kCandidateCounter;
-        jobs->candidates.push_back({CaptureBlock(block), block.executable_page, EstimateBenefit(block), now, now});
+    const auto observation = jobs->candidates.Observe(
+        target, now, RetryCount(engine), [&](const HotBlock& item) { return IsCurrentCandidate(engine, item); },
+        [&] { return EstimateBenefit(block); });
+    if (observation == jit_hotness::Observation::Deferred) {
+        ScheduleCandidates(engine, *jobs, now);
+        return;
     }
     PollLLVMArmCompilations(engine);
 }

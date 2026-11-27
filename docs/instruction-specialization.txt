@@ -97,9 +97,10 @@ rejects results for the previous revision.
 FIBERCPU_LLVM_JIT_WORKERS selects 0–8 workers. Set it to 0 for synchronous
 promotion. Profile collection records block recipes synchronously.
 
-The asynchronous scheduler samples recent block visits from the existing
-entry countdown. It ranks a bounded candidate list by visit rate, expected
-dispatch savings over the installed static handlers, and estimated work.
+Both guests use the same asynchronous scheduler to sample recent block visits
+from the existing entry countdown. It ranks a bounded candidate list by visit
+rate, expected dispatch savings over the installed static handlers, and
+estimated work.
 Older candidates age out before their instructions are copied. The shared
 pool allows an initial burst of 64 ms of compiler CPU and replenishes the
 budget at half of the configured workers' CPU capacity. Completed jobs
@@ -248,6 +249,11 @@ page publishes one region. Hot blocks outside it can compile as standalone
 entries. Invalidation restores the members' interpreter entries and
 clears their region contexts before releasing the table. Host backing
 invalidation also covers blocks decoded through guest aliases.
+
+FIBERCPU_LLVM_SHARED_REGION_EXITS defaults to ON for both guests. Region
+bodies share cold tails by destination. i386 also shares flag packing at
+those exits. AArch64 shares retry, refetch and slow branch resolution tails.
+Setting the CMake option to OFF disables this exit sharing.
 
 FIBERCPU_LLVM_JIT_SCHEDULER_TRACE records AArch64 region installations as
 arm_region_install events. WeightedProfilePath and the offline linked
