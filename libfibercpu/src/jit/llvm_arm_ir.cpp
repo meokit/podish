@@ -114,6 +114,7 @@ class Builder {
     ColdExit replay_;
     ColdExit refetch_;
     ColdExit resolve_;
+    std::array<ColdExit, 3> links_;
 
     llvm::BasicBlock* Block(const char* name) { return llvm::BasicBlock::Create(module_.getContext(), name, &entry_); }
 
@@ -218,6 +219,26 @@ class Builder {
     }
 
     void ChainBlock(llvm::Value* slot, BlockExitLink form) {
+        if (!FIBERCPU_LLVM_SHARED_REGION_EXITS || !region_ops_) {
+            EmitChainBlock(slot, form);
+            return;
+        }
+
+        // Share the link lookup across members while keeping its form constant.
+        auto* source = ir_.GetInsertBlock();
+        auto& link = links_[static_cast<size_t>(form)];
+        if (!link.block) {
+            link.block = Block("region.link");
+            ir_.SetInsertPoint(link.block);
+            link.op = ir_.CreatePHI(ir_.getPtrTy(), 2, "branch.op");
+            EmitChainBlock(link.op, form);
+            ir_.SetInsertPoint(source);
+        }
+        link.op->addIncoming(slot, source);
+        ir_.CreateBr(link.block);
+    }
+
+    void EmitChainBlock(llvm::Value* slot, BlockExitLink form) {
         auto* kind = ir_.getInt8(static_cast<uint8_t>(form));
         auto* indirect_pc = form == BlockExitLink::Indirect ? Load64(target_) : ir_.getInt64(0);
         auto* entry = ir_.CreateCall(module_.getFunction("FiberArmJitTryLink"),
