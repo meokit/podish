@@ -21,6 +21,7 @@ namespace fiberish {
 
 extern "C" bool FiberLLVMUseStep(unsigned index);
 extern "C" unsigned FiberLLVMOperandLayout(unsigned index);
+extern "C" [[gnu::const]] unsigned FiberLLVMBranchSuffix(unsigned index);
 extern "C" LLVMBlockExit FiberLLVMExit();
 extern "C" LogicFlow FiberLLVMPlaceholder(unsigned index, uint32_t encoding, uint32_t ea_desc, uint32_t displacement,
                                           LogicFuncParams);
@@ -94,7 +95,7 @@ extern "C" const LLVMOperationTable FiberLLVMOperationTable = {
             FiberLLVMPlaceholder(I, 0, 0, 0, state, current, &utlb, imm, 0, &branch, flags_cache, FIBERCPU_GPR_CACHE); \
         if (flow != LogicFlow::Continue) {                                                                             \
             HANDLE_SUPEROPCODE_FLOW(flow, state, current, instr_limit, utlb, utlb_tags, utlb_addend, branch,           \
-                                    flags_cache);                                                                      \
+                                    flags_cache, FiberLLVMBranchSuffix(I));                                            \
         }                                                                                                              \
         current += slots;                                                                                              \
     } while (false)

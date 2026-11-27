@@ -429,6 +429,7 @@ struct alignas(16) DecodedOp {
         return RelativeBranchWidth((payload >> kBranchWidthShift) & 3);
     }
     FORCE_INLINE unsigned BranchSuffix() const { return (payload >> kBranchSuffixShift) & kBranchSuffixMask; }
+    static constexpr size_t BranchSuffixAfter(size_t inst_count, size_t index) { return inst_count - index - 1; }
     FORCE_INLINE BasicBlock* LoadBlockLink() const {
         return reinterpret_cast<BasicBlock*>(static_cast<uintptr_t>(payload));
     }
@@ -657,9 +658,6 @@ struct alignas(16) BasicBlock {
                            reinterpret_cast<const std::byte*>(this));
     }
 
-#if defined(FIBERCPU_LLVM_BLOCK_TEMPLATE)
-    [[gnu::noinline]]
-#endif
     uint64_t& ExecCountStorage() {
         assert(chain.has_exec_count);
         return *reinterpret_cast<uint64_t*>(reinterpret_cast<std::byte*>(this) + ExecCountOffset());

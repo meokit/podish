@@ -26,8 +26,10 @@ def read_record(data, pos):
 def read_key(record, operation_count):
     if len(record) < 3:
         raise ValueError("truncated linked cache key")
-    exit_kind, exact, count = record[:3]
-    if exit_kind > 2 or exact != 1 or not 1 <= count <= 64 or len(record) != 3 + 28 * count:
+    header, exact, count = record[:3]
+    exit_kind, suffix = header & 3, header >> 2
+    if (exit_kind > 2 or suffix > 31 or (suffix and exit_kind) or exact != 1
+            or not count or count + suffix > 64 or len(record) != 3 + 28 * count):
         raise ValueError("invalid linked cache key header")
     steps = tuple(struct.iter_unpack("<HBB6I", record[3:]))
     operations = tuple(step[:3] for step in steps)
@@ -37,7 +39,7 @@ def read_key(record, operation_count):
     eips = tuple(step[7:] for step in steps)
     if any(width > 3 for _, width in eips):
         raise ValueError("linked cache has an invalid relative branch width")
-    return exit_kind, exact, operations, operands, eips
+    return exit_kind, suffix, exact, operations, operands, eips
 
 
 def read_region(record, operation_count):
@@ -117,7 +119,7 @@ def write_build_inputs(output, cpu, entries, regions, objects):
     eips = ["constexpr block_recipe::StepEip linked_cache_eips[] = {"]
     recipes = ["constexpr block_recipe::BlockKeyView linked_cache_keys[] = {"]
     offset = 0
-    for exit_kind, _, ops, shapes, steps in keys:
+    for exit_kind, suffix, _, ops, shapes, steps in keys:
         operations.append("    " + ", ".join(f"{{block_recipe::OpId{{{op}}}, {{{modrm}, {slots}}}}}" for op, modrm, slots in ops) + ",")
         for shape in shapes:
             operands.append("    {" + ", ".join(f"0x{field:08x}u" for field in shape) + "},")
@@ -126,7 +128,7 @@ def write_build_inputs(output, cpu, entries, regions, objects):
         count = len(ops)
         recipes.append(f"    {{LLVMBlockExit{{{exit_kind}}}, {{linked_cache_operations + {offset}, {count}}}, "
                        f"{{linked_cache_operands + {offset}, {count}}}, "
-                       f"{{linked_cache_eips + {offset}, {count}}}}},")
+                       f"{{linked_cache_eips + {offset}, {count}}}, {suffix}}},")
         offset += count
     for block in (operations, operands, eips, recipes):
         table.extend([*block, "};", ""])

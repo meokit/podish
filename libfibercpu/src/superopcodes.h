@@ -40,7 +40,8 @@ FORCE_INLINE LogicFlow BranchOnCompare(LogicFuncParams, SubtractionResultFlags<T
 #define DEFINE_FUSION_HANDLERS(name, width, selectable) \
     extern constinit const std::array<HandlerFunc, 1u << (width)> name##_handlers = {DecodeHandlerKey<[] {}>}
 
-#define HANDLE_SUPEROPCODE_FLOW(flow, state, flow_op, instr_limit, utlb, utlb_tags, utlb_addend, branch, flags_cache)  \
+#define HANDLE_SUPEROPCODE_FLOW(flow, state, flow_op, instr_limit, utlb, utlb_tags, utlb_addend, branch, flags_cache,  \
+                                taken_suffix)                                                                          \
     do {                                                                                                               \
         switch (flow) {                                                                                                \
             case LogicFlow::ExitOnCurrentEIP:                                                                          \
@@ -70,8 +71,9 @@ FORCE_INLINE LogicFlow BranchOnCompare(LogicFuncParams, SubtractionResultFlags<T
             case LogicFlow::ExitToBranch:                                                                              \
                 RecordBlockHandlersThrough(state, flow_op);                                                            \
                 mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);                                                  \
-                ATTR_MUSTTAIL return ResolveBranchTargetInline<1>(state, flow_op, instr_limit, utlb_tags, utlb_addend, \
-                                                                  branch, flags_cache FIBERCPU_PIN_RELOAD);            \
+                ATTR_MUSTTAIL return ResolveBranchTargetInline<1>(state, flow_op, (instr_limit) + (taken_suffix),      \
+                                                                  utlb_tags, utlb_addend, branch,                      \
+                                                                  flags_cache FIBERCPU_PIN_RELOAD);                    \
             case LogicFlow::ExitToBranchSingleSlot:                                                                    \
                 RecordBlockHandlersThrough(state, flow_op);                                                            \
                 mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);                                                  \
@@ -92,7 +94,7 @@ FORCE_INLINE LogicFlow BranchOnCompare(LogicFuncParams, SubtractionResultFlags<T
                            flags_cache, OperandGprCache<policy>(FIBERCPU_GPR_CACHE) __VA_OPT__(, ) __VA_ARGS__);   \
         if (flow != LogicFlow::Continue) [[unlikely]] {                                                            \
             HANDLE_SUPEROPCODE_FLOW(flow, state, cur_op, instr_limit, utlb, utlb_tags, utlb_addend, branch,        \
-                                    flags_cache);                                                                  \
+                                    flags_cache, 0);                                                               \
         }                                                                                                          \
     } while (false)
 

@@ -46,11 +46,11 @@ inline void WriteU32(llvm::raw_ostream& out, uint32_t value) {
     out.write(bytes, sizeof(bytes));
 }
 
-// Key records encode the exit, exact bit and step count, followed by each
-// bound operation and (in exact mode) operand and relative EIP fields.
+// Key records encode the exit and uncompiled suffix count in the first byte,
+// then the exact bit, step count and each bound operation.
 inline auto EncodeKey(block_recipe::BlockKeyView key) {
     llvm::SmallVector<char, 3 + 28 * block_recipe::kMaxOps> bytes;
-    bytes.push_back(static_cast<char>(key.exit));
+    bytes.push_back(static_cast<char>(static_cast<uint8_t>(key.exit) | (key.uncompiled_ops << 2)));
     bytes.push_back(key.IsExact());
     bytes.push_back(static_cast<char>(key.operations.size()));
     const auto append = [&](auto value) {
@@ -76,14 +76,19 @@ inline auto EncodeKey(block_recipe::BlockKeyView key) {
 }
 
 inline bool DecodeKey(std::string_view bytes, block_recipe::Plan& plan, bool& exact) {
-    if (bytes.size() < 3 || static_cast<uint8_t>(bytes[0]) > static_cast<uint8_t>(LLVMBlockExit::Branch) ||
-        static_cast<uint8_t>(bytes[1]) > 1)
+    if (bytes.size() < 3 || static_cast<uint8_t>(bytes[1]) > 1) return false;
+    const auto header = static_cast<uint8_t>(bytes[0]);
+    const unsigned exit = header & 3;
+    const unsigned suffix = header >> 2;
+    if (exit > static_cast<uint8_t>(LLVMBlockExit::Branch) || suffix > DecodedOp::kBranchSuffixMask ||
+        (suffix && exit != static_cast<uint8_t>(LLVMBlockExit::Dispatch)))
         return false;
     exact = bytes[1] != 0;
     const size_t count = static_cast<uint8_t>(bytes[2]);
-    plan.exit = static_cast<LLVMBlockExit>(bytes[0]);
+    plan.exit = static_cast<LLVMBlockExit>(exit);
+    plan.uncompiled_ops = suffix;
     bytes.remove_prefix(3);
-    if (!count || count > block_recipe::kMaxOps || bytes.size() != count * (exact ? 28 : 4)) return false;
+    if (!count || count + suffix > block_recipe::kMaxOps || bytes.size() != count * (exact ? 28 : 4)) return false;
 
     for (size_t i = 0; i < count; ++i) {
         const uint16_t id = llvm::support::endian::read16le(bytes.data());

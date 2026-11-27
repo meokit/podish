@@ -10,6 +10,20 @@
 
 namespace fiberish {
 
+#if FIBERCPU_BLOCK_COMPILATION
+extern "C" ATTR_PRESERVE_NONE int64_t FiberX86ProfiledChain(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
+                                                            int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags,
+                                                            mem::MicroTlbAbiWord utlb_addend, uint32_t,
+                                                            uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    // The dispatch thread owns the published entry, including any JIT installation.
+    auto* block = state->last_block;
+    const auto entry = block->entry;
+    CountLLVMBlockEntry(state, block, block->chain);
+    ATTR_MUSTTAIL return entry(state, op, instr_limit, utlb_tags, utlb_addend, std::numeric_limits<uint32_t>::max(),
+                               flags_cache FIBERCPU_PIN_ARGS);
+}
+#endif
+
 extern "C" uint64_t FiberReadRealtimeTsc(const EmuState* state) {
     const auto elapsed =
         std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now() - state->tsc_start_time)

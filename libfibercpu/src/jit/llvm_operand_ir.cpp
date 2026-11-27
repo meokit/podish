@@ -8,15 +8,20 @@
 #include <vector>
 
 #include <llvm/ADT/DenseMap.h>
+#include <llvm/ADT/SCCIterator.h>
 #include <llvm/ADT/SetVector.h>
 #include <llvm/ADT/SmallBitVector.h>
 #include <llvm/ADT/SmallPtrSet.h>
+#include <llvm/Analysis/AliasAnalysis.h>
 #include <llvm/Analysis/SimplifyQuery.h>
 #include <llvm/Analysis/ValueTracking.h>
 #include <llvm/ExecutionEngine/Orc/JITTargetMachineBuilder.h>
+#include <llvm/IR/CFG.h>
 #include <llvm/IR/Constants.h>
+#include <llvm/IR/Dominators.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/InstIterator.h>
+#include <llvm/IR/MDBuilder.h>
 #include <llvm/IR/PassManager.h>
 #include <llvm/IR/PatternMatch.h>
 #include <llvm/IR/ValueHandle.h>
@@ -31,6 +36,7 @@
 #include <llvm/Transforms/Scalar/SimplifyCFG.h>
 #include <llvm/Transforms/Utils/Cloning.h>
 #include <llvm/Transforms/Utils/Local.h>
+#include <llvm/Transforms/Utils/PromoteMemToReg.h>
 
 namespace fiberish {
 namespace {
@@ -165,6 +171,84 @@ void BakeLLVMOperandLoads(llvm::Function& entry, block_recipe::BlockKeyView key)
 }
 
 constexpr int64_t kFirstOpOffset = offsetof(BasicBlock, slots);
+
+void LowerX86MemoryAccesses(llvm::Function& entry, llvm::Value* region_table = nullptr) {
+    auto& module = *entry.getParent();
+    auto* guest_address = module.getFunction("FiberLLVMGuestAddress");
+    auto* chain_target = module.getFunction("FiberLLVMChainTarget");
+    auto& context = entry.getContext();
+    llvm::MDBuilder metadata(context);
+    auto* domain = metadata.createAnonymousAliasScopeDomain("x86 JIT storage");
+    const std::array scopes = {
+        metadata.createAnonymousAliasScope(domain, "EmuState"),
+        metadata.createAnonymousAliasScope(domain, "PageRegion"),
+        metadata.createAnonymousAliasScope(domain, "guest RAM"),
+        metadata.createAnonymousAliasScope(domain, "decoded blocks"),
+    };
+    auto* state = entry.getArg(0);
+    const auto classify = [&](const llvm::Value* ptr) {
+        llvm::SmallVector<const llvm::Value*, 4> objects;
+        llvm::getUnderlyingObjects(ptr, objects);
+        unsigned mask = 0;
+        for (const auto* object : objects) {
+            const auto* call = llvm::dyn_cast<llvm::CallInst>(object);
+            if (object == state)
+                mask |= 1;
+            else if (object == region_table)
+                mask |= 2;
+            else if (guest_address && call && call->getCalledFunction() == guest_address)
+                mask |= 4;
+            else if (chain_target && call && call->getCalledFunction() == chain_target)
+                mask |= 8;
+            else if (!region_table && object == entry.getArg(1))
+                mask |= 8;
+            else if (const auto* load = llvm::dyn_cast<llvm::LoadInst>(object);
+                     region_table && load && load->getMetadata(llvm::LLVMContext::MD_invariant_load) &&
+                     llvm::getUnderlyingObject(load->getPointerOperand()) == region_table)
+                mask |= 8;  // A pointer loaded from an immutable member slot.
+            else
+                return 0u;
+        }
+        return mask;
+    };
+    // Only annotate accesses whose storage is known. The volatile chain
+    // check stays volatile, and calls still observe the published state.
+    for (auto& inst : llvm::instructions(entry)) {
+        unsigned mask = 0;
+        if (auto* load = llvm::dyn_cast<llvm::LoadInst>(&inst); load && !load->isAtomic()) {
+            mask = classify(load->getPointerOperand());
+        } else if (auto* store = llvm::dyn_cast<llvm::StoreInst>(&inst); store && store->isSimple()) {
+            mask = classify(store->getPointerOperand());
+        } else if (auto* mem = llvm::dyn_cast<llvm::MemIntrinsic>(&inst); mem && !mem->isVolatile()) {
+            mask = classify(mem->getRawDest());
+            if (auto* transfer = llvm::dyn_cast<llvm::MemTransferInst>(mem)) {
+                const auto source = classify(transfer->getRawSource());
+                mask = mask && source ? mask | source : 0;
+            }
+        }
+        if (!mask) continue;
+        llvm::SmallVector<llvm::Metadata*, 4> alias, noalias;
+        for (auto [i, scope] : llvm::enumerate(scopes)) ((mask & (1u << i)) ? alias : noalias).push_back(scope);
+        for (auto [kind, list] : {std::pair{llvm::LLVMContext::MD_alias_scope, &alias},
+                                  std::pair{llvm::LLVMContext::MD_noalias, &noalias}}) {
+            if (list->empty()) continue;
+            inst.setMetadata(kind,
+                             llvm::MDNode::concatenate(inst.getMetadata(kind), llvm::MDNode::get(context, *list)));
+        }
+    }
+    for (auto* marker : {guest_address, chain_target}) {
+        if (!marker) continue;
+        for (auto* user : llvm::make_early_inc_range(marker->users())) {
+            auto* call = llvm::cast<llvm::CallInst>(user);
+            llvm::IRBuilder<> builder(call);
+            auto* value = call->getArgOperand(0);
+            if (value->getType()->isIntegerTy()) value = builder.CreateIntToPtr(value, call->getType());
+            call->replaceAllUsesWith(value);
+            call->eraseFromParent();
+        }
+        marker->eraseFromParent();
+    }
+}
 
 llvm::Value* LoadBlockEip(llvm::IRBuilder<>& builder, llvm::Value* first_op) {
     constexpr auto offset = int64_t(offsetof(BasicBlock, chain)) - kFirstOpOffset;
@@ -718,7 +802,8 @@ bool SpecializeBlockEntry(const LLVMOperandTemplates& templates, llvm::Function&
     const auto* use_step = module.getFunction("FiberLLVMUseStep");
     const auto* exit_kind = module.getFunction("FiberLLVMExit");
     const auto* operand_layout = module.getFunction("FiberLLVMOperandLayout");
-    if (!placeholder || !use_step || !exit_kind || !operand_layout) return false;
+    const auto* branch_suffix = module.getFunction("FiberLLVMBranchSuffix");
+    if (!placeholder || !use_step || !exit_kind || !operand_layout || !branch_suffix) return false;
 
     std::vector<llvm::CallInst*> guards;
     llvm::CallInst* exit_site = nullptr;
@@ -741,11 +826,13 @@ bool SpecializeBlockEntry(const LLVMOperandTemplates& templates, llvm::Function&
 
     std::vector<llvm::CallInst*> sites;
     std::vector<llvm::CallInst*> advances;
+    std::vector<llvm::CallInst*> suffixes;
     for (auto& inst : llvm::instructions(entry)) {
         auto* call = llvm::dyn_cast<llvm::CallInst>(&inst);
         if (!call) continue;
         if (call->getCalledFunction() == placeholder) sites.push_back(call);
         if (call->getCalledFunction() == operand_layout) advances.push_back(call);
+        if (call->getCalledFunction() == branch_suffix) suffixes.push_back(call);
     }
     for (auto* advance : advances) {
         const auto* index = llvm::dyn_cast<llvm::ConstantInt>(advance->getArgOperand(0));
@@ -756,6 +843,17 @@ bool SpecializeBlockEntry(const LLVMOperandTemplates& templates, llvm::Function&
         assert((layout & 3) == operation.shape.slots);
         advance->replaceAllUsesWith(llvm::ConstantInt::get(advance->getType(), layout));
         advance->eraseFromParent();
+    }
+    for (auto* suffix : suffixes) {
+        const auto* index = llvm::dyn_cast<llvm::ConstantInt>(suffix->getArgOperand(0));
+        if (!index || index->getZExtValue() >= key.operations.size()) return false;
+        const auto step = index->getZExtValue();
+        const auto id = static_cast<size_t>(key.operations[step].id);
+        const auto inst_count = key.operations.size() + key.uncompiled_ops;
+        const auto remaining =
+            block_recipe::kHasBranchLinkSlot[id] ? DecodedOp::BranchSuffixAfter(inst_count, step) : 0;
+        suffix->replaceAllUsesWith(llvm::ConstantInt::get(suffix->getType(), remaining));
+        suffix->eraseFromParent();
     }
     if (sites.size() != key.operations.size()) return false;
     llvm::SmallBitVector slots(key.operations.size());
@@ -833,6 +931,7 @@ std::unique_ptr<llvm::Module> PrepareLLVMBlock(const LLVMOperandTemplates& templ
     auto* entry = module->getFunction("FiberLLVMEntry");
     if (!entry || !SpecializeBlockEntry(templates, *entry, key, fold_operand_loads)) return {};
     RemoveBlockMarkers(*module);
+    LowerX86MemoryAccesses(*entry);
     entry->setName(entry_name);
     for (auto& function : *module) {
         if (&function != entry && !function.isDeclaration()) function.setLinkage(llvm::GlobalValue::InternalLinkage);
@@ -858,12 +957,12 @@ bool CanInlinePageMember(const llvm::Function& entry) {
         if (!callee) return false;
         const auto name = callee->getName();
         // These calls cannot run a guest observer or invalidate the page.
-        // GetNextEip and ExecCountStorage receive the block itself, which is bound before inlining.
+        // GetNextEip receives the block itself, which is bound before inlining.
         if (!callee->isIntrinsic() && name != kWriteArithmeticFlags && name != kWriteLogicalFlags &&
             name != kReadFlag && name != "FiberLLVMRegionEdge" && name != "FiberLLVMRegionExit" &&
             name != "FiberLLVMRegionBase" && name != "_ZNK8fiberish10BasicBlock10GetNextEipEm" &&
-            name != "_ZN8fiberish10BasicBlock16ExecCountStorageEv" && name != "memcpy" && name != "memmove" &&
-            name != "memset" && name != "memcmp")
+            name != "FiberLLVMGuestAddress" && name != "FiberLLVMChainTarget" && name != "memcpy" &&
+            name != "memmove" && name != "memset" && name != "memcmp")
             return false;
     }
     return true;
@@ -871,6 +970,112 @@ bool CanInlinePageMember(const llvm::Function& entry) {
 
 llvm::Value* BlockPointerSlot(llvm::IRBuilder<>& builder, llvm::Value* state) {
     return builder.CreateGEP(builder.getInt8Ty(), state, builder.getInt64(offsetof(EmuState, last_block)));
+}
+
+llvm::LoadInst* LoadRegionField(llvm::IRBuilder<>& builder, llvm::Type* type, llvm::Value* field) {
+    // Publication fixes the member pointers and page for the table's lifetime.
+    auto* load = builder.CreateLoad(type, field);
+    load->setMetadata(llvm::LLVMContext::MD_invariant_load, llvm::MDNode::get(builder.getContext(), {}));
+    return load;
+}
+
+// A region can enter a cycle at any member. Promote independent context
+// fields across these edges even when the CFG has no single loop header.
+void PromoteRegionRegisters(llvm::Function& body, llvm::FunctionAnalysisManager& functions) {
+    llvm::SmallPtrSet<const llvm::BasicBlock*, 16> cyclic;
+    for (auto scc = llvm::scc_begin(&body); !scc.isAtEnd(); ++scc)
+        if (scc.hasCycle()) cyclic.insert(scc->begin(), scc->end());
+    if (cyclic.empty()) return;
+
+    constexpr size_t kRegisterCount = sizeof(Context::regs) / sizeof(uint32_t);
+    constexpr size_t kSegmentCount = sizeof(Context::seg_base) / sizeof(uint32_t);
+    constexpr size_t kRegisterOffset = offsetof(EmuState, ctx) + offsetof(Context, regs);
+    constexpr size_t kSegmentOffset = offsetof(EmuState, ctx) + offsetof(Context, seg_base);
+    constexpr auto offsets = [] {
+        std::array<size_t, kRegisterCount + kSegmentCount> result{};
+        for (size_t i = 0; i < kRegisterCount; ++i) result[i] = kRegisterOffset + i * sizeof(uint32_t);
+        for (size_t i = 0; i < kSegmentCount; ++i) result[kRegisterCount + i] = kSegmentOffset + i * sizeof(uint32_t);
+        return result;
+    }();
+    std::array<llvm::SmallVector<llvm::Instruction*, 8>, offsets.size()> accesses;
+    llvm::SmallVector<llvm::Instruction*, 32> memory;
+    llvm::SmallVector<llvm::Instruction*, 8> exits;
+    const auto& layout = body.getParent()->getDataLayout();
+    auto* state = body.getArg(0);
+    for (auto& inst : llvm::instructions(body)) {
+        if (auto* ret = llvm::dyn_cast<llvm::ReturnInst>(&inst)) {
+            auto* call = llvm::dyn_cast_or_null<llvm::CallInst>(ret->getPrevNonDebugInstruction());
+            exits.push_back(call && call->isMustTailCall() ? static_cast<llvm::Instruction*>(call) : ret);
+        }
+        if (auto* call = llvm::dyn_cast<llvm::CallInst>(&inst); call && call->isMustTailCall()) continue;
+        // The external chain header read is modeled as a memory barrier.
+        // Publish registers before it as well as before the continuation.
+        if (auto* load = llvm::dyn_cast<llvm::LoadInst>(&inst);
+            load && load->isVolatile() && load->getType()->isIntegerTy(128) && !cyclic.contains(load->getParent())) {
+            exits.push_back(load);
+            continue;
+        }
+        if (!inst.mayReadOrWriteMemory()) continue;
+        memory.push_back(&inst);
+
+        llvm::Value* ptr = nullptr;
+        if (auto* load = llvm::dyn_cast<llvm::LoadInst>(&inst);
+            load && load->isSimple() && load->getType()->isIntegerTy(32))
+            ptr = load->getPointerOperand();
+        else if (auto* store = llvm::dyn_cast<llvm::StoreInst>(&inst);
+                 store && store->isSimple() && store->getValueOperand()->getType()->isIntegerTy(32))
+            ptr = store->getPointerOperand();
+        int64_t offset = 0;
+        if (!ptr || llvm::GetPointerBaseWithConstantOffset(ptr, offset, layout) != state || offset < 0) continue;
+        auto field = std::ranges::find(offsets, static_cast<size_t>(offset));
+        if (field != offsets.end()) accesses[field - offsets.begin()].push_back(&inst);
+    }
+
+    auto& aa = functions.getResult<llvm::AAManager>(body);
+    llvm::SmallBitVector eligible(offsets.size()), written(offsets.size());
+    for (auto [slot, uses] : llvm::enumerate(accesses)) {
+        if (!std::ranges::any_of(uses, [&](auto* inst) { return cyclic.contains(inst->getParent()); })) continue;
+        written[slot] = std::ranges::any_of(uses, [](auto* inst) { return llvm::isa<llvm::StoreInst>(inst); });
+        const auto location = *llvm::MemoryLocation::getOrNone(uses.front());
+        // Other accesses, including narrow or merged accesses to these fields,
+        // can only remain in IR if they are independent of the promoted value.
+        eligible[slot] = std::ranges::none_of(memory, [&](auto* inst) {
+            if (llvm::is_contained(uses, inst)) return false;
+            if (auto other = llvm::MemoryLocation::getOrNone(inst); other && aa.isNoAlias(location, *other))
+                return false;
+            const auto effect = aa.getModRefInfo(inst, location);
+            return llvm::isModSet(effect) || (written[slot] && llvm::isRefSet(effect));
+        });
+    }
+
+    llvm::IRBuilder<> entry(&*body.getEntryBlock().getFirstInsertionPt());
+    llvm::SmallVector<llvm::AllocaInst*, 8> shadows;
+    for (auto slot : eligible.set_bits()) {
+        auto* field = entry.CreateConstGEP1_64(entry.getInt8Ty(), state, offsets[slot]);
+        auto* shadow = entry.CreateAlloca(entry.getInt32Ty());
+        entry.CreateStore(entry.CreateLoad(entry.getInt32Ty(), field), shadow);
+        shadows.push_back(shadow);
+        for (auto* inst : accesses[slot]) {
+            if (auto* load = llvm::dyn_cast<llvm::LoadInst>(inst)) {
+                load->setOperand(0, shadow);
+                load->setAlignment(llvm::Align(alignof(uint32_t)));
+            } else {
+                auto* store = llvm::cast<llvm::StoreInst>(inst);
+                store->setOperand(1, shadow);
+                store->setAlignment(llvm::Align(alignof(uint32_t)));
+            }
+            inst->setAAMetadata(llvm::AAMDNodes());
+        }
+        if (!written[slot]) continue;
+        for (auto* exit : exits) {
+            llvm::IRBuilder<> builder(exit);
+            builder.CreateStore(builder.CreateLoad(builder.getInt32Ty(), shadow), field);
+        }
+    }
+    if (shadows.empty()) return;
+    auto& dom = functions.getResult<llvm::DominatorTreeAnalysis>(body);
+    llvm::PromoteMemToReg(shadows, dom);
+    functions.invalidate(body, llvm::PreservedAnalyses::none());
 }
 
 void BindCurrentBlock(llvm::Function& entry) {
@@ -974,7 +1179,7 @@ void ShareRegionTailExits(llvm::Function& body, const llvm::DenseMap<llvm::CallI
         const bool inline_chain = chain && llvm::all_of(group, [&](auto* call) { return sources.contains(call); });
         auto* state = body.getArg(0);
         const auto restore_source = [&](llvm::IRBuilder<>& builder, llvm::Value* record) {
-            auto* block = builder.CreateLoad(builder.getPtrTy(), record);
+            auto* block = LoadRegionField(builder, builder.getPtrTy(), record);
             builder.CreateStore(block, BlockPointerSlot(builder, state));
         };
         if (chain && !inline_chain) {
@@ -1097,6 +1302,9 @@ std::unique_ptr<llvm::Module> PrepareLLVMPageRegion(const LLVMOperandTemplates& 
                                         name + "_body", *module);
     body->setCallingConv(members[0]->getCallingConv());
     body->addFnAttr(llvm::Attribute::NoInline);
+    body->getArg(0)->addAttr(llvm::Attribute::NoAlias);
+    body->addDereferenceableParamAttr(0, sizeof(Context));
+    body->getArg(1)->addAttr(llvm::Attribute::NoAlias);
     auto& context = module->getContext();
     auto* start = llvm::BasicBlock::Create(context, "entry", body);
     auto* bad_selector = llvm::BasicBlock::Create(context, "invalid.selector", body);
@@ -1110,8 +1318,8 @@ std::unique_ptr<llvm::Module> PrepareLLVMPageRegion(const LLVMOperandTemplates& 
         builder.CreateAnd(tagged_table, llvm::ConstantInt::get(pointer_type, ~uint64_t{Region::MemberMask})),
         builder.getPtrTy());
     auto* page_field = builder.CreateConstGEP1_64(builder.getInt8Ty(), table, offsetof(Region, guest_page));
-    auto* page =
-        builder.CreateTrunc(builder.CreateLoad(builder.getInt64Ty(), page_field), builder.getInt32Ty(), "guest.page");
+    auto* page = builder.CreateTrunc(LoadRegionField(builder, builder.getInt64Ty(), page_field), builder.getInt32Ty(),
+                                     "guest.page");
     auto* state = body->getArg(0);
     auto* start_switch = builder.CreateSwitch(index, bad_selector, members.size());
 
@@ -1145,7 +1353,7 @@ std::unique_ptr<llvm::Module> PrepareLLVMPageRegion(const LLVMOperandTemplates& 
             args.push_back(supplied);
         }
         label.member_record = builder.CreateConstGEP1_64(builder.getPtrTy(), table, i);
-        auto* block = builder.CreateLoad(builder.getPtrTy(), label.member_record);
+        auto* block = LoadRegionField(builder, builder.getPtrTy(), label.member_record);
         args[1] = builder.CreateGEP(builder.getInt8Ty(), block, builder.getInt64(kFirstOpOffset));
         auto* call = builder.CreateCall(member, args);
         call->setCallingConv(member->getCallingConv());
@@ -1191,7 +1399,7 @@ std::unique_ptr<llvm::Module> PrepareLLVMPageRegion(const LLVMOperandTemplates& 
             continue;
         }
 #endif
-        auto* block = builder.CreateLoad(builder.getPtrTy(), record);
+        auto* block = LoadRegionField(builder, builder.getPtrTy(), record);
         builder.CreateStore(block, BlockPointerSlot(builder, state));
         call->eraseFromParent();
     }
@@ -1265,6 +1473,7 @@ std::unique_ptr<llvm::Module> PrepareLLVMPageRegion(const LLVMOperandTemplates& 
     }
 
     RemoveBlockMarkers(*module);
+    LowerX86MemoryAccesses(*body, table);
     for (auto& function : *module) {
         if (function.isDeclaration()) continue;
         function.removeFnAttr(llvm::Attribute::UWTable);
@@ -1282,6 +1491,7 @@ std::unique_ptr<llvm::Module> PrepareLLVMPageRegion(const LLVMOperandTemplates& 
         cleanup.addPass(llvm::SimplifyCFGPass());
         cleanup.run(*body, functions);
     }
+    PromoteRegionRegisters(*body, functions);
     if ((should_cancel && should_cancel()) || llvm::verifyModule(*module)) return {};
     return module;
 }

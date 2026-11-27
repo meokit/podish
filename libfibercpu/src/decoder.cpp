@@ -1110,7 +1110,8 @@ void BasicBlock::WriteOps(BlockSlotLayout layout, std::span<const DecodedInstruc
             auto& data = FirstOp()[physical_index++];
             data.SetDispatchHandler(nullptr);
             if (branch_link) {
-                slot.payload |= uint64_t{inst_count() - i - 1} << DecodedOp::kBranchSuffixShift;
+                slot.payload |= uint64_t{DecodedOp::BranchSuffixAfter(inst_count(), i)}
+                                << DecodedOp::kBranchSuffixShift;
                 data.StoreBlockLink(invalid);
             } else {
                 data.payload = GetImm(&op);

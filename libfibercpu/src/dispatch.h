@@ -10,14 +10,12 @@
 
 namespace fiberish {
 
-#if FIBERCPU_LLVM_JIT && !defined(FIBERCPU_LLVM_BLOCK_TEMPLATE)
-bool CaptureLLVMWeightedProfilePage(EmuState& state, BasicBlock& block);
-#endif
 #ifdef FIBERCPU_LLVM_BLOCK_TEMPLATE
 extern "C" void FiberLLVMRegionEdge(EmuState* state, DecodedOp* op, int64_t budget, mem::MicroTlbAbiWord tags,
                                     mem::MicroTlbAbiWord addend, uint32_t eip,
                                     uint64_t flags FIBERCPU_PIN_PARAMS) noexcept;
 extern "C" void FiberLLVMRegionExit(EmuState* state) noexcept;
+extern "C" [[gnu::const]] BasicBlock* FiberLLVMChainTarget(BasicBlock* block);
 #ifdef FIBERCPU_LLVM_SHARED_REGION_EXITS
 extern "C" [[gnu::const]] bool FiberLLVMShareRegionExits();
 #define FIBERCPU_REGION_EXIT_DECL(Name)                                                                              \
@@ -79,32 +77,51 @@ extern ATTR_PRESERVE_NONE int64_t ResolveBranchTargetSlowDoubleSlot(EmuState* RE
                                                                     mem::MicroTlbAbiWord utlb_addend, uint32_t branch,
                                                                     uint64_t flags_cache FIBERCPU_PIN_PARAMS);
 
-FORCE_INLINE void CountLLVMBlockEntry(EmuState* state, BasicBlock* block, BasicBlockChainPrefix chain) {
+// Return true when the entry needs profiling before it can dispatch.
+FORCE_INLINE bool CountLLVMBlockEntryFast(EmuState* state, BasicBlock* block, BasicBlockChainPrefix chain) {
 #if FIBERCPU_BLOCK_COMPILATION
-#if FIBERCPU_LLVM_JIT && !defined(FIBERCPU_ENABLE_BLOCK_PROFILE) && !defined(FIBERCPU_ENABLE_HANDLER_PROFILE)
-    if (chain.weighted_profile || chain.jit_execution_profile) ++block->ExecCountStorage();
+#if FIBERCPU_LLVM_JIT
+    if (chain.weighted_profile || chain.jit_execution_profile) [[unlikely]]
+        return true;
 #endif
     const auto count = chain.llvm_hot_count;
+    if (!count) [[likely]]
+        return false;
     if (count > 1) {
         block->chain.llvm_hot_count = count - 1;
-    } else if (count == 1) {
-#if FIBERCPU_LLVM_JIT && !defined(FIBERCPU_LLVM_BLOCK_TEMPLATE)
-        if (chain.weighted_profile && CaptureLLVMWeightedProfilePage(*state, *block)) {
-            block->chain.llvm_hot_count = 0;
-            return;
-        }
-#endif
-        if (!state->llvm_hot_block) {
-            block->chain.llvm_hot_count = 0;
-            state->llvm_hot_block = block;
-        }
+    } else if (!state->llvm_hot_block) {
+        block->chain.llvm_hot_count = 0;
+        state->llvm_hot_block = block;
     }
 #else
     (void)state;
     (void)block;
     (void)chain;
 #endif
+    return false;
 }
+
+#if FIBERCPU_BLOCK_COMPILATION
+// Keep the threaded ABI so the fast chain needs neither a call nor a frame.
+extern "C" [[gnu::cold, gnu::noinline]] ATTR_PRESERVE_NONE int64_t FiberX86ProfiledChain(
+    EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags,
+    mem::MicroTlbAbiWord utlb_addend, uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS);
+#endif
+
+#ifndef FIBERCPU_LLVM_BLOCK_TEMPLATE
+#if FIBERCPU_LLVM_JIT
+[[gnu::cold, gnu::noinline]] void ProfileLLVMBlockEntry(EmuState* state, BasicBlock* block,
+                                                        BasicBlockChainPrefix chain);
+#endif
+
+FORCE_INLINE void CountLLVMBlockEntry(EmuState* state, BasicBlock* block, BasicBlockChainPrefix chain) {
+    if (CountLLVMBlockEntryFast(state, block, chain)) {
+#if FIBERCPU_LLVM_JIT
+        ProfileLLVMBlockEntry(state, block, chain);
+#endif
+    }
+}
+#endif
 
 FORCE_INLINE ATTR_PRESERVE_NONE int64_t ReturnFromBlock(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
                                                         int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags,
@@ -127,12 +144,16 @@ FORCE_INLINE ATTR_PRESERVE_NONE int64_t ReturnFromBlock(EmuState* RESTRICT state
 struct BlockChainTarget {
     DecodedOp* op;
     HandlerFunc entry;
+    bool needs_profile;
 };
 
 template <unsigned LinkSlot>
 FORCE_INLINE BlockChainTarget TryChainBlock(EmuState* state, DecodedOp* op, uint32_t target_eip, int64_t& instr_limit) {
     static_assert(LinkSlot <= 1);
     BasicBlock* next_block = (op + LinkSlot)->LoadBlockLink();
+#ifdef FIBERCPU_LLVM_BLOCK_TEMPLATE
+    next_block = FiberLLVMChainTarget(next_block);
+#endif
     auto header = *reinterpret_cast<const volatile __uint128_t*>(next_block);
     auto header_ptr = reinterpret_cast<const BasicBlock*>(&header);
     if (!header_ptr->MatchesChainTarget(target_eip)) [[unlikely]]
@@ -145,7 +166,7 @@ FORCE_INLINE BlockChainTarget TryChainBlock(EmuState* state, DecodedOp* op, uint
     state->last_block = next_block;
     instr_limit -= header_ptr->inst_count();
     DecodedOp* next_head = next_block->FirstOp();
-    CountLLVMBlockEntry(state, next_block, header_ptr->chain);
+    const bool needs_profile = CountLLVMBlockEntryFast(state, next_block, header_ptr->chain);
 #if defined(FIBERCPU_ENABLE_BLOCK_PROFILE) || defined(FIBERCPU_ENABLE_HANDLER_PROFILE)
     next_block->ExecCountStorage()++;
 #endif
@@ -154,7 +175,7 @@ FORCE_INLINE BlockChainTarget TryChainBlock(EmuState* state, DecodedOp* op, uint
 #endif
     auto entry = header_ptr->entry;
     __builtin_assume(entry != nullptr);
-    return {next_head, entry};
+    return {next_head, entry, needs_profile};
 }
 
 template <unsigned LinkSlot, bool EmitRegionEdge = true>
@@ -166,14 +187,14 @@ FORCE_INLINE ATTR_PRESERVE_NONE int64_t ResolveBranchTargetInline(EmuState* REST
     (void)op;
     (void)utlb_tags;
     (void)utlb_addend;
-    // The caller prepaid the full decoded block. Do this before handing the
-    // budget to a local LLVM region edge, a cached link, or the slow resolver.
-    if constexpr (LinkSlot == 1 && EmitRegionEdge) instr_limit += op->BranchSuffix();
 #ifdef FIBERCPU_LLVM_BLOCK_TEMPLATE
     if constexpr (EmitRegionEdge)
         FiberLLVMRegionEdge(state, op, instr_limit, utlb_tags, utlb_addend, target_eip,
                             flags_cache FIBERCPU_PIN_RELOAD);
 #else
+    // The caller prepaid the full decoded block. JIT steps already refund
+    // their known suffix before calling this resolver.
+    if constexpr (LinkSlot == 1 && EmitRegionEdge) instr_limit += op->BranchSuffix();
     state->clear_pending_mem_op();
 #endif
     if (instr_limit <= 0) {
@@ -196,6 +217,12 @@ FORCE_INLINE ATTR_PRESERVE_NONE int64_t ResolveBranchTargetInline(EmuState* REST
 #endif
     const auto next = TryChainBlock<LinkSlot>(state, op, target_eip, instr_limit);
     if (next.op) [[likely]] {
+#if FIBERCPU_LLVM_JIT && FIBERCPU_BLOCK_COMPILATION
+        if (next.needs_profile) [[unlikely]] {
+            ATTR_MUSTTAIL return FiberX86ProfiledChain(state, next.op, instr_limit, utlb_tags, utlb_addend, target_eip,
+                                                       flags_cache FIBERCPU_PIN_RELOAD);
+        }
+#endif
         ATTR_MUSTTAIL return next.entry(state, next.op, instr_limit, utlb_tags, utlb_addend,
                                         std::numeric_limits<uint32_t>::max(), flags_cache FIBERCPU_PIN_RELOAD);
     }

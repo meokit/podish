@@ -58,17 +58,20 @@ struct BlockKeyView {
     std::span<const BoundOperation> operations;
     std::span<const DecodedOperandShape> operands;
     std::span<const StepEip> eips = {};
+    uint8_t uncompiled_ops = 0;
 
     bool IsExact() const { return !operands.empty(); }
 
     bool operator==(const BlockKeyView& other) const {
-        return exit == other.exit && std::ranges::equal(operations, other.operations) &&
-               std::ranges::equal(operands, other.operands) && std::ranges::equal(eips, other.eips);
+        return exit == other.exit && uncompiled_ops == other.uncompiled_ops &&
+               std::ranges::equal(operations, other.operations) && std::ranges::equal(operands, other.operands) &&
+               std::ranges::equal(eips, other.eips);
     }
 
     // Keep this field order in sync with extract_linked_block_cache.py.
     auto operator<=>(const BlockKeyView& other) const {
         if (auto order = exit <=> other.exit; order != 0) return order;
+        if (auto order = uncompiled_ops <=> other.uncompiled_ops; order != 0) return order;
         if (auto order = IsExact() <=> other.IsExact(); order != 0) return order;
         if (auto order = std::lexicographical_compare_three_way(operations.begin(), operations.end(),
                                                                 other.operations.begin(), other.operations.end());
@@ -89,12 +92,14 @@ struct Plan {
     std::array<HandlerFunc, kMaxOps> replay_handlers;
     size_t covered = 0;
     LLVMBlockExit exit = LLVMBlockExit::Dispatch;
+    uint8_t uncompiled_ops = 0;
 
     BlockKeyView Key(bool exact) const {
         return {exit,
                 {operations.data(), covered},
                 {operands.data(), exact ? covered : 0},
-                {eips.data(), exact ? covered : 0}};
+                {eips.data(), exact ? covered : 0},
+                uncompiled_ops};
     }
     std::span<const HandlerFunc> ReplayHandlers() const { return {replay_handlers.data(), covered}; }
 };
@@ -128,6 +133,13 @@ bool PlanBlock(Ops&& ops, uint32_t start_eip, size_t sentinel, LLVMBlockExit ful
         plan.replay_handlers[plan.covered++] = binding.handler;
     }
     plan.exit = plan.covered == sentinel ? full_exit : LLVMBlockExit::Dispatch;
+    // The dispatcher prepays the whole decoded block, including a native suffix.
+    plan.uncompiled_ops = 0;
+    if (plan.covered < sentinel && std::ranges::any_of(
+                                       std::span(plan.operations).first(plan.covered),
+                                       [](auto& step) { return kHasBranchLinkSlot[static_cast<size_t>(step.id)]; })) {
+        plan.uncompiled_ops = static_cast<uint8_t>(sentinel - plan.covered);
+    }
     return plan.covered > 1 || (plan.covered == 1 && plan.exit != LLVMBlockExit::Dispatch);
 }
 

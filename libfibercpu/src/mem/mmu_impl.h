@@ -271,6 +271,18 @@ struct MicroTlbAccessGuard {
     }
 };
 
+#ifdef FIBERCPU_LLVM_BLOCK_TEMPLATE
+extern "C" [[gnu::const]] HostAddr FiberLLVMGuestAddress(uintptr_t address);
+#endif
+
+static FORCE_INLINE HostAddr GuestTlbHostAddress(uintptr_t address) {
+#ifdef FIBERCPU_LLVM_BLOCK_TEMPLATE
+    return FiberLLVMGuestAddress(address);
+#else
+    return reinterpret_cast<HostAddr>(address);
+#endif
+}
+
 template <typename T>
 MemResult<T> Mmu::read_tlb_only(GuestAddr addr, MicroTLB* utlb) {
     const MicroTlbAccessGuard<T> guard{addr};
@@ -281,7 +293,7 @@ MemResult<T> Mmu::read_tlb_only(GuestAddr addr, MicroTLB* utlb) {
             stats.total_reads++;
 #endif
             T val;
-            std::memcpy(&val, (const void*)(utlb->addend + addr), sizeof(T));
+            std::memcpy(&val, GuestTlbHostAddress(utlb->addend + addr), sizeof(T));
             return val;
         }
 
@@ -294,7 +306,7 @@ MemResult<T> Mmu::read_tlb_only(GuestAddr addr, MicroTLB* utlb) {
             stats.total_reads++;
 #endif
             T val;
-            std::memcpy(&val, (const void*)(entry.addend + addr), sizeof(T));
+            std::memcpy(&val, GuestTlbHostAddress(entry.addend + addr), sizeof(T));
 
             *utlb = entry;
             return val;
@@ -332,7 +344,7 @@ MemResult<std::conditional_t<Store, void, HostAddr>> Mmu::write_tlb_impl(GuestAd
             stats.l1_write_hits++;
             stats.total_writes++;
 #endif
-            auto* host = reinterpret_cast<HostAddr>(utlb->addend + addr);
+            auto* host = GuestTlbHostAddress(utlb->addend + addr);
             if constexpr (Store) {
                 StoreGuestValue(get_state(), host, val);
                 return {};
@@ -351,7 +363,7 @@ MemResult<std::conditional_t<Store, void, HostAddr>> Mmu::write_tlb_impl(GuestAd
 #endif
             // Preserve ordinary-store ordering. The RMW specialization only
             // obtains the target; Store is compile-time.
-            auto* host = reinterpret_cast<HostAddr>(entry.addend + addr);
+            auto* host = GuestTlbHostAddress(entry.addend + addr);
             if constexpr (Store) StoreGuestValue(get_state(), host, val);
 
             *utlb = entry;

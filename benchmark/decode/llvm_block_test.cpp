@@ -816,6 +816,48 @@ bool VerifyUncompiledSuffix() {
     return hot == first && hot->LogicalOp(2)->handler == suffix;
 }
 
+bool VerifyBranchBeforeUncompiledSuffix() {
+    constexpr uint32_t target = code_address + 0x40;
+    constexpr uint32_t end = code_address + 0x80;
+    constexpr uint8_t prefix[] = {0x83, 0xfa, 1, 0x74, 59}; // CMP EDX,1; JE target
+    constexpr uint8_t locked[] = {0xf0, 0x83, 0x0e, 0};     // LOCK OR dword [ESI],0
+    constexpr uint8_t target_code[] = {0x43, 0xeb, 61};     // INC EBX; JMP end
+    std::array states{State{nullptr}, State{nullptr}};
+    for (size_t i = 0; i < states.size(); ++i) {
+        std::array<uint8_t, 4096> bytes{};
+        auto* after_lock = std::ranges::copy(locked, std::ranges::copy(prefix, bytes.begin()).out).out;
+        if (i)
+            *after_lock++ = 0x45; // INC EBP gives the same LLVM prefix a different decoded block budget.
+        *after_lock++ = 0xeb;
+        *after_lock = static_cast<uint8_t>(-(after_lock - bytes.begin() + 1));
+        std::ranges::copy(target_code, bytes.begin() + (target - code_address));
+        auto& state = states[i];
+        state = LoadCode(bytes.data(), bytes.size());
+        auto* cpu = state.get();
+        X86_RegWrite(cpu, 2, 1);
+        for (int warm = 0; warm < 5; ++warm) {
+            X86_SetEIP(cpu, code_address);
+            if (!X86_Run(cpu, 0, 2) || X86_GetEIP(cpu) != target) {
+                std::fprintf(stderr, "Branch before native suffix %zu, warm %d: EIP=%x\n", i, warm, X86_GetEIP(cpu));
+                return false;
+            }
+        }
+        const auto* block = FindCompiledBlock(cpu);
+        if (!block || block->start_eip() != code_address || block->inst_count() != 4 + i) {
+            std::fprintf(stderr, "Branch before native suffix %zu: compiled=%d, count=%u\n", i, block != nullptr,
+                         block ? block->inst_count() : 0);
+            return false;
+        }
+        X86_SetEIP(cpu, code_address);
+        if (!X86_Run(cpu, 0, 3) || X86_GetEIP(cpu) != end || X86_RegRead(cpu, 3) != 1) {
+            std::fprintf(stderr, "Branch before native suffix %zu: EIP=%x, EBX=%u\n", i, X86_GetEIP(cpu),
+                         X86_RegRead(cpu, 3));
+            return false;
+        }
+    }
+    return true;
+}
+
 bool VerifyCodeReuse() {
     const auto* mode = std::getenv("FIBERCPU_LLVM_JIT");
     const bool exact = !mode || std::strcmp(mode, "generic") != 0;
@@ -1525,7 +1567,7 @@ int main(int argc, char** argv) {
         return 1;
     }
     if (argc == 2 && std::strcmp(argv[1], "hot") == 0) {
-        if (VerifyHotLoop() && VerifyUncompiledSuffix())
+        if (VerifyHotLoop() && VerifyUncompiledSuffix() && VerifyBranchBeforeUncompiledSuffix())
             return 0;
         std::fprintf(stderr, "LLVM hot backedge admission or native suffix mismatch\n");
         return 1;

@@ -201,13 +201,15 @@ bool JobActive(uint64_t epoch, const AsyncSignals* signals) {
 struct BlockKey {
     explicit BlockKey(BlockKeyView key)
         : exit(key.exit),
+          uncompiled_ops(key.uncompiled_ops),
           operations(key.operations.begin(), key.operations.end()),
           operands(key.operands.begin(), key.operands.end()),
           eips(key.eips.begin(), key.eips.end()) {}
 
-    operator BlockKeyView() const { return {exit, operations, operands, eips}; }
+    operator BlockKeyView() const { return {exit, operations, operands, eips, uncompiled_ops}; }
 
     LLVMBlockExit exit;
+    uint8_t uncompiled_ops;
     std::vector<block_recipe::BoundOperation> operations;
     std::vector<DecodedOperandShape> operands;
     std::vector<block_recipe::StepEip> eips;
@@ -226,7 +228,7 @@ struct BlockKeyHash {
         const auto hash = [](auto span) {
             return llvm::xxh3_64bits({reinterpret_cast<const uint8_t*>(span.data()), span.size_bytes()});
         };
-        return std::rotl(hash(key.operations), static_cast<int>(key.exit)) ^
+        return std::rotl(hash(key.operations), static_cast<int>(key.exit)) ^ key.uncompiled_ops ^
                (key.IsExact() ? std::rotl(hash(key.operands), 23) ^ std::rotl(hash(key.eips), 37) : 0);
     }
 };
@@ -586,6 +588,7 @@ public:
 #if FIBERCPU_GUEST_I386
         bind("_Znam", static_cast<void* (*)(size_t)>(::operator new[]));
         bind("FiberReadRealtimeTsc", &FiberReadRealtimeTsc);
+        bind("FiberX86ProfiledChain", &FiberX86ProfiledChain);
 #endif
 
 #if FIBERCPU_GUEST_AARCH64
@@ -1581,7 +1584,7 @@ std::shared_ptr<WeightedProfile> CreateLLVMWeightedProfile(bool same_page) {
     return std::make_shared<WeightedProfile>(same_page);
 }
 
-bool CaptureLLVMWeightedProfilePage(EmuState& state, BasicBlock& hot) {
+static bool CaptureLLVMWeightedProfilePage(EmuState& state, BasicBlock& hot) {
     const auto* options = RunOptions(state);
     if (!options || !options->profile || !options->profile->same_page) return false;
 
@@ -1603,6 +1606,23 @@ bool CaptureLLVMWeightedProfilePage(EmuState& state, BasicBlock& hot) {
         pending.insert_or_assign(block, block->invalidation_revision);
     }
     return true;
+}
+
+void ProfileLLVMBlockEntry(EmuState* state, BasicBlock* block, BasicBlockChainPrefix chain) {
+#if !defined(FIBERCPU_ENABLE_BLOCK_PROFILE) && !defined(FIBERCPU_ENABLE_HANDLER_PROFILE)
+    ++block->ExecCountStorage();
+#endif
+    const auto count = chain.llvm_hot_count;
+    if (count > 1) {
+        block->chain.llvm_hot_count = count - 1;
+    } else if (count == 1) {
+        if (chain.weighted_profile && CaptureLLVMWeightedProfilePage(*state, *block)) {
+            block->chain.llvm_hot_count = 0;
+        } else if (!state->llvm_hot_block) {
+            block->chain.llvm_hot_count = 0;
+            state->llvm_hot_block = block;
+        }
+    }
 }
 
 void RetireLLVMWeightedProfile(const mem::CodeCacheState& cache) {
