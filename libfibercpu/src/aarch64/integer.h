@@ -5,12 +5,6 @@
 
 #include "decoder.h"
 
-#if FIBERCPU_AARCH64_PIN_REG >= 0
-#define A64_HOT_PIN_REF , uint64_t& pinned
-#else
-#define A64_HOT_PIN_REF
-#endif
-
 #if defined(_MSC_VER)
 #define A64_INTEGER_INLINE __forceinline
 #elif defined(__GNUC__) || defined(__clang__)
@@ -40,25 +34,6 @@ inline void WriteRegister(State& state, unsigned reg, unsigned width, uint64_t v
         state.sp = value;
 }
 
-A64_INTEGER_INLINE uint64_t ReadHotRegister(const State& state, unsigned reg, unsigned width,
-                                            bool use_sp A64_HOT_PIN_REF) {
-#if FIBERCPU_AARCH64_PIN_REG >= 0
-    if (reg == FIBERCPU_AARCH64_PIN_REG) return pinned & Ones(width);
-#endif
-    return ReadRegister(state, reg, width, use_sp);
-}
-
-A64_INTEGER_INLINE void WriteHotRegister(State& state, unsigned reg, unsigned width, uint64_t value,
-                                         bool use_sp A64_HOT_PIN_REF) {
-#if FIBERCPU_AARCH64_PIN_REG >= 0
-    if (reg == FIBERCPU_AARCH64_PIN_REG) {
-        pinned = value & Ones(width);
-        return;
-    }
-#endif
-    WriteRegister(state, reg, width, value, use_sp);
-}
-
 struct ScalarRegisters {
     State& state;
 
@@ -71,26 +46,29 @@ struct ScalarRegisters {
     }
 };
 
+// Hot kernels update the continuation arguments until dispatch publishes them.
 struct HotRegisters {
     State& state;
-#if FIBERCPU_AARCH64_PIN_REG >= 0
-    uint64_t& pinned;
-#endif
+#define A64_PIN_FIELD(reg, slot) uint64_t& pin_##slot;
+    FIBERCPU_AARCH64_FOR_EACH_PIN(A64_PIN_FIELD)
+#undef A64_PIN_FIELD
 
     A64_INTEGER_INLINE uint64_t Read(unsigned reg, unsigned width, bool use_sp = false) const {
-#if FIBERCPU_AARCH64_PIN_REG >= 0
-        return ReadHotRegister(state, reg, width, use_sp, pinned);
-#else
-        return ReadHotRegister(state, reg, width, use_sp);
-#endif
+#define A64_PIN_READ(id, slot) reg == id && (id != 31 || use_sp) ? pin_##slot:
+        const auto value = FIBERCPU_AARCH64_FOR_EACH_PIN(A64_PIN_READ) ReadRegister(state, reg, 64, use_sp);
+#undef A64_PIN_READ
+        return value & Ones(width);
     }
 
     A64_INTEGER_INLINE void Write(unsigned reg, unsigned width, uint64_t value, bool use_sp = false) const {
-#if FIBERCPU_AARCH64_PIN_REG >= 0
-        WriteHotRegister(state, reg, width, value, use_sp, pinned);
-#else
-        WriteHotRegister(state, reg, width, value, use_sp);
-#endif
+#define A64_PIN_WRITE(id, slot)              \
+    if (reg == id && (id != 31 || use_sp)) { \
+        pin_##slot = value & Ones(width);    \
+        return;                              \
+    }
+        FIBERCPU_AARCH64_FOR_EACH_PIN(A64_PIN_WRITE)
+#undef A64_PIN_WRITE
+        WriteRegister(state, reg, width, value, use_sp);
     }
 };
 
@@ -546,11 +524,7 @@ template <Kind kind, unsigned fixed_width = 0, int fixed_operation = -1, int fix
           IntegerForm form = IntegerForm::Default>
 A64_INTEGER_INLINE StepResult HotInteger(State& state, const DecodedInstruction& op, uint64_t pc, uint64_t bound_target,
                                          uint32_t& nzcv A64_HOT_PIN_REF) {
-#if FIBERCPU_AARCH64_PIN_REG >= 0
-    const HotRegisters registers{state, pinned};
-#else
-    const HotRegisters registers{state};
-#endif
+    const HotRegisters registers{state A64_HANDLER_PIN_ARGS};
     return IntegerKernel<kind, fixed_width, fixed_operation, fixed_shift, write_nzcv, true, form>(registers, op, pc,
                                                                                                   nzcv, bound_target);
 }

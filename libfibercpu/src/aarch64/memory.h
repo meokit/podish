@@ -89,28 +89,24 @@ inline void WriteElement(uint8_t* data, unsigned width, uint64_t value) {
 
 template <bool hot>
 A64_MEMORY_INLINE uint64_t ReadTransferRegister(const State& state, unsigned reg, bool use_sp,
-                                                [[maybe_unused]] uint64_t* pinned) {
-#if defined(FIBERCPU_AARCH64_PIN_REG) && FIBERCPU_AARCH64_PIN_REG >= 0
-    if constexpr (hot) return ReadHotRegister(state, reg, 64, use_sp, *pinned);
-#endif
+                                                [[maybe_unused]] const HotRegisters* pinned) {
+    if constexpr (hot) return pinned->Read(reg, 64, use_sp);
     return ReadRegister(state, reg, 64, use_sp);
 }
 
 template <bool hot>
 A64_MEMORY_INLINE void WriteTransferRegister(State& state, unsigned reg, unsigned width, uint64_t value, bool use_sp,
-                                             [[maybe_unused]] uint64_t* pinned) {
-#if defined(FIBERCPU_AARCH64_PIN_REG) && FIBERCPU_AARCH64_PIN_REG >= 0
+                                             [[maybe_unused]] const HotRegisters* pinned) {
     if constexpr (hot) {
-        WriteHotRegister(state, reg, width, value, use_sp, *pinned);
+        pinned->Write(reg, width, value, use_sp);
         return;
     }
-#endif
     WriteRegister(state, reg, width, value, use_sp);
 }
 
 template <bool hot = false>
 A64_MEMORY_INLINE void StoreRegister(const State& state, uint8_t* data, unsigned reg, unsigned width, bool vector,
-                                     uint64_t* pinned = nullptr) {
+                                     const HotRegisters* pinned = nullptr) {
     if (vector) {
         WriteElement(data, width, state.v[reg].lo);
         if (width == 128) WriteLittle(data + 8, state.v[reg].hi);
@@ -157,7 +153,7 @@ A64_MEMORY_INLINE bool ProbeDataTlb([[maybe_unused]] const State& state, uint64_
 
 template <bool hot = false>
 A64_MEMORY_INLINE void LoadRegister(State& state, const uint8_t* data, unsigned reg, unsigned width, bool vector,
-                                    unsigned operation, uint64_t* pinned = nullptr) {
+                                    unsigned operation, const HotRegisters* pinned = nullptr) {
     auto value = ReadElement(data, width);
     if (vector) {
         state.v[reg] = {value, width == 128 ? ReadLittle<uint64_t>(data + 8) : 0};
@@ -172,7 +168,7 @@ template <Kind kind, unsigned fixed_width, int fixed_operation, int fixed_mode, 
 A64_MEMORY_INLINE StepResult LoadStoreTransfer(State& state, const DecodedInstruction& op, uint64_t pc,
                                                uint64_t literal_address, const mem::SoftTlb* data_tlb,
                                                uint64_t& utlb_tags, uintptr_t& utlb_addend, const Memory* memory,
-                                               uint64_t* pinned) {
+                                               const HotRegisters* pinned) {
     const unsigned width = fixed_width == 0 ? op.width : fixed_width;
     const unsigned operation = fixed_operation < 0 ? op.operation : fixed_operation;
     const unsigned mode = fixed_mode < 0 ? op.mode : fixed_mode;
@@ -264,12 +260,9 @@ template <Kind kind, unsigned width = 0, int operation = -1, int mode = -1, int 
 A64_MEMORY_INLINE bool ProbeLoadStore(State& state, const DecodedInstruction& op, uint64_t literal_address,
                                       const mem::SoftTlb* data_tlb, uint64_t& utlb_tags,
                                       uintptr_t& utlb_addend A64_HOT_PIN_REF) {
-    uint64_t* pin = nullptr;
-#if defined(FIBERCPU_AARCH64_PIN_REG) && FIBERCPU_AARCH64_PIN_REG >= 0
-    pin = &pinned;
-#endif
+    const HotRegisters pins{state A64_HANDLER_PIN_ARGS};
     return LoadStoreTransfer<kind, width, operation, mode, shift, vector, true>(state, op, 0, literal_address, data_tlb,
-                                                                                utlb_tags, utlb_addend, nullptr, pin)
+                                                                                utlb_tags, utlb_addend, nullptr, &pins)
                .reason == Stop::Continue;
 }
 

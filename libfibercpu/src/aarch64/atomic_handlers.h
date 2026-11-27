@@ -57,6 +57,7 @@ FIBERCPU_AARCH64_HANDLER_ABI uint64_t AtomicHandler(A64_HANDLER_PARAMS) {
     constexpr bool lse = kind == Kind::LoadStoreAtomic;
     const auto op = GetOpOperands<kind>(*current);
     const HotRegisters registers{state A64_HANDLER_PIN_ARGS};
+    const auto* data_tlb = state.data_tlb;
     A64_PREPARE_ATOMIC_ACCESS(return ReturnFromBlock(state, current, instr_limit, flags_cache A64_HANDLER_PIN_ARGS,
                                                      Alignment(address, load ? Access::Read : Access::Write)),
                                      A64_MEMORY_OP_GENERIC(current));

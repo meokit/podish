@@ -21,10 +21,16 @@
 #define FIBERCPU_AARCH64_HANDLER_ABI ATTR_PRESERVE_NONE
 #endif
 
-#ifndef FIBERCPU_AARCH64_PIN_REG
-#define FIBERCPU_AARCH64_PIN_REG -1
+#if __has_include("aarch64_gpr_pins.generated.h")
+#include "aarch64_gpr_pins.generated.h"
+#elif defined(FIBERCPU_AARCH64_PIN_REG) && FIBERCPU_AARCH64_PIN_REG >= 0
+static_assert(FIBERCPU_AARCH64_PIN_REG <= 30);
+#define FIBERCPU_AARCH64_PIN_COUNT 1
+#define FIBERCPU_AARCH64_FOR_EACH_PIN(X) X(FIBERCPU_AARCH64_PIN_REG, 0)
+#else
+#define FIBERCPU_AARCH64_PIN_COUNT 0
+#define FIBERCPU_AARCH64_FOR_EACH_PIN(X)
 #endif
-static_assert(FIBERCPU_AARCH64_PIN_REG >= -1 && FIBERCPU_AARCH64_PIN_REG <= 30);
 
 namespace fiberish::mem {
 class SoftTlb;
@@ -59,6 +65,8 @@ struct State {
     uint8_t exclusive_size = 0;
     detail::RunFrame* active_run = nullptr;
     const detail::BasicBlock* last_block = nullptr;
+    // The active threaded run supplies this pointer and restores it on exit.
+    const mem::SoftTlb* data_tlb = nullptr;
 
     void ClearExclusive() { exclusive_size = 0; }
 };
@@ -118,19 +126,30 @@ using ScalarHandlerFunc = StepResult (*)(State&, const Memory&, const DecodedIns
 
 namespace detail {
 struct DecodedOp;
-#if FIBERCPU_AARCH64_PIN_REG >= 0
-#define A64_HANDLER_PIN_PARAMS , [[maybe_unused]] uint64_t pinned
-#define A64_HANDLER_PIN_ARGS , pinned
-#else
-#define A64_HANDLER_PIN_PARAMS
-#define A64_HANDLER_PIN_ARGS
-#endif
+
+// Encoding 31 selects SP only for operands that permit it.
+template <unsigned reg>
+inline uint64_t& PinSlot(State& state) {
+    if constexpr (reg == 31)
+        return state.sp;
+    else
+        return state.x[reg];
+}
+
+#define A64_PIN_PARAM(reg, slot) , [[maybe_unused]] uint64_t pin_##slot
+#define A64_PIN_ARG(reg, slot) , pin_##slot
+#define A64_PIN_INIT(reg, slot) , ::fiberish::aarch64::detail::PinSlot<reg>(state)
+#define A64_PIN_REF(reg, slot) , uint64_t& pin_##slot
+#define A64_HANDLER_PIN_PARAMS FIBERCPU_AARCH64_FOR_EACH_PIN(A64_PIN_PARAM)
+#define A64_HANDLER_PIN_ARGS FIBERCPU_AARCH64_FOR_EACH_PIN(A64_PIN_ARG)
+#define A64_HANDLER_PIN_INIT FIBERCPU_AARCH64_FOR_EACH_PIN(A64_PIN_INIT)
+#define A64_HOT_PIN_REF FIBERCPU_AARCH64_FOR_EACH_PIN(A64_PIN_REF)
 
 #define A64_HANDLER_PARAMS                                                                     \
     State &state, const ::fiberish::aarch64::detail::DecodedOp *current, uint64_t instr_limit, \
-        [[maybe_unused]] const mem::SoftTlb *data_tlb, [[maybe_unused]] uint64_t utlb_tags,    \
-        [[maybe_unused]] uintptr_t utlb_addend, uint32_t flags_cache A64_HANDLER_PIN_PARAMS
-#define A64_HANDLER_ARGS state, current, instr_limit, data_tlb, utlb_tags, utlb_addend, flags_cache A64_HANDLER_PIN_ARGS
+        [[maybe_unused]] uint64_t utlb_tags, [[maybe_unused]] uintptr_t utlb_addend,           \
+        uint32_t flags_cache A64_HANDLER_PIN_PARAMS
+#define A64_HANDLER_ARGS state, current, instr_limit, utlb_tags, utlb_addend, flags_cache A64_HANDLER_PIN_ARGS
 
 using HandlerFunc = uint64_t(FIBERCPU_AARCH64_HANDLER_ABI*)(A64_HANDLER_PARAMS);
 }  // namespace detail

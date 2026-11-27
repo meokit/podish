@@ -80,9 +80,8 @@ struct BakedStop {
 };
 
 template <uint32_t dead, bool dynamic_imm12, uint32_t Word, uint32_t... Rest>
-A64_BAKED_INLINE BakedStop ExecuteBakedOps(State& state, const detail::DecodedOp* member, const mem::SoftTlb* data_tlb,
-                                           uint64_t& utlb_tags, uintptr_t& utlb_addend,
-                                           uint32_t& flags_cache A64_HOT_PIN_REF) {
+A64_BAKED_INLINE BakedStop ExecuteBakedOps(State& state, const detail::DecodedOp* member, uint64_t& utlb_tags,
+                                           uintptr_t& utlb_addend, uint32_t& flags_cache A64_HOT_PIN_REF) {
     constexpr auto op = detail::DecodeFields(Word);
     if constexpr (HasNativeCompareBranch && sizeof...(Rest) == 1 && IsUnshiftedCompare(op) && !dynamic_imm12 &&
                   !(dead & 1)) {
@@ -100,7 +99,7 @@ A64_BAKED_INLINE BakedStop ExecuteBakedOps(State& state, const detail::DecodedOp
     if constexpr (HasBlockTarget(op.kind)) target = GetExtraOperands(*member).primary;
     if constexpr (IsBakedTransfer(op.kind)) {
         if (!detail::ProbeLoadStore<op.kind, op.width, op.operation, op.mode, op.shift, detail::Field(Word, 26, 1)>(
-                state, operands, target, data_tlb, utlb_tags, utlb_addend A64_HANDLER_PIN_ARGS))
+                state, operands, target, state.data_tlb, utlb_tags, utlb_addend A64_HANDLER_PIN_ARGS))
             return {member, {Stop::Replay}};
     } else {
         uint64_t pc = 0;
@@ -116,14 +115,13 @@ A64_BAKED_INLINE BakedStop ExecuteBakedOps(State& state, const detail::DecodedOp
     } else {
         static_assert(!dynamic_imm12 && CanFollowInBakedSequence(Word));
         return ExecuteBakedOps<(dead >> 1), false, Rest...>(state, member->NextOp<HasExtraOperandSlot(op.kind)>(),
-                                                            data_tlb, utlb_tags, utlb_addend,
-                                                            flags_cache A64_HANDLER_PIN_ARGS);
+                                                            utlb_tags, utlb_addend, flags_cache A64_HANDLER_PIN_ARGS);
     }
 }
 
 template <uint32_t dead, bool dynamic_imm12, uint32_t... Words>
 FIBERCPU_AARCH64_HANDLER_ABI uint64_t BakedHandler(A64_HANDLER_PARAMS) {
-    const auto result = ExecuteBakedOps<dead, dynamic_imm12, Words...>(state, current, data_tlb, utlb_tags, utlb_addend,
+    const auto result = ExecuteBakedOps<dead, dynamic_imm12, Words...>(state, current, utlb_tags, utlb_addend,
                                                                        flags_cache A64_HANDLER_PIN_ARGS);
     if constexpr ((IsBakedTransfer(detail::DecodeFields(Words).kind) || ...)) {
         if (result.step.reason == Stop::Replay) [[unlikely]] {

@@ -115,8 +115,7 @@ FIBERCPU_AARCH64_HANDLER_ABI uint64_t ResolveBranchTargetSlow(A64_HANDLER_PARAMS
                 CountLLVMBlockEntry(state, *target, target->header.chain);
 #endif
                 ATTR_MUSTTAIL return target->header.entry(state, target->FirstOp(), instr_limit - target->inst_count(),
-                                                          data_tlb, utlb_tags, utlb_addend,
-                                                          flags_cache A64_HANDLER_PIN_ARGS);
+                                                          utlb_tags, utlb_addend, flags_cache A64_HANDLER_PIN_ARGS);
             }
             // A known target that does not fit is a budget exit.
 #ifdef ENABLE_TLB_STATS
@@ -227,16 +226,27 @@ struct RunScope {
     State& state;
     detail::RunFrame* saved;
     const BasicBlock* saved_block;
+#if FIBERCPU_AARCH64_TAIL_DISPATCH
+    const mem::SoftTlb* saved_data_tlb;
+#endif
     const bool outer = !std::exchange(active, true);
 
     RunScope(State& state, detail::RunFrame& frame)
         : state(state),
           saved(std::exchange(state.active_run, &frame)),
-          saved_block(std::exchange(state.last_block, nullptr)) {}
+          saved_block(std::exchange(state.last_block, nullptr)) {
+#if FIBERCPU_AARCH64_TAIL_DISPATCH
+        static const mem::SoftTlb empty_tlb;
+        saved_data_tlb = std::exchange(state.data_tlb, frame.memory.data_tlb ? frame.memory.data_tlb : &empty_tlb);
+#endif
+    }
 
     ~RunScope() {
         state.active_run = saved;
         state.last_block = saved_block;
+#if FIBERCPU_AARCH64_TAIL_DISPATCH
+        state.data_tlb = saved_data_tlb;
+#endif
         if (outer) active = false;
     }
 };
@@ -489,10 +499,6 @@ RunResult Run(State& state, const Memory& memory, uint64_t budget, const Profile
     uint64_t* previous_link = nullptr;
     std::optional<LocalBlockCache> local;
     if (!memory.lookup_cached_block && memory.executable_page) local.emplace();
-#if FIBERCPU_AARCH64_TAIL_DISPATCH
-    static const mem::SoftTlb empty_tlb;
-    const auto* data_tlb = memory.data_tlb ? memory.data_tlb : &empty_tlb;
-#endif
     while (executed < budget) {
         const auto pc = state.pc;
         if (pc & 3) return {Stop::Alignment, executed, pc, 0, 0, Access::Execute};
@@ -543,13 +549,9 @@ RunResult Run(State& state, const Memory& memory, uint64_t budget, const Profile
 #if FIBERCPU_LLVM_JIT
             CountLLVMBlockEntry(state, *block, block->header.chain);
 #endif
-            const auto remaining = block->header.entry(state, slots, budget - executed - count, data_tlb,
-                                                       mem::InvalidMicroTlbAbiTags(), 0, state.nzcv
-#if FIBERCPU_AARCH64_PIN_REG >= 0
-                                                       ,
-                                                       state.x[FIBERCPU_AARCH64_PIN_REG]
-#endif
-            );
+            const auto remaining =
+                block->header.entry(state, slots, budget - executed - count, mem::InvalidMicroTlbAbiTags(), 0,
+                                    state.nzcv A64_HANDLER_PIN_INIT);
             executed = budget - remaining;
             step = frame.exit;
             stop_op = frame.exit_op;

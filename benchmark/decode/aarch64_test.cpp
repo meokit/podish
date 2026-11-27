@@ -848,8 +848,35 @@ bool FusedDispatch() {
     return result.reason == Stop::Budget && result.executed == 2 && state.pc == Base + 76 && state.x[0] == 3;
 }
 
+bool StackPointerAndZeroRegisterRoles() {
+    constexpr uint32_t AddSp = 0x910043ff;     // add sp, sp, #16
+    constexpr uint32_t ReadZero = 0xaa1f03e0;  // orr x0, xzr, xzr
+    constexpr uint32_t WriteZero = 0xaa00001f; // orr xzr, x0, x0
+    constexpr uint32_t ReadSp = 0x910003e1;    // add x1, sp, #0
+    constexpr uint32_t Syscall = 0xd4000001;   // svc #0
+    Backing backing;
+    backing.Code(Base, {AddSp, ReadZero, WriteZero, ReadSp, Syscall});
+    State state;
+    state.pc = Base;
+    state.sp = 0x1000;
+    state.x[0] = 99;
+    state.x[1] = 99;
+    const auto result = Run(state, backing.Callbacks(), 5);
+    return result.reason == Stop::Syscall && result.executed == 5 && state.sp == 0x1010 && state.x[0] == 0 &&
+           state.x[1] == 0x1010;
+}
+
+constexpr unsigned PinnedRegisterOr(unsigned fallback) {
+#define A64_TEST_PIN(reg, slot)                                                                                        \
+    if constexpr (reg < 31)                                                                                            \
+        return reg;
+    FIBERCPU_AARCH64_FOR_EACH_PIN(A64_TEST_PIN)
+#undef A64_TEST_PIN
+    return fallback;
+}
+
 bool FusedPCRelativeMembers() {
-    constexpr unsigned Counter = FIBERCPU_AARCH64_PIN_REG >= 0 ? FIBERCPU_AARCH64_PIN_REG : 8;
+    constexpr unsigned Counter = PinnedRegisterOr(8);
     constexpr unsigned AddressReg = Counter == 3 ? 4 : 3;
     constexpr uint32_t Adds = 0x31000400 | (Counter << 5) | Counter; // adds wCounter, wCounter, #1
     constexpr uint32_t Address = 0x10000060 | AddressReg;            // adr xAddress, +12
@@ -952,7 +979,7 @@ bool FusedLoadReplay() {
     constexpr auto Lead = Start - 8;
     constexpr auto Data = Base + Page + 64;
     constexpr auto HotData = 0x00410000u;
-    constexpr unsigned AddressReg = FIBERCPU_AARCH64_PIN_REG >= 0 ? FIBERCPU_AARCH64_PIN_REG : 3;
+    constexpr unsigned AddressReg = PinnedRegisterOr(3);
     constexpr unsigned Target = AddressReg == 2 ? 4 : 2;
     constexpr unsigned Counter = AddressReg == 1 ? 5 : 1;
     constexpr unsigned Observer = AddressReg == 6 ? 7 : 6;
@@ -1040,7 +1067,7 @@ bool FusedLoadReplay() {
 bool FusedStoreReplay() {
     constexpr auto Start = Base + Page - 12;
     constexpr auto Data = Base + Page + 64;
-    constexpr unsigned AddressReg = FIBERCPU_AARCH64_PIN_REG >= 0 ? FIBERCPU_AARCH64_PIN_REG : 3;
+    constexpr unsigned AddressReg = PinnedRegisterOr(3);
     constexpr unsigned Source = AddressReg == 2 ? 4 : 2;
     constexpr uint32_t Prefix = 0xb1004000 | (AddressReg << 5) | AddressReg;
     constexpr uint32_t Store = 0xb8004400 | (AddressReg << 5) | Source;
@@ -1547,6 +1574,7 @@ int main() {
         {"fused dispatch branch, budget and fault accounting", FusedDispatch()},
         {"compare and conditional branch preserve flags and budget boundaries", CompareBranchPair()},
         {"baked compare branch suffix preserves flags at a successor fault", BakedCompareBranchSuffix()},
+        {"SP remains distinct from XZR across threaded writes", StackPointerAndZeroRegisterRoles()},
         {"fused PC-relative address, link and conditional branch use each member PC", FusedPCRelativeMembers()},
         {"fused load fault and instruction refetch", FusedLoadRefetch()},
         {"fused load replay preserves the prefix and commits writeback once", FusedLoadReplay()},

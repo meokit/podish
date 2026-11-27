@@ -161,9 +161,7 @@ class Builder {
     llvm::Value* nzcv_;
     llvm::Value* target_;
     llvm::Value* next_op_;
-#if FIBERCPU_AARCH64_PIN_REG >= 0
-    llvm::Value* pinned_;
-#endif
+    std::array<llvm::Value*, FIBERCPU_AARCH64_PIN_COUNT> pins_;
     llvm::Value* page_;
     llvm::Value* region_ops_ = nullptr;
     llvm::Value* remaining_;
@@ -194,11 +192,9 @@ class Builder {
     }
 
     void TailExit(llvm::FunctionCallee target, llvm::Value* remaining, llvm::Value* op) {
-        llvm::SmallVector<llvm::Value*, 8> args{
-            state_, op, remaining, tlb_, Load64(tags_), Load64(addend_), ir_.CreateLoad(ir_.getInt32Ty(), nzcv_)};
-#if FIBERCPU_AARCH64_PIN_REG >= 0
-        args.push_back(Load64(pinned_));
-#endif
+        llvm::SmallVector<llvm::Value*, 6 + FIBERCPU_AARCH64_PIN_COUNT> args{
+            state_, op, remaining, Load64(tags_), Load64(addend_), ir_.CreateLoad(ir_.getInt32Ty(), nzcv_)};
+        for (auto* pin : pins_) args.push_back(Load64(pin));
         auto* call = ir_.CreateCall(target, args);
         call->setCallingConv(entry_.getCallingConv());
         call->setTailCallKind(llvm::CallInst::TCK_MustTail);
@@ -287,16 +283,15 @@ public:
         state_ = &*arg++;
         current_ = &*arg++;
         limit_ = &*arg++;
-        tlb_ = &*arg++;
         ir_.SetInsertPoint(Block("entry"));
+        auto* tlb_field = ir_.CreateConstGEP1_64(ir_.getInt8Ty(), state_, offsetof(State, data_tlb));
+        tlb_ = ir_.CreateLoad(ir_.getPtrTy(), tlb_field);
         tags_ = Saved(&*arg++, "tags");
         addend_ = Saved(&*arg++, "addend");
         nzcv_ = Saved(&*arg++, "nzcv");
         target_ = Saved(ir_.getInt64(0), "branch.target");
         next_op_ = ir_.CreateAlloca(ir_.getPtrTy(), nullptr, "next.op");
-#if FIBERCPU_AARCH64_PIN_REG >= 0
-        pinned_ = Saved(&*arg++, "pinned");
-#endif
+        for (auto& pin : pins_) pin = Saved(&*arg++, "pinned");
         llvm::Value* selector = nullptr;
         if (members.size() == 1) {
             auto* block = ir_.CreateGEP(ir_.getInt8Ty(), current_, ir_.getInt64(-int64_t(sizeof(BasicBlock))));
@@ -432,12 +427,10 @@ public:
             }
 
             auto* pc = PC(offset);
-            llvm::SmallVector<llvm::Value*, 11> args{
+            llvm::SmallVector<llvm::Value*, 10 + FIBERCPU_AARCH64_PIN_COUNT> args{
                 state_,  slot,  ConstantOperands(module_, op),      pc,     tlb_, tags_,
                 addend_, nzcv_, ir_.getInt1((dead_flags >> i) & 1), target_};
-#if FIBERCPU_AARCH64_PIN_REG >= 0
-            args.push_back(pinned_);
-#endif
+            for (auto* pin : pins_) args.push_back(pin);
             auto* flow = ir_.CreateCall(module_.getFunction(name), args);
             inline_calls_.push_back(flow);
             if (binding.may_exit || binding.refetch) {

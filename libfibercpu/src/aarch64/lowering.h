@@ -43,8 +43,9 @@ FIBERCPU_AARCH64_HANDLER_ABI inline uint64_t NopHandler(A64_HANDLER_PARAMS) {
 template <Kind kind, unsigned width, int operation, int mode, int shift, int vector>
 FIBERCPU_AARCH64_HANDLER_ABI uint64_t LoadStoreHandler(A64_HANDLER_PARAMS) {
     const auto op = GetOpOperands<kind>(*current);
-    if (!ProbeLoadStore<kind, width, operation, mode, shift, vector>(
-            state, op, BlockTarget<kind>(op), data_tlb, utlb_tags, utlb_addend A64_HANDLER_PIN_ARGS)) [[unlikely]] {
+    if (!ProbeLoadStore<kind, width, operation, mode, shift, vector>(state, op, BlockTarget<kind>(op), state.data_tlb,
+                                                                     utlb_tags, utlb_addend A64_HANDLER_PIN_ARGS))
+        [[unlikely]] {
         A64_MEMORY_OP_GENERIC(current);
     }
     A64_DISPATCH_NEXT(current->NextOp<HasExtraOperandSlot(kind)>());
