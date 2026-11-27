@@ -19,12 +19,14 @@
 
 namespace fiberish {
 
-extern "C" bool FiberLLVMUseStep(unsigned index);
-extern "C" unsigned FiberLLVMOperandLayout(unsigned index);
-extern "C" [[gnu::const]] unsigned FiberLLVMBranchSuffix(unsigned index);
+extern "C" unsigned FiberLLVMOperandLayout();
+extern "C" [[gnu::const]] unsigned FiberLLVMBranchSuffix();
 extern "C" LLVMBlockExit FiberLLVMExit();
-extern "C" LogicFlow FiberLLVMPlaceholder(unsigned index, uint32_t encoding, uint32_t ea_desc, uint32_t displacement,
-                                          LogicFuncParams);
+extern "C" LogicFlow FiberLLVMPlaceholder(uint32_t encoding, uint32_t ea_desc, uint32_t displacement, LogicFuncParams);
+extern "C" ATTR_PRESERVE_NONE int64_t FiberLLVMNextStep(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
+                                                        int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags,
+                                                        mem::MicroTlbAbiWord utlb_addend, uint32_t branch,
+                                                        uint64_t flags_cache FIBERCPU_PIN_PARAMS);
 
 #ifdef FIBERCPU_LLVM_SHARED_REGION_EXITS
 extern "C"
@@ -52,16 +54,16 @@ FIBERCPU_DEFINE_REGION_CHAIN(FiberLLVMRegionChainDouble, 1)
 extern "C" const HandlerFunc FiberLLVMRegionMemoryExits[] = {&MemoryOpRestart, &MemoryOpRetry};
 #endif
 
-#define FIBERCPU_LLVM_OP(Id, Name, Exact, Requirements, Extensions)                                         \
-    extern "C" LogicFlow FiberLLVMGeneric_##Name(unsigned, uint32_t, uint32_t, uint32_t, LogicFuncParams) { \
-        return op::Name(LogicPassParams);                                                                   \
-    }                                                                                                       \
-    extern "C" LogicFlow FiberLLVMTemplate_##Name(unsigned, uint32_t encoding, uint32_t ea_desc,            \
-                                                  uint32_t displacement, LogicFuncParams) {                 \
-        const auto metadata = uint8_t(encoding >> 16);                                                      \
-        const OperandSpec::Baked operands{uint8_t(encoding >> 8), ea_desc, displacement};                   \
-        gpr.baked_address = DecodedOperandShape::HasMemoryAddress(metadata) ? &operands.address : nullptr;  \
-        return Exact;                                                                                       \
+#define FIBERCPU_LLVM_OP(Id, Name, Exact, Requirements, Extensions)                                           \
+    extern "C" LogicFlow FiberLLVMGeneric_##Name(uint32_t, uint32_t, uint32_t, LogicFuncParams) {             \
+        return op::Name(LogicPassParams);                                                                     \
+    }                                                                                                         \
+    extern "C" LogicFlow FiberLLVMTemplate_##Name(uint32_t encoding, uint32_t ea_desc, uint32_t displacement, \
+                                                  LogicFuncParams) {                                          \
+        const auto metadata = uint8_t(encoding >> 16);                                                        \
+        const OperandSpec::Baked operands{uint8_t(encoding >> 8), ea_desc, displacement};                     \
+        gpr.baked_address = DecodedOperandShape::HasMemoryAddress(metadata) ? &operands.address : nullptr;    \
+        return Exact;                                                                                         \
     }
 #include "llvm_block_operations.inc"
 #undef FIBERCPU_LLVM_OP
@@ -82,51 +84,66 @@ extern "C" const LLVMOperationTable FiberLLVMOperationTable = {
     },
 };
 
-#define FIBERCPU_LLVM_STEP(I)                                                                                          \
-    do {                                                                                                               \
-        if (!FiberLLVMUseStep(I)) goto dispatch_tail;                                                                  \
-        const auto layout = FiberLLVMOperandLayout(I);                                                                 \
-        const auto slots = layout & 3;                                                                                 \
-        const auto imm = layout == kLLVMBranchLinkSlot ? current->Primary()                                            \
-                         : slots == 2                  ? (current + 1)->Primary()                                      \
-                         : current->HasMemory()        ? GetSingleSlotMemoryImmediate(current)                         \
-                                                       : current->Primary();                                                  \
-        auto flow =                                                                                                    \
-            FiberLLVMPlaceholder(I, 0, 0, 0, state, current, &utlb, imm, 0, &branch, flags_cache, FIBERCPU_GPR_CACHE); \
-        if (flow != LogicFlow::Continue) {                                                                             \
-            HANDLE_SUPEROPCODE_FLOW(flow, state, current, instr_limit, utlb, utlb_tags, utlb_addend, branch,           \
-                                    flags_cache, FiberLLVMBranchSuffix(I));                                            \
-        }                                                                                                              \
-        current += slots;                                                                                              \
-    } while (false)
-
-// Clang supplies the exact threaded ABI and shared SuperOpcode exits. Step
-// guards and calls are replaced before code generation.
-extern "C" ATTR_PRESERVE_NONE int64_t FiberLLVMEntry(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                     int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags,
-                                                     mem::MicroTlbAbiWord utlb_addend, uint32_t branch,
-                                                     uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+// Clang supplies the exact threaded ABI, step dispatch, and SuperOpcode exits
+// once per template instead of unrolling a fixed maximum block skeleton.
+extern "C" ATTR_PRESERVE_NONE int64_t FiberLLVMStep(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
+                                                    int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags,
+                                                    mem::MicroTlbAbiWord utlb_addend, uint32_t branch,
+                                                    uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
     FIBERCPU_PIN_ASSUME;
     auto utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
-    auto* current = op;
-#include "llvm_block_entries.inc"
-
-dispatch_tail:
+    const auto layout = FiberLLVMOperandLayout();
+    const auto slots = layout & 3;
+    const auto imm = layout == kLLVMBranchLinkSlot ? op->Primary()
+                     : slots == 2                  ? (op + 1)->Primary()
+                     : op->HasMemory()             ? GetSingleSlotMemoryImmediate(op)
+                                                   : op->Primary();
+    auto flow = FiberLLVMPlaceholder(0, 0, 0, state, op, &utlb, imm, 0, &branch, flags_cache, FIBERCPU_GPR_CACHE);
+    if (flow != LogicFlow::Continue) {
+        HANDLE_SUPEROPCODE_FLOW(flow, state, op, instr_limit, utlb, utlb_tags, utlb_addend, branch, flags_cache,
+                                FiberLLVMBranchSuffix());
+    }
     mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+    ATTR_MUSTTAIL return FiberLLVMNextStep(state, op + slots, instr_limit, utlb_tags, utlb_addend, branch,
+                                           flags_cache FIBERCPU_PIN_RELOAD);
+}
+
+// Fast-path step template for kernels proven to always return LogicFlow::Continue.
+extern "C" ATTR_PRESERVE_NONE int64_t FiberLLVMStepContinue(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
+                                                            int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags,
+                                                            mem::MicroTlbAbiWord utlb_addend, uint32_t branch,
+                                                            uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+    FIBERCPU_PIN_ASSUME;
+    auto utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
+    const auto layout = FiberLLVMOperandLayout();
+    const auto slots = layout & 3;
+    const auto imm = layout == kLLVMBranchLinkSlot ? op->Primary()
+                     : slots == 2                  ? (op + 1)->Primary()
+                     : op->HasMemory()             ? GetSingleSlotMemoryImmediate(op)
+                                                   : op->Primary();
+    (void)FiberLLVMPlaceholder(0, 0, 0, state, op, &utlb, imm, 0, &branch, flags_cache, FIBERCPU_GPR_CACHE);
+    mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
+    ATTR_MUSTTAIL return FiberLLVMNextStep(state, op + slots, instr_limit, utlb_tags, utlb_addend, branch,
+                                           flags_cache FIBERCPU_PIN_RELOAD);
+}
+
+extern "C" ATTR_PRESERVE_NONE int64_t FiberLLVMTail(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
+                                                    int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags,
+                                                    mem::MicroTlbAbiWord utlb_addend, uint32_t branch,
+                                                    uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
     switch (FiberLLVMExit()) {
         case LLVMBlockExit::Fallthrough:
-            ATTR_MUSTTAIL return OpExitBlockImpl<false>(state, current, instr_limit, utlb_tags, utlb_addend, branch,
+            ATTR_MUSTTAIL return OpExitBlockImpl<false>(state, op, instr_limit, utlb_tags, utlb_addend, branch,
                                                         flags_cache FIBERCPU_PIN_RELOAD);
         case LLVMBlockExit::Branch:
-            ATTR_MUSTTAIL return OpExitBlockImpl<true>(state, current, instr_limit, utlb_tags, utlb_addend, branch,
+            ATTR_MUSTTAIL return OpExitBlockImpl<true>(state, op, instr_limit, utlb_tags, utlb_addend, branch,
                                                        flags_cache FIBERCPU_PIN_RELOAD);
         case LLVMBlockExit::Dispatch:
             break;
     }
     RestoreLLVMBlockOnExit(state);
-    ATTR_MUSTTAIL return current->handler(state, current, instr_limit, utlb_tags, utlb_addend, branch,
-                                          flags_cache FIBERCPU_PIN_RELOAD);
+    ATTR_MUSTTAIL return op->handler(state, op, instr_limit, utlb_tags, utlb_addend, branch,
+                                     flags_cache FIBERCPU_PIN_RELOAD);
 }
-#undef FIBERCPU_LLVM_STEP
 
 }  // namespace fiberish

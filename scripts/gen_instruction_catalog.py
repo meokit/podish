@@ -386,7 +386,6 @@ def generate(catalog, output, fusion_source=None, pin_mode=0, pin_mask=0, modrm_
         "inline constexpr std::string_view kOpIdFingerprint = FIBERCPU_LLVM_OP_ID_FINGERPRINT;",
         "}  // namespace fiberish::block_recipe",
     ]
-    llvm_entries = [f"FIBERCPU_LLVM_STEP({i});" for i in range(64)]
 
     scalar_plans = scalar_modrm_plans(catalog)
     scalar_policies = catalog.get("scalar_policies", {})
@@ -539,7 +538,7 @@ def generate(catalog, output, fusion_source=None, pin_mode=0, pin_mask=0, modrm_
     partial_config = ["#pragma once", f"#define FIBERCPU_HAVE_SCALAR_PARTIALS {int(bool(partial_shapes))}"]
     for name, lines in (("instruction_families.h", families), ("instruction_catalog.inc", catalog_lines),
                         ("instruction_kernel_bindings.inc", bindings), ("llvm_block_operations.inc", llvm_operations),
-                        ("llvm_block_entries.inc", llvm_entries), ("llvm_op_ids.h", llvm_op_ids),
+                        ("llvm_op_ids.h", llvm_op_ids),
                         ("block_link_opcodes.inc", link_cases), ("extended_decode.inc", extended_decode),
                         ("scalar_partial_config.h", partial_config),
                         ("training_scalar_handlers.inc", scalar_training_lines),

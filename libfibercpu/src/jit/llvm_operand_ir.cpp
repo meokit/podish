@@ -466,14 +466,14 @@ bool InlineLLVMKernel(llvm::CallInst& call, llvm::Function& kernel, BoundOperand
     const auto bind = [&](unsigned arg, uint32_t value) {
         call.setArgOperand(arg, llvm::ConstantInt::get(call.getArgOperand(arg)->getType(), value));
     };
-    // The placeholder includes the four template operands followed by the
+    // The placeholder includes the three template operands followed by the
     // logic ABI. ModRM is a constant in both generic and exact blocks.
-    bind(8, binding.modrm);
+    bind(7, binding.modrm);
     if (shape) {
-        bind(1, shape->encoding);
-        bind(2, shape->ea_desc);
-        bind(3, shape->displacement);
-        bind(7, shape->immediate);
+        bind(0, shape->encoding);
+        bind(1, shape->ea_desc);
+        bind(2, shape->displacement);
+        bind(6, shape->immediate);
     }
     llvm::InlineFunctionInfo info;
     return llvm::InlineFunction(call, info).isSuccess();
@@ -820,19 +820,35 @@ const llvm::Function* LLVMOperandTemplates::Get(block_recipe::OpId id, bool exac
 
 namespace {
 
+bool KernelAlwaysContinues(const llvm::Function& kernel) {
+    bool saw_return = false;
+    for (const auto& block : kernel) {
+        const auto* ret = llvm::dyn_cast<llvm::ReturnInst>(block.getTerminator());
+        if (!ret) continue;
+        saw_return = true;
+        const auto* value = llvm::dyn_cast_or_null<llvm::ConstantInt>(ret->getReturnValue());
+        if (!value || !value->isZero()) return false;
+    }
+    return saw_return;
+}
+
 std::unique_ptr<llvm::Module> CloneBlockModule(const LLVMOperandTemplates& templates,
                                                std::span<const BlockKeyView> keys) {
     if (!templates.IsValid()) return {};
     const auto& source = templates.Module();
-    const auto* entry = source.getFunction("FiberLLVMEntry");
-    if (!entry) return {};
+    const auto* step_full = source.getFunction("FiberLLVMStep");
+    const auto* step_continue = source.getFunction("FiberLLVMStepContinue");
+    const auto* tail = source.getFunction("FiberLLVMTail");
+    if (!step_full || !step_continue || !tail) return {};
     llvm::SmallSetVector<const llvm::GlobalValue*, 32> roots;
-    roots.insert(entry);
+    roots.insert(tail);
 #ifdef FIBERCPU_LLVM_SHARED_REGION_EXITS
     // The region builder reads this table directly when grouping memory exits.
     if (keys.size() > 1)
         if (const auto* memory_exits = source.getNamedGlobal("FiberLLVMRegionMemoryExits")) roots.insert(memory_exits);
 #endif
+    bool need_full_step = false;
+    bool need_continue_step = false;
     for (const auto key : keys) {
         if (key.operations.size() > block_recipe::kMaxOps ||
             (key.IsExact() && key.operands.size() != key.operations.size()) ||
@@ -843,8 +859,14 @@ std::unique_ptr<llvm::Module> CloneBlockModule(const LLVMOperandTemplates& templ
             const auto* kernel = templates.Get(step.id, key.IsExact());
             if (!kernel) return {};
             roots.insert(kernel);
+            if (KernelAlwaysContinues(*kernel))
+                need_continue_step = true;
+            else
+                need_full_step = true;
         }
     }
+    if (need_full_step) roots.insert(step_full);
+    if (need_continue_step) roots.insert(step_continue);
     auto module = KernelModule().Clone(source, roots.getArrayRef());
     // The catalog normally stays in the source module. Let DCE remove it
     // if LLVM had to clone the entire module for module-level constructs.
@@ -853,118 +875,137 @@ std::unique_ptr<llvm::Module> CloneBlockModule(const LLVMOperandTemplates& templ
     return module;
 }
 
-bool SpecializeBlockEntry(const LLVMOperandTemplates& templates, llvm::Function& entry, BlockKeyView key,
-                          bool fold_operand_loads, std::optional<uint32_t> member_offset = {}) {
-    auto& module = *entry.getParent();
+llvm::Function* BuildBlockEntry(const LLVMOperandTemplates& templates, llvm::Module& module, llvm::StringRef entry_name,
+                                llvm::GlobalValue::LinkageTypes linkage, BlockKeyView key, bool fold_operand_loads,
+                                std::optional<uint32_t> member_offset = {}) {
+    auto* tail_fn = module.getFunction("FiberLLVMTail");
+    if (!tail_fn) return nullptr;
+    auto* step_full = module.getFunction("FiberLLVMStep");
+    auto* step_continue = module.getFunction("FiberLLVMStepContinue");
+    auto* next_step_fn = module.getFunction("FiberLLVMNextStep");
+    auto* placeholder_fn = module.getFunction("FiberLLVMPlaceholder");
+    auto* operand_layout_fn = module.getFunction("FiberLLVMOperandLayout");
+    auto* branch_suffix_fn = module.getFunction("FiberLLVMBranchSuffix");
+    auto* exit_kind_fn = module.getFunction("FiberLLVMExit");
+    if (!exit_kind_fn) return nullptr;
+    if (!key.operations.empty() && (!next_step_fn || !placeholder_fn || !operand_layout_fn)) return nullptr;
+
+    auto* entry = llvm::Function::Create(tail_fn->getFunctionType(), linkage, entry_name, module);
+    entry->copyAttributesFrom(tail_fn);
+    entry->setLinkage(linkage);
+    entry->setCallingConv(tail_fn->getCallingConv());
+
+    auto& context = module.getContext();
+    auto* start = llvm::BasicBlock::Create(context, "entry", entry);
+    llvm::IRBuilder<> builder(start);
+    llvm::SmallVector<llvm::Value*, 9> entry_args;
+    for (auto& arg : entry->args()) entry_args.push_back(&arg);
+    llvm::Function* initial_target = key.operations.empty() ? tail_fn : next_step_fn;
+    auto* continuation = builder.CreateCall(initial_target, entry_args);
+    continuation->setCallingConv(entry->getCallingConv());
+    continuation->setTailCallKind(llvm::CallInst::TCK_MustTail);
+    builder.CreateRet(continuation);
+
     const bool exact = key.IsExact();
     fold_operand_loads &= exact;
     std::array<size_t, block_recipe::kMaxOps> slot_offsets;
     size_t next_offset = 0;
-    size_t step_index = 0;
-    for (const auto& step : key.operations) {
-        slot_offsets[step_index++] = next_offset;
-        next_offset += step.shape.slots * sizeof(DecodedOp);
+    for (size_t i = 0; i < key.operations.size(); ++i) {
+        slot_offsets[i] = next_offset;
+        next_offset += key.operations[i].shape.slots * sizeof(DecodedOp);
     }
-    const auto* placeholder = module.getFunction("FiberLLVMPlaceholder");
-    const auto* use_step = module.getFunction("FiberLLVMUseStep");
-    const auto* exit_kind = module.getFunction("FiberLLVMExit");
-    const auto* operand_layout = module.getFunction("FiberLLVMOperandLayout");
-    const auto* branch_suffix = module.getFunction("FiberLLVMBranchSuffix");
-    if (!placeholder || !use_step || !exit_kind || !operand_layout || !branch_suffix) return false;
 
-    std::vector<llvm::CallInst*> guards;
-    llvm::CallInst* exit_site = nullptr;
-    for (auto& inst : llvm::instructions(entry)) {
-        auto* call = llvm::dyn_cast<llvm::CallInst>(&inst);
-        if (call && call->getCalledFunction() == use_step) guards.push_back(call);
-        if (call && call->getCalledFunction() == exit_kind) exit_site = call;
-    }
-    if (guards.size() != block_recipe::kMaxOps || !exit_site) return false;
-    exit_site->replaceAllUsesWith(llvm::ConstantInt::get(exit_site->getType(), static_cast<uint8_t>(key.exit)));
-    exit_site->eraseFromParent();
-    for (auto* guard : guards) {
-        const auto* index = llvm::dyn_cast<llvm::ConstantInt>(guard->getArgOperand(0));
-        if (!index) return false;
-        guard->replaceAllUsesWith(
-            llvm::ConstantInt::get(guard->getType(), index->getZExtValue() < key.operations.size()));
-        guard->eraseFromParent();
-    }
-    llvm::removeUnreachableBlocks(entry);
+    const auto replace_in_entry = [&](llvm::Function* fn, auto&& callback) {
+        if (!fn) return;
+        for (auto* user : llvm::make_early_inc_range(fn->users())) {
+            auto* call = llvm::dyn_cast<llvm::CallInst>(user);
+            if (call && call->getFunction() == entry) callback(*call);
+        }
+    };
 
-    std::vector<llvm::CallInst*> sites;
-    std::vector<llvm::CallInst*> advances;
-    std::vector<llvm::CallInst*> suffixes;
-    for (auto& inst : llvm::instructions(entry)) {
-        auto* call = llvm::dyn_cast<llvm::CallInst>(&inst);
-        if (!call) continue;
-        if (call->getCalledFunction() == placeholder) sites.push_back(call);
-        if (call->getCalledFunction() == operand_layout) advances.push_back(call);
-        if (call->getCalledFunction() == branch_suffix) suffixes.push_back(call);
-    }
-    for (auto* advance : advances) {
-        const auto* index = llvm::dyn_cast<llvm::ConstantInt>(advance->getArgOperand(0));
-        if (!index || index->getZExtValue() >= key.operations.size()) return false;
-        const auto& operation = key.operations[index->getZExtValue()];
-        const auto id = static_cast<size_t>(operation.id);
-        const auto layout = block_recipe::kHasBranchLinkSlot[id] ? kLLVMBranchLinkSlot : operation.shape.slots;
-        assert((layout & 3) == operation.shape.slots);
-        advance->replaceAllUsesWith(llvm::ConstantInt::get(advance->getType(), layout));
-        advance->eraseFromParent();
-    }
-    for (auto* suffix : suffixes) {
-        const auto* index = llvm::dyn_cast<llvm::ConstantInt>(suffix->getArgOperand(0));
-        if (!index || index->getZExtValue() >= key.operations.size()) return false;
-        const auto step = index->getZExtValue();
-        const auto id = static_cast<size_t>(key.operations[step].id);
-        const auto inst_count = key.operations.size() + key.uncompiled_ops;
-        const auto remaining =
-            block_recipe::kHasBranchLinkSlot[id] ? DecodedOp::BranchSuffixAfter(inst_count, step) : 0;
-        suffix->replaceAllUsesWith(llvm::ConstantInt::get(suffix->getType(), remaining));
-        suffix->eraseFromParent();
-    }
-    if (sites.size() != key.operations.size()) return false;
-    llvm::SmallBitVector slots(key.operations.size());
-    for (auto* call : sites) {
-        const auto* index = llvm::dyn_cast<llvm::ConstantInt>(call->getArgOperand(0));
-        if (!index || index->getZExtValue() >= key.operations.size() || slots.test(index->getZExtValue())) return false;
-        slots.set(index->getZExtValue());
-        const auto slot = index->getZExtValue();
+    for (size_t slot = 0; slot < key.operations.size(); ++slot) {
         const auto& operation = key.operations[slot];
         const auto* source = templates.Get(operation.id, exact);
         auto* target = source ? module.getFunction(source->getName()) : nullptr;
-        if (fold_operand_loads || !key.eips.empty()) {
-            // A kernel runs only at its step. The running cursor also flows
-            // into exits, so its incoming PHIs need not name that same slot.
-            // Give the kernel a direct pointer before inlining its loads.
-            llvm::IRBuilder<> builder(call);
-            auto* op =
-                builder.CreateInBoundsGEP(builder.getInt8Ty(), entry.getArg(1), builder.getInt64(slot_offsets[slot]));
-            call->setArgOperand(5, op);  // DecodedOp* in LogicFuncParams.
-        }
-        if (!target || !InlineLLVMKernel(*call, *target, operation.shape, exact ? &key.operands[slot] : nullptr))
-            return false;
-    }
-#ifdef FIBERCPU_LLVM_SHARED_REGION_EXITS
-    auto* share_exits = module.getFunction("FiberLLVMShareRegionExits");
-    if (share_exits) {
-        for (auto* user : llvm::make_early_inc_range(share_exits->users())) {
-            auto* call = llvm::cast<llvm::CallInst>(user);
-            if (call->getFunction() != &entry) continue;
-            call->replaceAllUsesWith(llvm::ConstantInt::getBool(entry.getContext(), member_offset.has_value()));
-            call->eraseFromParent();
-        }
-    }
-#endif
-    LowerBlockEipReads(entry, key, std::span(slot_offsets).first(step_index), member_offset);
-    if (fold_operand_loads) BakeLLVMOperandLoads(entry, key);
+        if (!target) return nullptr;
+        const bool always_continues = KernelAlwaysContinues(*target);
+        auto* step_template = always_continues ? step_continue : step_full;
+        if (!step_template) return nullptr;
 
-    return true;
+        if (slot > 0) {
+            llvm::IRBuilder<> pos(continuation);
+            continuation->setArgOperand(
+                1, pos.CreateInBoundsGEP(pos.getInt8Ty(), entry->getArg(1), pos.getInt64(slot_offsets[slot])));
+        }
+        continuation->setCalledFunction(step_template);
+        llvm::InlineFunctionInfo step_info;
+        if (!llvm::InlineFunction(*continuation, step_info).isSuccess()) return nullptr;
+
+        const auto id = static_cast<size_t>(operation.id);
+        const auto layout = block_recipe::kHasBranchLinkSlot[id] ? kLLVMBranchLinkSlot : operation.shape.slots;
+        assert((layout & 3) == operation.shape.slots);
+        replace_in_entry(operand_layout_fn, [&](llvm::CallInst& call) {
+            call.replaceAllUsesWith(llvm::ConstantInt::get(call.getType(), layout));
+            call.eraseFromParent();
+        });
+        const auto inst_count = key.operations.size() + key.uncompiled_ops;
+        const auto remaining =
+            block_recipe::kHasBranchLinkSlot[id] ? DecodedOp::BranchSuffixAfter(inst_count, slot) : 0;
+        replace_in_entry(branch_suffix_fn, [&](llvm::CallInst& call) {
+            call.replaceAllUsesWith(llvm::ConstantInt::get(call.getType(), remaining));
+            call.eraseFromParent();
+        });
+
+        llvm::SmallVector<llvm::CallInst*, 2> sites;
+        replace_in_entry(placeholder_fn, [&](llvm::CallInst& call) { sites.push_back(&call); });
+        if (sites.size() != 1) return nullptr;
+        if (fold_operand_loads || !key.eips.empty()) {
+            llvm::IRBuilder<> pos(sites[0]);
+            auto* op = pos.CreateInBoundsGEP(pos.getInt8Ty(), entry->getArg(1), pos.getInt64(slot_offsets[slot]));
+            sites[0]->setArgOperand(4, op);  // DecodedOp* in LogicFuncParams.
+        }
+        if (!InlineLLVMKernel(*sites[0], *target, operation.shape, exact ? &key.operands[slot] : nullptr))
+            return nullptr;
+
+        llvm::SmallVector<llvm::CallInst*, 2> next_calls;
+        replace_in_entry(next_step_fn, [&](llvm::CallInst& call) { next_calls.push_back(&call); });
+        if (next_calls.size() != 1) return nullptr;
+        continuation = next_calls[0];
+    }
+
+    if (!key.operations.empty()) {
+        llvm::IRBuilder<> pos(continuation);
+        continuation->setArgOperand(
+            1, pos.CreateInBoundsGEP(pos.getInt8Ty(), entry->getArg(1), pos.getInt64(next_offset)));
+        continuation->setCalledFunction(tail_fn);
+    }
+    llvm::InlineFunctionInfo tail_info;
+    if (!llvm::InlineFunction(*continuation, tail_info).isSuccess()) return nullptr;
+    replace_in_entry(exit_kind_fn, [&](llvm::CallInst& call) {
+        call.replaceAllUsesWith(llvm::ConstantInt::get(call.getType(), static_cast<uint8_t>(key.exit)));
+        call.eraseFromParent();
+    });
+
+#ifdef FIBERCPU_LLVM_SHARED_REGION_EXITS
+    replace_in_entry(module.getFunction("FiberLLVMShareRegionExits"), [&](llvm::CallInst& call) {
+        call.replaceAllUsesWith(llvm::ConstantInt::getBool(context, member_offset.has_value()));
+        call.eraseFromParent();
+    });
+#endif
+    LowerBlockEipReads(*entry, key, std::span(slot_offsets).first(key.operations.size()), member_offset);
+    if (fold_operand_loads) BakeLLVMOperandLoads(*entry, key);
+    return entry;
 }
 
 void RemoveBlockMarkers(llvm::Module& module) {
 #ifdef FIBERCPU_LLVM_SHARED_REGION_EXITS
     if (auto* memory_exits = module.getNamedGlobal("FiberLLVMRegionMemoryExits")) memory_exits->eraseFromParent();
 #endif
+    for (const auto name :
+         {"FiberLLVMStep", "FiberLLVMStepContinue", "FiberLLVMTail", "FiberLLVMNextStep", "FiberLLVMOperandLayout",
+          "FiberLLVMBranchSuffix", "FiberLLVMPlaceholder", "FiberLLVMExit", "FiberLLVMShareRegionExits"}) {
+        if (auto* fn = module.getFunction(name); fn && fn->use_empty()) fn->eraseFromParent();
+    }
     for (const auto name : {"FiberLLVMReadEip", "FiberLLVMRegionEdge", "FiberLLVMRegionExit"}) {
         auto* function = module.getFunction(name);
         if (!function) continue;
@@ -995,11 +1036,11 @@ std::unique_ptr<llvm::Module> PrepareLLVMBlock(const LLVMOperandTemplates& templ
     if (should_cancel && should_cancel()) return {};
     auto module = CloneBlockModule(templates, std::span(&key, 1));
     if (!module) return {};
-    auto* entry = module->getFunction("FiberLLVMEntry");
-    if (!entry || !SpecializeBlockEntry(templates, *entry, key, fold_operand_loads)) return {};
+    auto* entry =
+        BuildBlockEntry(templates, *module, entry_name, llvm::GlobalValue::ExternalLinkage, key, fold_operand_loads);
+    if (!entry) return {};
     RemoveBlockMarkers(*module);
     LowerX86MemoryAccesses(*entry);
-    entry->setName(entry_name);
     for (auto& function : *module) {
         if (&function != entry && !function.isDeclaration()) function.setLinkage(llvm::GlobalValue::InternalLinkage);
     }
@@ -1263,8 +1304,6 @@ std::unique_ptr<llvm::Module> PrepareLLVMPageRegion(const LLVMOperandTemplates& 
     for (const auto& candidate : candidates) keys.push_back(candidate.key);
     auto module = CloneBlockModule(templates, keys);
     if (!module || !module->getDataLayout().isLittleEndian()) return {};
-    auto* pattern = module->getFunction("FiberLLVMEntry");
-    if (!pattern) return {};
 
     llvm::LoopAnalysisManager loops;
     llvm::FunctionAnalysisManager functions;
@@ -1285,11 +1324,10 @@ std::unique_ptr<llvm::Module> PrepareLLVMPageRegion(const LLVMOperandTemplates& 
     included.clear();
     for (auto [index, candidate] : llvm::enumerate(candidates)) {
         if (should_cancel && should_cancel()) return {};
-        llvm::ValueToValueMapTy values;
-        auto* member = llvm::CloneFunction(pattern, values);
-        member->setLinkage(llvm::GlobalValue::InternalLinkage);
-        if (!SpecializeBlockEntry(templates, *member, candidate.key, fold_operand_loads, candidate.page_offset))
-            return {};
+        auto* member = BuildBlockEntry(templates, *module, "region.member." + std::to_string(index),
+                                       llvm::GlobalValue::InternalLinkage, candidate.key, fold_operand_loads,
+                                       candidate.page_offset);
+        if (!member) return {};
         BindCurrentBlock(*member);
         prepare.run(*member, functions);
         if (!CanInlinePageMember(*member)) {
@@ -1300,7 +1338,6 @@ std::unique_ptr<llvm::Module> PrepareLLVMPageRegion(const LLVMOperandTemplates& 
         included.push_back(index);
         members.push_back(member);
     }
-    pattern->eraseFromParent();
     if (members.size() < 2) return {};
 
     auto* body = llvm::Function::Create(members[0]->getFunctionType(), llvm::GlobalValue::InternalLinkage,
