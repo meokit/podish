@@ -2,8 +2,12 @@
 
 #include <array>
 #include <cassert>
+#include <limits>
+#include <memory>
 #include <memory_resource>
+#include <mutex>
 #include <optional>
+#include <type_traits>
 #include <unordered_map>
 #include <utility>
 
@@ -15,6 +19,57 @@ namespace fiberish::aarch64 {
 const detail::BasicBlock detail::BasicBlock::Invalid{};
 
 namespace detail {
+
+namespace {
+
+class ScalarHandlerTable {
+    static constexpr unsigned PageSize = 256;
+    static constexpr unsigned Capacity = std::numeric_limits<BlockHandlerIndex>::max();
+
+public:
+    BlockHandlerIndex Intern(ScalarHandlerFunc handler) {
+        struct Entry {
+            ScalarHandlerFunc handler = nullptr;
+            BlockHandlerIndex index = 0;
+        };
+        static thread_local std::array<Entry, 128> recent{};
+        const auto address = reinterpret_cast<uintptr_t>(handler) >> 2;
+        auto& entry = recent[(address ^ (address >> 7)) % recent.size()];
+        if (entry.handler == handler) return entry.index;
+
+        std::lock_guard lock(mutex);
+        if (const auto existing = indices.find(handler); existing != indices.end()) {
+            entry = {handler, existing->second};
+        } else if (indices.size() < Capacity) {
+            const auto index = static_cast<BlockHandlerIndex>(indices.size() + 1);
+            auto& page = pages[index / PageSize];
+            if (!page) page = std::make_unique<ScalarHandlerFunc[]>(PageSize);
+            indices.emplace(handler, index);
+            page[index % PageSize] = handler;
+            entry = {handler, index};
+        } else {
+            entry = {handler, 0};
+        }
+        return entry.index;
+    }
+
+    ScalarHandlerFunc Resolve(BlockHandlerIndex index) const {
+        // A page and its entry are initialized before the index reaches a
+        // block footer. Existing entries are immutable during later inserts.
+        return pages[index / PageSize][index % PageSize];
+    }
+
+private:
+    std::mutex mutex;
+    std::unordered_map<ScalarHandlerFunc, BlockHandlerIndex> indices;
+    std::array<std::unique_ptr<ScalarHandlerFunc[]>, (Capacity + 1) / PageSize> pages;
+};
+
+ScalarHandlerTable scalar_handlers;
+
+}  // namespace
+
+ScalarHandlerFunc ResolveBlockScalarHandler(BlockHandlerIndex index) { return scalar_handlers.Resolve(index); }
 
 DecodedInstruction ReadScalarOp(const DecodedOp& slot) {
     const auto* block = slot.OwningBlock();
@@ -97,6 +152,7 @@ struct DecodedOpBinding {
     DecodedInstruction op;
     HandlerFunc handler = nullptr;
     ScalarHandlerFunc fused = nullptr;
+    BlockHandlerIndex scalar_index = 0;
     uint8_t ordinal = 0;
     uint8_t fused_length = 1;
     uint8_t flags = 0;
@@ -136,6 +192,7 @@ DecodedOpBinding BindDecodedOp(uint32_t word, const Profile& profile) {
     assert(slot.handler && "Builtin instructions must provide a tail-dispatch handler");
 #endif
     slot.keep_scalar = custom;
+    if (custom) slot.scalar_index = scalar_handlers.Intern(binding.scalar_handler);
 
     const bool branch = kind >= Kind::BranchImmediate && kind <= Kind::TestBranch;
     const bool data_transfer = kind >= Kind::LoadStoreImmediate && kind <= Kind::LoadLiteral;
@@ -240,6 +297,8 @@ const BasicBlock* DecodeBlock(uint64_t pc, const uint8_t* executable, const Prof
     unsigned units = 0;
     uint32_t scalar_mask = 0;
     uint32_t fused_mask = 0;
+    std::array<BlockHandlerIndex, BlockMax> fusion_indices;
+    bool wide_bindings = false;
     for (unsigned i = slot_count; i-- > 0;) {
         auto& slot = decoded[i];
         if (i + 1 < slot_count && decoded[i + 1].ordinal != slot.ordinal + 1) following = 0;
@@ -288,8 +347,13 @@ const BasicBlock* DecodeBlock(uint64_t pc, const uint8_t* executable, const Prof
         }
         following = slot.Has(UntrustedScalar) ? 0 : slot.can_follow ? following + 1 : 1;
         units += 1 + slot.Has(HasDataSlot);
-        if (slot.keep_scalar) scalar_mask |= uint32_t{1} << slot.ordinal;
+        if (slot.keep_scalar) {
+            scalar_mask |= uint32_t{1} << slot.ordinal;
+            wide_bindings |= slot.scalar_index == 0;
+        }
         if (slot.fused) {
+            fusion_indices[i] = scalar_handlers.Intern(slot.fused);
+            wide_bindings |= fusion_indices[i] == 0;
             slot.flags |= Fused;
             fused_mask |= uint32_t{1} << slot.ordinal;
         }
@@ -302,13 +366,18 @@ const BasicBlock* DecodeBlock(uint64_t pc, const uint8_t* executable, const Prof
 #else
     const bool retain_region_context = false;
 #endif
-    const auto size = BasicBlock::CalculateSize(units, count, bindings, fusions, retain_region_context);
+    const auto binding_storage = !bindings       ? BlockHandlerStorage::None
+                                 : wide_bindings ? BlockHandlerStorage::Pointers
+                                                 : BlockHandlerStorage::Indexed;
+    const auto size =
+        BasicBlock::CalculateSize(units, count, bindings, fusions, binding_storage, retain_region_context);
     auto* storage = memory.allocate_block ? memory.allocate_block(memory.context, size, pc)
                                           : local->pool.allocate(size, alignof(BasicBlock));
     if (!storage) return nullptr;
     auto& block = *new (storage) BasicBlock;
     block.header.chain = BasicBlockChainPrefix::Pack(pc, count, bindings != 0, retain_region_context);
     block.sentinel_slot_index = uint8_t(units);
+    block.has_wide_bindings = wide_bindings;
     block.executable_page = executable;
 
     auto* bytes = reinterpret_cast<std::byte*>(&block + 1);
@@ -347,17 +416,25 @@ const BasicBlock* DecodeBlock(uint64_t pc, const uint8_t* executable, const Prof
         auto* masks = const_cast<uint32_t*>(block.BindingMasks());
         new (masks) uint32_t(scalar_mask);
         new (masks + 1) uint32_t(fused_mask);
-        auto* scalar = reinterpret_cast<ScalarHandlerFunc*>(masks + 2);
-        auto* fused = scalar + std::popcount(scalar_mask);
-        auto* lengths = reinterpret_cast<uint8_t*>(scalar + bindings);
-        for (unsigned i = 0; i < slot_count; ++i) {
-            const auto& binding = decoded[i];
-            if (binding.keep_scalar) new (scalar++) ScalarHandlerFunc(binding.op.scalar_handler);
-            if (binding.fused) {
-                new (fused++) ScalarHandlerFunc(binding.fused);
-                new (lengths++) uint8_t(binding.fused_length);
+        const auto write_bindings = [&]<typename Entry>(Entry* scalar) {
+            auto* fused = scalar + std::popcount(scalar_mask);
+            auto* lengths = reinterpret_cast<uint8_t*>(scalar + bindings);
+            for (unsigned i = 0; i < slot_count; ++i) {
+                const auto& binding = decoded[i];
+                if constexpr (std::is_same_v<Entry, BlockHandlerIndex>) {
+                    if (binding.keep_scalar) new (scalar++) Entry(binding.scalar_index);
+                    if (binding.fused) new (fused++) Entry(fusion_indices[i]);
+                } else {
+                    if (binding.keep_scalar) new (scalar++) Entry(binding.op.scalar_handler);
+                    if (binding.fused) new (fused++) Entry(binding.fused);
+                }
+                if (binding.fused) new (lengths++) uint8_t(binding.fused_length);
             }
-        }
+        };
+        if (binding_storage == BlockHandlerStorage::Indexed)
+            write_bindings(reinterpret_cast<BlockHandlerIndex*>(masks + 2));
+        else
+            write_bindings(reinterpret_cast<ScalarHandlerFunc*>(masks + 2));
     }
     block.header.entry = block.FirstOp()->handler;
     if (memory.cache_block)

@@ -336,16 +336,18 @@ static BasicBlock* BuildBlockConcat(EmuState* state, const BasicBlock* a, const 
     }
     ops.back() = b->ReadOp(b->inst_count());
 
-    const bool retain_scalar_handlers = a->has_unfused_handlers && b->has_unfused_handlers;
+    const bool retain_scalar_handlers = a->HasUnfusedHandlers() && b->HasUnfusedHandlers();
+    auto unfused = BlockHandlerStorage::None;
+    if (retain_scalar_handlers) unfused = std::max(a->unfused_storage, b->unfused_storage);
 #if FIBERCPU_BLOCK_COMPILATION
     if (retain_scalar_handlers) {
         for (uint32_t i = 0; i < source_count; ++i) {
-            ops[i].handler = a->UnfusedHandlers()[i];
+            ops[i].handler = a->UnfusedHandler(i);
             ops[i].meta.flags.operand_lowered = 0;
         }
         for (uint32_t i = 0; i < b->inst_count(); ++i) {
             auto& op = ops[source_count + i];
-            op.handler = b->UnfusedHandlers()[i];
+            op.handler = b->UnfusedHandler(i);
             op.meta.flags.operand_lowered = 0;
         }
     }
@@ -354,7 +356,7 @@ static BasicBlock* BuildBlockConcat(EmuState* state, const BasicBlock* a, const 
     const bool retain_region_context = a->chain.has_region_context && b->chain.has_region_context;
     const bool retain_exec_count = a->chain.has_exec_count;
     void* mem = state->mmu.try_allocate_block_bytes(
-        BasicBlock::CalculateSize(layout, retain_scalar_handlers, retain_region_context, retain_exec_count), start_eip);
+        BasicBlock::CalculateSize(layout, unfused, retain_region_context, retain_exec_count), start_eip);
     if (!mem) return nullptr;
     // Static scalar lowering depends on each instruction's original operands.
     // In this build the published slots already carry the correct handlers.
@@ -372,7 +374,7 @@ static BasicBlock* BuildBlockConcat(EmuState* state, const BasicBlock* a, const 
     concat->end_eip = b->end_eip;
     concat->set_inst_count(concat_count);
     concat->set_terminal_kind(b->terminal_kind());
-    concat->has_unfused_handlers = retain_scalar_handlers;
+    concat->unfused_storage = unfused;
     concat->chain.has_region_context = retain_region_context;
     concat->chain.has_exec_count = retain_exec_count;
     concat->WriteOps(layout, ops, state->mmu.invalid_code_block(), preserve_handlers);
@@ -381,9 +383,15 @@ static BasicBlock* BuildBlockConcat(EmuState* state, const BasicBlock* a, const 
 
 #if FIBERCPU_BLOCK_COMPILATION
     if (retain_scalar_handlers) {
-        auto* handlers = concat->UnfusedHandlers();
-        std::copy_n(a->UnfusedHandlers(), source_count, handlers);
-        std::copy_n(b->UnfusedHandlers(), b->inst_count(), handlers + source_count);
+        if (unfused == BlockHandlerStorage::Indexed) {
+            auto* indices = concat->UnfusedIndices();
+            std::copy_n(a->UnfusedIndices(), source_count, indices);
+            std::copy_n(b->UnfusedIndices(), b->inst_count(), indices + source_count);
+        } else {
+            auto* handlers = reinterpret_cast<HandlerFunc*>(concat->UnfusedFooter());
+            for (uint32_t i = 0; i < source_count; ++i) handlers[i] = a->UnfusedHandler(i);
+            for (uint32_t i = 0; i < b->inst_count(); ++i) handlers[source_count + i] = b->UnfusedHandler(i);
+        }
         concat->chain.weighted_profile = a->chain.weighted_profile;
         concat->chain.llvm_hot_count =
             concat->chain.weighted_profile ? block_recipe::HotThreshold(*state) : a->chain.llvm_hot_count;

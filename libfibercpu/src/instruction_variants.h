@@ -19,10 +19,12 @@ struct OpcodeBinding {
     bool has_variants = false;
 };
 extern const std::array<OpcodeBinding, 1024> kOpcodeBindings;
-BoundScalarHandler BindScalarHandler(const DecodedInstruction& op, ScalarBindingIndex index = ScalarBindingIndex::Unknown);
+BoundScalarHandler BindScalarHandler(const DecodedInstruction& op,
+                                     ScalarBindingIndex index = ScalarBindingIndex::Unknown);
 HandlerFunc CanonicalBoundHandler(HandlerFunc handler);
 HandlerFunc FindGenericInstructionHandler(uint16_t opcode, const DecodedInstruction* op);
 uint32_t FindScalarTrainingId(HandlerFunc handler);
+HandlerFunc ScalarBindingHandler(ScalarBindingIndex index);
 uint32_t TrainingOperationIdAt(uint32_t index);
 const char* FindTrainingOperationName(uint32_t id);
 const char* InstructionCatalogHash();
@@ -41,7 +43,8 @@ struct DeclaredInstructionVariant {
 
 template <class Family, spec::Spec S>
 consteval DeclaredInstructionVariant DeclareVariant(HandlerFunc handler, const char* name, const char* family,
-                                                    const char* parent, bool bake, int rank, ScalarBindingIndex binding) {
+                                                    const char* parent, bool bake, int rank,
+                                                    ScalarBindingIndex binding) {
     static_assert(spec::Valid<Family>(S), "Invalid catalog specialization");
     return {Family::opcode, spec::Criteria<Family>(S), handler, name, family, parent, bake, rank, binding};
 }

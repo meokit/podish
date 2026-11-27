@@ -274,6 +274,12 @@ uint32_t FindScalarTrainingId(HandlerFunc handler) {
     return 0;
 }
 
+HandlerFunc ScalarBindingHandler(ScalarBindingIndex index) {
+    const auto offset = static_cast<BlockHandlerIndex>(index) - 1u;
+    assert(offset < std::size(training_operations));
+    return training_operations[offset].handler;
+}
+
 uint32_t TrainingOperationIdAt(uint32_t index) {
     return index < std::size(training_operations) ? training_operations[index].id : 0;
 }

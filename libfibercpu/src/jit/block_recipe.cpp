@@ -61,7 +61,7 @@ OpId FindOperation(const DecodedInstruction& op, const BoundScalarHandler& bindi
 }
 
 bool CanPromoteBlock(EmuState& state, BasicBlock& block) {
-    return !state.mmu.code_cache_flush_pending() && block.is_valid() && block.has_unfused_handlers &&
+    return !state.mmu.code_cache_flush_pending() && block.is_valid() && block.HasUnfusedHandlers() &&
            block.entry == block.FirstOp()->handler && state.mmu.lookup_cached_block(block.start_eip()) == &block;
 }
 

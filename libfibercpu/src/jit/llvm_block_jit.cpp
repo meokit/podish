@@ -1321,13 +1321,12 @@ float EstimateBenefit(const BasicBlock& block, bool exact) {
     }();
     unsigned covered = 0;
     unsigned memory_ops = 0;
-    const auto* handlers = block.UnfusedHandlers();
     for (; covered < block.inst_count(); ++covered) {
         const auto decoded = block.ReadOp(covered);
         if (!block_recipe::CanPlanOp(decoded)) break;
-        BoundScalarHandler binding{nullptr, FindScalarTrainingId(handlers[covered]), {}};
+        BoundScalarHandler binding{nullptr, block.UnfusedTrainingId(covered), {}};
         if (block_recipe::FindOperation(decoded, binding, exact) == block_recipe::kInvalidOpId) {
-            const auto alias = generic_ids.find(handlers[covered]);
+            const auto alias = generic_ids.find(block.UnfusedHandler(covered));
             if (alias == generic_ids.end()) break;
             binding.id = alias->second;
             if (block_recipe::FindOperation(decoded, binding, exact) == block_recipe::kInvalidOpId) break;
@@ -1581,7 +1580,7 @@ bool CaptureLLVMWeightedProfilePage(EmuState& state, BasicBlock& hot) {
     for (const auto& ref : page->second) {
         const auto& member = cache.block_entries[ref.block_index];
         auto* block = member.block;
-        if (!block || !block->is_valid() || !block->has_unfused_handlers || member.cache_key.host_page_base != *host ||
+        if (!block || !block->is_valid() || !block->HasUnfusedHandlers() || member.cache_key.host_page_base != *host ||
             (member.cache_key.guest_eip >> 12) != (hot.start_eip() >> 12))
             continue;
         pending.insert_or_assign(block, block->invalidation_revision);

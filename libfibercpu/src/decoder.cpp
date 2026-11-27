@@ -618,7 +618,7 @@ static bool BasicBlockMatchesDecodedCandidate(const BasicBlock* candidate, uint3
     for (uint32_t i = 0; i < slot_count; ++i) {
         auto slot = candidate->ReadOp(i);
         if (compare_scalar && i < inst_count) {
-            slot.handler = candidate->UnfusedHandlers()[i];
+            slot.handler = candidate->UnfusedHandler(i);
             slot.meta.flags.operand_lowered = 0;
         }
         auto decoded = temp_ops[i].head;
@@ -934,9 +934,10 @@ finalize:
                                                  terminal_kind, compare_scalar, std::span(op_storage.data(), op_count),
                                                  binding_indices);
     };
-    const bool candidate_has_jit = invalidated_candidate && invalidated_candidate->has_unfused_handlers &&
+    const bool candidate_has_jit = invalidated_candidate && invalidated_candidate->HasUnfusedHandlers() &&
                                    invalidated_candidate->entry != invalidated_candidate->FirstOp()->handler;
     uint16_t hot_count = 0;
+    auto unfused = BlockHandlerStorage::None;
 #if FIBERCPU_BLOCK_COMPILATION
     if (candidate_has_jit && matches_candidate(true)) {
         invalidated_candidate->Revalidate();
@@ -946,7 +947,11 @@ finalize:
     if (hot_count && candidate_has_jit) hot_count = 1;
     std::array<HandlerFunc, MAX_INSTS> scalar_handlers;
     if (hot_count) {
-        for (uint32_t i = 0; i < decoded_inst_count; ++i) scalar_handlers[i] = scalar_ops[i].handler;
+        // Runtime registrations have no generated scalar binding index.
+        const bool indexed = std::ranges::find(binding_indices, ScalarBindingIndex::Unknown) == binding_indices.end();
+        unfused = indexed ? BlockHandlerStorage::Indexed : BlockHandlerStorage::Pointers;
+        if (!indexed)
+            for (uint32_t i = 0; i < decoded_inst_count; ++i) scalar_handlers[i] = scalar_ops[i].handler;
     }
 #endif
     ApplySuperOpcodesToBlockOps(scalar_ops, decoded_inst_count, false, binding_indices);
@@ -975,7 +980,7 @@ finalize:
 #else
     const bool retain_exec_count = false;
 #endif
-    size_t alloc_size = BasicBlock::CalculateSize(layout, hot_count != 0, retain_region_context, retain_exec_count);
+    size_t alloc_size = BasicBlock::CalculateSize(layout, unfused, retain_region_context, retain_exec_count);
     void* mem = state->mmu.try_allocate_block_bytes(alloc_size, start_eip);
     if (!mem) {
         if (use_single_step) *use_single_step = true;
@@ -991,7 +996,7 @@ finalize:
     block->set_terminal_kind(terminal_kind);
     block->chain.llvm_hot_count = hot_count;
     block->chain.weighted_profile = weighted_profile;
-    block->has_unfused_handlers = hot_count != 0;
+    block->unfused_storage = unfused;
     block->chain.has_region_context = retain_region_context;
     block->chain.has_exec_count = retain_exec_count;
 
@@ -999,7 +1004,10 @@ finalize:
     if (retain_region_context) block->SetRegionContext(nullptr);
     if (retain_exec_count) block->ExecCountStorage() = 0;
 #if FIBERCPU_BLOCK_COMPILATION
-    if (hot_count) std::copy_n(scalar_handlers.data(), decoded_inst_count, block->UnfusedHandlers());
+    if (unfused == BlockHandlerStorage::Indexed)
+        std::ranges::copy(binding_indices, block->UnfusedIndices());
+    else if (unfused == BlockHandlerStorage::Pointers)
+        std::copy_n(scalar_handlers.data(), decoded_inst_count, reinterpret_cast<HandlerFunc*>(block->UnfusedFooter()));
 #endif
 
     return block;
@@ -1008,6 +1016,19 @@ finalize:
 // ----------------------------------------------------------------------------
 // BasicBlock Implementation
 // ----------------------------------------------------------------------------
+
+HandlerFunc BasicBlock::UnfusedHandler(size_t ordinal) const {
+    assert(HasUnfusedHandlers());
+    return unfused_storage == BlockHandlerStorage::Indexed
+               ? ScalarBindingHandler(UnfusedIndices()[ordinal])
+               : reinterpret_cast<const HandlerFunc*>(UnfusedFooter())[ordinal];
+}
+
+uint32_t BasicBlock::UnfusedTrainingId(size_t ordinal) const {
+    if (unfused_storage == BlockHandlerStorage::Indexed)
+        return TrainingOperationIdAt(static_cast<BlockHandlerIndex>(UnfusedIndices()[ordinal]) - 1u);
+    return FindScalarTrainingId(UnfusedHandler(ordinal));
+}
 
 namespace {
 

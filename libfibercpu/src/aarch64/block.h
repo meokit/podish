@@ -3,6 +3,7 @@
 #include <bit>
 #include <new>
 
+#include "../block_handler_storage.h"
 #include "../mem/types.h"
 #include "aarch64.h"
 
@@ -12,6 +13,8 @@ constexpr unsigned BlockMax = 24;
 constexpr unsigned PageBytes = 4096;
 constexpr uint64_t PageMask = PageBytes - 1;
 static_assert(BlockMax <= 32);
+
+ScalarHandlerFunc ResolveBlockScalarHandler(BlockHandlerIndex index);
 
 enum SlotFlag : uint8_t {
     HasDataSlot = 1,
@@ -135,6 +138,7 @@ struct alignas(16) BasicBlock {
     BasicBlockHeader header;
     const uint8_t* executable_page = nullptr;
     uint8_t sentinel_slot_index = 0;
+    bool has_wide_bindings = false;
     uint16_t invalidation_revision = 0;
 
     uint64_t start_pc() const { return header.start_pc(); }
@@ -154,12 +158,12 @@ struct alignas(16) BasicBlock {
     }
 
     static size_t CalculateSize(unsigned units, unsigned count, unsigned bindings, unsigned fusions,
-                                bool retain_region_context) {
+                                BlockHandlerStorage storage, bool retain_region_context) {
         const auto code_size =
             sizeof(BasicBlock) + RegionContextOffset(units) + (retain_region_context ? sizeof(void*) : 0);
         if (!bindings) return code_size + count * sizeof(uint32_t);
-        return code_size + BindingsOffset(count) + 2 * sizeof(uint32_t) + bindings * sizeof(ScalarHandlerFunc) +
-               fusions;
+        return code_size + BindingsOffset(count) + 2 * sizeof(uint32_t) +
+               bindings * BlockHandlerWidth<ScalarHandlerFunc>(storage) + fusions;
     }
 
     const DecodedOp* FirstOp() const { return reinterpret_cast<const DecodedOp*>(this + 1); }
@@ -186,7 +190,7 @@ struct alignas(16) BasicBlock {
         return word;
     }
 
-    // Two masks index the optional scalar and fused handlers, followed by fusion lengths.
+    // Scalar and fusion masks rank the handlers by guest ordinal.
     const uint32_t* BindingMasks() const {
         return reinterpret_cast<const uint32_t*>(reinterpret_cast<const std::byte*>(Words()) +
                                                  BindingsOffset(inst_count()));
@@ -198,8 +202,7 @@ struct alignas(16) BasicBlock {
         const auto mask = masks[0];
         const auto bit = uint32_t{1} << ordinal;
         if (!(mask & bit)) return nullptr;
-        const auto* bindings = reinterpret_cast<const ScalarHandlerFunc*>(masks + 2);
-        return bindings[std::popcount(mask & (bit - 1))];
+        return Binding(masks + 2, std::popcount(mask & (bit - 1)));
     }
 
     struct Fusion {
@@ -212,9 +215,17 @@ struct alignas(16) BasicBlock {
         const auto count = std::popcount(masks[0]);
         const auto mask = masks[1];
         const auto index = std::popcount(mask & ((uint32_t{1} << ordinal) - 1));
-        const auto* bindings = reinterpret_cast<const ScalarHandlerFunc*>(masks + 2);
-        const auto* lengths = reinterpret_cast<const uint8_t*>(bindings + count + std::popcount(mask));
-        return {bindings[count + index], lengths[index]};
+        const auto* bindings = masks + 2;
+        const auto storage = has_wide_bindings ? BlockHandlerStorage::Pointers : BlockHandlerStorage::Indexed;
+        const auto* lengths = reinterpret_cast<const uint8_t*>(bindings) +
+                              (count + std::popcount(mask)) * BlockHandlerWidth<ScalarHandlerFunc>(storage);
+        return {Binding(bindings, count + index), lengths[index]};
+    }
+
+private:
+    ScalarHandlerFunc Binding(const void* bindings, unsigned index) const {
+        if (has_wide_bindings) return static_cast<const ScalarHandlerFunc*>(bindings)[index];
+        return ResolveBlockScalarHandler(static_cast<const BlockHandlerIndex*>(bindings)[index]);
     }
 };
 

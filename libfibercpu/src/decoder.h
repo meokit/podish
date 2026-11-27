@@ -9,6 +9,7 @@
 #include <type_traits>
 #include <utility>
 #include <vector>
+#include "block_handler_storage.h"
 #include "common.h"
 #include "handler_abi.h"
 #include "mem/tlb.h"
@@ -36,8 +37,8 @@ struct GprCache;
 struct DecodedOp;
 struct DecodedInstruction;
 
-// Index into the generated scalar binding table. Used only during decoding.
-enum class ScalarBindingIndex : uint16_t { Unknown };
+// Index into the generated scalar binding table.
+enum class ScalarBindingIndex : BlockHandlerIndex { Unknown };
 
 // Handler Function (Preserve None ABI, functionality + dispatch)
 using HandlerFunc = int64_t(ATTR_PRESERVE_NONE*)(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
@@ -522,7 +523,7 @@ struct alignas(16) BasicBlock {
     // LOCK is invalid for RET, leaving that bit free to mark a link-only tail.
     uint8_t link_only_return_prefixes = 0;
     uint8_t terminal_kind_raw = 0;
-    bool has_unfused_handlers = false;
+    BlockHandlerStorage unfused_storage = BlockHandlerStorage::None;
     uint16_t invalidation_revision = 0;
 
     // Flexible Array Member - fixed-size decoded op stream.
@@ -535,13 +536,13 @@ struct alignas(16) BasicBlock {
         return sizeof(DecodedOp) * physical_slots + (has_data_slots ? sizeof(uint64_t) : 0);
     }
 
-    static constexpr size_t CalculateSize(BlockSlotLayout layout, bool retain_scalar_handlers = false,
+    static constexpr size_t CalculateSize(BlockSlotLayout layout,
+                                          BlockHandlerStorage unfused = BlockHandlerStorage::None,
                                           bool retain_region_context = false, bool retain_exec_count = false) {
         if (!layout.logical_slot_count) return sizeof(BasicBlock);
         size_t size = offsetof(BasicBlock, slots) + SlotStorageSize(layout.PhysicalSlotCount(), layout.data_slot_count);
         if (retain_region_context) size += sizeof(void*);
-        size +=
-            (layout.logical_slot_count - 1) * (sizeof(uint16_t) + (retain_scalar_handlers ? sizeof(HandlerFunc) : 0));
+        size += (layout.logical_slot_count - 1) * (sizeof(uint16_t) + BlockHandlerWidth<HandlerFunc>(unfused));
         if (layout.anchor_count) size = AlignFooter(size) + sizeof(uint64_t) + sizeof(uint32_t) * layout.anchor_count;
         if (retain_exec_count) size = AlignFooter(size) + sizeof(uint64_t);
         return size;
@@ -625,14 +626,27 @@ struct alignas(16) BasicBlock {
     }
 
     // Scalar handlers and PC offsets are indexed by guest instruction, never data slot.
-    HandlerFunc* UnfusedHandlers() { return const_cast<HandlerFunc*>(std::as_const(*this).UnfusedHandlers()); }
-    const HandlerFunc* UnfusedHandlers() const {
+    bool HasUnfusedHandlers() const { return unfused_storage != BlockHandlerStorage::None; }
+
+    const std::byte* UnfusedFooter() const {
         const size_t offset = RegionContextOffset() + (chain.has_region_context ? sizeof(void*) : 0);
-        return reinterpret_cast<const HandlerFunc*>(reinterpret_cast<const std::byte*>(this) + offset);
+        return reinterpret_cast<const std::byte*>(this) + offset;
+    }
+    std::byte* UnfusedFooter() { return const_cast<std::byte*>(std::as_const(*this).UnfusedFooter()); }
+
+    const ScalarBindingIndex* UnfusedIndices() const {
+        return reinterpret_cast<const ScalarBindingIndex*>(UnfusedFooter());
+    }
+    ScalarBindingIndex* UnfusedIndices() {
+        return const_cast<ScalarBindingIndex*>(std::as_const(*this).UnfusedIndices());
     }
 
+    HandlerFunc UnfusedHandler(size_t ordinal) const;
+    uint32_t UnfusedTrainingId(size_t ordinal) const;
+
     const uint16_t* PCEnds() const {
-        return reinterpret_cast<const uint16_t*>(UnfusedHandlers() + (has_unfused_handlers ? inst_count() : 0));
+        return reinterpret_cast<const uint16_t*>(UnfusedFooter() +
+                                                 inst_count() * BlockHandlerWidth<HandlerFunc>(unfused_storage));
     }
 
     size_t AnchorOffset() const {
