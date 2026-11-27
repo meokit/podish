@@ -2,10 +2,9 @@
 #include "jit/block_recipe.h"
 #include "jit/executable_arena.h"
 #include "jit/linked_block_cache_host.h"
-#include "jit/llvm_async_signals.h"
+#include "jit/llvm_async_controller.h"
 #include "jit/llvm_block_cache.h"
 #include "jit/llvm_block_memory.h"
-#include "jit/llvm_hotness.h"
 #include "jit/llvm_operand_ir.h"
 #include "jit/page_region_selection.h"
 #if FIBERCPU_GUEST_I386
@@ -964,26 +963,9 @@ struct HotBlock {
 
 }  // namespace
 
-struct LLVMAsyncState {
-    std::shared_ptr<AsyncSignals> signals = std::make_shared<AsyncSignals>();
-    std::vector<PendingBlock> pending;
-    jit_hotness::HotCandidates<HotBlock> candidates;
-    unsigned poll_ticks = 0;
+struct LLVMAsyncState : AsyncJitController<PendingBlock, HotBlock> {};
 
-    ~LLVMAsyncState() {
-        // Detach without blocking this exiting MMU; the final MMU release
-        // drains all worker threads before host teardown or unload.
-        pending.clear();
-        signals->Cancel();
-    }
-};
-
-void CancelPendingLLVMBlockCompilations(LLVMAsyncState& state) {
-    state.pending.clear();
-    state.candidates.Clear();
-    state.signals->Cancel();
-    state.signals = std::make_shared<AsyncSignals>();
-}
+void CancelPendingLLVMBlockCompilations(LLVMAsyncState& state) { state.Cancel(); }
 
 namespace {
 
@@ -1404,11 +1386,11 @@ bool IsCurrentCandidate(EmuState& state, const HotBlock& candidate, uint16_t rev
 }
 
 void ScheduleCandidates(EmuState* state, LLVMAsyncState& async, JitClock::time_point now) {
-    if (state->mmu.code_cache_flush_pending() || !async.candidates.BeginSample(now)) return;
     const auto retry = jit_hotness::CandidateRetryCount(LLVMJitHotThreshold(*state));
     const bool exact = RuntimeMode(*state) != JitMode::Generic;
-    async.candidates.Schedule(
-        now, retry, [&](const HotBlock& target) { return IsCurrentCandidate(*state, target, retry); },
+    async.Schedule(
+        state->mmu.code_cache_flush_pending(), now, retry,
+        [&](const HotBlock& target) { return IsCurrentCandidate(*state, target, retry); },
         [&] { return async.pending.size() < WorkerCount() && Workers().CanSubmit(); },
         [](const HotBlock&) { return true; },
         [&](const HotBlock& target) {
@@ -1424,14 +1406,11 @@ void ScheduleCandidates(EmuState* state, LLVMAsyncState& async, JitClock::time_p
 void ObserveHotBlock(EmuState* state, BasicBlock* block, bool exact) {
     auto& async = state->mmu.core_handle()->llvm_async;
     if (!async) async = std::make_shared<LLVMAsyncState>();
-    if (std::ranges::any_of(async->pending, [&](const PendingBlock& item) {
-            return item.block == block && item.revision == block->invalidation_revision;
-        }))
-        return;
     const HotBlock target{block, block->start_eip(), block->invalidation_revision};
     const auto now = JitClock::now();
-    const auto observation = async->candidates.Observe(
+    const auto observation = async->Observe(
         target, now, jit_hotness::CandidateRetryCount(LLVMJitHotThreshold(*state)),
+        [&](const PendingBlock& item) { return item.block == block && item.revision == block->invalidation_revision; },
         [&](const HotBlock& item) { return IsCurrentCandidate(*state, item); },
         [&] { return EstimateBenefit(*block, exact); });
     if (observation == jit_hotness::Observation::New) ScheduleCandidates(state, *async, now);
@@ -1735,13 +1714,13 @@ void PollLLVMBlockCompilations(EmuState* state) {
     CollectPendingPageProfile(*state);
     const auto& async = state->mmu.core_handle()->llvm_async;
     if (!async) return;
-    if (async->signals->ready.exchange(false, std::memory_order_acquire)) {
-        std::erase_if(async->pending, [&](const PendingBlock& candidate) {
-            if (!candidate.result->done.load(std::memory_order_acquire)) return false;
-            if (candidate.result->region && PublishRegion(*state, *candidate.result->region)) return true;
+    async->Poll(
+        63, [](const PendingBlock& candidate) { return candidate.result->done.load(std::memory_order_acquire); },
+        [&](const PendingBlock& candidate) {
+            if (candidate.result->region && PublishRegion(*state, *candidate.result->region)) return;
             auto* trace = JitSchedulerTrace();
             auto* block = state->mmu.lookup_cached_block(candidate.eip);
-            if (block != candidate.block) return true;
+            if (block != candidate.block) return;
             if (block->invalidation_revision != candidate.revision) {
                 if (block->entry == block->FirstOp()->handler) block->chain.llvm_hot_count = 1;
             } else if (candidate.result->region && block_recipe::CanPromoteBlock(*state, *block)) {
@@ -1755,11 +1734,8 @@ void PollLLVMBlockCompilations(EmuState* state) {
                                  candidate.revision, (unsigned long long)block->ExecCount());
                 }
             }
-            return true;
-        });
-    }
-    if (!async->candidates.Empty() && (++async->poll_ticks & 63) == 0)
-        ScheduleCandidates(state, *async, JitClock::now());
+        },
+        [&](JitClock::time_point now) { ScheduleCandidates(state, *async, now); });
 }
 
 void TraceLLVMJitRetirement(const BasicBlock& block) {

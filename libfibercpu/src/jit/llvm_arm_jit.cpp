@@ -11,9 +11,8 @@
 #include "aarch64/dispatch.h"
 #include "aarch64/operation_binding.h"
 #include "jit/llvm_arm_ir.h"
-#include "jit/llvm_async_signals.h"
+#include "jit/llvm_async_controller.h"
 #include "jit/llvm_block_jit.h"
-#include "jit/llvm_hotness.h"
 #include "jit/page_region_selection.h"
 #include "state.h"
 
@@ -294,16 +293,7 @@ uint16_t RetryCount(const EmuState& engine) { return jit_hotness::CandidateRetry
 
 }  // namespace
 
-struct LLVMArmJobs {
-    std::shared_ptr<AsyncSignals> signals = std::make_shared<AsyncSignals>();
-    std::vector<std::shared_ptr<ArmCompilation>> pending;
-    jit_hotness::HotCandidates<HotBlock> candidates;
-
-    ~LLVMArmJobs() {
-        pending.clear();
-        signals->Cancel();
-    }
-};
+struct LLVMArmJobs : AsyncJitController<std::shared_ptr<ArmCompilation>, HotBlock> {};
 
 namespace {
 
@@ -332,10 +322,10 @@ bool PagePending(const LLVMArmJobs& jobs, const ArmBlock& block) {
 }
 
 void ScheduleCandidates(EmuState& engine, LLVMArmJobs& jobs, JitClock::time_point now) {
-    if (engine.mmu.code_cache_flush_pending() || !jobs.candidates.BeginSample(now)) return;
     const auto region = LLVMPageRegionsEnabled(engine);
-    jobs.candidates.Schedule(
-        now, RetryCount(engine), [&](const HotBlock& target) { return IsCurrentCandidate(engine, target); },
+    jobs.Schedule(
+        engine.mmu.code_cache_flush_pending(), now, RetryCount(engine),
+        [&](const HotBlock& target) { return IsCurrentCandidate(engine, target); },
         [&] { return jobs.pending.size() < arm_jit::WorkerLimit() && arm_jit::CanQueue(); },
         [&](const HotBlock& target) { return !region || !PagePending(jobs, *target.Block()); },
         [&](const HotBlock& target) {
@@ -348,14 +338,10 @@ void ScheduleCandidates(EmuState& engine, LLVMArmJobs& jobs, JitClock::time_poin
 void PollLLVMArmCompilations(EmuState& engine) {
     auto& jobs = engine.mmu.code_cache().llvm_arm_jobs;
     if (!jobs) return;
-    if (jobs->signals->ready.exchange(false, std::memory_order_acquire)) {
-        std::erase_if(jobs->pending, [&](const auto& job) {
-            if (!job->done.load(std::memory_order_acquire)) return false;
-            Publish(engine, *job);
-            return true;
-        });
-    }
-    if (!jobs->candidates.Empty()) ScheduleCandidates(engine, *jobs, JitClock::now());
+    jobs->Poll(
+        0, [](const auto& job) { return job->done.load(std::memory_order_acquire); },
+        [&](const auto& job) { Publish(engine, *job); },
+        [&](JitClock::time_point now) { ScheduleCandidates(engine, *jobs, now); });
 }
 
 void ObserveLLVMArmHotBlock(EmuState& engine, ArmBlock& block) {
@@ -374,14 +360,14 @@ void ObserveLLVMArmHotBlock(EmuState& engine, ArmBlock& block) {
 
     auto& jobs = engine.mmu.code_cache().llvm_arm_jobs;
     if (!jobs) jobs = std::make_shared<LLVMArmJobs>();
-    if (std::ranges::any_of(jobs->pending, [&](const auto& job) { return job->root.block == &block; })) return;
 
     const HotBlock target{CaptureBlock(block), block.executable_page};
     const auto now = JitClock::now();
-    const auto observation = jobs->candidates.Observe(
-        target, now, RetryCount(engine), [&](const HotBlock& item) { return IsCurrentCandidate(engine, item); },
-        [&] { return EstimateBenefit(block); });
-    if (observation == jit_hotness::Observation::Deferred) {
+    const auto observation = jobs->Observe(
+        target, now, RetryCount(engine), [&](const auto& job) { return job->root.block == &block; },
+        [&](const HotBlock& item) { return IsCurrentCandidate(engine, item); }, [&] { return EstimateBenefit(block); });
+    if (!observation) return;
+    if (*observation == jit_hotness::Observation::Deferred) {
         ScheduleCandidates(engine, *jobs, now);
         return;
     }
