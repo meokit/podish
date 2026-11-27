@@ -103,6 +103,8 @@ std::atomic<uint64_t> materializations{0};
 std::atomic<uint64_t> cache_epoch{0};
 std::atomic<bool> flush_requested{false};
 std::atomic<size_t> mmu_count{0};
+std::atomic<bool> compiler_initialized{false};
+std::atomic<bool> workers_initialized{false};
 std::shared_mutex execution_gate;
 
 unsigned DefaultWorkerCount() {
@@ -188,6 +190,10 @@ void CollectPendingPageProfile(EmuState& state) {
 
 bool AcceptsJobs(uint64_t epoch) {
     return !flush_requested.load(std::memory_order_acquire) && cache_epoch.load(std::memory_order_acquire) == epoch;
+}
+
+bool JobActive(uint64_t epoch, const AsyncSignals* signals) {
+    return AcceptsJobs(epoch) && (!signals || !signals->IsClosed());
 }
 
 #if FIBERCPU_GUEST_I386
@@ -607,11 +613,11 @@ public:
     }
 
 #if FIBERCPU_GUEST_I386
-    HandlerFunc FindOrCompile(BlockKeyView key, uint64_t epoch) {
-        if (!jit_ || !AcceptsJobs(epoch)) return nullptr;
+    HandlerFunc FindOrCompile(BlockKeyView key, uint64_t epoch, const AsyncSignals* signals = nullptr) {
+        if (!jit_ || !JobActive(epoch, signals)) return nullptr;
         std::unique_lock lock(mutex_);
         compilation_done_.wait(lock, [&] { return !AcceptsJobs(epoch) || !compiling_.contains(key); });
-        if (!AcceptsJobs(epoch)) return nullptr;
+        if (!JobActive(epoch, signals)) return nullptr;
         if (auto found = compiled_.find(key); found != compiled_.end()) return found->second;
         const auto name = "FiberJitBlock_" + std::to_string(next_symbol_++);
         compiling_.emplace(key);
@@ -622,8 +628,10 @@ public:
         thread_local BlockIR worker_ir;
         std::unique_ptr<llvm::MemoryBuffer> object;
         const auto& options = Options();
+        const auto cancelled = [&] { return !JobActive(epoch, signals); };
         if (auto module = PrepareLLVMBlock(worker_ir.templates, key, name, /*prune_dead_globals=*/true,
-                                           options.pipeline, options.fold_operand_loads)) {
+                                           options.pipeline, options.fold_operand_loads, cancelled);
+            module && !cancelled()) {
             auto result = jit_->getIRCompileLayer().getCompiler()(*module);
             if (result)
                 object = std::move(*result);
@@ -633,7 +641,8 @@ public:
 
         std::lock_guard link_lock(link_mutex_);
         HandlerFunc entry = nullptr;
-        if (object && AcceptsJobs(epoch) && !Materialize(std::span(&name, 1), std::move(object), std::span(&entry, 1)))
+        if (object && JobActive(epoch, signals) &&
+            !Materialize(std::span(&name, 1), std::move(object), std::span(&entry, 1)))
             entry = nullptr;
         lock.lock();
         auto recipe = compiling_.extract(key);
@@ -646,8 +655,9 @@ public:
         return entry;
     }
 
-    CompiledPageRegion FindOrCompileRegion(std::span<const LLVMPageMember> members, uint64_t epoch) {
-        if (!jit_ || !AcceptsJobs(epoch)) return {};
+    CompiledPageRegion FindOrCompileRegion(std::span<const LLVMPageMember> members, uint64_t epoch,
+                                           const AsyncSignals* signals = nullptr) {
+        if (!jit_ || !JobActive(epoch, signals)) return {};
         std::string key;
         llvm::raw_string_ostream encoded(key);
         for (const auto& member : members) {
@@ -666,14 +676,16 @@ public:
         thread_local BlockIR worker_ir;
         CompiledPageRegion compiled;
         const auto& options = Options();
+        const auto cancelled = [&] { return !JobActive(epoch, signals); };
         auto module = PrepareLLVMPageRegion(worker_ir.templates, members, name, options.pipeline,
-                                            options.fold_operand_loads, compiled.included);
-        if (!module) return {};
+                                            options.fold_operand_loads, compiled.included, cancelled);
+        if (!module || cancelled()) return {};
         auto object = jit_->getIRCompileLayer().getCompiler()(*module);
         if (!object) {
             llvm::consumeError(object.takeError());
             return {};
         }
+        if (cancelled()) return {};
         std::vector<std::string> names;
         names.reserve(compiled.included.size());
         for (size_t i = 0; i < compiled.included.size(); ++i) names.push_back(name + "_" + std::to_string(i));
@@ -681,7 +693,7 @@ public:
 
         std::lock_guard link_lock(link_mutex_);
         std::lock_guard lock(mutex_);
-        if (!AcceptsJobs(epoch)) return {};
+        if (!JobActive(epoch, signals)) return {};
         if (const auto found = compiled_regions_.find(key); found != compiled_regions_.end()) return found->second;
         if (!Materialize(names, std::move(*object), std::span(compiled.entries))) return {};
         live_blocks.fetch_add(compiled.entries.size(), std::memory_order_relaxed);
@@ -692,9 +704,9 @@ public:
 #endif
 
 #if FIBERCPU_GUEST_AARCH64
-    std::vector<aarch64::detail::HandlerFunc> FindOrCompileArm(std::span<const arm_jit::Member> members,
-                                                               uint64_t epoch) {
-        if (!jit_ || !AcceptsJobs(epoch)) return {};
+    std::vector<aarch64::detail::HandlerFunc> FindOrCompileArm(std::span<const arm_jit::Member> members, uint64_t epoch,
+                                                               const AsyncSignals* signals = nullptr) {
+        if (!jit_ || !JobActive(epoch, signals)) return {};
         std::string key;
         for (const auto& member : members) {
             const uint16_t offset = members.size() == 1 ? 0 : member.offset;
@@ -708,7 +720,7 @@ public:
         }
         std::unique_lock lock(mutex_);
         compilation_done_.wait(lock, [&] { return !AcceptsJobs(epoch) || !compiling_arm_.contains(key); });
-        if (!AcceptsJobs(epoch)) return {};
+        if (!JobActive(epoch, signals)) return {};
         if (const auto found = compiled_arm_.find(key); found != compiled_arm_.end()) return found->second;
         const auto name =
             (members.size() == 1 ? "FiberArmJitBlock_" : "FiberArmJitPage_") + std::to_string(next_symbol_++);
@@ -716,8 +728,10 @@ public:
         lock.unlock();
 
         const auto& options = Options();
+        const auto cancelled = [&] { return !JobActive(epoch, signals); };
         std::unique_ptr<llvm::MemoryBuffer> object;
-        if (auto module = arm_jit::Prepare(members, name, options.pipeline, options.fold_operand_loads)) {
+        if (auto module = arm_jit::Prepare(members, name, options.pipeline, options.fold_operand_loads, cancelled);
+            module && !cancelled()) {
             auto emitted = jit_->getIRCompileLayer().getCompiler()(*module);
             if (emitted)
                 object = std::move(*emitted);
@@ -732,7 +746,7 @@ public:
             for (size_t i = 0; i < members.size(); ++i) names.push_back(name + "_" + std::to_string(i));
         std::vector<aarch64::detail::HandlerFunc> entries(names.size());
         std::lock_guard link_lock(link_mutex_);
-        if (!object || !AcceptsJobs(epoch) ||
+        if (!object || !JobActive(epoch, signals) ||
             !Materialize(std::span<const std::string>(names), std::move(object), std::span(entries)))
             entries.clear();
         lock.lock();
@@ -861,7 +875,10 @@ CompilerStorage& Storage() {
 
 BlockCompiler& Compiler() {
     auto& storage = Storage();
-    std::call_once(storage.initialized, [&] { storage.compiler = std::make_unique<BlockCompiler>(); });
+    std::call_once(storage.initialized, [&] {
+        storage.compiler = std::make_unique<BlockCompiler>();
+        compiler_initialized.store(true, std::memory_order_release);
+    });
     return *storage.compiler;
 }
 
@@ -950,19 +967,18 @@ struct LLVMAsyncState {
     unsigned poll_ticks = 0;
 
     ~LLVMAsyncState() {
-        // Prevent publication and skip queued work. A final MMU release must
-        // also finish in-flight LLVM calls before returning to a host that
-        // can immediately unload the native library or exit.
+        // Detach without blocking this exiting MMU; the final MMU release
+        // drains all worker threads before host teardown or unload.
         pending.clear();
-        signals->Close();
+        signals->Cancel();
     }
 };
 
 void CancelPendingLLVMBlockCompilations(LLVMAsyncState& state) {
-    // Queued jobs hold weak result pointers. The same MMU's shutdown token
-    // stays live so an eventual destroy can drain old and new in-flight jobs.
     state.pending.clear();
     state.candidates.Clear();
+    state.signals->Cancel();
+    state.signals = std::make_shared<AsyncSignals>();
 }
 
 namespace {
@@ -1012,18 +1028,19 @@ struct CapturedRegion {
     };
     std::vector<Member> members;
 
-    std::optional<RegionResult> Compile(uint64_t epoch) const {
+    std::optional<RegionResult> Compile(uint64_t epoch, const AsyncSignals* signals = nullptr) const {
         std::vector<block_recipe::Plan> plans(members.size());
         std::vector<LLVMPageMember> keys;
         std::vector<size_t> eligible;
         for (auto [i, member] : llvm::enumerate(members)) {
+            if (!JobActive(epoch, signals)) return std::nullopt;
             auto& plan = plans[i];
             if (!member.input.Plan(true, plan) || plan.exit == LLVMBlockExit::Dispatch) continue;
             keys.push_back({plan.Key(true), member.entry.address - stamp.guest_page});
             eligible.push_back(i);
         }
-        if (keys.size() < 2 || !AcceptsJobs(epoch)) return std::nullopt;
-        const auto compiled = Compiler().FindOrCompileRegion(keys, epoch);
+        if (keys.size() < 2 || !JobActive(epoch, signals)) return std::nullopt;
+        const auto compiled = Compiler().FindOrCompileRegion(keys, epoch, signals);
         if (compiled.entries.empty()) return std::nullopt;
         RegionResult out{stamp, {}, {}, {}};
         const bool tracing = JitSchedulerTrace() != nullptr;
@@ -1127,15 +1144,16 @@ struct CompilationJob {
 
     uint64_t Run() {
         auto control = signals.lock();
-        if (!control || !control->Begin()) return 0;
+        if (!control || control->IsClosed()) return 0;
         const bool tracing = queued != JitClock::time_point{};
         const auto start = tracing ? JitClock::now() : JitClock::time_point{};
         const auto cpu_start = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID);
         block_recipe::Plan plan;
         auto output = result.lock();
-        auto compiled_region = output && region && AcceptsJobs(epoch) ? region->Compile(epoch) : std::nullopt;
+        auto compiled_region =
+            output && region && JobActive(epoch, control.get()) ? region->Compile(epoch, control.get()) : std::nullopt;
         output.reset();
-        const auto entry = compiled_region ? nullptr : Compile(plan);
+        const auto entry = compiled_region || control->IsClosed() ? nullptr : Compile(plan, control.get());
         const auto cpu_ns = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) - cpu_start;
         if (tracing) {
             traced_worker_cpu_ns.fetch_add(cpu_ns, std::memory_order_relaxed);
@@ -1144,21 +1162,22 @@ struct CompilationJob {
                          (unsigned long long)Ns(JitClock::now() - start), (unsigned long long)cpu_ns,
                          entry ? plan.covered : 0);
         }
-        if (auto output = result.lock()) {
-            output->entry = entry;
-            output->region = std::move(compiled_region);
-            if (entry) output->replay.assign(plan.ReplayHandlers().begin(), plan.ReplayHandlers().end());
-            output->done.store(true, std::memory_order_release);
-            control->ready.store(true, std::memory_order_release);
+        if (!control->IsClosed()) {
+            if (auto output = result.lock()) {
+                output->entry = entry;
+                output->region = std::move(compiled_region);
+                if (entry) output->replay.assign(plan.ReplayHandlers().begin(), plan.ReplayHandlers().end());
+                output->done.store(true, std::memory_order_release);
+                control->ready.store(true, std::memory_order_release);
+            }
         }
-        control->End();
         return cpu_ns;
     }
 
-    HandlerFunc Compile(block_recipe::Plan& plan) {
-        if (result.expired() || !AcceptsJobs(epoch)) return nullptr;
-        if (!input.Plan(exact, plan) || result.expired() || !AcceptsJobs(epoch)) return nullptr;
-        return Compiler().FindOrCompile(plan.Key(exact), epoch);
+    HandlerFunc Compile(block_recipe::Plan& plan, const AsyncSignals* control) {
+        if (result.expired() || !JobActive(epoch, control)) return nullptr;
+        if (!input.Plan(exact, plan) || result.expired() || !JobActive(epoch, control)) return nullptr;
+        return Compiler().FindOrCompile(plan.Key(exact), epoch, control);
     }
 };
 
@@ -1167,11 +1186,14 @@ struct CompilationJob {
 class CompilationPool {
     std::mutex mutex_;
     std::condition_variable queued_;
+    std::condition_variable idle_;
     struct Job {
+        std::weak_ptr<AsyncSignals> signals;
         std::function<uint64_t()> run;
         int64_t reserved_cpu_ns = 0;
     };
     std::deque<Job> jobs_;
+    size_t active_jobs_ = 0;
     bool stopping_ = false;
     const unsigned worker_count_;
     // Spend half of the available worker CPU over time, while allowing a
@@ -1183,7 +1205,21 @@ class CompilationPool {
     // Destroy these first so no worker can still touch the queue.
     std::vector<std::jthread> workers_;
 
+    void PruneCancelledLocked() {
+        auto it = jobs_.begin();
+        while (it != jobs_.end()) {
+            auto control = it->signals.lock();
+            if (!control || control->IsClosed()) {
+                credit_ns_ = std::min(kBurstNs, credit_ns_ + it->reserved_cpu_ns);
+                it = jobs_.erase(it);
+            } else {
+                ++it;
+            }
+        }
+    }
+
     bool HasCredit() {
+        PruneCancelledLocked();
         const auto now = JitClock::now();
         const auto refill = std::min<int64_t>(Ns(now - budget_updated_), kBurstNs * 2);
         credit_ns_ = std::min(kBurstNs, credit_ns_ + refill * worker_count_ / 2);
@@ -1200,6 +1236,7 @@ class CompilationPool {
                 if (stopping_) return;
                 job = std::move(jobs_.front());
                 jobs_.pop_front();
+                ++active_jobs_;
             }
             const auto cpu_ns = job.run();
             std::lock_guard lock(mutex_);
@@ -1208,6 +1245,7 @@ class CompilationPool {
                 job_estimate_ns_ =
                     std::clamp((7 * job_estimate_ns_ + int64_t(cpu_ns)) / 8, int64_t{1'000'000}, kBurstNs);
             }
+            if (--active_jobs_ == 0 && jobs_.empty()) idle_.notify_all();
         }
     }
 
@@ -1230,20 +1268,27 @@ public:
         return lock.owns_lock() && HasCredit();
     }
 
-    bool Submit(std::function<uint64_t()> run) {
+    bool Submit(std::weak_ptr<AsyncSignals> signals, std::function<uint64_t()> run) {
         {
             std::unique_lock lock(mutex_, std::try_to_lock);
             if (!lock.owns_lock() || !HasCredit()) return false;
             credit_ns_ -= job_estimate_ns_;
-            jobs_.push_back({std::move(run), job_estimate_ns_});
+            jobs_.push_back({std::move(signals), std::move(run), job_estimate_ns_});
         }
         queued_.notify_one();
         return true;
     }
 
+    void WaitIdle() {
+        std::unique_lock lock(mutex_);
+        PruneCancelledLocked();
+        idle_.wait(lock, [&] { return jobs_.empty() && active_jobs_ == 0; });
+    }
+
 #if FIBERCPU_GUEST_I386
     bool Submit(CompilationJob job) {
-        return Submit([job = std::move(job)]() mutable { return job.Run(); });
+        auto signals = job.signals;
+        return Submit(std::move(signals), [job = std::move(job)]() mutable { return job.Run(); });
     }
 #endif
 };
@@ -1260,6 +1305,7 @@ CompilationPool& Workers() {
 #endif
         return WorkerCount();
     }());
+    workers_initialized.store(true, std::memory_order_release);
     return pool;
 }
 
@@ -1406,8 +1452,9 @@ bool Enabled(const EmuState& state) {
     return mode == JitMode::Exact || mode == JitMode::Generic || mode == JitMode::Region;
 }
 
-std::vector<aarch64::detail::HandlerFunc> Compile(std::span<const Member> members, uint64_t epoch) {
-    return Compiler().FindOrCompileArm(members, epoch);
+std::vector<aarch64::detail::HandlerFunc> Compile(std::span<const Member> members, uint64_t epoch,
+                                                  const AsyncSignals* signals) {
+    return Compiler().FindOrCompileArm(members, epoch, signals);
 }
 
 unsigned WorkerLimit() { return WorkerCount(); }
@@ -1419,8 +1466,10 @@ void TraceRegion(uint64_t page, size_t members) {
         std::fprintf(trace, "arm_region_install,%llu,%zu\n", static_cast<unsigned long long>(page), members);
 }
 
-bool Queue(std::function<void()> work) {
-    return Workers().Submit([work = std::move(work)] {
+bool Queue(std::weak_ptr<AsyncSignals> signals, std::function<void()> work) {
+    return Workers().Submit(signals, [signals, work = std::move(work)]() -> uint64_t {
+        auto control = signals.lock();
+        if (!control || control->IsClosed()) return 0;
         const uint64_t start = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID);
         work();
         const auto elapsed = clock_gettime_nsec_np(CLOCK_THREAD_CPUTIME_ID) - start;
@@ -1458,9 +1507,22 @@ uint64_t LLVMJitCacheEpoch() { return cache_epoch.load(std::memory_order_acquire
 void LLVMJitMmuCreated() { mmu_count.fetch_add(1, std::memory_order_relaxed); }
 
 void LLVMJitMmuDestroyed() {
-    if (mmu_count.fetch_sub(1, std::memory_order_acq_rel) != 1 || !LLVMJitLiveBlockCount()) return;
+    if (mmu_count.fetch_sub(1, std::memory_order_acq_rel) != 1) return;
+    if (!workers_initialized.load(std::memory_order_acquire) && !compiler_initialized.load(std::memory_order_acquire))
+        return;
+    // Abort any detached in-flight compilations and wait for all workers to
+    // exit LLVM before returning to a host that may unload the library or exit.
     flush_requested.store(true, std::memory_order_release);
-    FinishPendingFlush();
+    if (workers_initialized.load(std::memory_order_acquire)) Workers().WaitIdle();
+    if (flush_requested.load(std::memory_order_acquire)) {
+        std::unique_lock lock(execution_gate);
+        if (flush_requested.load(std::memory_order_acquire)) {
+            if (compiler_initialized.load(std::memory_order_acquire))
+                Compiler().ResetGeneration();
+            else
+                flush_requested.store(false, std::memory_order_release);
+        }
+    }
 }
 
 bool LLVMBlockJitSupported() { return pthread_jit_write_protect_supported_np(); }

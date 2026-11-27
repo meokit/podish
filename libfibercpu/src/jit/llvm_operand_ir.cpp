@@ -534,12 +534,18 @@ void DeferredFlags::Lower(llvm::Function& entry) {
 }
 
 bool OptimizeLLVMModule(llvm::Function& entry, bool prune_dead_globals, llvm::StringRef custom_pipeline,
-                        bool fold_operand_loads) {
+                        bool fold_operand_loads, llvm::function_ref<bool()> should_cancel = {}) {
+    if (should_cancel && should_cancel()) return false;
     llvm::LoopAnalysisManager loops;
     llvm::FunctionAnalysisManager functions;
     llvm::CGSCCAnalysisManager call_graph;
     llvm::ModuleAnalysisManager modules;
-    llvm::PassBuilder passes;
+    llvm::PassInstrumentationCallbacks callbacks;
+    if (should_cancel) {
+        callbacks.registerShouldRunOptionalPassCallback([&](llvm::StringRef, llvm::Any) { return !should_cancel(); });
+    }
+    llvm::PassBuilder passes(nullptr, llvm::PipelineTuningOptions(), std::nullopt,
+                             should_cancel ? &callbacks : nullptr);
     passes.registerModuleAnalyses(modules);
     passes.registerCGSCCAnalyses(call_graph);
     passes.registerFunctionAnalyses(functions);
@@ -550,6 +556,7 @@ bool OptimizeLLVMModule(llvm::Function& entry, bool prune_dead_globals, llvm::St
     promote.addPass(llvm::SROAPass(llvm::SROAOptions::ModifyCFG));
     promote.addPass(llvm::SimplifyCFGPass());
     promote.run(entry, functions);
+    if (should_cancel && should_cancel()) return false;
     DeferredFlags().Lower(entry);
 #ifdef FIBERCPU_LLVM_SHARED_REGION_EXITS
     if (auto* pack = entry.getParent()->getFunction(kPackRegionFlags)) {
@@ -580,19 +587,21 @@ bool OptimizeLLVMModule(llvm::Function& entry, bool prune_dead_globals, llvm::St
         pipeline.addPass(llvm::GlobalDCEPass());
     }
     pipeline.run(*entry.getParent(), modules);
+    if (should_cancel && should_cancel()) return false;
     // Work on the optimized SSA so the result is independent of which guest
     // kernels supplied or consumed this bit. Packed exit values stay live.
     llvm::FunctionPassManager entry_passes;
     entry_passes.addPass(ForwardPackedBitTestsPass());
     entry_passes.run(entry, functions);
-    return true;
+    return !should_cancel || !should_cancel();
 }
 
 }  // namespace
 
 #if FIBERCPU_GUEST_AARCH64 && FIBERCPU_LLVM_JIT
-bool OptimizeLLVMArmModule(llvm::Function& entry, llvm::StringRef pipeline, bool fold_operand_loads) {
-    return OptimizeLLVMModule(entry, true, pipeline, fold_operand_loads);
+bool OptimizeLLVMArmModule(llvm::Function& entry, llvm::StringRef pipeline, bool fold_operand_loads,
+                           llvm::function_ref<bool()> should_cancel) {
+    return OptimizeLLVMModule(entry, true, pipeline, fold_operand_loads, should_cancel);
 }
 #endif
 
@@ -816,7 +825,9 @@ void RemoveBlockMarkers(llvm::Module& module) {
 
 std::unique_ptr<llvm::Module> PrepareLLVMBlock(const LLVMOperandTemplates& templates, block_recipe::BlockKeyView key,
                                                llvm::StringRef entry_name, bool prune_dead_globals,
-                                               llvm::StringRef custom_pipeline, bool fold_operand_loads) {
+                                               llvm::StringRef custom_pipeline, bool fold_operand_loads,
+                                               llvm::function_ref<bool()> should_cancel) {
+    if (should_cancel && should_cancel()) return {};
     auto module = CloneBlockModule(templates, std::span(&key, 1));
     if (!module) return {};
     auto* entry = module->getFunction("FiberLLVMEntry");
@@ -826,7 +837,7 @@ std::unique_ptr<llvm::Module> PrepareLLVMBlock(const LLVMOperandTemplates& templ
     for (auto& function : *module) {
         if (&function != entry && !function.isDeclaration()) function.setLinkage(llvm::GlobalValue::InternalLinkage);
     }
-    if (!OptimizeLLVMModule(*entry, prune_dead_globals, custom_pipeline, fold_operand_loads) ||
+    if (!OptimizeLLVMModule(*entry, prune_dead_globals, custom_pipeline, fold_operand_loads, should_cancel) ||
         llvm::verifyModule(*module))
         return {};
     for (auto& inst : llvm::instructions(*entry)) {
@@ -1032,7 +1043,9 @@ void ShareRegionTailExits(llvm::Function& body, const llvm::DenseMap<llvm::CallI
 std::unique_ptr<llvm::Module> PrepareLLVMPageRegion(const LLVMOperandTemplates& templates,
                                                     std::span<const LLVMPageMember> candidates, llvm::StringRef name,
                                                     llvm::StringRef pipeline, bool fold_operand_loads,
-                                                    std::vector<size_t>& included) {
+                                                    std::vector<size_t>& included,
+                                                    llvm::function_ref<bool()> should_cancel) {
+    if (should_cancel && should_cancel()) return {};
     using Region = mem::PageRegion<BasicBlock>;
     if (candidates.size() < 2 || candidates.size() > Region::MaxMembers) return {};
 
@@ -1061,6 +1074,7 @@ std::unique_ptr<llvm::Module> PrepareLLVMPageRegion(const LLVMOperandTemplates& 
     llvm::SmallVector<llvm::Function*, 16> members;
     included.clear();
     for (auto [index, candidate] : llvm::enumerate(candidates)) {
+        if (should_cancel && should_cancel()) return {};
         llvm::ValueToValueMapTy values;
         auto* member = llvm::CloneFunction(pattern, values);
         member->setLinkage(llvm::GlobalValue::InternalLinkage);
@@ -1258,7 +1272,9 @@ std::unique_ptr<llvm::Module> PrepareLLVMPageRegion(const LLVMOperandTemplates& 
         if (!function.getName().starts_with(name)) function.setLinkage(llvm::GlobalValue::InternalLinkage);
     }
     const llvm::WeakTrackingVH page_base(page);
-    if (llvm::verifyModule(*module) || !OptimizeLLVMModule(*body, true, pipeline, fold_operand_loads)) return {};
+    if (llvm::verifyModule(*module) || !OptimizeLLVMModule(*body, true, pipeline, fold_operand_loads, should_cancel))
+        return {};
+    if (should_cancel && should_cancel()) return {};
     // CFG simplification can expose a constant target only after the region's edges have been built.
     if (page_base && FoldRegionPageOffsets(*body, page_base)) {
         llvm::FunctionPassManager cleanup;
@@ -1266,7 +1282,7 @@ std::unique_ptr<llvm::Module> PrepareLLVMPageRegion(const LLVMOperandTemplates& 
         cleanup.addPass(llvm::SimplifyCFGPass());
         cleanup.run(*body, functions);
     }
-    if (llvm::verifyModule(*module)) return {};
+    if ((should_cancel && should_cancel()) || llvm::verifyModule(*module)) return {};
     return module;
 }
 

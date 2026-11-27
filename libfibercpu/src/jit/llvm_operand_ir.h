@@ -5,6 +5,7 @@
 #include <string>
 #include <vector>
 
+#include <llvm/ADT/STLFunctionalExtras.h>
 #include <llvm/ADT/StringRef.h>
 #include <llvm/Support/Error.h>
 
@@ -38,7 +39,8 @@ llvm::Expected<std::string> ParseLLVMBlockPipeline(llvm::StringRef level, llvm::
 
 std::unique_ptr<llvm::Module> PrepareLLVMBlock(const LLVMOperandTemplates& templates, block_recipe::BlockKeyView key,
                                                llvm::StringRef entry_name, bool prune_dead_globals = false,
-                                               llvm::StringRef custom_pipeline = {}, bool fold_operand_loads = false);
+                                               llvm::StringRef custom_pipeline = {}, bool fold_operand_loads = false,
+                                               llvm::function_ref<bool()> should_cancel = {});
 
 struct LLVMPageMember {
     block_recipe::BlockKeyView key;
@@ -48,6 +50,7 @@ struct LLVMPageMember {
 std::unique_ptr<llvm::Module> PrepareLLVMPageRegion(const LLVMOperandTemplates& templates,
                                                     std::span<const LLVMPageMember> candidates, llvm::StringRef name,
                                                     llvm::StringRef pipeline, bool fold_operand_loads,
-                                                    std::vector<size_t>& included);
+                                                    std::vector<size_t>& included,
+                                                    llvm::function_ref<bool()> should_cancel = {});
 
 }  // namespace fiberish

@@ -205,12 +205,12 @@ void Capture(ArmCompilation& job, const EmuState& engine, ArmBlock& root) {
     job.region = CapturePage(engine, root);
 }
 
-ArmHandler CompileBlock(const arm_jit::Member& member, uint64_t epoch) {
-    const auto entries = arm_jit::Compile(std::span(&member, 1), epoch);
+ArmHandler CompileBlock(const arm_jit::Member& member, uint64_t epoch, const AsyncSignals* signals) {
+    const auto entries = arm_jit::Compile(std::span(&member, 1), epoch, signals);
     return entries.empty() ? nullptr : entries.front();
 }
 
-bool CompileRegion(CapturedRegion& region, uint64_t epoch) {
+bool CompileRegion(CapturedRegion& region, uint64_t epoch, const AsyncSignals* signals) {
     size_t count = 0;
     for (size_t i = 0; i < region.members.size(); ++i) {
         if (!std::ranges::all_of(region.members[i].steps,
@@ -225,16 +225,18 @@ bool CompileRegion(CapturedRegion& region, uint64_t epoch) {
     if (count < 2) return false;
     region.members.resize(count);
     region.entries.resize(count);
-    const auto entries = arm_jit::Compile(region.members, epoch);
+    const auto entries = arm_jit::Compile(region.members, epoch, signals);
     if (entries.size() != count) return false;
     for (size_t i = 0; i < count; ++i) region.entries[i].handler = entries[i];
     return true;
 }
 
-void Compile(ArmCompilation& job) {
-    if (job.region && CompileRegion(*job.region, job.epoch)) return;
+void Compile(ArmCompilation& job, const AsyncSignals* signals = nullptr) {
+    if (signals && signals->IsClosed()) return;
+    if (job.region && CompileRegion(*job.region, job.epoch, signals)) return;
+    if (signals && signals->IsClosed()) return;
     job.region.reset();
-    job.entry = CompileBlock(job.input, job.epoch);
+    job.entry = CompileBlock(job.input, job.epoch, signals);
 }
 
 bool IsCurrent(const EmuState& engine, const CapturedBlock& member, const uint8_t* backing) {
@@ -311,7 +313,7 @@ struct LLVMArmJobs {
 
     ~LLVMArmJobs() {
         pending.clear();
-        signals->Close();
+        signals->Cancel();
     }
 };
 
@@ -321,15 +323,16 @@ bool QueueBlock(LLVMArmJobs& jobs, const EmuState& engine, ArmBlock& block) {
     auto job = std::make_shared<ArmCompilation>();
     Capture(*job, engine, block);
     const auto work = [result = std::weak_ptr(job), signals = jobs.signals] {
-        if (!signals->Begin()) return;
+        if (signals->IsClosed()) return;
         if (auto output = result.lock()) {
-            Compile(*output);
-            output->done.store(true, std::memory_order_release);
-            signals->ready.store(true, std::memory_order_release);
+            Compile(*output, signals.get());
+            if (!signals->IsClosed()) {
+                output->done.store(true, std::memory_order_release);
+                signals->ready.store(true, std::memory_order_release);
+            }
         }
-        signals->End();
     };
-    if (!arm_jit::Queue(work)) return false;
+    if (!arm_jit::Queue(jobs.signals, work)) return false;
     jobs.pending.push_back(std::move(job));
     return true;
 }

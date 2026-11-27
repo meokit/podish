@@ -24,7 +24,8 @@
 
 namespace fiberish {
 
-bool OptimizeLLVMArmModule(llvm::Function& entry, llvm::StringRef pipeline, bool fold_operand_loads);
+bool OptimizeLLVMArmModule(llvm::Function& entry, llvm::StringRef pipeline, bool fold_operand_loads,
+                           llvm::function_ref<bool()> should_cancel = {});
 
 namespace arm_jit {
 namespace {
@@ -470,7 +471,8 @@ public:
         branch_to(offset, Slot(first, slot_offset), BlockExitLink::Fallthrough);
     }
 
-    bool Optimize(llvm::StringRef pipeline, bool fold_operand_loads) {
+    bool Optimize(llvm::StringRef pipeline, bool fold_operand_loads, llvm::function_ref<bool()> should_cancel) {
+        if (should_cancel && should_cancel()) return false;
         // Native FP kernels use constrained arithmetic for guest FPCR.
         // Retain that contract when their bodies become part of this function.
         for (auto* call : inline_calls_) {
@@ -480,12 +482,14 @@ public:
             }
         }
         for (auto* call : inline_calls_) {
+            if (should_cancel && should_cancel()) return false;
             llvm::InlineFunctionInfo info;
             if (!llvm::InlineFunction(*call, info).isSuccess()) return false;
         }
+        if (should_cancel && should_cancel()) return false;
         return !llvm::verifyModule(module_, &llvm::errs()) &&
-               OptimizeLLVMArmModule(entry_, pipeline, fold_operand_loads) &&
-               !llvm::verifyModule(module_, &llvm::errs());
+               OptimizeLLVMArmModule(entry_, pipeline, fold_operand_loads, should_cancel) &&
+               (!should_cancel || !should_cancel()) && !llvm::verifyModule(module_, &llvm::errs());
     }
 };
 }  // namespace
@@ -493,8 +497,10 @@ public:
 bool CanLower(uint32_t word) { return BindOperation(DecodeFields(word)).id != OperationId::Unsupported; }
 
 std::unique_ptr<llvm::Module> Prepare(std::span<const Member> members, llvm::StringRef name, llvm::StringRef pipeline,
-                                      bool fold_operand_loads) {
-    if (members.empty() || members.size() > mem::PageRegion<BasicBlock>::MaxMembers) return {};
+                                      bool fold_operand_loads, llvm::function_ref<bool()> should_cancel) {
+    if ((should_cancel && should_cancel()) || members.empty() ||
+        members.size() > mem::PageRegion<BasicBlock>::MaxMembers)
+        return {};
     thread_local Templates templates;
     if (!templates.module) return {};
     const auto& source = *templates.module;
@@ -513,11 +519,12 @@ std::unique_ptr<llvm::Module> Prepare(std::span<const Member> members, llvm::Str
             if (binding.refetch) break;
         }
     }
+    if (should_cancel && should_cancel()) return {};
     auto module = KernelModule().Clone(source, kernels.getArrayRef());
     for (auto& function : *module)
         if (!function.isDeclaration()) function.setLinkage(llvm::GlobalValue::InternalLinkage);
     Builder builder(*module, name, members);
-    if (!builder.Optimize(pipeline, fold_operand_loads)) return {};
+    if (!builder.Optimize(pipeline, fold_operand_loads, should_cancel)) return {};
     return module;
 }
 

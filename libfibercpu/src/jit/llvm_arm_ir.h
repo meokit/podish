@@ -6,13 +6,15 @@
 #include <span>
 #include <vector>
 
+#include <llvm/ADT/STLFunctionalExtras.h>
 #include <llvm/ADT/StringRef.h>
 
 #include "aarch64/aarch64.h"
 
 namespace fiberish {
+class AsyncSignals;
 struct EmuState;
-}
+}  // namespace fiberish
 
 namespace llvm {
 class Module;
@@ -41,9 +43,10 @@ bool Enabled(const EmuState& state);
 unsigned WorkerLimit();
 bool CanQueue();
 void TraceRegion(uint64_t page, size_t members);
-bool Queue(std::function<void()> work);
-std::vector<aarch64::detail::HandlerFunc> Compile(std::span<const Member> members, uint64_t epoch);
+bool Queue(std::weak_ptr<AsyncSignals> signals, std::function<void()> work);
+std::vector<aarch64::detail::HandlerFunc> Compile(std::span<const Member> members, uint64_t epoch,
+                                                  const AsyncSignals* signals = nullptr);
 std::unique_ptr<llvm::Module> Prepare(std::span<const Member> members, llvm::StringRef name, llvm::StringRef pipeline,
-                                      bool fold_operand_loads);
+                                      bool fold_operand_loads, llvm::function_ref<bool()> should_cancel = {});
 
 }  // namespace fiberish::arm_jit

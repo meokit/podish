@@ -503,6 +503,22 @@ void CheckStandaloneReuse(EmuState* state) {
     assert(AArch64_RegRead(state, 32) == Pc + 12);
     AArch64_MemUnmap(state, Pc, PageBytes);
 }
+void CheckDetachedPeerTeardown(X86_RunContext* run) {
+    alignas(PageBytes) std::array<uint8_t, PageBytes> code{};
+    const std::array loop{0x91002821u,  // add x1, x1, #10
+                          0x91003042u,  // add x2, x2, #12
+                          0xf1000400u,  // subs x0, x0, #1
+                          0x54ffffa1u,  // b.ne .-12
+                          0x14000000u}; // b .
+    Put(code.data(), loop);
+    auto* peer = X86_CreateForRun(run);
+    assert(peer);
+    AArch64_Reset(peer);
+    assert(AArch64_MemMapHostPage(peer, Pc, code.data(), 5));
+    AArch64_RegWrite(peer, 0, 128);
+    Run(peer, Pc, 64);
+    X86_Destroy(peer);
+}
 } // namespace
 
 int main(int argc, char**) {
@@ -533,6 +549,7 @@ int main(int argc, char**) {
     } else {
         CheckStandaloneReuse(state);
     }
+    CheckDetachedPeerTeardown(run);
     assert(X86_GetLLVMJitBlockCount() > before && X86_GetLLVMJitLiveBlockCount() > 0);
     X86_Destroy(state);
     X86_DestroyRun(run);
