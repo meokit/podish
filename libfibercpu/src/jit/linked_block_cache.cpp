@@ -33,7 +33,7 @@ std::atomic<uint64_t> linked_hits{0};
 std::atomic<uint64_t> linked_page_hits{0};
 
 bool TryLinkedPageRegion(EmuState& state, BasicBlock& root, block_recipe::BlockKeyView key) {
-    if (!root.chain.has_region_context || !LinkedPageRegionsEnabled()) return false;
+    if (!root.chain.has_region_context || root.RegionContext() || !LinkedPageRegionsEnabled()) return false;
     const auto recipe = std::ranges::lower_bound(linked_cache_keys, key);
     if (recipe == std::end(linked_cache_keys) || *recipe != key) return false;
     auto& mmu = state.mmu;
@@ -45,14 +45,14 @@ bool TryLinkedPageRegion(EmuState& state, BasicBlock& root, block_recipe::BlockK
             continue;
 
         const auto stamp = mmu.page_region_stamp(page);
-        if (!stamp || mmu.code_cache().page_regions->Contains(page)) return false;
+        if (!stamp) return false;
         using Entry = mem::CodeCacheState::PageRegionEntry;
         std::vector<Entry> entries;
         entries.reserve(region.members.size());
         for (const auto& member : region.members) {
             const auto eip = page + member.offset;
             auto* block = mmu.lookup_cached_block(eip);
-            if (!block || !block->is_valid() || !block->chain.has_region_context) break;
+            if (!block || !block->is_valid() || !block->chain.has_region_context || block->RegionContext()) break;
             entries.push_back({eip, block, block->invalidation_revision, member.handler});
         }
         if (entries.size() != region.members.size()) continue;

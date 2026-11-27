@@ -7,6 +7,7 @@
 #include "jit/llvm_block_memory.h"
 #include "jit/llvm_hotness.h"
 #include "jit/llvm_operand_ir.h"
+#include "jit/page_region_selection.h"
 #if FIBERCPU_GUEST_I386
 #include "linked_block_cache_abi.h"
 #endif
@@ -1060,15 +1061,14 @@ struct CapturedRegion {
 };
 
 std::optional<CapturedRegion> CapturePage(EmuState& state, BasicBlock& root) {
+    if (root.RegionContext()) return std::nullopt;
     auto stamp = state.mmu.page_region_stamp(root.start_eip());
     if (!stamp) return std::nullopt;
     auto& cache = state.mmu.code_cache();
-    if (cache.page_regions->Contains(stamp->guest_page)) return std::nullopt;
+    if (cache.page_regions->Overlaps(stamp->guest_page, root)) return std::nullopt;
     const auto page = cache.page_to_blocks.find(stamp->host_page);
     if (page == cache.page_to_blocks.end()) return std::nullopt;
 
-    constexpr size_t max_members = kMaxRegionMembers;
-    constexpr size_t max_instructions = 192;
     struct RegionCandidate {
         BasicBlock* block;
         llvm::SmallVector<uint32_t, 4> targets;
@@ -1077,16 +1077,18 @@ std::optional<CapturedRegion> CapturePage(EmuState& state, BasicBlock& root) {
     for (const auto& reference : page->second) {
         const auto& item = cache.block_entries[reference.block_index];
         auto* block = item.block;
-        if (block && block->is_valid() && block->chain.has_region_context && item.host_pages.size() == 1 &&
-            item.cache_key.host_page_base == stamp->host_page &&
+        if (block && block->is_valid() && block->inst_count() && block->HasRegionContext() && !block->RegionContext() &&
+            item.host_pages.size() == 1 && item.cache_key.host_page_base == stamp->host_page &&
             (block->start_eip() & ~mem::PAGE_MASK) == stamp->guest_page && block->end_eip > block->start_eip() &&
-            ((block->end_eip - 1) & ~mem::PAGE_MASK) == stamp->guest_page) {
+            ((block->end_eip - 1) & ~mem::PAGE_MASK) == stamp->guest_page &&
+            !cache.page_regions->Overlaps(stamp->guest_page, *block)) {
             RegionCandidate candidate{block, {}};
-            candidate.targets.push_back(block->end_eip);
+            const auto terminal = block->terminal_kind();
+            if (terminal == BlockTerminalKind::None || terminal == BlockTerminalKind::DirectJccRel)
+                candidate.targets.push_back(block->end_eip);
             for (const auto* op = block->FirstOp(); op != block->Sentinel(); op = block->NextOp(op)) {
-                if (op->HasBranchOperands() &&
-                    (op->BranchSuffix() || block->terminal_kind() == BlockTerminalKind::DirectJmpRel ||
-                     block->terminal_kind() == BlockTerminalKind::DirectJccRel))
+                if (op->HasBranchOperands() && (op->BranchSuffix() || terminal == BlockTerminalKind::DirectJmpRel ||
+                                                terminal == BlockTerminalKind::DirectJccRel))
                     candidate.targets.push_back(op->Primary());
             }
             available.push_back(std::move(candidate));
@@ -1096,27 +1098,18 @@ std::optional<CapturedRegion> CapturePage(EmuState& state, BasicBlock& root) {
     const auto has_edge = [&](const RegionCandidate& from, const RegionCandidate& to) {
         return std::ranges::find(from.targets, address(to)) != from.targets.end();
     };
-    std::ranges::sort(available, {}, address);
-    const auto root_candidate = std::ranges::find(available, &root, &RegionCandidate::block);
-    if (root_candidate == available.end()) return std::nullopt;
-    std::vector<const RegionCandidate*> selected{&*root_candidate};
-    size_t instructions = root.inst_count();
-    const auto add = [&](const RegionCandidate* next) {
-        const auto count = next->block->inst_count();
-        if (selected.size() == max_members || instructions + count > max_instructions ||
-            std::ranges::find(selected, next) != selected.end())
-            return;
-        selected.push_back(next);
-        instructions += count;
+    struct InstructionCount {
+        size_t instructions = 0;
+        size_t count() const { return instructions; }
     };
-    for (size_t i = 0; i < selected.size() && selected.size() < max_members; ++i) {
-        const auto& from = *selected[i];
-        for (const auto& candidate : available) {
-            if (has_edge(from, candidate) || has_edge(candidate, from)) add(&candidate);
-        }
-    }
-    if (selected.size() < 2) return std::nullopt;
-    std::ranges::sort(selected, {}, [&](const auto* candidate) { return address(*candidate); });
+    const auto add_instructions = [](const RegionCandidate& candidate, InstructionCount total) {
+        total.instructions += candidate.block->inst_count();
+        return total;
+    };
+    std::ranges::sort(available, {}, address);
+    const auto selected =
+        SelectPageRegion(std::span<const RegionCandidate>(available), root, has_edge, add_instructions);
+    if (selected.empty()) return std::nullopt;
 
     CapturedRegion out{*stamp, {}};
     for (const auto* candidate : selected) {

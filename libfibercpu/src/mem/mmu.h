@@ -247,7 +247,33 @@ class PageRegionCache {
     using Region = PageRegion<BlockT>;
     static_assert(offsetof(Region, members) == 0 && alignof(Region) == Region::MemberMask + 1);
 
-    ankerl::unordered_dense::map<GuestAddress, std::unique_ptr<Region>> live_;
+    using Regions = std::vector<std::unique_ptr<Region>>;
+    ankerl::unordered_dense::map<GuestAddress, Regions> live_;
+
+    static GuestAddress Start(const BlockT& block) {
+        if constexpr (requires { block.start_pc(); })
+            return block.start_pc();
+        else
+            return block.start_eip();
+    }
+
+    static GuestAddress End(const BlockT& block) {
+        if constexpr (requires { block.end_pc(); })
+            return block.end_pc();
+        else
+            return block.end_eip;
+    }
+
+    static bool Overlaps(const Regions& regions, const BlockT& block) {
+        const auto start = Start(block);
+        const auto end = End(block);
+        for (const auto& region : regions) {
+            for (const auto* member : std::span(region->members, region->count)) {
+                if (start < End(*member) && Start(*member) < end) return true;
+            }
+        }
+        return false;
+    }
 
     static void Restore(const Region& region) {
         for (auto* block : std::span(region.members, region.count)) {
@@ -266,34 +292,36 @@ public:
 
     uint64_t invalidation_epoch = 0;
 
-    const Region* Find(GuestAddress guest_page) const {
-        const auto it = live_.find(guest_page);
-        return it == live_.end() ? nullptr : it->second.get();
+    bool Overlaps(GuestAddress guest_page, const BlockT& block) const {
+        const auto page = live_.find(guest_page);
+        return page != live_.end() && Overlaps(page->second, block);
     }
-
-    bool Contains(GuestAddress guest_page) const { return live_.contains(guest_page); }
 
     template <typename Validate>
     bool Install(GuestAddress guest_page, std::span<const Entry> members, Validate&& validate) {
-        if (members.size() < 2 || members.size() > Region::MaxMembers || Contains(guest_page)) return false;
-        auto region = std::make_unique<Region>();
-        region->guest_page = guest_page;
+        if (members.size() < 2 || members.size() > Region::MaxMembers) return false;
+        const auto page = live_.find(guest_page);
         GuestAddress previous = 0;
+        size_t count = 0;
         for (const auto& member : members) {
-            if ((member.address & ~GuestAddress(PAGE_MASK)) != guest_page ||
-                (region->count && member.address <= previous) || !member.block || !member.handler || !validate(member))
+            if ((member.address & ~GuestAddress(PAGE_MASK)) != guest_page || (count && member.address <= previous) ||
+                !member.block || !member.handler || !validate(member))
                 return false;
             const auto& block = *member.block;
-            if (block.invalidation_revision != member.revision || !block.HasRegionContext() || !block.inst_count())
+            if (block.invalidation_revision != member.revision || !block.HasRegionContext() || !block.inst_count() ||
+                block.RegionContext() || (page != live_.end() && Overlaps(page->second, block)))
                 return false;
-            region->members[region->count++] = member.block;
             previous = member.address;
+            ++count;
         }
 
         // Keep the table address stable when the map reallocates. The scheduler owns
         // publication, so no guest code or callback runs between these stores.
-        const auto* table = region->members;
-        live_.emplace(guest_page, std::move(region));
+        auto region = std::make_unique<Region>();
+        region->guest_page = guest_page;
+        for (const auto& member : members) region->members[region->count++] = member.block;
+        const auto* table = region.get();
+        live_[guest_page].push_back(std::move(region));
         for (const auto& member : members) {
             member.block->SetRegionContext(table);
             member.block->EntryHandler() = member.handler;
@@ -304,13 +332,14 @@ public:
     void Invalidate(GuestAddress guest_page) {
         const auto region = live_.find(guest_page);
         if (region == live_.end()) return;
-        Restore(*region->second);
+        for (const auto& item : region->second) Restore(*item);
         live_.erase(region);
     }
 
     void InvalidateAll() {
         ++invalidation_epoch;
-        for (const auto& item : live_) Restore(*item.second);
+        for (const auto& [page, regions] : live_)
+            for (const auto& region : regions) Restore(*region);
         live_.clear();
     }
 };

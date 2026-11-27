@@ -1339,6 +1339,86 @@ bool VerifyPageRegion(bool cross_page = false) {
     return run(first, 8, 10, first, 11, cmp_flags) && observer.called && observer.restored &&
            (observer.flags & flag_mask) == initial_flags && !region_context(alias);
 }
+
+bool VerifyMultiplePageRegions() {
+    using Region = fiberish::mem::PageRegion<BasicBlock>;
+    constexpr unsigned blocks = 18;
+    constexpr unsigned stride = 4;
+    constexpr uint32_t alias = 0x30000;
+    alignas(4096) std::array<uint8_t, 4096> code{};
+    for (unsigned i = 0; i < blocks; ++i) {
+        const auto at = stride * i;
+        code[at] = 0x40; // INC EAX
+        code[at + 1] = 0xeb;
+        code[at + 2] = i + 1 == blocks ? uint8_t(1 - stride * blocks) : 1;
+    }
+    using namespace std::string_view_literals;
+    constexpr auto options = "JitMode=region\0JitHotThreshold=8\0"sv;
+    char error[256]{};
+    const std::unique_ptr<X86_RunContext, decltype(&X86_DestroyRun)> run{
+        X86_CreateRun(options.data(), options.size(), error, sizeof(error)), X86_DestroyRun};
+    if (!run)
+        return false;
+    State state{X86_CreateForRun(run.get())};
+    auto* cpu = state.get();
+    if (!cpu || !X86_MemMapHostPage(cpu, code_address, code.data(), 5) ||
+        !X86_MemMapHostPage(cpu, alias, code.data(), 5))
+        return false;
+    const auto step = [&](uint32_t address, unsigned budget = 2) {
+        X86_SetEIP(cpu, address);
+        return X86_Run(cpu, 0, budget);
+    };
+    const auto wait_for_region = [&](uint32_t address) -> BasicBlock* {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        do {
+            if (!step(address))
+                return nullptr;
+            if (auto* block = FindCompiledBlock(cpu, address); block && block->RegionContext())
+                return block;
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        } while (std::chrono::steady_clock::now() < deadline);
+        return nullptr;
+    };
+
+    std::vector<const BasicBlock*> members;
+    for (const auto page : {code_address, alias}) {
+        for (unsigned i = 0; i < blocks; ++i)
+            if (!step(page + stride * i))
+                return false;
+        const auto* first = wait_for_region(page);
+        if (!first)
+            return false;
+        const auto* table = static_cast<const Region*>(first->RegionContext());
+        const auto entry = first->entry;
+        if (table->count != Region::MaxMembers)
+            return false;
+        unsigned offset = 0;
+        while (offset < stride * blocks && FindCompiledBlock(cpu, page + offset))
+            offset += stride;
+        if (offset == stride * blocks)
+            return false;
+        const auto* second = wait_for_region(page + offset);
+        if (!second || first->RegionContext() != table || first->entry != entry)
+            return false;
+        const auto* other_table = static_cast<const Region*>(second->RegionContext());
+        if (other_table == table || other_table->count != blocks - Region::MaxMembers)
+            return false;
+        for (unsigned i = 0; i < blocks; ++i) {
+            const auto* block = FindCompiledBlock(cpu, page + stride * i);
+            if (!block || (block->RegionContext() != table && block->RegionContext() != other_table))
+                return false;
+            members.push_back(block);
+        }
+    }
+    X86_RegWrite(cpu, 0, 0);
+    if (!step(code_address, 2 * blocks) || X86_RegRead(cpu, 0) != blocks || X86_GetEIP(cpu) != code_address)
+        return false;
+    X86_ResetCodeCacheByRange(cpu, alias, 1);
+    return std::ranges::all_of(members, [](const BasicBlock* block) {
+        return !block->is_valid() && !block->RegionContext() && block->entry == block->FirstOp()->handler;
+    });
+}
+
 #endif
 
 bool VerifyAsyncCompilations() {
@@ -1419,7 +1499,8 @@ int main(int argc, char** argv) {
     }
 #if FIBERCPU_LLVM_JIT
     if (argc == 2 && std::strcmp(argv[1], "region") == 0) {
-        if (VerifyPageRegion() && VerifyPageRegion(true) && VerifyConditionalFallthrough(true))
+        if (VerifyPageRegion() && VerifyPageRegion(true) && VerifyConditionalFallthrough(true) &&
+            VerifyMultiplePageRegions())
             return 0;
         std::fprintf(stderr, "LLVM page region publication, relocation or memory restart mismatch\n");
         return 1;

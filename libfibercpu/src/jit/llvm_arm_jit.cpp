@@ -14,6 +14,7 @@
 #include "jit/llvm_async_signals.h"
 #include "jit/llvm_block_jit.h"
 #include "jit/llvm_hotness.h"
+#include "jit/page_region_selection.h"
 #include "state.h"
 
 namespace fiberish::aarch64::detail {
@@ -61,8 +62,6 @@ using ArmHandler = aarch64::detail::HandlerFunc;
 using namespace aarch64;
 using namespace aarch64::detail;
 
-constexpr size_t kMaxRegionMembers = mem::PageRegion<ArmBlock>::MaxMembers;
-constexpr size_t kMaxRegionInstructions = 192;
 using JitClock = jit_hotness::Clock;
 using jit_hotness::QueueResult;
 
@@ -139,18 +138,20 @@ arm_jit::Member CaptureMember(const ArmBlock& block) {
 }
 
 std::optional<CapturedRegion> CapturePage(const EmuState& engine, ArmBlock& root) {
-    if (!LLVMPageRegionsEnabled(engine) || !root.HasRegionContext()) return std::nullopt;
+    if (!LLVMPageRegionsEnabled(engine) || !root.HasRegionContext() || root.RegionContext()) return std::nullopt;
     const auto page = root.start_pc() & ~PageMask;
     const auto stamp = engine.mmu.arm_page_region_stamp(page);
     if (!stamp || stamp->backing != reinterpret_cast<uintptr_t>(root.executable_page)) return std::nullopt;
     const auto& cache = *engine.mmu.code_cache().arm_blocks;
-    if (cache.regions.Contains(page)) return std::nullopt;
+    if (cache.regions.Overlaps(page, root)) return std::nullopt;
     const auto host = cache.pages.find(stamp->backing);
     if (host == cache.pages.end()) return std::nullopt;
 
     std::vector<RegionCandidate> available;
     for (auto* block : host->second)
-        if (block->IsValid() && block->HasRegionContext() && (block->start_pc() & ~PageMask) == page)
+        if (block->IsValid() && block->inst_count() && block->HasRegionContext() && !block->RegionContext() &&
+            (block->start_pc() & ~PageMask) == page && block->end_pc() <= page + PageBytes &&
+            !cache.regions.Overlaps(page, *block))
             available.push_back(RegionEdges(*block));
 
     const auto address = [](const RegionCandidate& item) { return item.block->start_pc(); };
@@ -161,33 +162,20 @@ std::optional<CapturedRegion> CapturePage(const EmuState& engine, ArmBlock& root
     };
     // Sequential execution can enter a member partway through another member.
     // Charge each guest instruction once, as the IR does at those boundaries.
-    const auto footprint = [](const ArmBlock& block) {
-        std::bitset<PageBytes / 4> words;
+    const auto add_instructions = [](const RegionCandidate& candidate, std::bitset<PageBytes / 4> words) {
+        const auto& block = *candidate.block;
         const auto start = (block.start_pc() & PageMask) / 4;
         for (unsigned i = 0; i < block.inst_count(); ++i) words.set(start + i);
         return words;
     };
     std::ranges::sort(available, {}, address);
-    std::vector<RegionCandidate> selected{RegionEdges(root)};
-    auto words = footprint(root);
-    for (size_t i = 0; i < selected.size() && selected.size() < kMaxRegionMembers; ++i) {
-        const auto source = selected[i];
-        for (const auto& candidate : available) {
-            if (selected.size() == kMaxRegionMembers) break;
-            if (std::ranges::find(selected, candidate.block, &RegionCandidate::block) != selected.end()) continue;
-            if (!has_edge(source, candidate) && !has_edge(candidate, source)) continue;
-            const auto extended = words | footprint(*candidate.block);
-            if (extended.count() > kMaxRegionInstructions) continue;
-            selected.push_back(candidate);
-            words = extended;
-        }
-    }
-    if (selected.size() < 2) return std::nullopt;
-    std::ranges::sort(selected, {}, address);
+    const auto selected =
+        SelectPageRegion(std::span<const RegionCandidate>(available), root, has_edge, add_instructions);
+    if (selected.empty()) return std::nullopt;
 
     CapturedRegion region{*stamp, {}, {}};
-    for (const auto& candidate : selected) {
-        auto* block = candidate.block;
+    for (const auto* candidate : selected) {
+        auto* block = candidate->block;
         region.entries.push_back({block->start_pc(), block, block->invalidation_revision, nullptr});
         region.members.push_back(CaptureMember(*block));
     }

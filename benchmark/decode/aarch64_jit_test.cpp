@@ -46,10 +46,8 @@ void WaitForJit(EmuState* state, uint64_t pc, unsigned budget, const uint8_t* co
         if (block && block->header.entry != block->FirstOp()->handler) {
             if (minimum_size == 1)
                 return;
-            const auto& regions = state->mmu.code_cache().arm_blocks->regions;
-            const auto* installed = regions.Find(pc & ~PageMask);
-            if (installed && block->RegionContext() == installed->members && installed->count >= minimum_size &&
-                installed->guest_page == (pc & ~PageMask))
+            const auto* installed = static_cast<const fiberish::mem::PageRegion<ArmBlock>*>(block->RegionContext());
+            if (installed && installed->count >= minimum_size && installed->guest_page == (pc & ~PageMask))
                 return;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
@@ -116,14 +114,14 @@ void CheckLoop(EmuState* state, bool region) {
     assert(AArch64_RegRead(state, 5) == Alias + 4);
     // The host changed an instruction through an alias and then flushed it,
     // as the managed MMU does for out-of-band writes.
-    const auto* context = static_cast<ArmBlock* const*>(first->RegionContext());
+    const auto* context = static_cast<const fiberish::mem::PageRegion<ArmBlock>*>(first->RegionContext());
     const auto revision = first->invalidation_revision;
     const auto stamp = state->mmu.arm_page_region_stamp(Pc);
     using RegionEntry = fiberish::mem::CodeCacheState::ArmBlocks::RegionEntry;
     std::array<RegionEntry, 2> old_entries{};
     if (region) {
-        old_entries[0] = {Pc, context[0], revision, first->header.entry};
-        old_entries[1] = {Pc + 16, context[1], second->invalidation_revision, second->header.entry};
+        old_entries[0] = {Pc, context->members[0], revision, first->header.entry};
+        old_entries[1] = {Pc + 16, context->members[1], second->invalidation_revision, second->header.entry};
     }
     Put(code.data(), std::array{0x91000821u}); // add x1, x1, #2
     AArch64_ResetCodeCacheByRange(state, Alias, 4);
@@ -141,6 +139,81 @@ void CheckLoop(EmuState* state, bool region) {
     assert(AArch64_RegRead(state, 1) == 6);
     AArch64_MemUnmap(state, Alias, PageBytes);
     AArch64_MemUnmap(state, Pc, PageBytes);
+}
+
+void CheckMultiplePageRegions() {
+    using namespace std::string_view_literals;
+    constexpr auto options = "JitMode=region\0JitHotThreshold=8\0"sv;
+    char error[256]{};
+    auto* run = X86_CreateRun(options.data(), options.size(), error, sizeof(error));
+    assert(run);
+    auto* state = X86_CreateForRun(run);
+    assert(state);
+    AArch64_Reset(state);
+    using Region = fiberish::mem::PageRegion<ArmBlock>;
+    constexpr unsigned blocks = 18;
+    constexpr unsigned stride = 8;
+    alignas(PageBytes) std::array<uint8_t, PageBytes> code{};
+    for (unsigned i = 0; i < blocks; ++i) {
+        const auto imm = (i + 1 == blocks ? 1 - 2 * blocks : 1) & 0x03ffffffu;
+        Put(code.data() + stride * i, std::array{0x91000421u, 0x14000000u | imm}); // add x1, x1, #1; b
+    }
+    assert(AArch64_MemMapHostPage(state, Pc, code.data(), 5));
+    assert(AArch64_MemMapHostPage(state, Alias, code.data(), 5));
+
+    const auto install = [&](uint64_t page) {
+        for (unsigned i = 0; i < blocks; ++i)
+            Run(state, page + stride * i, 2);
+        WaitForJit(state, page, 2, code.data(), Region::MaxMembers);
+        const auto* first = Lookup(state, page, code.data());
+        const auto* first_region = static_cast<const Region*>(first->RegionContext());
+        const auto first_entry = first->header.entry;
+        assert(first_region->count == Region::MaxMembers);
+        auto second_pc = page;
+        while (Lookup(state, second_pc, code.data())->RegionContext() == first_region)
+            second_pc += stride;
+        WaitForJit(state, second_pc, 2, code.data(), 2);
+        const auto* second_region = static_cast<const Region*>(Lookup(state, second_pc, code.data())->RegionContext());
+        assert(first->RegionContext() == first_region && first->header.entry == first_entry);
+        assert(second_region != first_region && second_region->count == blocks - Region::MaxMembers);
+        std::array<ArmBlock*, blocks> members{};
+        for (unsigned i = 0; i < blocks; ++i) {
+            members[i] = Lookup(state, page + stride * i, code.data());
+            assert(members[i]->RegionContext() == first_region || members[i]->RegionContext() == second_region);
+        }
+        return members;
+    };
+    const auto members = install(Pc);
+    // Decoding the branch in isolation creates an unowned block within an installed member's range.
+    const auto stamp = state->mmu.arm_page_region_stamp(Pc);
+    using Entry = fiberish::mem::CodeCacheState::ArmBlocks::RegionEntry;
+    const auto entry = [](ArmBlock* block) {
+        return Entry{block->start_pc(), block, block->invalidation_revision, block->header.entry};
+    };
+    const std::array installed{entry(members[0]), entry(members[1])};
+    assert(stamp && !state->mmu.publish_arm_page_region(*stamp, installed));
+    std::array<Entry, 2> overlapping{};
+    for (unsigned i = 0; i < overlapping.size(); ++i) {
+        const auto pc = Pc + stride * i + 4;
+        Run(state, pc, 1);
+        auto* block = Lookup(state, pc, code.data());
+        assert(block && block->HasRegionContext() && !block->RegionContext());
+        overlapping[i] = entry(block);
+    }
+    assert(!state->mmu.publish_arm_page_region(*stamp, overlapping));
+    const auto aliases = install(Alias);
+    AArch64_RegWrite(state, 1, 0);
+    Run(state, Pc, 2 * blocks);
+    assert(AArch64_RegRead(state, 1) == blocks && AArch64_RegRead(state, 32) == Pc);
+
+    AArch64_MemProtect(state, Alias, PageBytes, 7);
+    for (const auto& page : {members, aliases}) {
+        for (const auto* member : page)
+            assert(!member->IsValid() && !member->RegionContext() &&
+                   member->header.entry == member->FirstOp()->handler);
+    }
+    X86_Destroy(state);
+    X86_DestroyRun(run);
 }
 
 void CheckRegionReplay(EmuState* state) {
@@ -542,6 +615,7 @@ int main(int argc, char**) {
     CheckAtomicAndSystemReplay(state);
     CheckVectorStructureReplay(state);
     if (region) {
+        CheckMultiplePageRegions();
         CheckRegionReplay(state);
         CheckRegionOverlappingFallthrough(state);
         CheckRegionExternalLink(state, false);
