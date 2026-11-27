@@ -6,13 +6,21 @@
 #include <string>
 #include <utility>
 
+#include <llvm/ADT/PostOrderIterator.h>
+#include <llvm/ADT/SCCIterator.h>
 #include <llvm/ADT/SetVector.h>
+#include <llvm/Analysis/CFG.h>
+#include <llvm/Analysis/LoopInfo.h>
 #include <llvm/Bitcode/BitcodeReader.h>
+#include <llvm/IR/Dominators.h>
 #include <llvm/IR/IRBuilder.h>
+#include <llvm/IR/InstIterator.h>
+#include <llvm/IR/IntrinsicInst.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Verifier.h>
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Transforms/Utils/Cloning.h>
+#include <llvm/Transforms/Utils/PromoteMemToReg.h>
 
 #include "aarch64/block_operands.h"
 #include "aarch64/decoder.h"
@@ -84,6 +92,103 @@ unsigned EmittedStepCount(std::span<const Member> members, size_t index) {
     return count;
 }
 
+void PromoteRegionGprs(llvm::Function& entry) {
+    llvm::DominatorTree dom(entry);
+    llvm::LoopInfo loops(dom);
+    llvm::ReversePostOrderTraversal<llvm::Function*> order(&entry);
+    if (!llvm::containsIrreducibleCFG<llvm::BasicBlock*>(order, loops)) return;
+
+    llvm::SmallPtrSet<llvm::BasicBlock*, 32> cyclic;
+    for (auto scc = llvm::scc_begin(&entry); !scc.isAtEnd(); ++scc)
+        if (scc.hasCycle()) cyclic.insert(scc->begin(), scc->end());
+
+    // LICM cannot promote GPR memory in cycles entered through several region
+    // members. Create scalar slots for those accesses and let mem2reg build
+    // SSA across the entry, internal edges and external exits.
+    struct Register {
+        llvm::SmallVector<llvm::Instruction*, 4> accesses;
+        bool whole = true;
+        bool in_cycle = false;
+        bool written = false;
+    };
+    constexpr size_t word_bytes = sizeof(uint64_t);
+    constexpr size_t gpr_count = 32;
+    static_assert(offsetof(State, x) == 0 && offsetof(State, sp) == (gpr_count - 1) * word_bytes);
+    std::array<Register, gpr_count> registers;
+    const auto& layout = entry.getDataLayout();
+    auto* state = entry.getArg(0);
+    llvm::SmallVector<std::pair<llvm::Value*, uint64_t>, 32> addresses{{state, 0}};
+    for (size_t i = 0; i < addresses.size(); ++i) {
+        const auto [address, offset] = addresses[i];
+        for (auto& use : address->uses()) {
+            auto* inst = llvm::cast<llvm::Instruction>(use.getUser());
+            if (auto* gep = llvm::dyn_cast<llvm::GetElementPtrInst>(inst)) {
+                llvm::APInt delta(layout.getIndexTypeSizeInBits(address->getType()), 0);
+                if (!gep->accumulateConstantOffset(layout, delta)) return;
+                addresses.emplace_back(gep, offset + delta.getZExtValue());
+                continue;
+            }
+            auto* load = llvm::dyn_cast<llvm::LoadInst>(inst);
+            auto* store = llvm::dyn_cast<llvm::StoreInst>(inst);
+            llvm::Type* type;
+            if (load) {
+                type = load->getType();
+            } else if (store && &use == &store->getOperandUse(1)) {
+                type = store->getValueOperand()->getType();
+            } else if (llvm::isa<llvm::AssumeInst>(inst) ||
+                       (llvm::isa<llvm::CallInst>(inst) && llvm::cast<llvm::CallInst>(inst)->isMustTailCall() &&
+                        &use == &inst->getOperandUse(0) && address == state)) {
+                continue;
+            } else {
+                // An unrecognized use may read or expose the register file.
+                return;
+            }
+            if (offset >= gpr_count * word_bytes) continue;
+            auto& reg = registers[offset / word_bytes];
+            if (offset % word_bytes == 0 && type->isIntegerTy(64) && (load ? load->isSimple() : store->isSimple())) {
+                reg.accesses.push_back(inst);
+                reg.in_cycle |= cyclic.contains(inst->getParent());
+                reg.written |= store != nullptr;
+            } else {
+                const auto size = layout.getTypeStoreSize(type);
+                const auto limit =
+                    size.isScalable()
+                        ? gpr_count
+                        : std::min<uint64_t>(gpr_count, (offset + size.getFixedValue() + word_bytes - 1) / word_bytes);
+                for (size_t j = offset / word_bytes; j < limit; ++j) registers[j].whole = false;
+            }
+        }
+    }
+
+    llvm::SmallVector<llvm::Instruction*, 8> exits;
+    for (auto& inst : llvm::instructions(entry)) {
+        if (const auto* call = llvm::dyn_cast<llvm::CallInst>(&inst); call && call->isMustTailCall())
+            exits.push_back(&inst);
+        else if (const auto* load = llvm::dyn_cast<llvm::LoadInst>(&inst);
+                 load && load->isVolatile() && load->getType()->isIntegerTy(128))
+            exits.push_back(&inst);
+    }
+
+    llvm::IRBuilder<> ir(&*entry.getEntryBlock().getFirstInsertionPt());
+    llvm::SmallVector<llvm::AllocaInst*, 8> slots;
+    for (size_t i = 0; i < registers.size(); ++i) {
+        const auto& reg = registers[i];
+        if (!reg.whole || !reg.in_cycle) continue;
+        auto* slot = ir.CreateAlloca(ir.getInt64Ty(), nullptr, "gpr");
+        auto* field = ir.CreateConstGEP1_64(ir.getInt8Ty(), state, i * word_bytes);
+        ir.CreateStore(ir.CreateLoad(ir.getInt64Ty(), field), slot);
+        slots.push_back(slot);
+        for (auto* inst : reg.accesses) inst->setOperand(llvm::isa<llvm::StoreInst>(inst) ? 1 : 0, slot);
+        if (reg.written) {
+            for (auto* exit : exits) {
+                llvm::IRBuilder<> out(exit);
+                out.CreateStore(out.CreateLoad(out.getInt64Ty(), slot), field);
+            }
+        }
+    }
+    llvm::PromoteMemToReg(slots, dom);
+}
+
 class Builder {
     llvm::Module& module_;
     llvm::IRBuilder<> ir_;
@@ -99,7 +204,8 @@ class Builder {
     llvm::Value* target_;
     llvm::Value* next_op_;
     std::array<llvm::Value*, FIBERCPU_AARCH64_PIN_COUNT> pins_;
-    llvm::Value* page_;
+    llvm::Value* page_ = nullptr;
+    uint64_t single_offset_;
     llvm::Value* region_ops_ = nullptr;
     llvm::Value* remaining_;
     llvm::BasicBlock* leave_;
@@ -127,7 +233,32 @@ class Builder {
 
     llvm::Value* Load64(llvm::Value* slot) { return ir_.CreateLoad(ir_.getInt64Ty(), slot); }
 
-    llvm::Value* PC(uint64_t offset) { return ir_.CreateAdd(page_, ir_.getInt64(offset)); }
+    llvm::Value* PC(uint64_t offset) {
+        if (page_) return ir_.CreateAdd(page_, ir_.getInt64(offset));
+        return ir_.CreateAdd(BlockPC(Owner(current_)), ir_.getInt64(offset - single_offset_));
+    }
+
+    llvm::Value* Owner(llvm::Value* first) {
+        return ir_.CreateConstGEP1_64(ir_.getInt8Ty(), first, -int64_t(sizeof(BasicBlock)));
+    }
+
+    llvm::LoadInst* LoadRegionField(llvm::Type* type, llvm::Value* field) {
+        auto* load = ir_.CreateLoad(type, field);
+        // A published region's page and membership are fixed for this invocation.
+        load->setMetadata(llvm::LLVMContext::MD_invariant_load, llvm::MDNode::get(module_.getContext(), {}));
+        return load;
+    }
+
+    llvm::Value* MemberFirst(size_t index) {
+        auto* field = ir_.CreateConstGEP1_64(ir_.getPtrTy(), region_ops_, index);
+        return ir_.CreateConstGEP1_64(ir_.getInt8Ty(), LoadRegionField(ir_.getPtrTy(), field), sizeof(BasicBlock));
+    }
+
+    void PublishMember(llvm::Value* first) {
+        if (!region_ops_) return;
+        auto* last_block = ir_.CreateConstGEP1_64(ir_.getInt8Ty(), state_, offsetof(State, last_block));
+        ir_.CreateStore(Owner(first), last_block);
+    }
 
     llvm::Value* BlockPC(llvm::Value* block) {
         return ir_.CreateAnd(Load64(block), ir_.getInt64(BasicBlockChainPrefix::StartPcMask));
@@ -155,6 +286,7 @@ class Builder {
     }
 
     void Leave(llvm::Value* pc, llvm::Value* op) {
+        PublishMember(op);
         leave_pc_->addIncoming(pc, ir_.GetInsertBlock());
         leave_op_->addIncoming(op, ir_.GetInsertBlock());
         ir_.CreateBr(leave_);
@@ -219,9 +351,13 @@ class Builder {
         ir_.CreateBr(exit.block);
     }
 
-    void ChainBlock(llvm::Value* slot, BlockExitLink form) {
+    void ChainBlock(llvm::Value* first, llvm::Value* slot, BlockExitLink form, uint64_t end_offset) {
+        // On a link hit, TryChainBlock publishes the target. On a miss the
+        // dispatcher needs the source to resolve or cache the link.
+        PublishMember(first);
+        auto* fallthrough_pc = form == BlockExitLink::Direct ? ir_.getInt64(0) : PC(end_offset);
         if (!FIBERCPU_LLVM_SHARED_REGION_EXITS || !region_ops_) {
-            EmitChainBlock(slot, form);
+            EmitChainBlock(slot, form, fallthrough_pc);
             return;
         }
 
@@ -232,18 +368,20 @@ class Builder {
             link.block = Block("region.link");
             ir_.SetInsertPoint(link.block);
             link.op = ir_.CreatePHI(ir_.getPtrTy(), 2, "branch.op");
-            EmitChainBlock(link.op, form);
+            if (form != BlockExitLink::Direct) link.pc = ir_.CreatePHI(ir_.getInt64Ty(), 2, "fallthrough.pc");
+            EmitChainBlock(link.op, form, link.pc ? link.pc : fallthrough_pc);
             ir_.SetInsertPoint(source);
         }
         link.op->addIncoming(slot, source);
+        if (link.pc) link.pc->addIncoming(fallthrough_pc, source);
         ir_.CreateBr(link.block);
     }
 
-    void EmitChainBlock(llvm::Value* slot, BlockExitLink form) {
+    void EmitChainBlock(llvm::Value* slot, BlockExitLink form, llvm::Value* fallthrough_pc) {
         auto* kind = ir_.getInt8(static_cast<uint8_t>(form));
         auto* indirect_pc = form == BlockExitLink::Indirect ? Load64(target_) : ir_.getInt64(0);
         auto* entry = ir_.CreateCall(module_.getFunction("FiberArmJitTryLink"),
-                                     {state_, slot, remaining_, next_op_, indirect_pc, kind});
+                                     {state_, slot, remaining_, next_op_, indirect_pc, fallthrough_pc, kind});
         inline_calls_.push_back(entry);
         auto* next = ir_.CreateLoad(ir_.getPtrTy(), next_op_);
         auto* linked = Block("link.hit");
@@ -263,10 +401,15 @@ public:
           entry_(*llvm::Function::Create(
               module.getFunction("FiberArmJitABI")->getFunctionType(),
               members.size() == 1 ? llvm::GlobalValue::ExternalLinkage : llvm::GlobalValue::InternalLinkage,
-              members.size() == 1 ? llvm::Twine(name) : name + "_body", module)) {
+              members.size() == 1 ? llvm::Twine(name) : name + "_body", module)),
+          single_offset_(members.front().offset) {
         entry_.addFnAttr(llvm::Attribute::NoUnwind);
         entry_.setCallingConv(module.getFunction("FiberArmJitABI")->getCallingConv());
         auto arg = entry_.arg_begin();
+        // The host State is separate from decoded blocks, the TLB and guest
+        // RAM. External exits still receive State and observe its stores.
+        arg->addAttr(llvm::Attribute::NoAlias);
+        arg->addAttr(llvm::Attribute::getWithDereferenceableBytes(module.getContext(), sizeof(State)));
         state_ = &*arg++;
         current_ = &*arg++;
         limit_ = &*arg++;
@@ -280,10 +423,7 @@ public:
         next_op_ = ir_.CreateAlloca(ir_.getPtrTy(), nullptr, "next.op");
         for (auto& pin : pins_) pin = Saved(&*arg++, "pinned");
         llvm::Value* selector = nullptr;
-        if (members.size() == 1) {
-            auto* block = ir_.CreateGEP(ir_.getInt8Ty(), current_, ir_.getInt64(-int64_t(sizeof(BasicBlock))));
-            page_ = ir_.CreateSub(BlockPC(block), ir_.getInt64(members.front().offset));
-        } else {
+        if (members.size() > 1) {
             entry_.addFnAttr(llvm::Attribute::NoInline);
             using Region = mem::PageRegion<BasicBlock>;
             constexpr uint64_t member_mask = Region::MemberMask;
@@ -291,7 +431,7 @@ public:
             selector = ir_.CreateAnd(input, ir_.getInt64(member_mask));
             region_ops_ = ir_.CreateIntToPtr(ir_.CreateAnd(input, ir_.getInt64(~member_mask)), ir_.getPtrTy());
             auto* page_field = ir_.CreateConstGEP1_64(ir_.getInt8Ty(), region_ops_, offsetof(Region, guest_page));
-            page_ = Load64(page_field);
+            page_ = LoadRegionField(ir_.getInt64Ty(), page_field);
         }
         leave_ = Block("leave");
 
@@ -342,16 +482,10 @@ public:
                 auto* exhausted = Block("region.budget");
                 ir_.CreateCondBr(ir_.CreateICmpSGE(Load64(remaining_), ir_.getInt64(0)), run_bodies[i], exhausted);
                 ir_.SetInsertPoint(exhausted);
-                auto* exit_block =
-                    ir_.CreateLoad(ir_.getPtrTy(), ir_.CreateConstGEP1_64(ir_.getPtrTy(), region_ops_, i));
-                Leave(PC(members[i].offset), ir_.CreateConstGEP1_64(ir_.getInt8Ty(), exit_block, sizeof(BasicBlock)));
+                Leave(PC(members[i].offset), MemberFirst(i));
 
                 ir_.SetInsertPoint(run_bodies[i]);
-                auto* record = ir_.CreateConstGEP1_64(ir_.getPtrTy(), region_ops_, i);
-                auto* block = ir_.CreateLoad(ir_.getPtrTy(), record);
-                auto* last_block = ir_.CreateConstGEP1_64(ir_.getInt8Ty(), state_, offsetof(State, last_block));
-                ir_.CreateStore(block, last_block);
-                first = ir_.CreateConstGEP1_64(ir_.getInt8Ty(), block, sizeof(BasicBlock));
+                first = MemberFirst(i);
             } else {
                 ir_.SetInsertPoint(run_bodies[i]);
             }
@@ -368,7 +502,7 @@ public:
 
     llvm::ConstantInt* Flow(OperationFlow flow) { return ir_.getInt32(static_cast<uint32_t>(flow)); }
 
-    void ExitOnFlow(llvm::Value* flow, llvm::Value* slot, llvm::Value* pc, llvm::Value* remaining,
+    void ExitOnFlow(llvm::Value* flow, llvm::Value* first, llvm::Value* slot, uint64_t offset, llvm::Value* remaining,
                     bool mandatory_refetch) {
         llvm::BasicBlock* next = nullptr;
         if (!mandatory_refetch) {
@@ -378,6 +512,8 @@ public:
             ir_.SetInsertPoint(exit);
         }
         ir_.CreateStore(remaining, remaining_);
+        PublishMember(first);
+        auto* pc = PC(offset);
         auto* replay = Block("step.replay");
         auto* refetch = Block("step.refetch");
         ir_.CreateCondBr(ir_.CreateICmpEQ(flow, Flow(OperationFlow::Refetch)), refetch, replay);
@@ -402,7 +538,7 @@ public:
             if (members.size() > 1 && it != members.end())
                 ir_.CreateBr(bodies[size_t(it - members.begin())]);
             else
-                ChainBlock(slot, form);
+                ChainBlock(first, slot, form, target);
         };
         uint32_t dead_flags = 0;
 #if FIBERCPU_AARCH64_DFE
@@ -424,6 +560,7 @@ public:
             const auto* name = KernelName(binding.id);
             if (!name) {
                 retire(i);
+                PublishMember(first);
                 TailToColdExit(replay_, "FiberArmJitRetry", slot, PC(offset));
                 return;
             }
@@ -438,7 +575,7 @@ public:
             if (binding.may_exit || binding.refetch) {
                 // Publish the prefix only for an exit. Refetch retires the
                 // current instruction in the handler; replay has not run it.
-                ExitOnFlow(flow, slot, pc, ir_.CreateSub(budget, ir_.getInt64(i)), binding.refetch);
+                ExitOnFlow(flow, first, slot, offset, ir_.CreateSub(budget, ir_.getInt64(i)), binding.refetch);
                 if (binding.refetch) return;
             }
             if (binding.branch == BranchForm::Conditional) {
@@ -463,7 +600,7 @@ public:
                         lookup->addCase(ir_.getInt64(members[j].offset), bodies[j]);
                     ir_.SetInsertPoint(outside);
                 }
-                ChainBlock(slot, BlockExitLink::Indirect);
+                ChainBlock(first, slot, BlockExitLink::Indirect, member.offset + member.steps.size() * 4);
                 return;
             }
         }
@@ -487,9 +624,12 @@ public:
             if (!llvm::InlineFunction(*call, info).isSuccess()) return false;
         }
         if (should_cancel && should_cancel()) return false;
-        return !llvm::verifyModule(module_, &llvm::errs()) &&
-               OptimizeLLVMArmModule(entry_, pipeline, fold_operand_loads, should_cancel) &&
-               (!should_cancel || !should_cancel()) && !llvm::verifyModule(module_, &llvm::errs());
+        if (llvm::verifyModule(module_, &llvm::errs()) ||
+            !OptimizeLLVMArmModule(entry_, pipeline, fold_operand_loads, should_cancel) ||
+            (should_cancel && should_cancel()))
+            return false;
+        if (region_ops_ && pipeline.empty()) PromoteRegionGprs(entry_);
+        return (!should_cancel || !should_cancel()) && !llvm::verifyModule(module_, &llvm::errs());
     }
 };
 }  // namespace

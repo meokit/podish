@@ -17,15 +17,15 @@ extern "C" FIBERCPU_AARCH64_HANDLER_ABI int64_t FiberArmJitABI(A64_HANDLER_PARAM
 }
 
 extern "C" HandlerFunc FiberArmJitTryLink(State& state, const DecodedOp* slot, int64_t& remaining,
-                                          const DecodedOp*& next, uint64_t indirect_pc, BlockExitLink kind) {
-    const uint64_t fallthrough = state.last_block->end_pc();
+                                          const DecodedOp*& next, uint64_t indirect_pc, uint64_t fallthrough_pc,
+                                          BlockExitLink kind) {
     auto* link = &slot->payload;
-    uint64_t target_pc = fallthrough;
+    uint64_t target_pc = fallthrough_pc;
     if (kind != BlockExitLink::Fallthrough) {
         const auto& branch = GetExtraOperands(*slot);
         target_pc = kind == BlockExitLink::Direct ? branch.primary : indirect_pc;
-        link = kind == BlockExitLink::Indirect && target_pc == fallthrough ? &state.last_block->Sentinel()->payload
-                                                                           : &branch.secondary;
+        link = kind == BlockExitLink::Indirect && target_pc == fallthrough_pc ? &state.last_block->Sentinel()->payload
+                                                                              : &branch.secondary;
     }
     const BasicBlock* target;
     if (const auto entry = TryChainBlock(state, target, *link, target_pc, remaining)) [[likely]] {

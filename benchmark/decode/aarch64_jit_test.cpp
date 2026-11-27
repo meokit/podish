@@ -553,6 +553,54 @@ void CheckVectorStructureReplay(EmuState* state) {
     AArch64_MemUnmap(state, Data, PageBytes);
     AArch64_MemUnmap(state, Pc, PageBytes);
 }
+
+void CheckJitIntegerFlags(EmuState* state) {
+    alignas(PageBytes) std::array<uint8_t, PageBytes> code{};
+    constexpr std::array words{0x2b020023u,  // adds w3, w1, w2
+                               0x6b020023u,  // subs w3, w1, w2
+                               0x6a020023u,  // ands w3, w1, w2
+                               0x3a020023u,  // adcs w3, w1, w2
+                               0x7a020023u,  // sbcs w3, w1, w2
+                               0x7a420025u}; // ccmp w1, w2, #5, eq
+    constexpr uint32_t wide = 0x80000000u;
+    for (size_t i = 0; i < words.size(); ++i) {
+        Put(code.data() + i * 16, std::array{words[i], 0x17ffffffu}); // b to the flag setter
+        Put(code.data() + i * 16 + 8, std::array{words[i] | wide, 0x17ffffffu});
+    }
+    assert(AArch64_MemMapHostPage(state, Pc, code.data(), 5));
+
+    for (unsigned width : {32u, 64u}) {
+        const auto sign = uint64_t{1} << (width - 1);
+        const auto mask = sign | (sign - 1);
+        const auto check = [&](unsigned op, uint64_t left, uint64_t right, uint32_t initial, uint64_t result,
+                               uint32_t flags) {
+            const auto pc = Pc + op * 16 + (width == 64 ? 8 : 0);
+            WaitForJit(state, pc, 2, code.data(), 1);
+            AArch64_RegWrite(state, 1, left);
+            AArch64_RegWrite(state, 2, right);
+            AArch64_RegWrite(state, 3, UINT64_MAX);
+            state->arm->nzcv = initial;
+            Run(state, pc, 2);
+            assert(AArch64_RegRead(state, 3) == result && state->arm->nzcv == flags);
+        };
+        check(0, sign - 1, 1, 0, sign, Negative | Overflow);
+        check(0, mask, 1, 0, 0, Zero | Carry);
+        check(1, sign, 1, 0, sign - 1, Carry | Overflow);
+        check(1, 0, 1, 0, mask, Negative);
+        check(2, sign, mask, Carry | Overflow, sign, Negative);
+        check(2, sign, 1, Carry | Overflow, 0, Zero);
+        check(3, sign - 1, 0, Carry, sign, Negative | Overflow);
+        check(3, mask, 0, Carry, 0, Zero | Carry);
+        check(3, mask, 0, 0, mask, Negative);
+        check(4, sign, 0, 0, sign - 1, Carry | Overflow);
+        check(4, 0, mask, 0, 0, Zero);
+        check(4, 0, 0, Carry, 0, Zero | Carry);
+        check(5, sign, 1, Zero, UINT64_MAX, Carry | Overflow);
+        check(5, sign, 1, 0, UINT64_MAX, Zero | Overflow);
+    }
+    AArch64_MemUnmap(state, Pc, PageBytes);
+}
+
 void CheckStandaloneReuse(EmuState* state) {
     alignas(PageBytes) std::array<uint8_t, PageBytes> code{};
     constexpr uint64_t Other = 128;
@@ -614,6 +662,7 @@ int main(int argc, char**) {
     CheckRegisterAndRefetch(state, region);
     CheckAtomicAndSystemReplay(state);
     CheckVectorStructureReplay(state);
+    CheckJitIntegerFlags(state);
     if (region) {
         CheckMultiplePageRegions();
         CheckRegionReplay(state);
