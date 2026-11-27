@@ -1052,40 +1052,58 @@ std::optional<CapturedRegion> CapturePage(EmuState& state, BasicBlock& root) {
 
     constexpr size_t max_members = kMaxRegionMembers;
     constexpr size_t max_instructions = 192;
-    std::vector<BasicBlock*> available;
+    struct RegionCandidate {
+        BasicBlock* block;
+        llvm::SmallVector<uint32_t, 4> targets;
+    };
+    std::vector<RegionCandidate> available;
     for (const auto& reference : page->second) {
         const auto& item = cache.block_entries[reference.block_index];
         auto* block = item.block;
         if (block && block->is_valid() && block->chain.has_region_context && item.host_pages.size() == 1 &&
             item.cache_key.host_page_base == stamp->host_page &&
             (block->start_eip() & ~mem::PAGE_MASK) == stamp->guest_page && block->end_eip > block->start_eip() &&
-            ((block->end_eip - 1) & ~mem::PAGE_MASK) == stamp->guest_page)
-            available.push_back(block);
+            ((block->end_eip - 1) & ~mem::PAGE_MASK) == stamp->guest_page) {
+            RegionCandidate candidate{block, {}};
+            candidate.targets.push_back(block->end_eip);
+            for (const auto* op = block->FirstOp(); op != block->Sentinel(); op = block->NextOp(op)) {
+                if (op->HasBranchOperands() &&
+                    (op->BranchSuffix() || block->terminal_kind() == BlockTerminalKind::DirectJmpRel ||
+                     block->terminal_kind() == BlockTerminalKind::DirectJccRel))
+                    candidate.targets.push_back(op->Primary());
+            }
+            available.push_back(std::move(candidate));
+        }
     }
-    if (std::ranges::find(available, &root) == available.end()) return std::nullopt;
-    std::ranges::sort(available, {}, &BasicBlock::start_eip);
-    std::vector<BasicBlock*> selected{&root};
+    const auto address = [](const RegionCandidate& candidate) { return candidate.block->start_eip(); };
+    const auto has_edge = [&](const RegionCandidate& from, const RegionCandidate& to) {
+        return std::ranges::find(from.targets, address(to)) != from.targets.end();
+    };
+    std::ranges::sort(available, {}, address);
+    const auto root_candidate = std::ranges::find(available, &root, &RegionCandidate::block);
+    if (root_candidate == available.end()) return std::nullopt;
+    std::vector<const RegionCandidate*> selected{&*root_candidate};
     size_t instructions = root.inst_count();
-    const auto add = [&](BasicBlock* next) {
-        if (selected.size() == max_members || instructions + next->inst_count() > max_instructions ||
+    const auto add = [&](const RegionCandidate* next) {
+        const auto count = next->block->inst_count();
+        if (selected.size() == max_members || instructions + count > max_instructions ||
             std::ranges::find(selected, next) != selected.end())
             return;
         selected.push_back(next);
-        instructions += next->inst_count();
+        instructions += count;
     };
     for (size_t i = 0; i < selected.size() && selected.size() < max_members; ++i) {
-        auto* from = selected[i];
-        for (auto* candidate : available) {
-            if (candidate->start_eip() == from->BranchTargetEip() || candidate->start_eip() == from->end_eip ||
-                candidate->BranchTargetEip() == from->start_eip() || candidate->end_eip == from->start_eip())
-                add(candidate);
+        const auto& from = *selected[i];
+        for (const auto& candidate : available) {
+            if (has_edge(from, candidate) || has_edge(candidate, from)) add(&candidate);
         }
     }
     if (selected.size() < 2) return std::nullopt;
-    std::ranges::sort(selected, {}, &BasicBlock::start_eip);
+    std::ranges::sort(selected, {}, [&](const auto* candidate) { return address(*candidate); });
 
     CapturedRegion out{*stamp, {}};
-    for (auto* block : selected) {
+    for (const auto* candidate : selected) {
+        auto* block = candidate->block;
         const auto revision = block->invalidation_revision;
         auto input = CaptureBlock(state, *block);
         if (state.mmu.page_region_stamp(stamp->guest_page) != stamp) return std::nullopt;

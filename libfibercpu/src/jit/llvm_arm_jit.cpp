@@ -1,5 +1,6 @@
 #include "jit/llvm_arm_jit.h"
 
+#include <llvm/ADT/SmallVector.h>
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -99,21 +100,24 @@ struct ArmCompilation {
 
 struct RegionCandidate {
     ArmBlock* block;
-    std::array<uint16_t, 2> targets{UINT16_MAX, UINT16_MAX};
+    llvm::SmallVector<uint16_t, 4> targets;
 };
 
 RegionCandidate RegionEdges(ArmBlock& block) {
-    RegionCandidate candidate{&block};
-    const auto last = DecodeFields(block.Word(block.inst_count() - 1));
-    const auto binding = BindOperation(last);
-    if (binding.refetch || binding.branch == BranchForm::Indirect) return candidate;
+    RegionCandidate candidate{&block, {}};
     const auto page = block.start_pc() & ~PageMask;
-    const auto end = block.start_pc() + 4 * block.inst_count();
-    const auto local = [page](uint64_t pc) {
-        return pc - page <= PageMask ? uint16_t(pc - page) : uint16_t{UINT16_MAX};
+    const auto add_local = [&](uint64_t pc) {
+        if (pc - page <= PageMask) candidate.targets.push_back(uint16_t(pc - page));
     };
-    if (binding.branch != BranchForm::None) candidate.targets[0] = local(end - 4 + last.immediate);
-    if (binding.branch != BranchForm::Direct) candidate.targets[1] = local(end);
+    for (const auto* slot = block.FirstOp(); slot != block.Sentinel(); slot = slot->NextOp()) {
+        if (!slot->Has(HasBranchLink)) continue;
+        const auto branch = DecodeFields(block.Word(slot->GuestIndex()));
+        if (branch.kind == Kind::BranchRegister) return candidate;
+        add_local(GetExtraOperands(*slot).primary);
+        if (branch.kind == Kind::BranchImmediate) return candidate;
+    }
+    const auto last = DecodeFields(block.Word(block.inst_count() - 1));
+    if (!BindOperation(last).refetch) add_local(block.end_pc());
     return candidate;
 }
 

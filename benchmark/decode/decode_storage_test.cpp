@@ -550,6 +550,19 @@ int main() {
     next[1] = std::byte{0xc0};
     result = FetchAndDecodeInstruction(state, address + 4095, buffer, &decoded, &handler, &raw);
     ok = ok && result == InstructionDecodeResult::Success && raw == 0x8b && decoded.head.GetLength() == 3;
+
+    // Continue past JNE through the last complete instruction on this page.
+    // The split MOV belongs to the next block even with both pages mapped.
+    page[4092] = std::byte{0x75};
+    page[4093] = std::byte{0x01};
+    page[4094] = std::byte{0x40};
+    const auto* continued = DecodeBlock(state, address + 4092, address + 4098, 0);
+    if (!continued || continued->inst_count() != 2 || continued->end_eip != address + 4095 ||
+        continued->FirstOp()->BranchSuffix() != 1) {
+        std::fprintf(stderr, "Conditional fallthrough crossed an executable page\n");
+        ok = false;
+    }
+
     // MOV keeps the canonical handler index until the slot is bound.
     page[0] = std::byte{0x8b};
     page[1] = std::byte{0xc0};

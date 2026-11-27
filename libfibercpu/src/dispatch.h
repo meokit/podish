@@ -166,6 +166,9 @@ FORCE_INLINE ATTR_PRESERVE_NONE int64_t ResolveBranchTargetInline(EmuState* REST
     (void)op;
     (void)utlb_tags;
     (void)utlb_addend;
+    // The caller prepaid the full decoded block. Do this before handing the
+    // budget to a local LLVM region edge, a cached link, or the slow resolver.
+    if constexpr (LinkSlot == 1 && EmitRegionEdge) instr_limit += op->BranchSuffix();
 #ifdef FIBERCPU_LLVM_BLOCK_TEMPLATE
     if constexpr (EmitRegionEdge)
         FiberLLVMRegionEdge(state, op, instr_limit, utlb_tags, utlb_addend, target_eip,

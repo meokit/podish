@@ -81,7 +81,7 @@ FIBERCPU_AARCH64_HANDLER_ABI int64_t IntegerHandler(A64_HANDLER_PARAMS) {
                 A64_RESOLVE_BRANCH_TARGET_INLINE(
                     result.address == pc + 4 ? current->NextOp<true>()->payload : extra.secondary, result.address);
             } else {
-                A64_RESOLVE_DIRECT_BRANCH_TARGET();
+                A64_RESOLVE_DIRECT_BRANCH_TARGET(kind);
             }
         }
     }

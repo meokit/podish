@@ -174,20 +174,22 @@ FIBERCPU_AARCH64_HANDLER_ABI int64_t ResolveBranchTargetSlow(A64_HANDLER_PARAMS)
     do {                                                                                               \
         const uint64_t a64_target = (target_pc);                                                       \
         const auto* a64_block = state.last_block;                                                      \
-        if (current->Has(::fiberish::aarch64::detail::HasBranchLink) &&                                \
-            current->GuestIndex() + 1 == a64_block->inst_count()) {                                    \
-            auto& link = a64_target == a64_block->end_pc() ? a64_block->Sentinel()->payload            \
-                                                           : GetExtraOperands(*current).secondary;     \
-            A64_RESOLVE_BRANCH_TARGET_INLINE(link, a64_target);                                        \
+        if (current->Has(::fiberish::aarch64::detail::HasBranchLink)) {                                \
+            instr_limit += a64_block->inst_count() - current->GuestIndex() - 1;                        \
+            A64_RESOLVE_BRANCH_TARGET_INLINE(GetExtraOperands(*current).secondary, a64_target);        \
         }                                                                                              \
         return ::fiberish::aarch64::detail::ReturnFromBlock(                                           \
             state, current, instr_limit, flags_cache A64_HANDLER_PIN_ARGS,                             \
             {::fiberish::aarch64::Stop::Branch, ::fiberish::aarch64::Access::Execute, 0, a64_target}); \
     } while (false)
 
-#define A64_RESOLVE_DIRECT_BRANCH_TARGET()                                                              \
-    A64_RESOLVE_BRANCH_TARGET_INLINE(::fiberish::aarch64::detail::GetExtraOperands(*current).secondary, \
-                                     ::fiberish::aarch64::detail::GetExtraOperands(*current).primary)
+#define A64_RESOLVE_DIRECT_BRANCH_TARGET(kind)                                            \
+    do {                                                                                  \
+        if constexpr (::fiberish::aarch64::detail::IsConditionalBranch(kind))             \
+            instr_limit += state.last_block->inst_count() - current->GuestIndex() - 1;    \
+        const auto& a64_branch = ::fiberish::aarch64::detail::GetExtraOperands(*current); \
+        A64_RESOLVE_BRANCH_TARGET_INLINE(a64_branch.secondary, a64_branch.primary);       \
+    } while (false)
 
 // Cold dispatch reconstructs the full operation from the saved instruction word.
 DecodedInstruction ReadScalarOp(const BasicBlock& block, const DecodedOp& slot);

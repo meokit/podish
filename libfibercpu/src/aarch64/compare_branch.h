@@ -109,7 +109,7 @@ FIBERCPU_AARCH64_HANDLER_ABI int64_t CompareBranchHandler(A64_HANDLER_PARAMS) {
     const auto compare = GetOpOperands<kind>(*current);
     const bool taken = CompareAndTest<kind, width, condition>(state, compare, flags_cache A64_HANDLER_PIN_ARGS);
     current = current->NextOp<false>();
-    if (taken) A64_RESOLVE_DIRECT_BRANCH_TARGET();
+    if (taken) A64_RESOLVE_DIRECT_BRANCH_TARGET(Kind::BranchCondition);
     A64_DISPATCH_NEXT(current->NextOp<true>());
 }
 

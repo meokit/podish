@@ -16,16 +16,16 @@ extern "C" FIBERCPU_AARCH64_HANDLER_ABI int64_t FiberArmJitABI(A64_HANDLER_PARAM
     ATTR_MUSTTAIL return FiberArmJitRetry(A64_HANDLER_ARGS);
 }
 
-extern "C" HandlerFunc FiberArmJitTryLink(State& state, const DecodedOp* sentinel, int64_t& remaining,
+extern "C" HandlerFunc FiberArmJitTryLink(State& state, const DecodedOp* slot, int64_t& remaining,
                                           const DecodedOp*& next, uint64_t indirect_pc, BlockExitLink kind) {
-    auto* link = &sentinel->payload;
     const uint64_t fallthrough = state.last_block->end_pc();
+    auto* link = &slot->payload;
     uint64_t target_pc = fallthrough;
     if (kind != BlockExitLink::Fallthrough) {
-        const auto* branch = std::launder(reinterpret_cast<const DecodedOpWithDataSlot*>(
-            reinterpret_cast<const std::byte*>(sentinel) - sizeof(DecodedOpWithDataSlot)));
-        target_pc = kind == BlockExitLink::Direct ? branch->primary : indirect_pc;
-        if (kind == BlockExitLink::Direct || target_pc != fallthrough) link = &branch->secondary;
+        const auto& branch = GetExtraOperands(*slot);
+        target_pc = kind == BlockExitLink::Direct ? branch.primary : indirect_pc;
+        link = kind == BlockExitLink::Indirect && target_pc == fallthrough ? &state.last_block->Sentinel()->payload
+                                                                           : &branch.secondary;
     }
     const BasicBlock* target;
     if (const auto entry = TryChainBlock(state, target, *link, target_pc, remaining)) [[likely]] {
@@ -35,7 +35,7 @@ extern "C" HandlerFunc FiberArmJitTryLink(State& state, const DecodedOp* sentine
     auto& frame = *state.active_run;
     frame.exit_target = target_pc;
     frame.exit_link = link;
-    next = sentinel;
+    next = slot;
     return nullptr;
 }
 

@@ -365,6 +365,9 @@ struct alignas(16) DecodedOp {
     static constexpr unsigned kPrefixShift = 40;
     static constexpr unsigned kMetaShift = 48;
     static constexpr unsigned kAddressShift = 54;
+    // Relative branches use these bits for the prepaid suffix length.
+    static constexpr unsigned kBranchSuffixShift = kAddressShift;
+    static constexpr unsigned kBranchSuffixMask = 31;
     static constexpr unsigned kBranchWidthShift = kModRMShift + 3;
     static constexpr uint64_t kBranchTag = uint64_t{1} << (kModRMShift + 7);
     static constexpr uint64_t kHasMemory = uint64_t{2} << kMetaShift;
@@ -425,6 +428,7 @@ struct alignas(16) DecodedOp {
     FORCE_INLINE RelativeBranchWidth BranchWidth() const {
         return RelativeBranchWidth((payload >> kBranchWidthShift) & 3);
     }
+    FORCE_INLINE unsigned BranchSuffix() const { return (payload >> kBranchSuffixShift) & kBranchSuffixMask; }
     FORCE_INLINE BasicBlock* LoadBlockLink() const {
         return reinterpret_cast<BasicBlock*>(static_cast<uintptr_t>(payload));
     }
@@ -699,13 +703,6 @@ struct alignas(16) BasicBlock {
 
     BlockTerminalKind terminal_kind() const { return static_cast<BlockTerminalKind>(terminal_kind_raw); }
     void set_terminal_kind(BlockTerminalKind kind) { terminal_kind_raw = static_cast<uint8_t>(kind); }
-    uint32_t BranchTargetEip() const {
-        const auto kind = terminal_kind();
-        if (kind == BlockTerminalKind::DirectJmpRel || kind == BlockTerminalKind::DirectJccRel)
-            return LogicalOp(inst_count() - 1)->Primary();
-        return 0;
-    }
-
     uint32_t start_eip() const { return static_cast<uint32_t>(chain.start_eip); }
     void set_start_eip(uint32_t start_eip) { chain.start_eip = start_eip; }
     bool is_valid() const { return chain.valid != 0; }
@@ -747,7 +744,8 @@ bool DecodeInstruction(const uint8_t* code, DecodedInstTmp* inst, uint16_t* hand
 // architectural opcode before any handler-specific remapping.
 InstructionDecodeResult FetchAndDecodeInstruction(EmuState* state, uint32_t eip, uint8_t* buffer, DecodedInstTmp* inst,
                                                   uint16_t* handler_index, uint16_t* raw_opcode = nullptr,
-                                                  DecodeHandlerMode mode = DecodeHandlerMode::Native);
+                                                  DecodeHandlerMode mode = DecodeHandlerMode::Native,
+                                                  bool stay_on_page = false);
 // Shared Step/block preparation, without dead-flags analysis.
 void FinalizeDecodedInstruction(EmuState* state, uint32_t eip, uint16_t handler_index, DecodedInstruction* op,
                                 DecodeHandlerMode mode = DecodeHandlerMode::Native);

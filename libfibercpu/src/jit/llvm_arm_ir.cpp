@@ -208,19 +208,11 @@ class Builder {
         ir_.CreateBr(exit.block);
     }
 
-    void ChainBlock(llvm::Value* sentinel, BranchForm branch, llvm::Value* taken = nullptr) {
-        auto* form = ir_.getInt8(static_cast<uint8_t>(BlockExitLink::Fallthrough));
-        llvm::Value* kind = form;
-        llvm::Value* indirect_pc = ir_.getInt64(0);
-        if (branch == BranchForm::Indirect) {
-            kind = ir_.getInt8(static_cast<uint8_t>(BlockExitLink::Indirect));
-            indirect_pc = Load64(target_);
-        } else if (branch == BranchForm::Direct || branch == BranchForm::Conditional) {
-            auto* direct = ir_.getInt8(static_cast<uint8_t>(BlockExitLink::Direct));
-            kind = branch == BranchForm::Direct ? direct : ir_.CreateSelect(taken, direct, form);
-        }
+    void ChainBlock(llvm::Value* slot, BlockExitLink form) {
+        auto* kind = ir_.getInt8(static_cast<uint8_t>(form));
+        auto* indirect_pc = form == BlockExitLink::Indirect ? Load64(target_) : ir_.getInt64(0);
         auto* entry = ir_.CreateCall(module_.getFunction("FiberArmJitTryLink"),
-                                     {state_, sentinel, remaining_, next_op_, indirect_pc, kind});
+                                     {state_, slot, remaining_, next_op_, indirect_pc, kind});
         inline_calls_.push_back(entry);
         auto* next = ir_.CreateLoad(ir_.getPtrTy(), next_op_);
         auto* linked = Block("link.hit");
@@ -372,6 +364,13 @@ public:
         const auto retire = [&](unsigned count) {
             ir_.CreateStore(ir_.CreateSub(budget, ir_.getInt64(count)), remaining_);
         };
+        const auto branch_to = [&](uint64_t target, llvm::Value* slot, BlockExitLink form) {
+            const auto it = std::ranges::find(members, target, &Member::offset);
+            if (members.size() > 1 && it != members.end())
+                ir_.CreateBr(bodies[size_t(it - members.begin())]);
+            else
+                ChainBlock(slot, form);
+        };
         uint32_t dead_flags = 0;
 #if FIBERCPU_AARCH64_DFE
         uint32_t live = FlagMask;
@@ -381,9 +380,6 @@ public:
         }
 #endif
         auto offset = uint64_t(member.offset);
-        BranchForm branch = BranchForm::None;
-        llvm::Value* taken = nullptr;
-        uint64_t target_offset = 0;
         unsigned slot_offset = 0;
         for (unsigned i = 0; i < member.steps.size(); ++i, offset += 4) {
             const auto& step = member.steps[i];
@@ -412,47 +408,34 @@ public:
                 ExitOnFlow(flow, slot, pc, ir_.CreateSub(budget, ir_.getInt64(i)), binding.refetch);
                 if (binding.refetch) return;
             }
-            if (binding.branch != BranchForm::None) {
-                // The decoder ends the member at every branch.
-                branch = binding.branch;
-                target_offset = offset + op.immediate;
-                if (branch == BranchForm::Conditional) taken = ir_.CreateICmpEQ(flow, Flow(OperationFlow::Branch));
+            if (binding.branch == BranchForm::Conditional) {
+                auto* taken = Block("branch.taken");
+                auto* fallthrough = Block("branch.fallthrough");
+                ir_.CreateCondBr(ir_.CreateICmpEQ(flow, Flow(OperationFlow::Branch)), taken, fallthrough);
+                ir_.SetInsertPoint(taken);
+                retire(i + 1);
+                branch_to(offset + op.immediate, slot, BlockExitLink::Direct);
+                ir_.SetInsertPoint(fallthrough);
+            } else if (binding.branch == BranchForm::Direct) {
+                retire(i + 1);
+                branch_to(offset + op.immediate, slot, BlockExitLink::Direct);
+                return;
+            } else if (binding.branch == BranchForm::Indirect) {
+                retire(i + 1);
+                if (members.size() > 1) {
+                    auto* outside = Block("region.outside");
+                    auto* lookup =
+                        ir_.CreateSwitch(ir_.CreateSub(Load64(target_), page_), outside, unsigned(members.size()));
+                    for (size_t j = 0; j < members.size(); ++j)
+                        lookup->addCase(ir_.getInt64(members[j].offset), bodies[j]);
+                    ir_.SetInsertPoint(outside);
+                }
+                ChainBlock(slot, BlockExitLink::Indirect);
+                return;
             }
         }
         retire(unsigned(member.steps.size()));
-        auto* sentinel = Slot(first, slot_offset);
-
-        if (members.size() == 1) {
-            ChainBlock(sentinel, branch, taken);
-            return;
-        }
-
-        const auto branch_to = [&](uint64_t target, BranchForm form) {
-            const auto it = std::ranges::find(members, target, &Member::offset);
-            if (it != members.end())
-                ir_.CreateBr(bodies[size_t(it - members.begin())]);
-            else
-                ChainBlock(sentinel, form);
-        };
-        if (branch == BranchForm::Indirect) {
-            auto* outside = Block("region.outside");
-            auto* lookup = ir_.CreateSwitch(ir_.CreateSub(Load64(target_), page_), outside, unsigned(members.size()));
-            for (size_t i = 0; i < members.size(); ++i) lookup->addCase(ir_.getInt64(members[i].offset), bodies[i]);
-            ir_.SetInsertPoint(outside);
-            ChainBlock(sentinel, branch);
-        } else if (branch == BranchForm::Direct) {
-            branch_to(target_offset, BranchForm::Direct);
-        } else if (branch == BranchForm::Conditional) {
-            auto* target = Block("region.taken");
-            auto* fallthrough = Block("region.fallthrough");
-            ir_.CreateCondBr(taken, target, fallthrough);
-            ir_.SetInsertPoint(target);
-            branch_to(target_offset, BranchForm::Direct);
-            ir_.SetInsertPoint(fallthrough);
-            branch_to(offset, BranchForm::None);
-        } else {
-            branch_to(offset, BranchForm::None);
-        }
+        branch_to(offset, Slot(first, slot_offset), BlockExitLink::Fallthrough);
     }
 
     bool Optimize(llvm::StringRef pipeline, bool fold_operand_loads) {

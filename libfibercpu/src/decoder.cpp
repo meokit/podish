@@ -434,8 +434,8 @@ bool DecodeInstruction(const uint8_t* code, DecodedInstTmp* inst, uint16_t* hand
 }
 
 InstructionDecodeResult FetchAndDecodeInstruction(EmuState* state, uint32_t eip, uint8_t* buffer, DecodedInstTmp* inst,
-                                                  uint16_t* handler_index, uint16_t* raw_opcode,
-                                                  DecodeHandlerMode mode) {
+                                                  uint16_t* handler_index, uint16_t* raw_opcode, DecodeHandlerMode mode,
+                                                  bool stay_on_page) {
     const auto fetch = [&](uint32_t address) -> const std::byte* {
         if (mode == DecodeHandlerMode::Generic) {
             return state->mmu.resolve_safe_for_read(address, mem::Property::Exec);
@@ -458,7 +458,7 @@ InstructionDecodeResult FetchAndDecodeInstruction(EmuState* state, uint32_t eip,
                                            raw_opcode, mode);
     if (result == InstructionDecodeResult::Success) return result;
     std::memcpy(buffer, code, available);
-    if (result != InstructionDecodeResult::NeedMoreBytes) return result;
+    if (result != InstructionDecodeResult::NeedMoreBytes || stay_on_page) return result;
     for (;;) {
         // Bounded decoding returns Invalid rather than requesting a 16th byte.
         code = fetch(eip + static_cast<uint32_t>(available));
@@ -476,9 +476,12 @@ static bool IsDirectRelativeJmpHandlerIndex(uint16_t handler_index) {
     return handler_index == 0xE9 || handler_index == 0xEB;
 }
 
+static bool IsJccHandlerIndex(uint16_t handler_index) {
+    return (handler_index >= 0x70 && handler_index <= 0x7F) || (handler_index >= 0x180 && handler_index <= 0x18F);
+}
+
 static bool IsDirectRelativeJccHandlerIndex(uint16_t handler_index) {
-    return (handler_index >= 0xE0 && handler_index <= 0xE3) || (handler_index >= 0x70 && handler_index <= 0x7F) ||
-           (handler_index >= 0x180 && handler_index <= 0x18F);
+    return (handler_index >= 0xE0 && handler_index <= 0xE3) || IsJccHandlerIndex(handler_index);
 }
 
 static bool IsDirectRelativeCallHandlerIndex(uint16_t handler_index) { return handler_index == 0xE8; }
@@ -658,6 +661,7 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
 
     uint32_t end_eip = start_eip;
     bool success = true;
+    bool continuing_jcc = false;
     BlockStopReason stop_reason = BlockStopReason::Unknown;
 
     while (op_count < effective_limit) {
@@ -672,8 +676,9 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
         // to a fresh block without invoking a guest fault resolver speculatively.
         if (op_count != 0) {
             const uint32_t remaining = 0x1000u - (current_eip & 0xFFFu);
-            if (!state->mmu.probe_exec(current_eip) ||
-                (remaining < 15 && !state->mmu.probe_exec(current_eip + remaining))) {
+            if ((continuing_jcc && ((current_eip ^ start_eip) & ~mem::PAGE_MASK)) ||
+                !state->mmu.probe_exec(current_eip) ||
+                (!continuing_jcc && remaining < 15 && !state->mmu.probe_exec(current_eip + remaining))) {
                 stop_reason = BlockStopReason::PageCross;
                 break;
             }
@@ -682,8 +687,12 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
         DecodedInstTmp inst{};
         uint16_t handler_index = 0;
         uint16_t raw_opcode = 0;
-        const auto decode_result =
-            FetchAndDecodeInstruction(state, current_eip, buf, &inst, &handler_index, &raw_opcode);
+        const auto decode_result = FetchAndDecodeInstruction(state, current_eip, buf, &inst, &handler_index,
+                                                             &raw_opcode, DecodeHandlerMode::Native, continuing_jcc);
+        if (decode_result == InstructionDecodeResult::NeedMoreBytes) {
+            stop_reason = BlockStopReason::PageCross;
+            break;
+        }
         if (decode_result == InstructionDecodeResult::FetchFault) {
             success = false;
             stop_reason = BlockStopReason::FetchFault;
@@ -749,26 +758,21 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
         binding_storage[op_count] = binding;
         op_storage[op_count++] = inst;
         inst_count++;
-        uint32_t inst_len = inst.head.GetLength();
+        current_eip += inst.head.GetLength();
 
-        // Stop if Control Flow
+        // An undefined instruction reached through fallthrough cannot
+        // execute its suffix, whether decoded explicitly or as a fallback.
+        if (continuing_jcc && inst.head.handler == g_Handlers[0x10B]) {
+            stop_reason = BlockStopReason::ControlFlow;
+            break;
+        }
         if (IsControlFlow(inst)) {
-            current_eip += inst_len;
-            stop_reason = BlockStopReason::ControlFlow;
-            break;
+            if (!IsJccHandlerIndex(raw_opcode) || ((current_eip ^ start_eip) & ~mem::PAGE_MASK)) {
+                stop_reason = BlockStopReason::ControlFlow;
+                break;
+            }
+            continuing_jcc = true;
         }
-
-        // Advance
-        current_eip += inst_len;
-
-        // Stop if Control Flow (checked again on last op? redundancy from original code)
-        if (IsControlFlow(op_storage[op_count - 1])) {
-            stop_reason = BlockStopReason::ControlFlow;
-            break;
-        }
-
-        // Continue across mapped executable pages. The next iteration probes
-        // before decoding so a missing mapping cannot fault this block early.
     }
 
     if (stop_reason == BlockStopReason::Unknown && op_count >= effective_limit) {
@@ -890,6 +894,8 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
 
         // A restart or fault may expose the flags from before the instruction.
         if (HasMem(&op) && flat_idx != 0x8d) reads |= DFE_ALL_FLAGS;  // LEA has no memory access.
+        // The taken edge exposes every flag even if fallthrough overwrites it.
+        if (IsJccHandlerIndex(h_idx)) live_flags |= DFE_ALL_FLAGS;
 
         if (writes != 0 && (writes & live_flags) == 0) op.meta.flags.no_flags = 1;
         live_flags &= ~writes;
@@ -1061,6 +1067,7 @@ BlockSlotLayout BlockSlotLayout::Inspect(std::span<const DecodedInstruction> ops
 
 void BasicBlock::WriteOps(BlockSlotLayout layout, std::span<const DecodedInstruction> ops, BasicBlock* invalid,
                           std::span<const ScalarBindingIndex> binding_indices) {
+    static_assert(BlockMax - 1 <= DecodedOp::kBranchSuffixMask);
     slot_count = static_cast<uint8_t>(layout.PhysicalSlotCount());
     sentinel_slot_index = slot_count - 1;
     set_inst_count(layout.logical_slot_count - 1);
@@ -1096,6 +1103,7 @@ void BasicBlock::WriteOps(BlockSlotLayout layout, std::span<const DecodedInstruc
             auto& data = FirstOp()[physical_index++];
             data.SetDispatchHandler(nullptr);
             if (branch_link) {
+                slot.payload |= uint64_t{inst_count() - i - 1} << DecodedOp::kBranchSuffixShift;
                 data.StoreBlockLink(invalid);
             } else {
                 data.payload = GetImm(&op);

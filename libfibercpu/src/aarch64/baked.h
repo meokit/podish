@@ -138,7 +138,7 @@ FIBERCPU_AARCH64_HANDLER_ABI int64_t BakedHandler(A64_HANDLER_PARAMS) {
                     result.step.address == extra.primary + 4 ? current->NextOp<true>()->payload : extra.secondary,
                     result.step.address);
             } else {
-                A64_RESOLVE_DIRECT_BRANCH_TARGET();
+                A64_RESOLVE_DIRECT_BRANCH_TARGET(terminal);
             }
         }
     }

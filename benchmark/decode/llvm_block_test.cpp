@@ -234,7 +234,7 @@ bool VerifyDirectBranch(bool enabled) {
     if (!X86_Run(state.get(), end, 16) || X86_GetEIP(state.get()) != end)
         return false;
     auto* block = FindCompiledBlock(state.get());
-    return enabled ? block && block->inst_count() == 3 : block == nullptr;
+    return enabled ? block && block->inst_count() == 4 : block == nullptr;
 }
 
 bool VerifyRelocatedWordBranch(bool enabled) {
@@ -1177,6 +1177,56 @@ bool VerifyCpuRunOptions(const char* path) {
 #endif
 
 #if FIBERCPU_LLVM_JIT
+bool VerifyConditionalFallthrough(bool region) {
+    constexpr uint32_t first = code_address + 0x40;
+    constexpr uint32_t second = code_address + 0x80;
+    constexpr uint8_t entry[] = {
+        0x83, 0xfa, 1, 0x74, 59,           // CMP EDX,1; JE first
+        0x83, 0xfb, 1, 0x74, 118,          // CMP EBX,1; JE second
+        0x83, 0xf8, 0, 0xeb, uint8_t(-15), // CMP EAX,0; JMP entry
+    };
+    constexpr uint8_t first_code[] = {0x0f, 0x44, 0xf7, 0xeb, uint8_t(-0x45)}; // CMOVZ ESI,EDI; JMP entry
+    constexpr uint8_t second_code[] = {0x0f, 0x44, 0xf7, 0xe9, 0x78, 0xff, 0xff, 0xff};
+    alignas(4096) std::array<uint8_t, 4096> code{};
+    std::ranges::copy(entry, code.begin());
+    std::ranges::copy(first_code, code.begin() + (first - code_address));
+    std::ranges::copy(second_code, code.begin() + (second - code_address));
+    State state{X86_CreateWithOptions(X86_CREATE_NO_FATAL_SIGNAL_HANDLERS)};
+    auto* cpu = state.get();
+    if (!X86_MemMapHostPage(cpu, code_address, code.data(), 5))
+        return false;
+    X86_RegWrite(cpu, 7, 11);
+    for (const auto target : {first, second}) {
+        X86_SetEIP(cpu, target);
+        if (!X86_Run(cpu, 0, 2) || X86_GetEIP(cpu) != code_address)
+            return false;
+    }
+    const auto check = [&](unsigned edx, unsigned ebx, unsigned budget, uint32_t next, unsigned esi, uint32_t flags) {
+        X86_SetEIP(cpu, code_address);
+        X86_RegWrite(cpu, 0, 2);
+        X86_RegWrite(cpu, 2, edx);
+        X86_RegWrite(cpu, 3, ebx);
+        X86_RegWrite(cpu, 6, 7);
+        X86_SetEFLAGS(cpu, 2);
+        return X86_Run(cpu, 0, budget) && X86_GetEIP(cpu) == next && X86_RegRead(cpu, 6) == esi &&
+               (X86_GetEFLAGS(cpu) & 0x8d5) == flags;
+    };
+    const auto verify_paths = [&] {
+        return check(1, 0, 2, first, 7, 0x44) && check(0, 1, 4, second, 7, 0x44) &&
+               check(1, 0, 4, code_address, 11, 0x44) && check(0, 1, 6, code_address, 11, 0x44) &&
+               check(0, 0, 6, code_address, 7, 0);
+    };
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    do {
+        if (!verify_paths())
+            return false;
+        if (const auto* block = FindCompiledBlock(cpu); block && (!region || block->RegionContext()))
+            return block->inst_count() == 6 && verify_paths();
+        std::this_thread::sleep_for(std::chrono::milliseconds(2));
+    } while (std::chrono::steady_clock::now() < deadline);
+    return false;
+}
+
 bool VerifyPageRegion(bool cross_page = false) {
     constexpr uint32_t first = code_address;
     constexpr uint32_t external = first + 4096;
@@ -1369,7 +1419,7 @@ int main(int argc, char** argv) {
     }
 #if FIBERCPU_LLVM_JIT
     if (argc == 2 && std::strcmp(argv[1], "region") == 0) {
-        if (VerifyPageRegion() && VerifyPageRegion(true))
+        if (VerifyPageRegion() && VerifyPageRegion(true) && VerifyConditionalFallthrough(true))
             return 0;
         std::fprintf(stderr, "LLVM page region publication, relocation or memory restart mismatch\n");
         return 1;
@@ -1381,9 +1431,9 @@ int main(int argc, char** argv) {
         return 1;
     }
     if (argc == 2 && std::strcmp(argv[1], "budget") == 0) {
-        if (VerifyPackedBudget())
+        if (VerifyPackedBudget() && VerifyConditionalFallthrough(false))
             return 0;
-        std::fprintf(stderr, "LLVM cache pressure did not safely reset the shared generation\n");
+        std::fprintf(stderr, "LLVM cache pressure or conditional branch budget mismatch\n");
         return 1;
     }
 #endif

@@ -4,11 +4,13 @@
 #include <cassert>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <string_view>
 #include <thread>
 
 #include "aarch64/dispatch.h"
+#include "aarch64/integer.h"
 #include "bindings.h"
 #include "state.h"
 
@@ -66,7 +68,8 @@ void CheckLoop(EmuState* state, bool region) {
                           0xd503201fu,  // nop, folded in the decoder
                           0x14000001u,  // b .+4
                           0xf1000400u,  // subs x0, x0, #1
-                          0x54ffff61u}; // b.ne .-20
+                          0x54ffff61u,  // b.ne .-20
+                          0x14000000u}; // b .
     Put(code.data(), loop);
     assert(AArch64_MemMapHostPage(state, Pc, code.data(), 5));
     assert(AArch64_MemMapHostPage(state, Alias, code.data(), 5));
@@ -74,16 +77,17 @@ void CheckLoop(EmuState* state, bool region) {
     const auto* first = Lookup(state, Pc, code.data());
     const auto* second = Lookup(state, Pc + 16, code.data());
     assert(first && second);
-    const auto clear_links = [](const ArmBlock& block) {
-        const auto* tail = block.Sentinel() - 2;
-        assert(tail->Has(HasBranchLink));
-        GetExtraOperands(*tail).secondary = block.Sentinel()->payload = BlockLink(&ArmBlock::Invalid);
+    const auto branch_link = [](const ArmBlock& block) -> uint64_t& {
+        for (const auto* op = block.FirstOp(); op != block.Sentinel(); op = op->NextOp())
+            if (op->Has(HasBranchLink))
+                return GetExtraOperands(*op).secondary;
+        std::abort();
     };
     if (region) {
         assert(first->header.entry != second->header.entry);
         assert(first->RegionContext() == second->RegionContext());
-        clear_links(*first);
-        clear_links(*second);
+        for (const auto* member : {first, second})
+            branch_link(*member) = member->Sentinel()->payload = BlockLink(&ArmBlock::Invalid);
     }
     AArch64_RegWrite(state, 0, 3);
     AArch64_RegWrite(state, 1, 0);
@@ -94,8 +98,7 @@ void CheckLoop(EmuState* state, bool region) {
     if (region) {
         // The loop stays in JIT code, leaving the interpreter links empty.
         for (auto* member : {first, second}) {
-            const auto* tail = member->Sentinel() - 2;
-            assert(!LoadBlockLink(GetExtraOperands(*tail).secondary)->IsValid());
+            assert(!LoadBlockLink(branch_link(*member))->IsValid());
             assert(!LoadBlockLink(member->Sentinel()->payload)->IsValid());
         }
     }
@@ -215,6 +218,40 @@ void CheckBudgetModes(EmuState* state, bool region) {
     check();
     WaitForJit(state, Pc, 20, code.data(), region ? 2 : 1);
     check();
+    AArch64_MemUnmap(state, Pc, PageBytes);
+}
+
+void CheckConditionalFallthrough(EmuState* state, bool region) {
+    alignas(PageBytes) std::array<uint8_t, PageBytes> code{};
+    Put(code.data(), std::array{0xf100045fu,                       // cmp x2, #1
+                                0xb40001e0u,                       // cbz x0, Pc+0x40
+                                0x370003c1u,                       // tbnz x1, #0, Pc+0x80
+                                0xf100005fu,                       // cmp x2, #0
+                                0x17fffffcu});                     // b Pc
+    Put(code.data() + 0x40, std::array{0x910004e7u, 0x17ffffefu}); // add x7, x7, #1; b Pc
+    Put(code.data() + 0x80, std::array{0x910008e7u, 0x17ffffdfu}); // add x7, x7, #2; b Pc
+    assert(AArch64_MemMapHostPage(state, Pc, code.data(), 5));
+    Run(state, Pc + 0x40, 2);
+    Run(state, Pc + 0x80, 2);
+    const auto check = [&](unsigned x0, unsigned x1, unsigned budget, unsigned x7, uint64_t next, uint32_t flags) {
+        AArch64_RegWrite(state, 0, x0);
+        AArch64_RegWrite(state, 1, x1);
+        AArch64_RegWrite(state, 2, 0);
+        AArch64_RegWrite(state, 7, 0);
+        Run(state, Pc, budget);
+        assert(AArch64_RegRead(state, 7) == x7 && AArch64_RegRead(state, 32) == next && state->arm->nzcv == flags);
+    };
+    const auto verify_paths = [&] {
+        check(0, 0, 5, 1, Pc + 4, Negative);
+        check(1, 1, 5, 2, Pc, Negative);
+        check(1, 0, 5, 0, Pc, Zero | Carry);
+        check(0, 0, 2, 0, Pc + 0x40, Negative);
+        check(1, 1, 3, 0, Pc + 0x80, Negative);
+    };
+    verify_paths();
+    assert(Lookup(state, Pc, code.data())->inst_count() == 5);
+    WaitForJit(state, Pc, 20, code.data(), region ? 2 : 1);
+    verify_paths();
     AArch64_MemUnmap(state, Pc, PageBytes);
 }
 
@@ -452,6 +489,7 @@ int main(int argc, char**) {
     const auto before = X86_GetLLVMJitBlockCount();
     CheckLoop(state, region);
     CheckBudgetModes(state, region);
+    CheckConditionalFallthrough(state, region);
     CheckMemory(state);
     CheckRegisterAndRefetch(state, region);
     CheckAtomicAndSystemReplay(state);

@@ -126,11 +126,7 @@ FIBERCPU_AARCH64_HANDLER_ABI int64_t ResolveBranchTargetSlow(A64_HANDLER_PARAMS)
         if (stats) ++stats->link_misses;
 #endif
     }
-    if (current != state.last_block->Sentinel())
-        return ReturnFromBlock(state, current, instr_limit, flags_cache A64_HANDLER_PIN_ARGS,
-                               {Stop::Branch, Access::Execute, 0, target_pc});
-    // At the sentinel the source block has already retired, including its
-    // final branch. Resume at the target with the existing budget.
+    // The caller has charged only the retired prefix, including the branch.
     CommitDispatchState(state, target_pc, flags_cache A64_HANDLER_PIN_ARGS);
     frame.exit_op = current;
     frame.exit = {};
@@ -195,7 +191,8 @@ DecodedOpBinding BindDecodedOp(uint32_t word, const Profile& profile) {
     const bool branch = kind >= Kind::BranchImmediate && kind <= Kind::TestBranch;
     const bool data_transfer = kind >= Kind::LoadStoreImmediate && kind <= Kind::LoadLiteral;
     const bool arithmetic = kind == Kind::ScalarFloat || (kind == Kind::Vector && (word & 0xbe000000) != 0x0c000000);
-    slot.can_follow = !untrusted && (IsInteger(kind) || data_transfer || arithmetic || slot.nop || binding.can_follow);
+    slot.can_follow =
+        !untrusted && !branch && (IsInteger(kind) || data_transfer || arithmetic || slot.nop || binding.can_follow);
     if (slot.can_follow || (branch && !untrusted)) slot.flags |= RetainsPage;
     if (untrusted) slot.flags |= UntrustedScalar;
     if (branch) slot.flags |= HasBranchLink;
@@ -292,7 +289,7 @@ const BasicBlock* DecodeBlock(uint64_t pc, const uint8_t* executable, const Prof
         slot = binding;
         slot.ordinal = ordinal;
         BindBlockOperands(slot.op, pc + ordinal * 4);
-        if (!slot.can_follow) break;
+        if (!slot.can_follow && !(IsConditionalBranch(slot.op.kind) && !slot.Has(UntrustedScalar))) break;
     }
 
     uint32_t dead = 0;
@@ -352,7 +349,7 @@ const BasicBlock* DecodeBlock(uint64_t pc, const uint8_t* executable, const Prof
                 slot.flags |= OmitsFlags;
             }
 #if FIBERCPU_AARCH64_TAIL_DISPATCH
-        } else if (following == 1 && i + 2 == slot_count && slot.can_follow) {
+        } else if (following == 1 && i + 1 < slot_count && slot.can_follow) {
             const auto& branch = decoded[i + 1];
             if (profile.trusted_baking || (!slot.keep_scalar && !branch.keep_scalar)) {
                 // Only the hot entry changes. Partial budgets still run the two scalar instructions.

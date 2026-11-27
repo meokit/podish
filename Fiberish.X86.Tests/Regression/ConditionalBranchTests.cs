@@ -29,7 +29,7 @@ public sealed class ConditionalBranchTests
 
         X86Native.BlockStats stats = default;
         X86Native.GetBlockStats(cpu.State, &stats);
-        Assert.Equal(2UL, stats.BlockCount);
+        Assert.Equal(1UL, stats.BlockCount);
         Assert.Equal(EmuStatus.Stopped, cpu.Status);
         Assert.Equal(end, cpu.Eip);
         Assert.Equal(0x78u, cpu[Reg.EAX]);

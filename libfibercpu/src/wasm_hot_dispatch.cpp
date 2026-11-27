@@ -135,6 +135,7 @@ ATTR_PRESERVE_NONE int64_t RunWasmHotDispatch(EmuState* state, DecodedOp* op, in
                 HOT_TAIL(MemoryOpRetry);
             case LogicFlow::ExitToBranch:
                 RecordBlockHandlersThrough(state, locals.op);
+                locals.limit += locals.op->BranchSuffix();
                 if (TryFollowHotBranch<1>(state, locals)) continue;
                 if (locals.limit > 0) HOT_TAIL(ResolveBranchTargetSlowDoubleSlot);
                 break;

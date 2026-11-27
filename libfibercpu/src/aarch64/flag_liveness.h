@@ -31,8 +31,12 @@ constexpr FlagEffects NZCVEffects(const DecodedInstruction& op) {
         case Kind::ConditionalCompare:
             return {ConditionFlags(op.shift), FlagMask};
         case Kind::ConditionalSelect:
-        case Kind::BranchCondition:
             return {ConditionFlags(op.shift), 0};
+        case Kind::BranchCondition:
+        case Kind::CompareBranch:
+        case Kind::TestBranch:
+            // A taken edge leaves the span with the current NZCV.
+            return {FlagMask, 0};
         case Kind::Address:
         case Kind::MoveWide:
         case Kind::Bitfield:
@@ -42,8 +46,6 @@ constexpr FlagEffects NZCVEffects(const DecodedInstruction& op) {
         case Kind::Multiply:
         case Kind::BranchImmediate:
         case Kind::BranchRegister:
-        case Kind::CompareBranch:
-        case Kind::TestBranch:
             return {0, 0};
         default:
             return {FlagMask, 0};

@@ -341,6 +341,8 @@ A64_INTEGER_INLINE uint64_t Multiply(const Registers& registers, const DecodedIn
 
 constexpr StepResult Branch(uint64_t address) { return {Stop::Branch, Access::Execute, 0, address}; }
 
+constexpr bool IsConditionalBranch(Kind kind) { return kind >= Kind::BranchCondition && kind <= Kind::TestBranch; }
+
 constexpr bool HasBlockTarget(Kind kind) {
     switch (kind) {
         case Kind::Address:
