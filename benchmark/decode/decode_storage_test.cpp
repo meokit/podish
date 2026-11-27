@@ -267,22 +267,22 @@ static bool CheckPendingMemoryReplay(EmuState* state) {
 
     if (state->request_read_and_check_pending<uint32_t>(address, &slots[0]))
         return false;
-    std::memcpy(state->mem_op.read.data.data(), &value, sizeof(value));
-    state->mem_op.read.done = true;
+    std::memcpy(state->mem_op.data.data(), &value, sizeof(value));
+    state->mem_op.done = true;
     if (state->request_read_and_check_pending<uint32_t>(address, &slots[1]))
         return false;
-    std::memcpy(state->mem_op.read.data.data(), &value, sizeof(value));
-    state->mem_op.read.done = true;
+    std::memcpy(state->mem_op.data.data(), &value, sizeof(value));
+    state->mem_op.done = true;
     const auto read = state->request_read_and_check_pending<uint32_t>(address, &slots[1]);
     if (!read || *read != value || state->mem_op_type != PendingMemOp::None)
         return false;
 
     if (state->request_write_and_check_pending(address, value, &slots[0]))
         return false;
-    state->mem_op.write.done = true;
+    state->mem_op.done = true;
     if (state->request_write_and_check_pending(address, value, &slots[1]))
         return false;
-    state->mem_op.write.done = true;
+    state->mem_op.done = true;
     return state->request_write_and_check_pending(address, value, &slots[1]).has_value() &&
            state->mem_op_type == PendingMemOp::None;
 }

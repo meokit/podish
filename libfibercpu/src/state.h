@@ -48,15 +48,7 @@ using FaultHandler = int (*)(EmuState* state, uint32_t addr, int is_write, void*
 using MemHook = void (*)(EmuState* state, uint32_t addr, uint32_t size, int is_write, uint64_t val, void* userdata);
 using InterruptHandler = int (*)(EmuState* state, uint32_t vector, void* userdata);
 
-struct alignas(16) MemReadOperation {
-    std::array<std::byte, 16> data;
-    const DecodedOp* instruction;
-    uint32_t addr;
-    uint8_t size;
-    bool done;
-};
-
-struct alignas(16) MemWriteOperation {
+struct alignas(16) PendingMemoryAccess {
     std::array<std::byte, 16> data;
     const DecodedOp* instruction;
     uint32_t addr;
@@ -65,8 +57,7 @@ struct alignas(16) MemWriteOperation {
     bool can_restart;
 };
 
-static_assert(sizeof(MemReadOperation) == 32);
-static_assert(sizeof(MemWriteOperation) == 32);
+static_assert(sizeof(PendingMemoryAccess) == 32);
 
 enum class BlockStopReason : uint8_t {
     Unknown = 0,
@@ -178,18 +169,10 @@ struct EmuState {
     void sync_eip_to_op_start(const DecodedOp* op) { ctx.eip = last_block->GetStartEip(op); }
     void sync_eip_to_op_end(const DecodedOp* op) { ctx.eip = last_block->GetNextEip(op); }
 
-    union MemOpUnion {
-        MemReadOperation read;
-        MemWriteOperation write;
-
-        MemOpUnion() noexcept {}
-        ~MemOpUnion() noexcept {}
-    };
-
     // Pending results belong to one native replay chain. Clear the tag
     // before leaving execution or returning stack-backed decoded storage.
     PendingMemOp mem_op_type = PendingMemOp::None;
-    MemOpUnion mem_op;
+    PendingMemoryAccess mem_op;
     BasicBlock* llvm_hot_block = nullptr;
     std::shared_ptr<aarch64::State> arm;
     uint64_t arm_fault_address = 0;
@@ -205,7 +188,7 @@ struct EmuState {
 
         // Use pending value
         if (mem_op_type == PendingMemOp::Read) {
-            const auto& read_op = mem_op.read;
+            const auto& read_op = mem_op;
             if (read_op.done && read_op.instruction == instruction) {
                 T pending{};
                 std::memcpy(&pending, read_op.data.data(), sizeof(T));
@@ -215,7 +198,7 @@ struct EmuState {
         }
 
         mem_op_type = PendingMemOp::Read;
-        auto& op = mem_op.read;
+        auto& op = mem_op;
         op.data = {};
         op.addr = addr;
         op.size = sizeof(T);
@@ -231,7 +214,7 @@ struct EmuState {
         static_assert(sizeof(T) <= 16);
 
         if (mem_op_type == PendingMemOp::Write) {
-            const auto& write_op = mem_op.write;
+            const auto& write_op = mem_op;
             if (write_op.done && write_op.instruction == instruction) {
                 clear_pending_mem_op();
                 return {};
@@ -239,7 +222,7 @@ struct EmuState {
         }
 
         mem_op_type = PendingMemOp::Write;
-        auto& op = mem_op.write;
+        auto& op = mem_op;
 
         op.addr = addr;
         op.size = sizeof(T);
@@ -257,7 +240,7 @@ struct EmuState {
 
         // No check for pending, just request
         mem_op_type = PendingMemOp::Write;
-        auto& op = mem_op.write;
+        auto& op = mem_op;
 
         op.addr = addr;
         op.size = sizeof(T);

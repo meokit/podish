@@ -65,78 +65,57 @@ static inline bool PerformMemOp(EmuState* state, mem::MicroTLB& utlb, uint32_t a
     }
 }
 
+// Keep the two tail-call entries for the interpreter and the JIT. Both
+// enter the same replay routine, with the pending operation carrying the
+// data and the entry selecting where execution resumes.
+#if defined(_MSC_VER)
+__declspec(noinline)
+#elif defined(__GNUC__) || defined(__clang__)
+[[gnu::noinline]]
+#endif
+static bool ReplayPendingMemory(EmuState* state, const DecodedOp* op, mem::MicroTLB& utlb, bool restart) {
+    // Alignment faults have already published their fault state.
+    if (state->status != EmuStatus::Running) return false;
+    const auto type = state->mem_op_type;
+    if (type == PendingMemOp::None) return true;
+
+#ifdef ENABLE_TLB_STATS
+    ++state->mmu.dispatch_stats.memory_replays;
+#endif
+    // Publish the faulting EIP before an observer can inspect it.
+    state->sync_eip_to_op_start(op);
+    const bool write = type == PendingMemOp::Write;
+    auto& transfer = state->mem_op;
+    state->can_restart_memory_fault = write ? transfer.can_restart : restart;
+    const bool fault = PerformMemOp(state, utlb, transfer.addr, transfer.size, transfer.data.data(), write);
+    state->can_restart_memory_fault = false;
+    if (!fault) transfer.done = true;
+    return !fault;
+}
+
 template <bool restart>
-ATTR_PRESERVE_NONE int64_t MemoryOpGeneric(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
-                                           mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
-                                           uint32_t branch, uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
+static FORCE_INLINE ATTR_PRESERVE_NONE int64_t MemoryOpGeneric(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
+                                                               int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags,
+                                                               mem::MicroTlbAbiWord utlb_addend, uint32_t branch,
+                                                               uint64_t flags_cache FIBERCPU_PIN_PARAMS) {
     FIBERCPU_PIN_ASSUME;
     FIBERCPU_PIN_COMMIT(state);
-    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
-    // An architectural alignment fault has already completed fault setup and
-    // must not restart the same instruction or consume an older pending read.
-    if (state->status != EmuStatus::Running) {
+    auto utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
+    if (!ReplayPendingMemory(state, op, utlb, restart)) {
+        // Fault and SMC exits must expose the flags produced by prior ops.
         CommitFlagsCache(state, flags_cache);
         state->clear_pending_mem_op();
         return instr_limit;
     }
-    // A TLB-only attempt never calls a guest observer. Recover the faulting
-    // instruction's EIP once, before replay can invoke callbacks or fault.
-    if (state->mem_op_type != PendingMemOp::None) {
-#ifdef ENABLE_TLB_STATS
-        ++state->mmu.dispatch_stats.memory_replays;
-#endif
-        state->sync_eip_to_op_start(op);
-    }
-    if (state->mem_op_type == PendingMemOp::Read) {
-        auto& mem_op = state->mem_op.read;
-        state->can_restart_memory_fault = restart;
-        const bool fault = PerformMemOp(state, utlb, mem_op.addr, mem_op.size, mem_op.data.data(), false);
-        state->can_restart_memory_fault = false;
-        if (!fault) {
-            mem_op.done = true;
-        } else {
-            // Flags produced by earlier instructions in this block are still
-            // only in the local cache. Commit them before leaving, otherwise the
-            // resumed execution sees stale flags (SMC interception exits here).
-            CommitFlagsCache(state, flags_cache);
-            state->clear_pending_mem_op();
-            return instr_limit;
-        }
-    } else if (state->mem_op_type == PendingMemOp::Write) {
-        auto& mem_op = state->mem_op.write;
-        state->can_restart_memory_fault = mem_op.can_restart;
-        const bool fault = PerformMemOp(state, utlb, mem_op.addr, mem_op.size, mem_op.data.data(), true);
-        state->can_restart_memory_fault = false;
-        if (!fault) {
-            mem_op.done = true;
-        } else {
-            CommitFlagsCache(state, flags_cache);
-            state->clear_pending_mem_op();
-            return instr_limit;
-        }
-    }
-
     mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-    if constexpr (restart) {
-        // Don't clear mem_op, it's pending for restart
-        ATTR_MUSTTAIL return op->handler(state, op, instr_limit, utlb_tags, utlb_addend, branch,
-                                         flags_cache FIBERCPU_PIN_RESUME);
+    auto* resume = op;
+    if constexpr (!restart) {
+        state->clear_pending_mem_op();
+        resume = state->last_block->NextOp(op);
     }
-
-    state->clear_pending_mem_op();
-    DecodedOp* next_op = state->last_block->NextOp(op);
-    ATTR_MUSTTAIL return next_op->handler(state, next_op, instr_limit, utlb_tags, utlb_addend, branch,
-                                          flags_cache FIBERCPU_PIN_RESUME);
+    ATTR_MUSTTAIL return resume->handler(state, resume, instr_limit, utlb_tags, utlb_addend, branch,
+                                         flags_cache FIBERCPU_PIN_RESUME);
 }
-
-template ATTR_PRESERVE_NONE int64_t MemoryOpGeneric<true>(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                          int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags,
-                                                          mem::MicroTlbAbiWord utlb_addend, uint32_t branch,
-                                                          uint64_t flags_cache FIBERCPU_PIN_PARAMS);
-template ATTR_PRESERVE_NONE int64_t MemoryOpGeneric<false>(EmuState* RESTRICT state, DecodedOp* RESTRICT op,
-                                                           int64_t instr_limit, mem::MicroTlbAbiWord utlb_tags,
-                                                           mem::MicroTlbAbiWord utlb_addend, uint32_t branch,
-                                                           uint64_t flags_cache FIBERCPU_PIN_PARAMS);
 
 ATTR_PRESERVE_NONE int64_t MemoryOpRestart(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
                                            mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
