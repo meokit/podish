@@ -75,8 +75,9 @@ void CheckLoop(EmuState* state, bool region) {
     const auto* second = Lookup(state, Pc + 16, code.data());
     assert(first && second);
     const auto clear_links = [](const ArmBlock& block) {
-        auto& sentinel = GetBlockSentinel(*block.Sentinel());
-        sentinel.links[0] = sentinel.links[1] = &ArmBlock::Invalid;
+        const auto* tail = block.Sentinel() - 2;
+        assert(tail->Has(HasBranchLink));
+        GetExtraOperands(*tail).secondary = block.Sentinel()->payload = BlockLink(&ArmBlock::Invalid);
     };
     if (region) {
         assert(first->header.entry != second->header.entry);
@@ -91,11 +92,12 @@ void CheckLoop(EmuState* state, bool region) {
     assert(AArch64_RegRead(state, 32) == Pc + 24);
     assert(state->arm->nzcv == 0x60000000);
     if (region) {
-        // Every edge in the loop ran in JIT code. The interpreter does not
-        // discover or install a link in either member's sentinel.
-        for (auto* member : {first, second})
-            for (auto* target : GetBlockSentinel(*member->Sentinel()).links)
-                assert(!target->IsValid());
+        // The loop stays in JIT code, leaving the interpreter links empty.
+        for (auto* member : {first, second}) {
+            const auto* tail = member->Sentinel() - 2;
+            assert(!LoadBlockLink(GetExtraOperands(*tail).secondary)->IsValid());
+            assert(!LoadBlockLink(member->Sentinel()->payload)->IsValid());
+        }
     }
 
     AArch64_RegWrite(state, 0, 2);
@@ -213,16 +215,16 @@ void CheckRegionExternalLink(EmuState* state, bool indirect) {
     auto* target = Lookup(state, external, next.data());
     assert(first && second && target && first->header.entry != second->header.entry);
     assert(first->RegionContext() && first->RegionContext() == second->RegionContext());
-    auto& first_exit = GetBlockSentinel(*first->Sentinel());
-    auto& second_exit = GetBlockSentinel(*second->Sentinel());
-    first_exit.links[1] = second_exit.links[1] = &ArmBlock::Invalid;
+    auto& first_exit = first->Sentinel()->payload;
+    auto& second_exit = second->Sentinel()->payload;
+    first_exit = second_exit = BlockLink(&ArmBlock::Invalid);
     AArch64_RegWrite(state, 7, external);
     for (unsigned run = 0; run < 2; ++run) {
         AArch64_RegWrite(state, 0, 1);
         AArch64_RegWrite(state, 1, 0);
         Run(state, start, 10);
         assert(AArch64_RegRead(state, 1) == 9 && AArch64_RegRead(state, 32) == external + 4);
-        assert(first_exit.links[1] == &ArmBlock::Invalid && second_exit.links[1] == target);
+        assert(LoadBlockLink(first_exit) == &ArmBlock::Invalid && LoadBlockLink(second_exit) == target);
     }
 
     AArch64_MemUnmap(state, Pc, 2 * PageBytes);

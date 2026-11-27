@@ -58,6 +58,7 @@ struct State {
     std::array<uint8_t, 16> exclusive_value{};
     uint8_t exclusive_size = 0;
     detail::RunFrame* active_run = nullptr;
+    const detail::BasicBlock* last_block = nullptr;
 
     void ClearExclusive() { exclusive_size = 0; }
 };

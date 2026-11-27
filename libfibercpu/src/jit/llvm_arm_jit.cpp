@@ -18,8 +18,8 @@
 namespace fiberish::aarch64::detail {
 
 extern "C" FIBERCPU_AARCH64_HANDLER_ABI uint64_t FiberArmJitRetry(A64_HANDLER_PARAMS) {
-    if (current->OwningBlock()->IsValid()) {
-        instr_limit -= current->Sentinel()->GuestIndex() - current->GuestIndex();
+    if (state.last_block->IsValid()) {
+        instr_limit -= state.last_block->inst_count() - current->GuestIndex();
         ATTR_MUSTTAIL return current->handler(A64_HANDLER_ARGS);
     }
     ATTR_MUSTTAIL return FiberArmJitLeave(A64_HANDLER_ARGS);
@@ -27,9 +27,9 @@ extern "C" FIBERCPU_AARCH64_HANDLER_ABI uint64_t FiberArmJitRetry(A64_HANDLER_PA
 
 extern "C" FIBERCPU_AARCH64_HANDLER_ABI uint64_t FiberArmJitRefetch(A64_HANDLER_PARAMS) {
     auto& frame = *state.active_run;
-    frame.exit_edge = 2;
-    if (current->OwningBlock()->IsValid()) {
-        instr_limit -= current->Sentinel()->GuestIndex() - current->GuestIndex();
+    frame.exit_link = nullptr;
+    if (state.last_block->IsValid()) {
+        instr_limit -= state.last_block->inst_count() - current->GuestIndex();
         return ReturnFromBlock(state, current, instr_limit, flags_cache A64_HANDLER_PIN_ARGS, {Stop::Refetch});
     }
 
@@ -46,7 +46,7 @@ extern "C" FIBERCPU_AARCH64_HANDLER_ABI uint64_t FiberArmJitLeave(A64_HANDLER_PA
     auto& frame = *state.active_run;
     frame.exit_op = current;
     frame.exit = {Stop::Branch, Access::Execute, 0, state.pc};
-    frame.exit_edge = 2;
+    frame.exit_link = nullptr;
     return instr_limit;
 }
 
@@ -124,9 +124,10 @@ arm_jit::Member CaptureMember(const ArmBlock& block) {
     arm_jit::Member member{uint16_t(block.start_pc() & PageMask), {}};
     member.steps.reserve(block.inst_count());
     const auto* op = block.FirstOp();
+    const auto* sentinel = block.Sentinel();
     for (unsigned i = 0; i < block.inst_count(); ++i) {
         const auto word = block.Word(i);
-        if (op->GuestIndex() == i) {
+        if (op != sentinel && op->GuestIndex() == i) {
             member.steps.push_back({word, uint8_t(1 + op->Has(HasDataSlot))});
             op = op->NextOp();
         } else {
@@ -285,7 +286,8 @@ float EstimateBenefit(const ArmBlock& block) {
     }
     unsigned dispatches = 0;
     const auto* op = block.FirstOp();
-    while (op->GuestIndex() < covered) {
+    const auto* sentinel = block.Sentinel();
+    while (op != sentinel && op->GuestIndex() < covered) {
         unsigned span = 1;
         if (op->Has(Fused)) span = block.FusedBinding(op->GuestIndex()).length;
         const auto* last = op->LastOp(span);

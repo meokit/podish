@@ -18,29 +18,23 @@ extern "C" FIBERCPU_AARCH64_HANDLER_ABI uint64_t FiberArmJitABI(A64_HANDLER_PARA
 
 extern "C" HandlerFunc FiberArmJitTryLink(State& state, const DecodedOp* sentinel, uint64_t& remaining,
                                           const DecodedOp*& next, uint64_t indirect_pc, BlockExitLink kind) {
-    unsigned edge;
-    uint64_t target_pc;
-    if (kind == BlockExitLink::Direct) {
+    auto* link = &sentinel->payload;
+    const uint64_t fallthrough = state.last_block->end_pc();
+    uint64_t target_pc = fallthrough;
+    if (kind != BlockExitLink::Fallthrough) {
         const auto* branch = std::launder(reinterpret_cast<const DecodedOpWithDataSlot*>(
             reinterpret_cast<const std::byte*>(sentinel) - sizeof(DecodedOpWithDataSlot)));
-        target_pc = branch->primary;
-        edge = 0;
-    } else if (kind == BlockExitLink::Fallthrough) {
-        target_pc = sentinel->Operands();
-        edge = 1;
-    } else {
-        target_pc = indirect_pc;
-        edge = indirect_pc == sentinel->Operands();
+        target_pc = kind == BlockExitLink::Direct ? branch->primary : indirect_pc;
+        if (kind == BlockExitLink::Direct || target_pc != fallthrough) link = &branch->secondary;
     }
     const BasicBlock* target;
-    if (const auto entry = TryChainBlock(state, target, *sentinel, edge, target_pc, remaining)) [[likely]] {
-        A64_COUNT_DIRECT_LINK(sentinel, target);
+    if (const auto entry = TryChainBlock(state, target, *link, target_pc, remaining)) [[likely]] {
         next = target->FirstOp();
         return entry;
     }
     auto& frame = *state.active_run;
     frame.exit_target = target_pc;
-    frame.exit_edge = edge;
+    frame.exit_link = link;
     next = sentinel;
     return nullptr;
 }

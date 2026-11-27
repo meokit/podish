@@ -15,7 +15,7 @@ FIBERCPU_AARCH64_HANDLER_ABI uint64_t FloatHandler(A64_HANDLER_PARAMS) {
     valid = FloatRegisterOp<family>(state, op, flags_cache, HotRegisters{state A64_HANDLER_PIN_ARGS});
     if (!valid) [[unlikely]]
         return ReturnFromBlock(state, current, instr_limit, flags_cache A64_HANDLER_PIN_ARGS,
-                               Undefined(current->GetStartPc()));
+                               Undefined(current->GetStartPc(state)));
     A64_DISPATCH_NEXT(current->NextOp<false>());
 }
 
@@ -29,7 +29,7 @@ FIBERCPU_AARCH64_HANDLER_ABI uint64_t VectorHandler(A64_HANDLER_PARAMS) {
             A64_MEMORY_OP_GENERIC(current);
         }
         if (step.reason != Stop::Continue) [[unlikely]] {
-            if (step.reason == Stop::Undefined) step.address = current->GetStartPc();
+            if (step.reason == Stop::Undefined) step.address = current->GetStartPc(state);
             return ReturnFromBlock(state, current, instr_limit, flags_cache A64_HANDLER_PIN_ARGS, step);
         }
     } else {
@@ -40,7 +40,7 @@ FIBERCPU_AARCH64_HANDLER_ABI uint64_t VectorHandler(A64_HANDLER_PARAMS) {
         valid = VectorRegisterOp<family>(state, op, registers);
         if (!valid) [[unlikely]]
             return ReturnFromBlock(state, current, instr_limit, flags_cache A64_HANDLER_PIN_ARGS,
-                                   Undefined(current->GetStartPc()));
+                                   Undefined(current->GetStartPc(state)));
     }
     A64_DISPATCH_NEXT(current->NextOp<false>());
 }

@@ -67,7 +67,7 @@ FIBERCPU_AARCH64_HANDLER_ABI uint64_t AtomicHandler(A64_HANDLER_PARAMS) {
     } else {
         auto step = ExclusiveMemoryOp(state, op, address, registers, memory);
         if (step.reason != Stop::Continue) [[unlikely]] {
-            if (step.reason == Stop::Undefined) step.address = current->GetStartPc();
+            if (step.reason == Stop::Undefined) step.address = current->GetStartPc(state);
             return ReturnFromBlock(state, current, instr_limit, flags_cache A64_HANDLER_PIN_ARGS, step);
         }
     }

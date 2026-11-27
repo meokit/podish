@@ -353,6 +353,8 @@ public:
             if (members.size() > 1) {
                 auto* record = ir_.CreateConstGEP1_64(ir_.getPtrTy(), region_ops_, i);
                 auto* block = ir_.CreateLoad(ir_.getPtrTy(), record);
+                auto* last_block = ir_.CreateConstGEP1_64(ir_.getInt8Ty(), state_, offsetof(State, last_block));
+                ir_.CreateStore(block, last_block);
                 first = ir_.CreateConstGEP1_64(ir_.getInt8Ty(), block, sizeof(BasicBlock));
                 auto* body = Block("region.run");
                 auto* exhausted = Block("region.budget");

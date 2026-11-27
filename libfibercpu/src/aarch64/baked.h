@@ -104,8 +104,8 @@ A64_BAKED_INLINE BakedStop ExecuteBakedOps(State& state, const detail::DecodedOp
             return {member, {Stop::Replay}};
     } else {
         uint64_t pc = 0;
-        if constexpr ((op.kind == Kind::BranchImmediate || op.kind == Kind::BranchRegister) && op.operation != 0)
-            pc = GetExtraOperands(*member).secondary;
+        if constexpr (op.kind == Kind::BranchImmediate && op.operation != 0) pc = member->GetStartPc(state);
+        if constexpr (op.kind == Kind::BranchRegister && op.operation != 0) pc = GetExtraOperands(*member).primary;
         constexpr auto form = IsRotateImmediate(op) ? IntegerForm::RotateRight : IntegerForm::Default;
         const auto step = detail::HotInteger<op.kind, op.width, op.operation, op.shift, !(dead & 1), form>(
             state, operands, pc, target, flags_cache A64_HANDLER_PIN_ARGS);
@@ -135,9 +135,10 @@ FIBERCPU_AARCH64_HANDLER_ABI uint64_t BakedHandler(A64_HANDLER_PARAMS) {
         if (result.step.reason == Stop::Branch) {
             current = result.member;
             if constexpr (terminal == Kind::BranchRegister) {
-                A64_RESOLVE_BRANCH_TARGET_INLINE(current->NextOp<true>(),
-                                                 result.step.address == GetExtraOperands(*current).secondary + 4,
-                                                 result.step.address);
+                const auto& extra = GetExtraOperands(*current);
+                A64_RESOLVE_BRANCH_TARGET_INLINE(
+                    result.step.address == extra.primary + 4 ? current->NextOp<true>()->payload : extra.secondary,
+                    result.step.address);
             } else {
                 A64_RESOLVE_DIRECT_BRANCH_TARGET();
             }

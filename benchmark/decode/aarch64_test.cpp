@@ -588,16 +588,19 @@ bool Va39BlockLink() {
     constexpr unsigned Count = 3;
     State state;
     detail::BasicBlock block;
-    block.header.entry = detail::GetExitHandlerFallthrough(Pc);
+    block.header.entry = detail::GetExitHandlerFallthrough();
     block.header.chain = detail::BasicBlockChainPrefix::Pack(Pc, Count, true, false);
     block.sentinel_slot_index = 5;
-    detail::BlockSentinel sentinel{.links{&block, &detail::BasicBlock::Invalid}};
+    const Memory memory{};
+    detail::RunFrame frame{memory};
+    state.active_run = &frame;
     const detail::BasicBlock* target = nullptr;
     uint64_t budget = 10;
-    if (detail::TryChainBlock(state, target, sentinel.head, 0, Pc & UINT32_MAX, budget) || budget != 10)
+    if (detail::TryChainBlock(state, target, detail::BlockLink(&block), Pc & UINT32_MAX, budget) || budget != 10)
         return false;
-    if (detail::TryChainBlock(state, target, sentinel.head, 0, Pc, budget) != block.header.entry || target != &block ||
-        budget != 10 - Count || block.sentinel_slot_index != 5 || !block.HasBindings())
+    if (detail::TryChainBlock(state, target, detail::BlockLink(&block), Pc, budget) != block.header.entry ||
+        target != &block || budget != 10 - Count || state.last_block != &block || block.sentinel_slot_index != 5 ||
+        !block.HasBindings())
         return false;
 #endif
     return true;
@@ -1472,25 +1475,26 @@ bool CompactSlotsAndFoldedNopBudgets() {
 
     const auto& block = *backing.blocks.front();
     if (backing.allocations != 1 || block.inst_count() != 8 || block.sentinel_slot_index != 5 ||
-        backing.initial_size != 176 || block.Word(1) != Nop || block.Word(2) != Nop || block.Word(4) != Nop ||
+        backing.initial_size != 160 || block.Word(1) != Nop || block.Word(2) != Nop || block.Word(4) != Nop ||
         block.Word(6) != Nop)
         return false;
+    State inspect;
+    inspect.last_block = &block;
     const auto* slot = block.FirstOp();
     for (const unsigned ordinal : {0u, 3u, 5u, 7u}) {
-        if (slot->GuestIndex() != ordinal || slot->GetStartPc() != Base + 4 * ordinal ||
+        if (slot->GuestIndex() != ordinal || slot->GetStartPc(inspect) != Base + 4 * ordinal ||
             slot->Has(detail::HasDataSlot) != (ordinal == 3))
             return false;
         slot = slot->NextOp();
     }
-    if (slot != block.Sentinel() || slot->GetStartPc() != Base + 32)
+    if (slot != block.Sentinel() || block.end_pc() != Base + 32)
         return false;
 
     State state;
     state.pc = Branch;
     const auto result = Run(state, memory, 2);
     return result.reason == Stop::Budget && result.executed == 2 && state.pc == Base + 8 && state.x[1] == 0 &&
-           backing.allocations == 3 && backing.blocks[2]->start_pc() == Base + 4 &&
-           backing.blocks[2]->FirstOp()->Word() == Nop;
+           backing.allocations == 3 && backing.blocks[2]->start_pc() == Base + 4 && backing.blocks[2]->Word(0) == Nop;
 }
 
 bool RefetchChangedFoldedNop() {

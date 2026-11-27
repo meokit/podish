@@ -24,6 +24,7 @@ enum SlotFlag : uint8_t {
     UntrustedFused = 16,
     BaseFields = 32,
     Fused = 64,
+    HasBranchLink = 128,
 };
 
 struct alignas(16) DecodedOp {
@@ -31,18 +32,17 @@ struct alignas(16) DecodedOp {
 #if INTPTR_MAX == INT32_MAX
     uint32_t thread_padding = 0;
 #endif
-    // Low 40 bits hold the operands. The upper bytes locate the guest
-    // instruction and block sentinel independently of the physical stride.
-    uint64_t payload = 0;
+    // Low 40 bits hold the operands. The upper bytes hold the guest ordinal and flags.
+    // The sentinel uses the entire payload for its fallthrough link.
+    mutable uint64_t payload = 0;
 
     static constexpr uint64_t OperandMask = (uint64_t{1} << 40) - 1;
-    static constexpr uint64_t Pack(uint64_t operands, unsigned ordinal, unsigned sentinel_units, uint8_t flags) {
-        return operands | (uint64_t{ordinal} << 40) | (uint64_t{sentinel_units} << 48) | (uint64_t{flags} << 56);
+    static constexpr uint64_t Pack(uint64_t operands, unsigned ordinal, uint8_t flags) {
+        return operands | (uint64_t{ordinal} << 40) | (uint64_t{flags} << 56);
     }
 
     uint64_t Operands() const { return payload & OperandMask; }
     unsigned GuestIndex() const { return (payload >> 40) & 0xff; }
-    unsigned SentinelUnits() const { return (payload >> 48) & 0xff; }
     bool Has(SlotFlag flag) const { return (payload >> 56) & flag; }
 
     const DecodedOp* Advance(unsigned units) const {
@@ -56,7 +56,6 @@ struct alignas(16) DecodedOp {
     }
 
     const DecodedOp* NextOp() const { return Advance(1 + Has(HasDataSlot)); }
-    const DecodedOp* Sentinel() const { return Advance(SentinelUnits()); }
 
     const DecodedOp* LastOp(unsigned length) const {
         auto* slot = this;
@@ -64,35 +63,27 @@ struct alignas(16) DecodedOp {
         return slot;
     }
 
-    const BasicBlock* OwningBlock() const;
-    uint64_t GetStartPc() const;
-    uint32_t Word() const;
+    uint64_t GetStartPc(const State& state) const;
 };
 
 struct DecodedOpWithDataSlot {
     DecodedOp head;
-    uint64_t primary = 0;
-    uint64_t secondary = 0;
+    uint64_t primary = 0;            // Bound target, branch-register PC or immediate.
+    mutable uint64_t secondary = 0;  // Taken link for branches, mask for bitfield operations.
 };
 
 inline const DecodedOpWithDataSlot& GetExtraOperands(const DecodedOp& slot) {
     return *reinterpret_cast<const DecodedOpWithDataSlot*>(&slot);
 }
 
-struct BlockSentinel {
-    DecodedOp head;
-    mutable const BasicBlock* links[2];
-
-    // On the sentinel the top byte points back to the owner, in slot units.
-    unsigned OwnerUnits() const { return head.payload >> 56; }
-};
-
-inline const BlockSentinel& GetBlockSentinel(const DecodedOp& slot) {
-    return *reinterpret_cast<const BlockSentinel*>(&slot);
+inline const BasicBlock* LoadBlockLink(uint64_t link) {
+    return reinterpret_cast<const BasicBlock*>(static_cast<uintptr_t>(link));
 }
 
+inline uint64_t BlockLink(const BasicBlock* block) { return reinterpret_cast<uintptr_t>(block); }
+
 static_assert(sizeof(DecodedOp) == 16 && offsetof(DecodedOp, handler) == 0);
-static_assert(sizeof(DecodedOpWithDataSlot) == 32 && sizeof(BlockSentinel) == 32);
+static_assert(sizeof(DecodedOpWithDataSlot) == 32);
 
 struct BasicBlockChainPrefix {
     uint32_t pc_low;
@@ -143,6 +134,7 @@ struct alignas(16) BasicBlock {
 
     uint64_t start_pc() const { return header.start_pc(); }
     unsigned inst_count() const { return header.inst_count(); }
+    uint64_t end_pc() const { return start_pc() + uint64_t{inst_count()} * 4; }
     bool IsValid() const { return header.IsValid(); }
     bool HasBindings() const { return header.chain.metadata & BasicBlockChainPrefix::HasBindings; }
     void Invalidate() {
@@ -154,7 +146,7 @@ struct alignas(16) BasicBlock {
     static constexpr size_t BindingsOffset(unsigned count) { return (count * sizeof(uint32_t) + 7) & ~size_t{7}; }
 
     static constexpr size_t RegionContextOffset(unsigned units) {
-        return units * sizeof(DecodedOp) + sizeof(BlockSentinel);
+        return units * sizeof(DecodedOp) + sizeof(DecodedOp);
     }
 
     static size_t CalculateSize(unsigned units, unsigned count, unsigned bindings, unsigned fusions,
@@ -171,7 +163,7 @@ struct alignas(16) BasicBlock {
     HandlerFunc& EntryHandler() { return header.entry; }
     bool HasRegionContext() const { return header.chain.metadata & BasicBlockChainPrefix::HasRegionContext; }
     const void* RegionContext() const {
-        return HasRegionContext() ? *reinterpret_cast<const void* const*>(&GetBlockSentinel(*Sentinel()) + 1) : nullptr;
+        return HasRegionContext() ? *reinterpret_cast<const void* const*>(Sentinel() + 1) : nullptr;
     }
     void SetRegionContext(const void* context) {
         *reinterpret_cast<const void**>(reinterpret_cast<std::byte*>(this + 1) +
@@ -180,7 +172,7 @@ struct alignas(16) BasicBlock {
 
     // The footer uses guest ordinals, so it includes instructions with no slot.
     const uint32_t* Words() const {
-        const auto* footer = reinterpret_cast<const std::byte*>(&GetBlockSentinel(*Sentinel()) + 1);
+        const auto* footer = reinterpret_cast<const std::byte*>(Sentinel() + 1);
         return reinterpret_cast<const uint32_t*>(footer + (HasRegionContext() ? sizeof(void*) : 0));
     }
 
@@ -229,15 +221,9 @@ private:
     }
 };
 
-inline const BasicBlock* DecodedOp::OwningBlock() const {
-    const auto& sentinel = GetBlockSentinel(*Sentinel());
-    return reinterpret_cast<const BasicBlock*>(reinterpret_cast<const std::byte*>(&sentinel) -
-                                               sentinel.OwnerUnits() * sizeof(DecodedOp));
+inline uint64_t DecodedOp::GetStartPc(const State& state) const {
+    return state.last_block->start_pc() + uint64_t{GuestIndex()} * 4;
 }
-
-inline uint64_t DecodedOp::GetStartPc() const { return OwningBlock()->start_pc() + uint64_t{GuestIndex()} * 4; }
-
-inline uint32_t DecodedOp::Word() const { return OwningBlock()->Word(GuestIndex()); }
 
 static_assert(alignof(BasicBlock) >= alignof(DecodedOp));
 static_assert(mem::ArmTaskSize == (uint64_t{1} << 39) && BlockMax < 64);

@@ -20,7 +20,7 @@ template <Stop reason>
 FIBERCPU_AARCH64_HANDLER_ABI uint64_t TrapHandler(A64_HANDLER_PARAMS) {
     const uint16_t immediate = reason == Stop::Undefined ? 0 : uint16_t(current->Operands());
     return ReturnFromBlock(state, current, instr_limit, flags_cache A64_HANDLER_PIN_ARGS,
-                           {reason, Access::Execute, immediate, current->GetStartPc()});
+                           {reason, Access::Execute, immediate, current->GetStartPc(state)});
 }
 #endif
 
@@ -66,14 +66,19 @@ template <Kind kind, unsigned width, int operation, int shift, bool write_nzcv, 
 FIBERCPU_AARCH64_HANDLER_ABI uint64_t IntegerHandler(A64_HANDLER_PARAMS) {
     const auto op = GetOpOperands<kind>(*current);
     uint64_t pc = 0;
-    if constexpr (kind == Kind::BranchImmediate || kind == Kind::BranchRegister)
-        pc = GetExtraOperands(*current).secondary;
+    if constexpr (kind == Kind::BranchImmediate) {
+        if (op.operation != 0) pc = current->GetStartPc(state);
+    } else if constexpr (kind == Kind::BranchRegister) {
+        pc = GetExtraOperands(*current).primary;
+    }
     const auto result = HotInteger<kind, width, operation, shift, write_nzcv, form>(
         state, op, pc, BlockTarget<kind>(op), flags_cache A64_HANDLER_PIN_ARGS);
     if constexpr (kind >= Kind::BranchImmediate && kind <= Kind::TestBranch) {
         if (result.reason == Stop::Branch) {
             if constexpr (kind == Kind::BranchRegister) {
-                A64_RESOLVE_BRANCH_TARGET_INLINE(current->NextOp<true>(), result.address == pc + 4, result.address);
+                const auto& extra = GetExtraOperands(*current);
+                A64_RESOLVE_BRANCH_TARGET_INLINE(
+                    result.address == pc + 4 ? current->NextOp<true>()->payload : extra.secondary, result.address);
             } else {
                 A64_RESOLVE_DIRECT_BRANCH_TARGET();
             }
