@@ -1025,6 +1025,9 @@ std::unique_ptr<llvm::Module> PrepareLLVMPageRegion(const LLVMOperandTemplates& 
                                                     std::span<const LLVMPageMember> candidates, llvm::StringRef name,
                                                     llvm::StringRef pipeline, bool fold_operand_loads,
                                                     std::vector<size_t>& included) {
+    using Region = mem::PageRegion<BasicBlock>;
+    if (candidates.size() < 2 || candidates.size() > Region::MaxMembers) return {};
+
     llvm::SmallVector<BlockKeyView, 16> keys;
     for (const auto& candidate : candidates) keys.push_back(candidate.key);
     auto module = CloneBlockModule(templates, keys);
@@ -1077,11 +1080,17 @@ std::unique_ptr<llvm::Module> PrepareLLVMPageRegion(const LLVMOperandTemplates& 
     auto* bad_selector = llvm::BasicBlock::Create(context, "invalid.selector", body);
     llvm::IRBuilder<>(bad_selector).CreateUnreachable();
     llvm::IRBuilder<> builder(start);
-    auto* selector = body->getArg(5);
-    auto* page = builder.CreateAnd(selector, builder.getInt32(~uint32_t(mem::PAGE_MASK)), "guest.page");
-    auto* index = builder.CreateAnd(selector, builder.getInt32(mem::PAGE_MASK), "member.index");
+    auto* pointer_type = builder.getIntPtrTy(module->getDataLayout());
+    auto* tagged_table = builder.CreatePtrToInt(body->getArg(1), pointer_type);
+    auto* index = builder.CreateAnd(builder.CreateTruncOrBitCast(tagged_table, builder.getInt32Ty()),
+                                    builder.getInt32(Region::MemberMask), "member.index");
+    auto* table = builder.CreateIntToPtr(
+        builder.CreateAnd(tagged_table, llvm::ConstantInt::get(pointer_type, ~uint64_t{Region::MemberMask})),
+        builder.getPtrTy());
+    auto* page_field = builder.CreateConstGEP1_64(builder.getInt8Ty(), table, offsetof(Region, guest_page));
+    auto* page =
+        builder.CreateTrunc(builder.CreateLoad(builder.getInt64Ty(), page_field), builder.getInt32Ty(), "guest.page");
     auto* state = body->getArg(0);
-    auto* table = body->getArg(1);
     auto* start_switch = builder.CreateSwitch(index, bad_selector, members.size());
 
     llvm::SmallVector<RegionLabel, 16> labels;
@@ -1223,11 +1232,10 @@ std::unique_ptr<llvm::Module> PrepareLLVMPageRegion(const LLVMOperandTemplates& 
         const auto context_offset =
             BasicBlock::SlotStorageSize(physical_count, physical_count > key.operations.size() + 1);
         auto* slot = builder.CreateGEP(builder.getInt8Ty(), args[1], builder.getInt64(context_offset));
-        auto* base = builder.CreateAnd(LoadBlockEip(builder, args[1]), builder.getInt32(~uint32_t(mem::PAGE_MASK)));
-        // Pass the immutable member table in the Op register, and the guest
-        // page plus the entry ordinal in the otherwise unused branch register.
-        args[1] = builder.CreateAlignedLoad(builder.getPtrTy(), slot, llvm::Align(alignof(void*)));
-        args[5] = builder.CreateOr(base, builder.getInt32(i));
+        auto* table = builder.CreateAlignedLoad(builder.getPtrTy(), slot, llvm::Align(alignof(void*)));
+        auto* address = builder.CreatePtrToInt(table, pointer_type);
+        auto* tagged = builder.CreateOr(address, llvm::ConstantInt::get(pointer_type, i));
+        args[1] = builder.CreateIntToPtr(tagged, builder.getPtrTy());
         auto* call = builder.CreateCall(body, args);
         call->setCallingConv(body->getCallingConv());
         call->setTailCallKind(llvm::CallInst::TCK_MustTail);

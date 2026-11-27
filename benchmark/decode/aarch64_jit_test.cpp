@@ -45,8 +45,9 @@ void WaitForJit(EmuState* state, uint64_t pc, unsigned budget, const uint8_t* co
             if (minimum_size == 1)
                 return;
             const auto& regions = state->mmu.code_cache().arm_blocks->regions;
-            const auto installed = regions.find(pc & ~PageMask);
-            if (block->RegionContext() && installed != regions.end() && installed->second->count >= minimum_size)
+            const auto* installed = regions.Find(pc & ~PageMask);
+            if (installed && block->RegionContext() == installed->members && installed->count >= minimum_size &&
+                installed->guest_page == (pc & ~PageMask))
                 return;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(2));
@@ -116,8 +117,8 @@ void CheckLoop(EmuState* state, bool region) {
     using RegionEntry = fiberish::mem::CodeCacheState::ArmBlocks::RegionEntry;
     std::array<RegionEntry, 2> old_entries{};
     if (region) {
-        old_entries[0] = {context[0], Pc, revision, first->header.entry};
-        old_entries[1] = {context[1], Pc + 16, second->invalidation_revision, second->header.entry};
+        old_entries[0] = {Pc, context[0], revision, first->header.entry};
+        old_entries[1] = {Pc + 16, context[1], second->invalidation_revision, second->header.entry};
     }
     Put(code.data(), std::array{0x91000821u}); // add x1, x1, #2
     AArch64_ResetCodeCacheByRange(state, Alias, 4);

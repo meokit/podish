@@ -383,7 +383,7 @@ struct CompiledPageRegion {
     std::vector<HandlerFunc> entries;
 };
 
-constexpr size_t kMaxRegionMembers = 12;
+constexpr size_t kMaxRegionMembers = mem::PageRegion<BasicBlock>::MaxMembers;
 
 void WriteRegionMember(llvm::raw_ostream& out, const LLVMPageMember& member) {
     llvm_block_cache::WriteU32(out, member.page_offset);
@@ -1035,7 +1035,7 @@ struct CapturedRegion {
         for (auto [i, member] : llvm::enumerate(members)) {
             auto& plan = plans[i];
             if (!member.input.Plan(true, plan) || plan.exit == LLVMBlockExit::Dispatch) continue;
-            keys.push_back({plan.Key(true), member.entry.eip - stamp.guest_page});
+            keys.push_back({plan.Key(true), member.entry.address - stamp.guest_page});
             eligible.push_back(i);
         }
         if (keys.size() < 2 || !AcceptsJobs(epoch)) return std::nullopt;
@@ -1062,7 +1062,7 @@ std::optional<CapturedRegion> CapturePage(EmuState& state, BasicBlock& root) {
     auto stamp = state.mmu.page_region_stamp(root.start_eip());
     if (!stamp) return std::nullopt;
     auto& cache = state.mmu.code_cache();
-    if (cache.page_regions->live.contains(stamp->guest_page)) return std::nullopt;
+    if (cache.page_regions->Contains(stamp->guest_page)) return std::nullopt;
     const auto page = cache.page_to_blocks.find(stamp->host_page);
     if (page == cache.page_to_blocks.end()) return std::nullopt;
 

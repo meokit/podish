@@ -19,6 +19,7 @@
 #include "aarch64/dispatch.h"
 #include "aarch64/flag_liveness.h"
 #include "aarch64/operation_binding.h"
+#include "mem/page_region.h"
 
 namespace fiberish {
 
@@ -302,13 +303,13 @@ public:
             page_ = ir_.CreateSub(BlockPC(block), ir_.getInt64(members.front().offset));
         } else {
             entry_.addFnAttr(llvm::Attribute::NoInline);
-            constexpr uint64_t member_mask = alignof(PageRegion) - 1;
+            using Region = mem::PageRegion<BasicBlock>;
+            constexpr uint64_t member_mask = Region::MemberMask;
             auto* input = ir_.CreatePtrToInt(current_, ir_.getInt64Ty());
             selector = ir_.CreateAnd(input, ir_.getInt64(member_mask));
             region_ops_ = ir_.CreateIntToPtr(ir_.CreateAnd(input, ir_.getInt64(~member_mask)), ir_.getPtrTy());
-            // Every member belongs to the same guest page.
-            auto* block = ir_.CreateLoad(ir_.getPtrTy(), region_ops_);
-            page_ = ir_.CreateAnd(BlockPC(block), ir_.getInt64(~PageMask));
+            auto* page_field = ir_.CreateConstGEP1_64(ir_.getInt8Ty(), region_ops_, offsetof(Region, guest_page));
+            page_ = Load64(page_field);
         }
         leave_ = Block("leave");
 
@@ -510,7 +511,7 @@ bool CanLower(uint32_t word) { return BindOperation(DecodeFields(word)).id != Op
 
 std::unique_ptr<llvm::Module> Prepare(std::span<const Member> members, llvm::StringRef name, llvm::StringRef pipeline,
                                       bool fold_operand_loads) {
-    if (members.empty() || members.size() > PageRegion::MaxMembers) return {};
+    if (members.empty() || members.size() > mem::PageRegion<BasicBlock>::MaxMembers) return {};
     thread_local Templates templates;
     if (!templates.module) return {};
     const auto& source = *templates.module;

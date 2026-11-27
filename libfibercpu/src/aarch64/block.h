@@ -164,6 +164,7 @@ struct alignas(16) BasicBlock {
 
     const DecodedOp* FirstOp() const { return reinterpret_cast<const DecodedOp*>(this + 1); }
     const DecodedOp* Sentinel() const { return FirstOp()->Advance(sentinel_slot_index); }
+    HandlerFunc& EntryHandler() { return header.entry; }
     bool HasRegionContext() const { return header.chain.metadata & BasicBlockChainPrefix::HasRegionContext; }
     const void* RegionContext() const {
         return HasRegionContext() ? *reinterpret_cast<const void* const*>(&GetBlockSentinel(*Sentinel()) + 1) : nullptr;
@@ -235,13 +236,5 @@ static_assert(sizeof(BasicBlockHeader) == 16);
 static_assert(offsetof(BasicBlockHeader, chain) == 0 && offsetof(BasicBlockHeader, entry) == 8);
 static_assert(offsetof(BasicBlock, header) == 0);
 static_assert(sizeof(BasicBlock) == 32);
-
-// The region entry passes the member ordinal in the low bits of this table's address.
-struct alignas(16) PageRegion {
-    static constexpr size_t MaxMembers = 12;
-    BasicBlock* members[MaxMembers];
-    size_t count;
-};
-static_assert(offsetof(PageRegion, members) == 0 && PageRegion::MaxMembers <= alignof(PageRegion));
 
 }  // namespace fiberish::aarch64::detail

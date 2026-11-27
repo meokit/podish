@@ -60,7 +60,7 @@ using ArmHandler = aarch64::detail::HandlerFunc;
 using namespace aarch64;
 using namespace aarch64::detail;
 
-constexpr size_t kMaxRegionMembers = PageRegion::MaxMembers;
+constexpr size_t kMaxRegionMembers = mem::PageRegion<ArmBlock>::MaxMembers;
 constexpr size_t kMaxRegionInstructions = 192;
 using JitClock = std::chrono::steady_clock;
 using namespace std::chrono_literals;
@@ -142,7 +142,7 @@ std::optional<CapturedRegion> CapturePage(const EmuState& engine, ArmBlock& root
     const auto stamp = engine.mmu.arm_page_region_stamp(page);
     if (!stamp || stamp->backing != reinterpret_cast<uintptr_t>(root.executable_page)) return std::nullopt;
     const auto& cache = *engine.mmu.code_cache().arm_blocks;
-    if (cache.regions.contains(page)) return std::nullopt;
+    if (cache.regions.Contains(page)) return std::nullopt;
     const auto host = cache.pages.find(stamp->backing);
     if (host == cache.pages.end()) return std::nullopt;
 
@@ -176,7 +176,7 @@ std::optional<CapturedRegion> CapturePage(const EmuState& engine, ArmBlock& root
     CapturedRegion region{*stamp, {}, {}};
     for (const auto& candidate : selected) {
         auto* block = candidate.block;
-        region.entries.push_back({block, block->start_pc(), block->invalidation_revision, nullptr});
+        region.entries.push_back({block->start_pc(), block, block->invalidation_revision, nullptr});
         region.members.push_back(CaptureMember(*block));
     }
     return region;
@@ -215,7 +215,7 @@ bool CompileRegion(CapturedRegion& region, uint64_t epoch) {
     region.entries.resize(count);
     const auto entries = arm_jit::Compile(region.members, epoch);
     if (entries.size() != count) return false;
-    for (size_t i = 0; i < count; ++i) region.entries[i].entry = entries[i];
+    for (size_t i = 0; i < count; ++i) region.entries[i].handler = entries[i];
     return true;
 }
 

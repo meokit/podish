@@ -607,9 +607,15 @@ struct alignas(16) BasicBlock {
     }
     FORCE_INLINE DecodedOp* NextOp(DecodedOp* op) { return const_cast<DecodedOp*>(std::as_const(*this).NextOp(op)); }
 
-    // Scalar handlers and PC offsets are indexed by guest instruction, never data slot.
+    HandlerFunc& EntryHandler() { return entry; }
+    bool HasRegionContext() const { return chain.has_region_context; }
+    const void* RegionContext() const {
+        if (!HasRegionContext()) return nullptr;
+        return *reinterpret_cast<const void* const*>(reinterpret_cast<const std::byte*>(this) + RegionContextOffset());
+    }
+
     void SetRegionContext(const void* context) {
-        assert(chain.has_region_context);
+        assert(HasRegionContext());
         auto* slot = reinterpret_cast<const void**>(reinterpret_cast<std::byte*>(this) + RegionContextOffset());
         *slot = context;
     }
@@ -618,6 +624,7 @@ struct alignas(16) BasicBlock {
         return offsetof(BasicBlock, slots) + SlotStorageSize(slot_count, HasDataSlots());
     }
 
+    // Scalar handlers and PC offsets are indexed by guest instruction, never data slot.
     HandlerFunc* UnfusedHandlers() { return const_cast<HandlerFunc*>(std::as_const(*this).UnfusedHandlers()); }
     const HandlerFunc* UnfusedHandlers() const {
         const size_t offset = RegionContextOffset() + (chain.has_region_context ? sizeof(void*) : 0);

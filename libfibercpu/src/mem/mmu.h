@@ -18,6 +18,7 @@
 #include "../aarch64/block.h"
 #include "arm_page_table.h"
 #endif
+#include "page_region.h"
 #include "tlb.h"
 #include "types.h"
 
@@ -241,6 +242,79 @@ inline size_t BlockLookupCacheSlot(uintptr_t host_page_base, uint32_t guest_eip)
     return static_cast<size_t>(hash) & (BlockLookupCacheSize - 1);
 }
 
+template <typename BlockT, typename GuestAddress, typename Handler>
+class PageRegionCache {
+    using Region = PageRegion<BlockT>;
+    static_assert(offsetof(Region, members) == 0 && alignof(Region) == Region::MemberMask + 1);
+
+    ankerl::unordered_dense::map<GuestAddress, std::unique_ptr<Region>> live_;
+
+    static void Restore(const Region& region) {
+        for (auto* block : std::span(region.members, region.count)) {
+            block->EntryHandler() = block->FirstOp()->handler;
+            block->SetRegionContext(nullptr);
+        }
+    }
+
+public:
+    struct Entry {
+        GuestAddress address;
+        BlockT* block;
+        uint16_t revision;
+        Handler handler;
+    };
+
+    uint64_t invalidation_epoch = 0;
+
+    const Region* Find(GuestAddress guest_page) const {
+        const auto it = live_.find(guest_page);
+        return it == live_.end() ? nullptr : it->second.get();
+    }
+
+    bool Contains(GuestAddress guest_page) const { return live_.contains(guest_page); }
+
+    template <typename Validate>
+    bool Install(GuestAddress guest_page, std::span<const Entry> members, Validate&& validate) {
+        if (members.size() < 2 || members.size() > Region::MaxMembers || Contains(guest_page)) return false;
+        auto region = std::make_unique<Region>();
+        region->guest_page = guest_page;
+        GuestAddress previous = 0;
+        for (const auto& member : members) {
+            if ((member.address & ~GuestAddress(PAGE_MASK)) != guest_page ||
+                (region->count && member.address <= previous) || !member.block || !member.handler || !validate(member))
+                return false;
+            const auto& block = *member.block;
+            if (block.invalidation_revision != member.revision || !block.HasRegionContext() || !block.inst_count())
+                return false;
+            region->members[region->count++] = member.block;
+            previous = member.address;
+        }
+
+        // Keep the table address stable when the map reallocates. The scheduler owns
+        // publication, so no guest code or callback runs between these stores.
+        const auto* table = region->members;
+        live_.emplace(guest_page, std::move(region));
+        for (const auto& member : members) {
+            member.block->SetRegionContext(table);
+            member.block->EntryHandler() = member.handler;
+        }
+        return true;
+    }
+
+    void Invalidate(GuestAddress guest_page) {
+        const auto region = live_.find(guest_page);
+        if (region == live_.end()) return;
+        Restore(*region->second);
+        live_.erase(region);
+    }
+
+    void InvalidateAll() {
+        ++invalidation_epoch;
+        for (const auto& item : live_) Restore(*item.second);
+        live_.clear();
+    }
+};
+
 struct CodeCacheState {
     static constexpr size_t kDefaultBlockBudgetBytes = 64ull * 1024ull * 1024ull;
 
@@ -260,17 +334,8 @@ struct CodeCacheState {
         std::vector<BlockHostPageRef> host_pages;
     };
 
-    struct PageRegionEntry {
-        uint32_t eip;
-        BasicBlock* block;
-        uint16_t revision;
-        HandlerFunc handler;
-    };
-
-    struct PageRegions {
-        ankerl::unordered_dense::map<uint32_t, std::vector<BasicBlock*>> live;
-        uint64_t invalidation_epoch = 0;
-    };
+    using PageRegions = PageRegionCache<BasicBlock, uint32_t, HandlerFunc>;
+    using PageRegionEntry = PageRegions::Entry;
 
 #if FIBERCPU_GUEST_AARCH64
     struct ArmBlockCacheKey {
@@ -287,45 +352,18 @@ struct CodeCacheState {
         std::vector<BasicBlock*> entries;
         ankerl::unordered_dense::map<uintptr_t, std::vector<BasicBlock*>> pages;
 #if FIBERCPU_LLVM_JIT
-        struct RegionEntry {
-            BasicBlock* block;
-            uint64_t pc;
-            uint16_t revision;
-            aarch64::detail::HandlerFunc entry;
-        };
-
-        using Region = aarch64::detail::PageRegion;
-        ankerl::unordered_dense::map<uint64_t, std::unique_ptr<Region>> regions;
-        uint64_t invalidation_epoch = 0;
-
-        static void RestoreRegion(const Region& region) {
-            for (auto* block : std::span(region.members, region.count)) {
-                block->header.entry = block->FirstOp()->handler;
-                block->SetRegionContext(nullptr);
-            }
-        }
+        using Regions = PageRegionCache<BasicBlock, uint64_t, aarch64::detail::HandlerFunc>;
+        using RegionEntry = Regions::Entry;
+        Regions regions;
 
         bool InstallRegion(uint64_t guest_page, uintptr_t backing, std::span<const RegionEntry> members) {
-            if (members.size() < 2 || members.size() > Region::MaxMembers || regions.contains(guest_page)) return false;
-            auto region = std::make_unique<Region>();
-            for (const auto& member : members) {
-                if ((member.pc & ~PAGE_MASK) != guest_page || !member.block || !member.entry ||
-                    (region->count && region->members[region->count - 1]->start_pc() >= member.pc) ||
-                    Find({backing, member.pc}) != member.block)
-                    return false;
-                const auto& block = *member.block;
-                if (!block.IsValid() || block.invalidation_revision != member.revision || !block.HasRegionContext() ||
-                    !block.inst_count() || member.pc + 4 * block.inst_count() - 1 > (guest_page | PAGE_MASK))
-                    return false;
-                region->members[region->count++] = member.block;
-            }
-            const auto* table = region->members;
-            regions.emplace(guest_page, std::move(region));
-            for (const auto& member : members) {
-                member.block->SetRegionContext(table);
-                member.block->header.chain.llvm_hot_count = 0;
-                member.block->header.entry = member.entry;
-            }
+            if (!regions.Install(guest_page, members, [&](const RegionEntry& member) {
+                    if (Find({backing, member.address}) != member.block) return false;
+                    const auto& block = *member.block;
+                    return block.IsValid() && member.address + 4 * block.inst_count() - 1 <= (guest_page | PAGE_MASK);
+                }))
+                return false;
+            for (const auto& member : members) member.block->header.chain.llvm_hot_count = 0;
             return true;
         }
 #endif
@@ -371,15 +409,11 @@ struct CodeCacheState {
             const auto page = pages.find(host_page);
             if (page == pages.end()) return false;
 #if FIBERCPU_LLVM_JIT
-            ++invalidation_epoch;
+            ++regions.invalidation_epoch;
 #endif
             for (auto* block : page->second) {
 #if FIBERCPU_LLVM_JIT
-                if (block->RegionContext()) {
-                    const auto region = regions.find(block->start_pc() & ~PAGE_MASK);
-                    RestoreRegion(*region->second);
-                    regions.erase(region);
-                }
+                if (block->RegionContext()) regions.Invalidate(block->start_pc() & ~PAGE_MASK);
 #endif
                 block->Invalidate();
             }
@@ -389,8 +423,7 @@ struct CodeCacheState {
 
         void InvalidateAll() {
 #if FIBERCPU_LLVM_JIT
-            for (const auto& item : regions) RestoreRegion(*item.second);
-            regions.clear();
+            regions.InvalidateAll();
 #endif
             for (auto* block : entries) block->Invalidate();
         }
@@ -448,17 +481,7 @@ struct CodeCacheState {
     }
 
     void InvalidateBlock(BasicBlock& block) {
-        if (page_regions) {
-            auto& live = page_regions->live;
-            const auto region = live.find(block.start_eip() & ~PAGE_MASK);
-            if (region != live.end()) {
-                for (auto* member : region->second) {
-                    member->entry = member->FirstOp()->handler;
-                    member->SetRegionContext(nullptr);
-                }
-                live.erase(region);
-            }
-        }
+        if (page_regions) page_regions->Invalidate(block.start_eip() & ~uint32_t(PAGE_MASK));
         block.Invalidate();
     }
 
@@ -469,11 +492,9 @@ struct CodeCacheState {
             arm_blocks.reset();
         }
 #endif
-        if (page_regions) ++page_regions->invalidation_epoch;
+        if (page_regions) page_regions->InvalidateAll();
         for (auto& entry : block_entries) {
-            if (entry.block != nullptr) {
-                InvalidateBlock(*entry.block);
-            }
+            if (entry.block != nullptr) entry.block->Invalidate();
         }
         block_cache.clear();
         block_entries.clear();
@@ -532,38 +553,18 @@ struct CodeCacheState {
 
 #if FIBERCPU_BLOCK_COMPILATION
     bool InstallPageRegion(uint32_t guest_page, uintptr_t host_page, std::span<const PageRegionEntry> members) {
-        if (!page_regions || members.size() < 2 || page_regions->live.contains(guest_page)) return false;
-
-        std::vector<BasicBlock*> blocks;
-        blocks.reserve(members.size());
-        std::optional<uint32_t> previous;
-        for (const auto& member : members) {
-            if ((member.eip & ~PAGE_MASK) != guest_page || (previous && member.eip <= *previous) || !member.block ||
-                !member.handler)
-                return false;
-            previous = member.eip;
-            const auto* index = block_cache.find(BlockCacheKey{host_page, member.eip});
+        if (!page_regions) return false;
+        return page_regions->Install(guest_page, members, [&](const PageRegionEntry& member) {
+            const auto* index = block_cache.find(BlockCacheKey{host_page, member.address});
             if (!index) return false;
             const auto& entry = block_entries[*index];
             if (entry.block != member.block || entry.host_pages.size() != 1 ||
                 entry.host_pages.front().host_page_base != host_page)
                 return false;
             const auto& block = *entry.block;
-            if (!block.is_valid() || block.start_eip() != member.eip || !block.chain.has_region_context ||
-                block.invalidation_revision != member.revision || !block.entry || !block.inst_count() ||
-                block.end_eip <= member.eip || ((block.end_eip - 1) & ~PAGE_MASK) != guest_page)
-                return false;
-            blocks.push_back(member.block);
-        }
-
-        // The scheduler owns publication. Workers supply code and immutable
-        // snapshots. No guest code or callback runs between these stores.
-        const auto installed = page_regions->live.emplace(guest_page, std::move(blocks)).first;
-        for (const auto& member : members) {
-            member.block->SetRegionContext(installed->second.data());
-            member.block->entry = member.handler;
-        }
-        return true;
+            return block.is_valid() && block.start_eip() == member.address && block.entry &&
+                   block.end_eip > member.address && ((block.end_eip - 1) & ~PAGE_MASK) == guest_page;
+        });
     }
 #endif
 
@@ -2049,8 +2050,9 @@ public:
         const auto* backing = try_arm_region_page(guest_page);
         if (!backing) return std::nullopt;
         const auto& cache = code_cache();
-        return ArmPageRegionStamp{core_->identity,  reinterpret_cast<uintptr_t>(backing), guest_page,
-                                  cache.generation, cache.arm_blocks->invalidation_epoch, cache.llvm_cache_epoch};
+        return ArmPageRegionStamp{
+            core_->identity,  reinterpret_cast<uintptr_t>(backing),         guest_page,
+            cache.generation, cache.arm_blocks->regions.invalidation_epoch, cache.llvm_cache_epoch};
     }
 
     bool publish_arm_page_region(const ArmPageRegionStamp& snapshot,

@@ -3,6 +3,7 @@
 #if FIBERCPU_LLVM_JIT
 #include "jit/executable_arena.h"
 #include "jit/llvm_block_jit.h"
+#include "mem/page_region.h"
 #include <mach/mach.h>
 #include <mach/mach_vm.h>
 #endif
@@ -1225,22 +1226,17 @@ bool VerifyPageRegion(bool cross_page = false) {
                X86_RegRead(state.get(), 0) == eax && X86_RegRead(state.get(), 6) == esi &&
                (X86_GetEFLAGS(state.get()) & flag_mask) == flags;
     };
-    const auto region_context = [](const BasicBlock* block) -> const void* {
-        if (!block || !block->chain.has_region_context)
-            return nullptr;
-        const void* context;
-        std::memcpy(&context, reinterpret_cast<const std::byte*>(block) + block->RegionContextOffset(),
-                    sizeof(context));
-        return context;
-    };
+    const auto region_context = [](const BasicBlock* block) { return block ? block->RegionContext() : nullptr; };
     const auto warm = [&](uint32_t start) -> BasicBlock* {
         for (int attempt = 0; attempt < 150; ++attempt) {
             if (!run(start, 10000, 3750, start, 11, cmp_flags))
                 return nullptr;
             auto* a = FindCompiledBlock(state.get(), start);
             auto* b = FindCompiledBlock(state.get(), start + (second - first));
-            if (region_context(a) && region_context(a) == region_context(b) && a->entry != b->entry)
-                return a;
+            if (const auto* table = region_context(a); table && table == region_context(b) && a->entry != b->entry) {
+                using Region = fiberish::mem::PageRegion<BasicBlock>;
+                return reinterpret_cast<uintptr_t>(table) & Region::MemberMask ? nullptr : a;
+            }
             std::this_thread::sleep_for(std::chrono::milliseconds(10));
         }
         return nullptr;

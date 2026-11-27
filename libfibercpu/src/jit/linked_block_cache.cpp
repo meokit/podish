@@ -40,13 +40,12 @@ bool TryLinkedPageRegion(EmuState& state, BasicBlock& root, block_recipe::BlockK
     const auto page = root.start_eip() & ~uint32_t(mem::PAGE_MASK);
     const auto offset = root.start_eip() - page;
     for (const auto& region : linked_page_regions) {
-        if (!std::ranges::any_of(region.members, [&](const auto& member) {
-                return member.offset == offset && member.key == recipe;
-            }))
+        if (!std::ranges::any_of(region.members,
+                                 [&](const auto& member) { return member.offset == offset && member.key == recipe; }))
             continue;
 
         const auto stamp = mmu.page_region_stamp(page);
-        if (!stamp || mmu.code_cache().page_regions->live.contains(page)) return false;
+        if (!stamp || mmu.code_cache().page_regions->Contains(page)) return false;
         using Entry = mem::CodeCacheState::PageRegionEntry;
         std::vector<Entry> entries;
         entries.reserve(region.members.size());
