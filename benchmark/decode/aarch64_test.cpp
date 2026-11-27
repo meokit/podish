@@ -1123,12 +1123,18 @@ bool FusedStorePromotesReadWriteMicroTlb() {
     memory.write = nullptr;
     uint32_t word = 0;
     fiberish::mem::SoftTlb tlb;
-    // Only the write table holds this page. The following read needs the
-    // read tag promoted into the handler ABI by the store.
-    tlb.write_tlb[(Data >> fiberish::mem::PAGE_SHIFT) & fiberish::mem::TLB_INDEX_MASK] = {
+    // When the register micro-TLB is enabled, a store hit in write_tlb promotes
+    // the read tag into the handler ABI so the following load hits without a
+    // read_tlb entry. When disabled, the load probes read_tlb directly.
+    const auto tlb_index = (Data >> fiberish::mem::PAGE_SHIFT) & fiberish::mem::TLB_INDEX_MASK;
+    const fiberish::mem::MicroTLB entry{
         fiberish::mem::PackMicroTlbTags(ArmPageTag(Data), ArmPageTag(Data)),
         reinterpret_cast<uintptr_t>(&word) - static_cast<uintptr_t>(Data),
     };
+    tlb.write_tlb[tlb_index] = entry;
+#if !FIBERCPU_AARCH64_MICRO_TLB
+    tlb.read_tlb[tlb_index] = entry;
+#endif
     memory.data_tlb = &tlb;
     Profile profile{.trusted_baking = true};
     profile.resolve_sequence = [](const uint32_t*, unsigned count, unsigned* length, uint32_t dead,

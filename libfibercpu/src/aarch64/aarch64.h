@@ -149,11 +149,28 @@ inline uint64_t& PinSlot(State& state) {
 #define A64_HANDLER_PIN_INIT FIBERCPU_AARCH64_FOR_EACH_PIN(A64_PIN_INIT)
 #define A64_HOT_PIN_REF FIBERCPU_AARCH64_FOR_EACH_PIN(A64_PIN_REF)
 
-#define A64_HANDLER_PARAMS                                                                    \
-    State &state, const ::fiberish::aarch64::detail::DecodedOp *current, int64_t instr_limit, \
-        [[maybe_unused]] uint64_t utlb_tags, [[maybe_unused]] uintptr_t utlb_addend,          \
+#ifndef FIBERCPU_AARCH64_MICRO_TLB
+#define FIBERCPU_AARCH64_MICRO_TLB 0
+#endif
+
+#if FIBERCPU_AARCH64_MICRO_TLB
+#define A64_UTLB_PARAMS , [[maybe_unused]] uint64_t utlb_tags, [[maybe_unused]] uintptr_t utlb_addend
+#define A64_UTLB_REF_PARAMS , [[maybe_unused]] uint64_t &utlb_tags, [[maybe_unused]] uintptr_t &utlb_addend
+#define A64_UTLB_ARGS , utlb_tags, utlb_addend
+#define A64_UTLB_INIT , ::fiberish::mem::InvalidMicroTlbAbiTags(), uintptr_t{0}
+#define A64_UTLB_INVALIDATE() (utlb_tags = ::fiberish::mem::InvalidMicroTlbAbiTags())
+#else
+#define A64_UTLB_PARAMS
+#define A64_UTLB_REF_PARAMS
+#define A64_UTLB_ARGS
+#define A64_UTLB_INIT
+#define A64_UTLB_INVALIDATE() ((void)0)
+#endif
+
+#define A64_HANDLER_PARAMS                                                                                    \
+    State &state, const ::fiberish::aarch64::detail::DecodedOp *current, int64_t instr_limit A64_UTLB_PARAMS, \
         uint32_t flags_cache A64_HANDLER_PIN_PARAMS
-#define A64_HANDLER_ARGS state, current, instr_limit, utlb_tags, utlb_addend, flags_cache A64_HANDLER_PIN_ARGS
+#define A64_HANDLER_ARGS state, current, instr_limit A64_UTLB_ARGS, flags_cache A64_HANDLER_PIN_ARGS
 
 using HandlerFunc = int64_t(FIBERCPU_AARCH64_HANDLER_ABI*)(A64_HANDLER_PARAMS);
 }  // namespace detail

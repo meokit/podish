@@ -787,8 +787,7 @@ A64_VECTOR_INLINE void VectorTable(State& state, const DecodedInstruction& op, b
 
 template <bool hot, class Registers>
 inline StepResult VectorStructure(State& state, const Memory* memory, const DecodedInstruction& op,
-                                  const Registers& registers, const mem::SoftTlb* data_tlb, uint64_t& utlb_tags,
-                                  uintptr_t& utlb_addend) {
+                                  const Registers& registers, const mem::SoftTlb* data_tlb A64_UTLB_REF_PARAMS) {
     const bool q = Field(op.word, 30, 1);
     const uint64_t pc = hot ? 0 : state.pc;
     const bool postindex = Field(op.word, 23, 1);
@@ -865,8 +864,8 @@ inline StepResult VectorStructure(State& state, const Memory* memory, const Deco
     std::array<uint8_t, 64> storage;
     auto* data = storage.data();
     if constexpr (hot) {
-        const bool hit = load ? ProbeDataTlb<false>(state, address, total, data_tlb, utlb_tags, utlb_addend, data)
-                              : ProbeDataTlb<true>(state, address, total, data_tlb, utlb_tags, utlb_addend, data);
+        const bool hit = load ? ProbeDataTlb<false>(state, address, total, data_tlb A64_UTLB_ARGS, data)
+                              : ProbeDataTlb<true>(state, address, total, data_tlb A64_UTLB_ARGS, data);
         if (!hit) return {Stop::Replay};
     } else if (load && !ReadMemory(*memory, address, data, total)) {
         return Fault(address, access);
@@ -954,9 +953,11 @@ inline bool VectorRegisterOp(State& state, const DecodedInstruction& op, const R
 template <VectorFamily family>
 inline StepResult Vector(State& state, const Memory& memory, const DecodedInstruction& op) {
     if constexpr (family == VectorFamily::Structure) {
-        uint64_t tags = 0;
-        uintptr_t addend = 0;
-        return VectorStructure<false>(state, &memory, op, ScalarRegisters{state}, nullptr, tags, addend);
+#if FIBERCPU_AARCH64_MICRO_TLB
+        uint64_t utlb_tags = 0;
+        uintptr_t utlb_addend = 0;
+#endif
+        return VectorStructure<false>(state, &memory, op, ScalarRegisters{state}, nullptr A64_UTLB_ARGS);
     } else {
         return VectorRegisterOp<family>(state, op, ScalarRegisters{state}) ? StepResult{} : Undefined(state.pc);
     }

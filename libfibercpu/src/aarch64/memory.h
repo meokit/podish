@@ -117,14 +117,14 @@ A64_MEMORY_INLINE void StoreRegister(const State& state, uint8_t* data, unsigned
 
 template <bool write>
 A64_MEMORY_INLINE bool ProbeDataTlb([[maybe_unused]] const State& state, uint64_t address, unsigned size,
-                                    const mem::SoftTlb* data_tlb, uint64_t& utlb_tags, uintptr_t& utlb_addend,
-                                    uint8_t*& data) {
+                                    const mem::SoftTlb* data_tlb A64_UTLB_REF_PARAMS, uint8_t*& data) {
 #ifdef ENABLE_TLB_STATS
     auto* stats = state.active_run ? state.active_run->memory.stats : nullptr;
     if (stats) ++(write ? stats->total_writes : stats->total_reads);
 #endif
     if (address < mem::ArmTaskSize && (address & PageMask) <= PageBytes - size) [[likely]] {
         const auto tag = mem::ArmPageTag(address);
+#if FIBERCPU_AARCH64_MICRO_TLB
         const auto cached = write ? uint32_t(utlb_tags >> 32) : uint32_t(utlb_tags);
         if (cached == tag) [[likely]] {
 #ifdef ENABLE_TLB_STATS
@@ -133,14 +133,17 @@ A64_MEMORY_INLINE bool ProbeDataTlb([[maybe_unused]] const State& state, uint64_
             data = reinterpret_cast<uint8_t*>(utlb_addend + static_cast<uintptr_t>(address));
             return true;
         }
+#endif
         const auto index = tag & mem::TLB_INDEX_MASK;
         const auto entry = (write ? data_tlb->write_tlb : data_tlb->read_tlb)[index];
         if ((write ? entry.WriteTag() : entry.ReadTag()) == tag) [[likely]] {
 #ifdef ENABLE_TLB_STATS
             if (stats) ++(write ? stats->l2_write_hits : stats->l2_read_hits);
 #endif
+#if FIBERCPU_AARCH64_MICRO_TLB
             utlb_tags = entry.tags;
             utlb_addend = entry.addend;
+#endif
             data = reinterpret_cast<uint8_t*>(entry.addend + static_cast<uintptr_t>(address));
             return true;
         }
@@ -166,8 +169,8 @@ A64_MEMORY_INLINE void LoadRegister(State& state, const uint8_t* data, unsigned 
 template <Kind kind, unsigned fixed_width, int fixed_operation, int fixed_mode, int fixed_shift, int fixed_vector,
           bool probe_only>
 A64_MEMORY_INLINE StepResult LoadStoreTransfer(State& state, const DecodedInstruction& op, uint64_t pc,
-                                               uint64_t literal_address, const mem::SoftTlb* data_tlb,
-                                               uint64_t& utlb_tags, uintptr_t& utlb_addend, const Memory* memory,
+                                               uint64_t literal_address,
+                                               const mem::SoftTlb* data_tlb A64_UTLB_REF_PARAMS, const Memory* memory,
                                                const HotRegisters* pinned) {
     const unsigned width = fixed_width == 0 ? op.width : fixed_width;
     const unsigned operation = fixed_operation < 0 ? op.operation : fixed_operation;
@@ -210,9 +213,8 @@ A64_MEMORY_INLINE StepResult LoadStoreTransfer(State& state, const DecodedInstru
     std::array<uint8_t, pair ? 32 : 16> storage;
     auto* data = storage.data();
     if constexpr (probe_only) {
-        const bool hit = operation == Store
-                             ? ProbeDataTlb<true>(state, address, size, data_tlb, utlb_tags, utlb_addend, data)
-                             : ProbeDataTlb<false>(state, address, size, data_tlb, utlb_tags, utlb_addend, data);
+        const bool hit = operation == Store ? ProbeDataTlb<true>(state, address, size, data_tlb A64_UTLB_ARGS, data)
+                                            : ProbeDataTlb<false>(state, address, size, data_tlb A64_UTLB_ARGS, data);
         if (!hit) return {Stop::Replay};
     }
     if (operation == Store) {
@@ -233,7 +235,7 @@ A64_MEMORY_INLINE StepResult LoadStoreTransfer(State& state, const DecodedInstru
         if constexpr (!probe_only) {
 #if FIBERCPU_AARCH64_UNMANAGED_CACHE
             const bool hit = memory->data_tlb && !memory->lookup_cached_block &&
-                             ProbeDataTlb<false>(state, address, size, memory->data_tlb, utlb_tags, utlb_addend, data);
+                             ProbeDataTlb<false>(state, address, size, memory->data_tlb A64_UTLB_ARGS, data);
 #else
             constexpr bool hit = false;
 #endif
@@ -253,20 +255,21 @@ A64_MEMORY_INLINE StepResult LoadStoreTransfer(State& state, const DecodedInstru
 template <Kind kind, unsigned width = 0, int operation = -1, int mode = -1, int shift = -1, int vector = -1>
 A64_MEMORY_INLINE StepResult LoadStore(State& state, const Memory& memory, const DecodedInstruction& op) {
     const auto literal_address = kind == Kind::LoadLiteral ? state.pc + op.immediate : 0;
-    uint64_t tags = mem::InvalidMicroTlbAbiTags();
-    uintptr_t addend = 0;
+#if FIBERCPU_AARCH64_MICRO_TLB
+    uint64_t utlb_tags = mem::InvalidMicroTlbAbiTags();
+    uintptr_t utlb_addend = 0;
+#endif
     return LoadStoreTransfer<kind, width, operation, mode, shift, vector, false>(
-        state, op, state.pc, literal_address, nullptr, tags, addend, &memory, nullptr);
+        state, op, state.pc, literal_address, nullptr A64_UTLB_ARGS, &memory, nullptr);
 }
 
 // Only a TLB hit can change guest state. A miss replays the current member.
 template <Kind kind, unsigned width = 0, int operation = -1, int mode = -1, int shift = -1, int vector = -1>
 A64_MEMORY_INLINE bool ProbeLoadStore(State& state, const DecodedInstruction& op, uint64_t literal_address,
-                                      const mem::SoftTlb* data_tlb, uint64_t& utlb_tags,
-                                      uintptr_t& utlb_addend A64_HOT_PIN_REF) {
+                                      const mem::SoftTlb* data_tlb A64_UTLB_REF_PARAMS A64_HOT_PIN_REF) {
     const HotRegisters pins{state A64_HANDLER_PIN_ARGS};
-    return LoadStoreTransfer<kind, width, operation, mode, shift, vector, true>(state, op, 0, literal_address, data_tlb,
-                                                                                utlb_tags, utlb_addend, nullptr, &pins)
+    return LoadStoreTransfer<kind, width, operation, mode, shift, vector, true>(state, op, 0, literal_address,
+                                                                                data_tlb A64_UTLB_ARGS, nullptr, &pins)
                .reason == Stop::Continue;
 }
 

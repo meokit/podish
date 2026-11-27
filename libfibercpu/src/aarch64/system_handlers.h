@@ -122,10 +122,10 @@ inline StepResult SystemInstruction(State& state, const Memory& memory, const De
 #if FIBERCPU_AARCH64_TAIL_DISPATCH
 
 [[gnu::always_inline]] inline bool ProbeZeroCacheLine(State& state, unsigned rd, const HotRegisters& registers,
-                                                      const mem::SoftTlb* tlb, uint64_t& tags, uintptr_t& addend) {
+                                                      const mem::SoftTlb* tlb A64_UTLB_REF_PARAMS) {
     const auto address = registers.Read(rd, 64) & ~uint64_t{ZeroBlockBytes - 1};
     uint8_t* data = nullptr;
-    if (!ProbeDataTlb<true>(state, address, ZeroBlockBytes, tlb, tags, addend, data)) return false;
+    if (!ProbeDataTlb<true>(state, address, ZeroBlockBytes, tlb A64_UTLB_ARGS, data)) return false;
     std::memset(data, 0, ZeroBlockBytes);
     ClearOverlappingExclusive(state, address, ZeroBlockBytes);
     return true;
@@ -138,7 +138,7 @@ FIBERCPU_AARCH64_HANDLER_ABI int64_t SystemHandler(A64_HANDLER_PARAMS) {
     if constexpr (operation == SystemOp::Refetch) {
         return ReturnFromBlock(state, current, instr_limit, flags_cache A64_HANDLER_PIN_ARGS, {Stop::Refetch});
     } else if constexpr (operation == SystemOp::ZeroCacheLine) {
-        if (!ProbeZeroCacheLine(state, rd, registers, state.data_tlb, utlb_tags, utlb_addend)) [[unlikely]] {
+        if (!ProbeZeroCacheLine(state, rd, registers, state.data_tlb A64_UTLB_ARGS)) [[unlikely]] {
             A64_MEMORY_OP_GENERIC(current);
         }
     } else {

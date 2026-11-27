@@ -108,8 +108,10 @@ class Builder {
     llvm::Value* current_;
     llvm::Value* limit_;
     llvm::Value* tlb_;
+#if FIBERCPU_AARCH64_MICRO_TLB
     llvm::Value* tags_;
     llvm::Value* addend_;
+#endif
     llvm::Value* nzcv_;
     llvm::Value* target_;
     llvm::Value* next_op_;
@@ -175,8 +177,12 @@ class Builder {
     }
 
     void TailExit(llvm::FunctionCallee target, llvm::Value* remaining, llvm::Value* op) {
-        llvm::SmallVector<llvm::Value*, 6 + FIBERCPU_AARCH64_PIN_COUNT> args{
-            state_, op, remaining, Load64(tags_), Load64(addend_), ir_.CreateLoad(ir_.getInt32Ty(), nzcv_)};
+        llvm::SmallVector<llvm::Value*, 6 + FIBERCPU_AARCH64_PIN_COUNT> args{state_, op, remaining};
+#if FIBERCPU_AARCH64_MICRO_TLB
+        args.push_back(Load64(tags_));
+        args.push_back(Load64(addend_));
+#endif
+        args.push_back(ir_.CreateLoad(ir_.getInt32Ty(), nzcv_));
         for (auto* pin : pins_) args.push_back(Load64(pin));
         auto* call = ir_.CreateCall(target, args);
         call->setCallingConv(entry_.getCallingConv());
@@ -304,8 +310,10 @@ public:
         ir_.SetInsertPoint(Block("entry"));
         auto* tlb_field = ir_.CreateConstGEP1_64(ir_.getInt8Ty(), state_, offsetof(State, data_tlb));
         tlb_ = ir_.CreateLoad(ir_.getPtrTy(), tlb_field);
+#if FIBERCPU_AARCH64_MICRO_TLB
         tags_ = Saved(&*arg++, "tags");
         addend_ = Saved(&*arg++, "addend");
+#endif
         nzcv_ = Saved(&*arg++, "nzcv");
         target_ = Saved(ir_.getInt64(0), "branch.target");
         next_op_ = ir_.CreateAlloca(ir_.getPtrTy(), nullptr, "next.op");
@@ -454,8 +462,14 @@ public:
 
             auto* pc = PC(offset);
             llvm::SmallVector<llvm::Value*, 10 + FIBERCPU_AARCH64_PIN_COUNT> args{
-                state_,  slot,  ConstantOperands(module_, op),      pc,     tlb_, tags_,
-                addend_, nzcv_, ir_.getInt1((dead_flags >> i) & 1), target_};
+                state_, slot, ConstantOperands(module_, op), pc, tlb_};
+#if FIBERCPU_AARCH64_MICRO_TLB
+            args.push_back(tags_);
+            args.push_back(addend_);
+#endif
+            args.push_back(nzcv_);
+            args.push_back(ir_.getInt1((dead_flags >> i) & 1));
+            args.push_back(target_);
             for (auto* pin : pins_) args.push_back(pin);
             auto* flow = ir_.CreateCall(module_.getFunction(name), args);
             inline_calls_.push_back(flow);

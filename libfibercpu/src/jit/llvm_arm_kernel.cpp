@@ -2,11 +2,10 @@
 #include "aarch64/memory.h"
 #include "aarch64/operation_binding.h"
 
-#define ARM_OPERATION_KERNEL(Name)                                                                                 \
-    extern "C" OperationFlow FiberArmJit##Name(State& state, [[maybe_unused]] const DecodedOp& slot,               \
-                                               const DecodedInstruction& op, uint64_t pc, const mem::SoftTlb* tlb, \
-                                               uint64_t& tags, uintptr_t& addend, uint32_t& nzcv, bool dead,       \
-                                               uint64_t& target A64_HOT_PIN_REF)
+#define ARM_OPERATION_KERNEL(Name)                                                                       \
+    extern "C" OperationFlow FiberArmJit##Name(                                                          \
+        State& state, [[maybe_unused]] const DecodedOp& slot, const DecodedInstruction& op, uint64_t pc, \
+        const mem::SoftTlb* tlb A64_UTLB_REF_PARAMS, uint32_t& nzcv, bool dead, uint64_t& target A64_HOT_PIN_REF)
 
 namespace fiberish::aarch64::detail {
 
@@ -71,7 +70,7 @@ OperationFlow RunInteger(State& state, const DecodedOp& slot, const DecodedInstr
 #define ARM_MEMORY(Name, FallbackWidth)                                                                \
     ARM_OPERATION_KERNEL(Name) {                                                                       \
         const uint64_t address = Kind::Name == Kind::LoadLiteral ? GetExtraOperands(slot).primary : 0; \
-        return ProbeLoadStore<Kind::Name>(state, op, address, tlb, tags, addend A64_HANDLER_PIN_ARGS)  \
+        return ProbeLoadStore<Kind::Name>(state, op, address, tlb A64_UTLB_ARGS A64_HANDLER_PIN_ARGS)  \
                    ? OperationFlow::Continue                                                           \
                    : OperationFlow::Replay;                                                            \
     }

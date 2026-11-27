@@ -13,13 +13,12 @@ namespace fiberish::aarch64::detail {
     }
 
 template <VectorFamily family>
-[[gnu::always_inline]] inline OperationFlow ExecuteVectorOperation(State& state, const DecodedInstruction& op,
-                                                                   const mem::SoftTlb* tlb, uint64_t& tags,
-                                                                   uintptr_t& addend A64_HOT_PIN_REF) {
+[[gnu::always_inline]] inline OperationFlow ExecuteVectorOperation(
+    State& state, const DecodedInstruction& op, const mem::SoftTlb* tlb A64_UTLB_REF_PARAMS A64_HOT_PIN_REF) {
     const HotRegisters registers{state A64_HANDLER_PIN_ARGS};
     if constexpr (family == VectorFamily::Structure) {
         StepResult step;
-        [[clang::always_inline]] step = VectorStructure<true>(state, nullptr, op, registers, tlb, tags, addend);
+        [[clang::always_inline]] step = VectorStructure<true>(state, nullptr, op, registers, tlb A64_UTLB_ARGS);
         return step.reason == Stop::Continue ? OperationFlow::Continue : OperationFlow::Replay;
     } else {
         bool valid;
@@ -30,7 +29,7 @@ template <VectorFamily family>
 
 #define ARM_KERNELVector(Name)                                                                                \
     ARM_OPERATION_KERNEL(Vector##Name) {                                                                      \
-        return ExecuteVectorOperation<VectorFamily::Name>(state, op, tlb, tags, addend A64_HANDLER_PIN_ARGS); \
+        return ExecuteVectorOperation<VectorFamily::Name>(state, op, tlb A64_UTLB_ARGS A64_HANDLER_PIN_ARGS); \
     }
 #if (defined(__aarch64__) && !defined(_MSC_VER)) || FIBERCPU_AARCH64_SIMDE
 #define ARM_KERNELByteVector(Name)                             \

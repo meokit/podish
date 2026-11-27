@@ -122,8 +122,9 @@ FIBERCPU_AARCH64_HANDLER_ABI int64_t ResolveBranchTargetSlow(A64_HANDLER_PARAMS)
 #if FIBERCPU_LLVM_JIT
                 CountLLVMBlockEntry(state, *target, target->header.chain);
 #endif
-                ATTR_MUSTTAIL return target->header.entry(state, target->FirstOp(), instr_limit - target->inst_count(),
-                                                          utlb_tags, utlb_addend, flags_cache A64_HANDLER_PIN_ARGS);
+                ATTR_MUSTTAIL return target->header.entry(state, target->FirstOp(),
+                                                          instr_limit - target->inst_count() A64_UTLB_ARGS,
+                                                          flags_cache A64_HANDLER_PIN_ARGS);
             }
             // A known target that does not fit is a budget exit.
 #ifdef ENABLE_TLB_STATS
@@ -609,8 +610,8 @@ RunResult Run(State& state, const Memory& memory, uint64_t budget, const Profile
 #endif
             const auto batch = int64_t(std::min<uint64_t>(budget - executed, MaxBatch));
             const auto available = batch - frame.budget_reserve - 1;
-            const auto remaining = block->header.entry(state, slots, available - count, mem::InvalidMicroTlbAbiTags(),
-                                                       0, state.nzcv A64_HANDLER_PIN_INIT);
+            const auto remaining =
+                block->header.entry(state, slots, available - count A64_UTLB_INIT, state.nzcv A64_HANDLER_PIN_INIT);
             executed += uint64_t(available - remaining);
             step = frame.exit;
             stop_op = frame.exit_op;

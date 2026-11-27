@@ -24,7 +24,7 @@ FIBERCPU_AARCH64_HANDLER_ABI int64_t VectorHandler(A64_HANDLER_PARAMS) {
     const auto op = BaseInstruction(uint32_t(current->Operands()));
     const HotRegisters registers{state A64_HANDLER_PIN_ARGS};
     if constexpr (family == VectorFamily::Structure) {
-        auto step = VectorStructure<true>(state, nullptr, op, registers, state.data_tlb, utlb_tags, utlb_addend);
+        auto step = VectorStructure<true>(state, nullptr, op, registers, state.data_tlb A64_UTLB_ARGS);
         if (step.reason == Stop::Replay) [[unlikely]] {
             A64_MEMORY_OP_GENERIC(current);
         }

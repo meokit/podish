@@ -26,30 +26,29 @@ struct CachedAtomicTransfers {
 // Leave the slow edge in its caller. The threaded handler must tail-call
 // the memory replay, while the inlined JIT operation returns flow to its span.
 // Probe both permissions before changing registers or the exclusive monitor.
-#define A64_PREPARE_ATOMIC_ACCESS(on_alignment, on_replay)                                                         \
-    const auto address = registers.Read(op.rn, 64, true);                                                          \
-    const bool pair = !lse && (op.mode == ExclusivePair || op.mode == CompareSwapPair);                            \
-    const bool cas = !lse && (op.mode == CompareSwap || op.mode == CompareSwapPair);                               \
-    const bool exclusive = !lse && (op.mode == Exclusive || op.mode == ExclusivePair);                             \
-    const bool load = !lse && !cas && op.operation == Load;                                                        \
-    const unsigned size = op.width / 8 * (pair ? 2 : 1);                                                           \
-    if ((op.rn == 31 && (address & 15)) || (address & (size - 1))) [[unlikely]] {                                  \
-        on_alignment;                                                                                              \
-    }                                                                                                              \
-                                                                                                                   \
-    uint8_t* readable = nullptr;                                                                                   \
-    uint8_t* writable = nullptr;                                                                                   \
-    const bool unmatched_store =                                                                                   \
-        exclusive && !load && (state.exclusive_size != size || state.exclusive_address != address);                \
-    if (!unmatched_store) {                                                                                        \
-        if ((lse || cas || load || exclusive) &&                                                                   \
-            !ProbeDataTlb<false>(state, address, size, data_tlb, utlb_tags, utlb_addend, readable)) [[unlikely]] { \
-            on_replay;                                                                                             \
-        }                                                                                                          \
-        if (!load && !ProbeDataTlb<true>(state, address, size, data_tlb, utlb_tags, utlb_addend, writable))        \
-            [[unlikely]] {                                                                                         \
-            on_replay;                                                                                             \
-        }                                                                                                          \
+#define A64_PREPARE_ATOMIC_ACCESS(on_alignment, on_replay)                                                       \
+    const auto address = registers.Read(op.rn, 64, true);                                                        \
+    const bool pair = !lse && (op.mode == ExclusivePair || op.mode == CompareSwapPair);                          \
+    const bool cas = !lse && (op.mode == CompareSwap || op.mode == CompareSwapPair);                             \
+    const bool exclusive = !lse && (op.mode == Exclusive || op.mode == ExclusivePair);                           \
+    const bool load = !lse && !cas && op.operation == Load;                                                      \
+    const unsigned size = op.width / 8 * (pair ? 2 : 1);                                                         \
+    if ((op.rn == 31 && (address & 15)) || (address & (size - 1))) [[unlikely]] {                                \
+        on_alignment;                                                                                            \
+    }                                                                                                            \
+                                                                                                                 \
+    uint8_t* readable = nullptr;                                                                                 \
+    uint8_t* writable = nullptr;                                                                                 \
+    const bool unmatched_store =                                                                                 \
+        exclusive && !load && (state.exclusive_size != size || state.exclusive_address != address);              \
+    if (!unmatched_store) {                                                                                      \
+        if ((lse || cas || load || exclusive) &&                                                                 \
+            !ProbeDataTlb<false>(state, address, size, data_tlb A64_UTLB_ARGS, readable)) [[unlikely]] {         \
+            on_replay;                                                                                           \
+        }                                                                                                        \
+        if (!load && !ProbeDataTlb<true>(state, address, size, data_tlb A64_UTLB_ARGS, writable)) [[unlikely]] { \
+            on_replay;                                                                                           \
+        }                                                                                                        \
     }
 
 template <Kind kind>
@@ -78,8 +77,7 @@ FIBERCPU_AARCH64_HANDLER_ABI int64_t AtomicHandler(A64_HANDLER_PARAMS) {
 template <Kind kind>
 [[gnu::always_inline]] inline StepResult ProbeAtomicOperation(State& state, const DecodedInstruction& op,
                                                               const HotRegisters& registers,
-                                                              const mem::SoftTlb* data_tlb, uint64_t& utlb_tags,
-                                                              uintptr_t& utlb_addend) {
+                                                              const mem::SoftTlb* data_tlb A64_UTLB_REF_PARAMS) {
     constexpr bool lse = kind == Kind::LoadStoreAtomic;
     A64_PREPARE_ATOMIC_ACCESS(return Alignment(address, load ? Access::Read : Access::Write), return {Stop::Replay});
 

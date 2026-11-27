@@ -146,33 +146,33 @@ inline HandlerFunc TryChainBlock(State& state, const BasicBlock*& target, uint64
     return header.entry;
 }
 
-#define A64_DISPATCH_NEXT(next_slot)                                                                 \
-    do {                                                                                             \
-        const auto* a64_next = (next_slot);                                                          \
-        ATTR_MUSTTAIL return a64_next->handler(state, a64_next, instr_limit, utlb_tags, utlb_addend, \
-                                               flags_cache A64_HANDLER_PIN_ARGS);                    \
+#define A64_DISPATCH_NEXT(next_slot)                                                       \
+    do {                                                                                   \
+        const auto* a64_next = (next_slot);                                                \
+        ATTR_MUSTTAIL return a64_next->handler(state, a64_next, instr_limit A64_UTLB_ARGS, \
+                                               flags_cache A64_HANDLER_PIN_ARGS);          \
     } while (false)
 
-#define A64_MEMORY_OP_GENERIC(slot)                                                                          \
-    ATTR_MUSTTAIL return ::fiberish::aarch64::detail::MemoryOpGeneric(state, (slot), instr_limit, utlb_tags, \
-                                                                      utlb_addend, flags_cache A64_HANDLER_PIN_ARGS)
+#define A64_MEMORY_OP_GENERIC(slot)                                                                             \
+    ATTR_MUSTTAIL return ::fiberish::aarch64::detail::MemoryOpGeneric(state, (slot), instr_limit A64_UTLB_ARGS, \
+                                                                      flags_cache A64_HANDLER_PIN_ARGS)
 
 FIBERCPU_AARCH64_HANDLER_ABI int64_t ResolveBranchTargetSlow(A64_HANDLER_PARAMS);
 
-#define A64_RESOLVE_BRANCH_TARGET_INLINE(link, target_pc)                                                           \
-    do {                                                                                                            \
-        auto& a64_link = (link);                                                                                    \
-        const auto a64_target_pc = (target_pc);                                                                     \
-        const ::fiberish::aarch64::detail::BasicBlock* a64_target_block;                                            \
-        if (const auto a64_entry = ::fiberish::aarch64::detail::TryChainBlock(                                      \
-                state, a64_target_block, a64_link, a64_target_pc, instr_limit)) [[likely]] {                        \
-            ATTR_MUSTTAIL return a64_entry(state, a64_target_block->FirstOp(), instr_limit, utlb_tags, utlb_addend, \
-                                           flags_cache A64_HANDLER_PIN_ARGS);                                       \
-        }                                                                                                           \
-        auto& a64_frame = *state.active_run;                                                                        \
-        a64_frame.exit_link = &a64_link;                                                                            \
-        a64_frame.exit_target = a64_target_pc;                                                                      \
-        ATTR_MUSTTAIL return ::fiberish::aarch64::detail::ResolveBranchTargetSlow(A64_HANDLER_ARGS);                \
+#define A64_RESOLVE_BRANCH_TARGET_INLINE(link, target_pc)                                                 \
+    do {                                                                                                  \
+        auto& a64_link = (link);                                                                          \
+        const auto a64_target_pc = (target_pc);                                                           \
+        const ::fiberish::aarch64::detail::BasicBlock* a64_target_block;                                  \
+        if (const auto a64_entry = ::fiberish::aarch64::detail::TryChainBlock(                            \
+                state, a64_target_block, a64_link, a64_target_pc, instr_limit)) [[likely]] {              \
+            ATTR_MUSTTAIL return a64_entry(state, a64_target_block->FirstOp(), instr_limit A64_UTLB_ARGS, \
+                                           flags_cache A64_HANDLER_PIN_ARGS);                             \
+        }                                                                                                 \
+        auto& a64_frame = *state.active_run;                                                              \
+        a64_frame.exit_link = &a64_link;                                                                  \
+        a64_frame.exit_target = a64_target_pc;                                                            \
+        ATTR_MUSTTAIL return ::fiberish::aarch64::detail::ResolveBranchTargetSlow(A64_HANDLER_ARGS);      \
     } while (false)
 
 #define A64_RESOLVE_BRANCH_TARGET(target_pc)                                                           \
@@ -214,7 +214,7 @@ FIBERCPU_AARCH64_HANDLER_ABI inline int64_t MemoryOpGeneric(A64_HANDLER_PARAMS) 
 #endif
     const auto op = ReadScalarOp(*state.last_block, *current);
     auto step = CompleteStep(state, current, op.scalar_handler(state, memory, op));
-    utlb_tags = mem::InvalidMicroTlbAbiTags();
+    A64_UTLB_INVALIDATE();
     if (current->Has(UntrustedScalar)) {
         state.active_run->executable = nullptr;
         if (step.reason == Stop::Continue) step.reason = Stop::Refetch;
@@ -247,7 +247,7 @@ FIBERCPU_AARCH64_HANDLER_ABI int64_t RunScalarHandler(A64_HANDLER_PARAMS) {
         step = op.scalar_handler(state, memory, op);
     flags_cache = state.nzcv;
     ReloadDispatchPins(state A64_HANDLER_PIN_ARGS);
-    utlb_tags = mem::InvalidMicroTlbAbiTags();
+    A64_UTLB_INVALIDATE();
     if (step.reason == Stop::Continue) {
         step = CompleteStep(state, last, step);
         if (step.reason == Stop::Continue && !untrusted) A64_DISPATCH_NEXT(last->NextOp());
