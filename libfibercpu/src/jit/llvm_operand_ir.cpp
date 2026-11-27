@@ -1,5 +1,6 @@
 #include "jit/llvm_operand_ir.h"
 #include "exec_utils.h"
+#include "jit/llvm_ir_common.h"
 #include "jit/llvm_kernel_module.h"
 #include "state.h"
 
@@ -8,17 +9,13 @@
 #include <vector>
 
 #include <llvm/ADT/DenseMap.h>
-#include <llvm/ADT/SCCIterator.h>
 #include <llvm/ADT/SetVector.h>
 #include <llvm/ADT/SmallBitVector.h>
 #include <llvm/ADT/SmallPtrSet.h>
-#include <llvm/Analysis/AliasAnalysis.h>
 #include <llvm/Analysis/SimplifyQuery.h>
 #include <llvm/Analysis/ValueTracking.h>
-#include <llvm/ExecutionEngine/Orc/JITTargetMachineBuilder.h>
 #include <llvm/IR/CFG.h>
 #include <llvm/IR/Constants.h>
-#include <llvm/IR/Dominators.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/InstIterator.h>
 #include <llvm/IR/MDBuilder.h>
@@ -28,15 +25,11 @@
 #include <llvm/IR/Verifier.h>
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Support/KnownBits.h>
-#include <llvm/Support/TargetSelect.h>
-#include <llvm/Transforms/IPO/GlobalDCE.h>
 #include <llvm/Transforms/InstCombine/InstCombine.h>
-#include <llvm/Transforms/Scalar/InstSimplifyPass.h>
 #include <llvm/Transforms/Scalar/SROA.h>
 #include <llvm/Transforms/Scalar/SimplifyCFG.h>
 #include <llvm/Transforms/Utils/Cloning.h>
 #include <llvm/Transforms/Utils/Local.h>
-#include <llvm/Transforms/Utils/PromoteMemToReg.h>
 
 namespace fiberish {
 namespace {
@@ -761,114 +754,44 @@ void DeferredFlags::Lower(llvm::Function& entry) {
     for (auto* value : deferred) llvm::cast<llvm::Instruction>(value)->eraseFromParent();
 }
 
-bool OptimizeLLVMModule(llvm::Function& entry, bool prune_dead_globals, llvm::StringRef custom_pipeline,
-                        bool fold_operand_loads, llvm::function_ref<bool()> should_cancel = {}) {
-    if (should_cancel && should_cancel()) return false;
-    llvm::LoopAnalysisManager loops;
-    llvm::FunctionAnalysisManager functions;
-    llvm::CGSCCAnalysisManager call_graph;
-    llvm::ModuleAnalysisManager modules;
-    llvm::PassInstrumentationCallbacks callbacks;
-    if (should_cancel) {
-        callbacks.registerShouldRunOptionalPassCallback([&](llvm::StringRef, llvm::Any) { return !should_cancel(); });
-    }
-    llvm::PassBuilder passes(nullptr, llvm::PipelineTuningOptions(), std::nullopt,
-                             should_cancel ? &callbacks : nullptr);
-    passes.registerModuleAnalyses(modules);
-    passes.registerCGSCCAnalyses(call_graph);
-    passes.registerFunctionAnalyses(functions);
-    passes.registerLoopAnalyses(loops);
-    passes.crossRegisterProxies(loops, functions, call_graph, modules);
-    // Promote the C++ flags reference before lowering its symbolic producers.
-    llvm::FunctionPassManager promote;
-    promote.addPass(llvm::SROAPass(llvm::SROAOptions::ModifyCFG));
-    promote.addPass(llvm::SimplifyCFGPass());
-    promote.run(entry, functions);
-    if (should_cancel && should_cancel()) return false;
-    DeferredFlags().Lower(entry);
+bool OptimizeX86Module(llvm::Function& entry, bool prune_dead_globals, llvm::StringRef custom_pipeline,
+                       bool fold_operand_loads, llvm::function_ref<bool()> should_cancel = {}) {
+    const auto pre = [](llvm::Function& fn, llvm::FunctionAnalysisManager& functions) {
+        // Promote the C++ flags reference before lowering its symbolic producers.
+        llvm::FunctionPassManager promote;
+        promote.addPass(llvm::SROAPass(llvm::SROAOptions::ModifyCFG));
+        promote.addPass(llvm::SimplifyCFGPass());
+        promote.run(fn, functions);
+        DeferredFlags().Lower(fn);
 #ifdef FIBERCPU_LLVM_SHARED_REGION_EXITS
-    if (auto* pack = entry.getParent()->getFunction(kPackRegionFlags)) {
-        for (auto* user : llvm::make_early_inc_range(pack->users())) {
-            auto* call = llvm::cast<llvm::CallInst>(user);
-            call->replaceAllUsesWith(call->getArgOperand(0));
-            call->eraseFromParent();
+        if (auto* pack = fn.getParent()->getFunction(kPackRegionFlags)) {
+            for (auto* user : llvm::make_early_inc_range(pack->users())) {
+                auto* call = llvm::cast<llvm::CallInst>(user);
+                call->replaceAllUsesWith(call->getArgOperand(0));
+                call->eraseFromParent();
+            }
+            pack->eraseFromParent();
         }
-        pack->eraseFromParent();
-    }
 #endif
-    functions.clear(entry, entry.getName());
-    llvm::ModulePassManager pipeline;
-    // The copied kernels have already been inlined into the entry. Prune
-    // unreachable definitions before spending optimization time on them.
-    if (prune_dead_globals) pipeline.addPass(llvm::GlobalDCEPass());
-    if (custom_pipeline.empty()) {
-        pipeline.addPass(passes.buildPerModuleDefaultPipeline(llvm::OptimizationLevel::O2));
-    } else {
-        if (fold_operand_loads) pipeline.addPass(llvm::createModuleToFunctionPassAdaptor(llvm::InstSimplifyPass()));
-        // Resolve the constantized step and exit guards even for a minimal
-        // user pipeline. Unused template bodies must never reach codegen.
-        pipeline.addPass(llvm::createModuleToFunctionPassAdaptor(llvm::SimplifyCFGPass()));
-        if (auto error = passes.parsePassPipeline(pipeline, custom_pipeline)) {
-            llvm::logAllUnhandledErrors(std::move(error), llvm::errs(), "LLVM block pipeline: ");
-            return false;
-        }
-        pipeline.addPass(llvm::GlobalDCEPass());
-    }
-    pipeline.run(*entry.getParent(), modules);
-    if (should_cancel && should_cancel()) return false;
-    // Work on the optimized SSA so the result is independent of which guest
-    // kernels supplied or consumed this bit. Packed exit values stay live.
-    llvm::FunctionPassManager entry_passes;
-    entry_passes.addPass(ForwardPackedBitTestsPass());
-    entry_passes.run(entry, functions);
-    return !should_cancel || !should_cancel();
+    };
+    const auto post = [](llvm::Function& fn, llvm::FunctionAnalysisManager& functions) {
+        // Work on the optimized SSA so the result is independent of which guest
+        // kernels supplied or consumed this bit. Packed exit values stay live.
+        llvm::FunctionPassManager entry_passes;
+        entry_passes.addPass(ForwardPackedBitTestsPass());
+        entry_passes.run(fn, functions);
+    };
+    return OptimizeLLVMFunction(entry, {
+                                           .prune_dead_globals = prune_dead_globals,
+                                           .custom_pipeline = custom_pipeline,
+                                           .fold_operand_loads = fold_operand_loads,
+                                           .should_cancel = should_cancel,
+                                           .pre_pipeline = pre,
+                                           .post_pipeline = post,
+                                       });
 }
 
 }  // namespace
-
-#if FIBERCPU_GUEST_AARCH64 && FIBERCPU_LLVM_JIT
-bool OptimizeLLVMArmModule(llvm::Function& entry, llvm::StringRef pipeline, bool fold_operand_loads,
-                           llvm::function_ref<bool()> should_cancel) {
-    return OptimizeLLVMModule(entry, true, pipeline, fold_operand_loads, should_cancel);
-}
-#endif
-
-llvm::Expected<std::string> ParseLLVMBlockPipeline(llvm::StringRef level, llvm::StringRef passes) {
-    if (!level.empty() && !passes.empty())
-        return llvm::createStringError("select an LLVM optimization level or a pass pipeline");
-    if (!passes.empty()) {
-        llvm::PassBuilder builder;
-        llvm::ModulePassManager pipeline;
-        if (auto error = builder.parsePassPipeline(pipeline, passes)) return std::move(error);
-        return passes.str();
-    }
-    level.consume_front("-");
-    if (level.empty() || level == "O2") return std::string{};
-    if (level != "O0" && level != "O1" && level != "O3" && level != "Os" && level != "Oz")
-        return llvm::createStringError("invalid LLVM optimization level: %s", level.str().c_str());
-    return "default<" + level.str() + ">";
-}
-
-bool InitializeLLVMTarget() {
-    static const bool initialized = [] {
-        if (llvm::InitializeNativeTarget() || llvm::InitializeNativeTargetAsmPrinter()) return false;
-#if FIBERCPU_GUEST_AARCH64 && FIBERCPU_LLVM_JIT
-        // The A64 interpreter's kernels contain native NZCV instructions.
-        if (llvm::InitializeNativeTargetAsmParser()) return false;
-#endif
-        return true;
-    }();
-    return initialized;
-}
-
-llvm::Expected<std::unique_ptr<llvm::TargetMachine>> CreateLLVMObjectTarget(const llvm::Module& templates) {
-    auto target = llvm::orc::JITTargetMachineBuilder::detectHost();
-    if (!target) return target.takeError();
-    // Host CPU code generation with the deployment target embedded in the interpreter bitcode.
-    target->getTargetTriple() = templates.getTargetTriple();
-    target->setRelocationModel(llvm::Reloc::PIC_).setOptions(llvm::TargetOptions{});
-    return target->createTargetMachine();
-}
 
 LLVMOperandTemplates::LLVMOperandTemplates(const llvm::Module* module) : module_(module) {
     if (!module_) return;
@@ -1080,7 +1003,7 @@ std::unique_ptr<llvm::Module> PrepareLLVMBlock(const LLVMOperandTemplates& templ
     for (auto& function : *module) {
         if (&function != entry && !function.isDeclaration()) function.setLinkage(llvm::GlobalValue::InternalLinkage);
     }
-    if (!OptimizeLLVMModule(*entry, prune_dead_globals, custom_pipeline, fold_operand_loads, should_cancel) ||
+    if (!OptimizeX86Module(*entry, prune_dead_globals, custom_pipeline, fold_operand_loads, should_cancel) ||
         llvm::verifyModule(*module))
         return {};
     for (auto& inst : llvm::instructions(*entry)) {
@@ -1116,110 +1039,27 @@ llvm::Value* BlockPointerSlot(llvm::IRBuilder<>& builder, llvm::Value* state) {
     return builder.CreateGEP(builder.getInt8Ty(), state, builder.getInt64(offsetof(EmuState, last_block)));
 }
 
-llvm::LoadInst* LoadRegionField(llvm::IRBuilder<>& builder, llvm::Type* type, llvm::Value* field) {
-    // Publication fixes the member pointers and page for the table's lifetime.
-    auto* load = builder.CreateLoad(type, field);
-    load->setMetadata(llvm::LLVMContext::MD_invariant_load, llvm::MDNode::get(builder.getContext(), {}));
-    return load;
-}
-
 // A region can enter a cycle at any member. Promote independent context
 // fields across these edges even when the CFG has no single loop header.
 void PromoteRegionRegisters(llvm::Function& body, llvm::FunctionAnalysisManager& functions) {
-    llvm::SmallPtrSet<const llvm::BasicBlock*, 16> cyclic;
-    for (auto scc = llvm::scc_begin(&body); !scc.isAtEnd(); ++scc)
-        if (scc.hasCycle()) cyclic.insert(scc->begin(), scc->end());
-    if (cyclic.empty()) return;
-
     constexpr size_t kRegisterCount = sizeof(Context::regs) / sizeof(uint32_t);
     constexpr size_t kSegmentCount = sizeof(Context::seg_base) / sizeof(uint32_t);
     constexpr size_t kRegisterOffset = offsetof(EmuState, ctx) + offsetof(Context, regs);
     constexpr size_t kSegmentOffset = offsetof(EmuState, ctx) + offsetof(Context, seg_base);
-    constexpr auto offsets = [] {
+    static constexpr auto kOffsets = [] {
         std::array<size_t, kRegisterCount + kSegmentCount> result{};
         for (size_t i = 0; i < kRegisterCount; ++i) result[i] = kRegisterOffset + i * sizeof(uint32_t);
         for (size_t i = 0; i < kSegmentCount; ++i) result[kRegisterCount + i] = kSegmentOffset + i * sizeof(uint32_t);
         return result;
     }();
-    std::array<llvm::SmallVector<llvm::Instruction*, 8>, offsets.size()> accesses;
-    llvm::SmallVector<llvm::Instruction*, 32> memory;
-    llvm::SmallVector<llvm::Instruction*, 8> exits;
-    const auto& layout = body.getParent()->getDataLayout();
-    auto* state = body.getArg(0);
-    for (auto& inst : llvm::instructions(body)) {
-        if (auto* ret = llvm::dyn_cast<llvm::ReturnInst>(&inst)) {
-            auto* call = llvm::dyn_cast_or_null<llvm::CallInst>(ret->getPrevNonDebugInstruction());
-            exits.push_back(call && call->isMustTailCall() ? static_cast<llvm::Instruction*>(call) : ret);
-        }
-        if (auto* call = llvm::dyn_cast<llvm::CallInst>(&inst); call && call->isMustTailCall()) continue;
-        // The external chain header read is modeled as a memory barrier.
-        // Publish registers before it as well as before the continuation.
-        if (auto* load = llvm::dyn_cast<llvm::LoadInst>(&inst);
-            load && load->isVolatile() && load->getType()->isIntegerTy(128) && !cyclic.contains(load->getParent())) {
-            exits.push_back(load);
-            continue;
-        }
-        if (!inst.mayReadOrWriteMemory()) continue;
-        memory.push_back(&inst);
-
-        llvm::Value* ptr = nullptr;
-        if (auto* load = llvm::dyn_cast<llvm::LoadInst>(&inst);
-            load && load->isSimple() && load->getType()->isIntegerTy(32))
-            ptr = load->getPointerOperand();
-        else if (auto* store = llvm::dyn_cast<llvm::StoreInst>(&inst);
-                 store && store->isSimple() && store->getValueOperand()->getType()->isIntegerTy(32))
-            ptr = store->getPointerOperand();
-        int64_t offset = 0;
-        if (!ptr || llvm::GetPointerBaseWithConstantOffset(ptr, offset, layout) != state || offset < 0) continue;
-        auto field = std::ranges::find(offsets, static_cast<size_t>(offset));
-        if (field != offsets.end()) accesses[field - offsets.begin()].push_back(&inst);
-    }
-
-    auto& aa = functions.getResult<llvm::AAManager>(body);
-    llvm::SmallBitVector eligible(offsets.size()), written(offsets.size());
-    for (auto [slot, uses] : llvm::enumerate(accesses)) {
-        if (!std::ranges::any_of(uses, [&](auto* inst) { return cyclic.contains(inst->getParent()); })) continue;
-        written[slot] = std::ranges::any_of(uses, [](auto* inst) { return llvm::isa<llvm::StoreInst>(inst); });
-        const auto location = *llvm::MemoryLocation::getOrNone(uses.front());
-        // Other accesses, including narrow or merged accesses to these fields,
-        // can only remain in IR if they are independent of the promoted value.
-        eligible[slot] = std::ranges::none_of(memory, [&](auto* inst) {
-            if (llvm::is_contained(uses, inst)) return false;
-            if (auto other = llvm::MemoryLocation::getOrNone(inst); other && aa.isNoAlias(location, *other))
-                return false;
-            const auto effect = aa.getModRefInfo(inst, location);
-            return llvm::isModSet(effect) || (written[slot] && llvm::isRefSet(effect));
-        });
-    }
-
-    llvm::IRBuilder<> entry(&*body.getEntryBlock().getFirstInsertionPt());
-    llvm::SmallVector<llvm::AllocaInst*, 8> shadows;
-    for (auto slot : eligible.set_bits()) {
-        auto* field = entry.CreateConstGEP1_64(entry.getInt8Ty(), state, offsets[slot]);
-        auto* shadow = entry.CreateAlloca(entry.getInt32Ty());
-        entry.CreateStore(entry.CreateLoad(entry.getInt32Ty(), field), shadow);
-        shadows.push_back(shadow);
-        for (auto* inst : accesses[slot]) {
-            if (auto* load = llvm::dyn_cast<llvm::LoadInst>(inst)) {
-                load->setOperand(0, shadow);
-                load->setAlignment(llvm::Align(alignof(uint32_t)));
-            } else {
-                auto* store = llvm::cast<llvm::StoreInst>(inst);
-                store->setOperand(1, shadow);
-                store->setAlignment(llvm::Align(alignof(uint32_t)));
-            }
-            inst->setAAMetadata(llvm::AAMDNodes());
-        }
-        if (!written[slot]) continue;
-        for (auto* exit : exits) {
-            llvm::IRBuilder<> builder(exit);
-            builder.CreateStore(builder.CreateLoad(builder.getInt32Ty(), shadow), field);
-        }
-    }
-    if (shadows.empty()) return;
-    auto& dom = functions.getResult<llvm::DominatorTreeAnalysis>(body);
-    llvm::PromoteMemToReg(shadows, dom);
-    functions.invalidate(body, llvm::PreservedAnalyses::none());
+    PromoteCyclicStateFields(body,
+                             {
+                                 .field_bits = 32,
+                                 .offsets = kOffsets,
+                                 .use_alias_analysis = true,
+                                 .clear_aa_metadata = true,
+                             },
+                             &functions);
 }
 
 void BindCurrentBlock(llvm::Function& entry) {
@@ -1344,7 +1184,7 @@ void ShareRegionTailExits(llvm::Function& body, const llvm::DenseMap<llvm::CallI
         const bool inline_chain = chain && llvm::all_of(group, [&](auto* call) { return sources.contains(call); });
         auto* state = body.getArg(0);
         const auto restore_source = [&](llvm::IRBuilder<>& builder, llvm::Value* record) {
-            auto* block = LoadRegionField(builder, builder.getPtrTy(), record);
+            auto* block = LoadInvariantRegionField(builder, builder.getPtrTy(), record);
             builder.CreateStore(block, BlockPointerSlot(builder, state));
         };
         if (chain && !inline_chain) {
@@ -1475,16 +1315,9 @@ std::unique_ptr<llvm::Module> PrepareLLVMPageRegion(const LLVMOperandTemplates& 
     auto* bad_selector = llvm::BasicBlock::Create(context, "invalid.selector", body);
     llvm::IRBuilder<>(bad_selector).CreateUnreachable();
     llvm::IRBuilder<> builder(start);
-    auto* pointer_type = builder.getIntPtrTy(module->getDataLayout());
-    auto* tagged_table = builder.CreatePtrToInt(body->getArg(1), pointer_type);
-    auto* index = builder.CreateAnd(builder.CreateTruncOrBitCast(tagged_table, builder.getInt32Ty()),
-                                    builder.getInt32(Region::MemberMask), "member.index");
-    auto* table = builder.CreateIntToPtr(
-        builder.CreateAnd(tagged_table, llvm::ConstantInt::get(pointer_type, ~uint64_t{Region::MemberMask})),
-        builder.getPtrTy());
-    auto* page_field = builder.CreateConstGEP1_64(builder.getInt8Ty(), table, offsetof(Region, guest_page));
-    auto* page = builder.CreateTrunc(LoadRegionField(builder, builder.getInt64Ty(), page_field), builder.getInt32Ty(),
-                                     "guest.page");
+    const auto [index, table, page] =
+        DecodeRegionSelector(builder, body->getArg(1), Region::MemberMask, offsetof(Region, guest_page),
+                             builder.getInt32Ty(), builder.getInt32Ty());
     auto* state = body->getArg(0);
     auto* start_switch = builder.CreateSwitch(index, bad_selector, members.size());
 
@@ -1518,7 +1351,7 @@ std::unique_ptr<llvm::Module> PrepareLLVMPageRegion(const LLVMOperandTemplates& 
             args.push_back(supplied);
         }
         label.member_record = builder.CreateConstGEP1_64(builder.getPtrTy(), table, i);
-        auto* block = LoadRegionField(builder, builder.getPtrTy(), label.member_record);
+        auto* block = LoadInvariantRegionField(builder, builder.getPtrTy(), label.member_record);
         args[1] = builder.CreateGEP(builder.getInt8Ty(), block, builder.getInt64(kFirstOpOffset));
         auto* call = builder.CreateCall(member, args);
         call->setCallingConv(member->getCallingConv());
@@ -1564,7 +1397,7 @@ std::unique_ptr<llvm::Module> PrepareLLVMPageRegion(const LLVMOperandTemplates& 
             continue;
         }
 #endif
-        auto* block = LoadRegionField(builder, builder.getPtrTy(), record);
+        auto* block = LoadInvariantRegionField(builder, builder.getPtrTy(), record);
         builder.CreateStore(block, BlockPointerSlot(builder, state));
         call->eraseFromParent();
     }
@@ -1612,30 +1445,18 @@ std::unique_ptr<llvm::Module> PrepareLLVMPageRegion(const LLVMOperandTemplates& 
     ShareRegionTailExits(*body, chain_sources);
 #endif
 
+    llvm::SmallVector<size_t, 16> wrapper_offsets;
+    wrapper_offsets.reserve(members.size());
     for (auto [i, member] : llvm::enumerate(members)) {
         functions.clear(*member, member->getName());
         member->eraseFromParent();
-        auto* wrapper = llvm::Function::Create(body->getFunctionType(), llvm::GlobalValue::ExternalLinkage,
-                                               name + "_" + llvm::Twine(i), *module);
-        wrapper->setCallingConv(body->getCallingConv());
-        builder.SetInsertPoint(llvm::BasicBlock::Create(context, "entry", wrapper));
-        llvm::SmallVector<llvm::Value*, 9> args;
-        for (auto& arg : wrapper->args()) args.push_back(&arg);
         const auto& key = candidates[included[i]].key;
         size_t physical_count = 1;  // Include the sentinel.
         for (const auto& step : key.operations) physical_count += step.shape.slots;
-        const auto context_offset =
-            BasicBlock::SlotStorageSize(physical_count, physical_count > key.operations.size() + 1);
-        auto* slot = builder.CreateGEP(builder.getInt8Ty(), args[1], builder.getInt64(context_offset));
-        auto* table = builder.CreateAlignedLoad(builder.getPtrTy(), slot, llvm::Align(alignof(void*)));
-        auto* address = builder.CreatePtrToInt(table, pointer_type);
-        auto* tagged = builder.CreateOr(address, llvm::ConstantInt::get(pointer_type, i));
-        args[1] = builder.CreateIntToPtr(tagged, builder.getPtrTy());
-        auto* call = builder.CreateCall(body, args);
-        call->setCallingConv(body->getCallingConv());
-        call->setTailCallKind(llvm::CallInst::TCK_MustTail);
-        builder.CreateRet(call);
+        wrapper_offsets.push_back(
+            BasicBlock::SlotStorageSize(physical_count, physical_count > key.operations.size() + 1));
     }
+    EmitRegionEntryWrappers(*module, *body, name, wrapper_offsets);
 
     RemoveBlockMarkers(*module);
     LowerX86MemoryAccesses(*body, table);
@@ -1646,7 +1467,7 @@ std::unique_ptr<llvm::Module> PrepareLLVMPageRegion(const LLVMOperandTemplates& 
         if (!function.getName().starts_with(name)) function.setLinkage(llvm::GlobalValue::InternalLinkage);
     }
     const llvm::WeakTrackingVH page_base(page);
-    if (llvm::verifyModule(*module) || !OptimizeLLVMModule(*body, true, pipeline, fold_operand_loads, should_cancel))
+    if (llvm::verifyModule(*module) || !OptimizeX86Module(*body, true, pipeline, fold_operand_loads, should_cancel))
         return {};
     if (should_cancel && should_cancel()) return {};
     // CFG simplification can expose a constant target only after the region's edges have been built.

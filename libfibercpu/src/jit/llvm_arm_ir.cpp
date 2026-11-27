@@ -6,35 +6,24 @@
 #include <string>
 #include <utility>
 
-#include <llvm/ADT/PostOrderIterator.h>
-#include <llvm/ADT/SCCIterator.h>
 #include <llvm/ADT/SetVector.h>
-#include <llvm/Analysis/CFG.h>
-#include <llvm/Analysis/LoopInfo.h>
 #include <llvm/Bitcode/BitcodeReader.h>
-#include <llvm/IR/Dominators.h>
 #include <llvm/IR/IRBuilder.h>
-#include <llvm/IR/InstIterator.h>
-#include <llvm/IR/IntrinsicInst.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Verifier.h>
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Transforms/Utils/Cloning.h>
-#include <llvm/Transforms/Utils/PromoteMemToReg.h>
 
 #include "aarch64/block_operands.h"
 #include "aarch64/decoder.h"
 #include "aarch64/dispatch.h"
 #include "aarch64/flag_liveness.h"
 #include "aarch64/operation_binding.h"
+#include "jit/llvm_ir_common.h"
 #include "jit/llvm_kernel_module.h"
 #include "mem/page_region.h"
 
 namespace fiberish {
-
-bool OptimizeLLVMArmModule(llvm::Function& entry, llvm::StringRef pipeline, bool fold_operand_loads,
-                           llvm::function_ref<bool()> should_cancel = {});
-
 namespace arm_jit {
 namespace {
 using namespace aarch64;
@@ -93,100 +82,20 @@ unsigned EmittedStepCount(std::span<const Member> members, size_t index) {
 }
 
 void PromoteRegionGprs(llvm::Function& entry) {
-    llvm::DominatorTree dom(entry);
-    llvm::LoopInfo loops(dom);
-    llvm::ReversePostOrderTraversal<llvm::Function*> order(&entry);
-    if (!llvm::containsIrreducibleCFG<llvm::BasicBlock*>(order, loops)) return;
-
-    llvm::SmallPtrSet<llvm::BasicBlock*, 32> cyclic;
-    for (auto scc = llvm::scc_begin(&entry); !scc.isAtEnd(); ++scc)
-        if (scc.hasCycle()) cyclic.insert(scc->begin(), scc->end());
-
-    // LICM cannot promote GPR memory in cycles entered through several region
-    // members. Create scalar slots for those accesses and let mem2reg build
-    // SSA across the entry, internal edges and external exits.
-    struct Register {
-        llvm::SmallVector<llvm::Instruction*, 4> accesses;
-        bool whole = true;
-        bool in_cycle = false;
-        bool written = false;
-    };
-    constexpr size_t word_bytes = sizeof(uint64_t);
-    constexpr size_t gpr_count = 32;
-    static_assert(offsetof(State, x) == 0 && offsetof(State, sp) == (gpr_count - 1) * word_bytes);
-    std::array<Register, gpr_count> registers;
-    const auto& layout = entry.getDataLayout();
-    auto* state = entry.getArg(0);
-    llvm::SmallVector<std::pair<llvm::Value*, uint64_t>, 32> addresses{{state, 0}};
-    for (size_t i = 0; i < addresses.size(); ++i) {
-        const auto [address, offset] = addresses[i];
-        for (auto& use : address->uses()) {
-            auto* inst = llvm::cast<llvm::Instruction>(use.getUser());
-            if (auto* gep = llvm::dyn_cast<llvm::GetElementPtrInst>(inst)) {
-                llvm::APInt delta(layout.getIndexTypeSizeInBits(address->getType()), 0);
-                if (!gep->accumulateConstantOffset(layout, delta)) return;
-                addresses.emplace_back(gep, offset + delta.getZExtValue());
-                continue;
-            }
-            auto* load = llvm::dyn_cast<llvm::LoadInst>(inst);
-            auto* store = llvm::dyn_cast<llvm::StoreInst>(inst);
-            llvm::Type* type;
-            if (load) {
-                type = load->getType();
-            } else if (store && &use == &store->getOperandUse(1)) {
-                type = store->getValueOperand()->getType();
-            } else if (llvm::isa<llvm::AssumeInst>(inst) ||
-                       (llvm::isa<llvm::CallInst>(inst) && llvm::cast<llvm::CallInst>(inst)->isMustTailCall() &&
-                        &use == &inst->getOperandUse(0) && address == state)) {
-                continue;
-            } else {
-                // An unrecognized use may read or expose the register file.
-                return;
-            }
-            if (offset >= gpr_count * word_bytes) continue;
-            auto& reg = registers[offset / word_bytes];
-            if (offset % word_bytes == 0 && type->isIntegerTy(64) && (load ? load->isSimple() : store->isSimple())) {
-                reg.accesses.push_back(inst);
-                reg.in_cycle |= cyclic.contains(inst->getParent());
-                reg.written |= store != nullptr;
-            } else {
-                const auto size = layout.getTypeStoreSize(type);
-                const auto limit =
-                    size.isScalable()
-                        ? gpr_count
-                        : std::min<uint64_t>(gpr_count, (offset + size.getFixedValue() + word_bytes - 1) / word_bytes);
-                for (size_t j = offset / word_bytes; j < limit; ++j) registers[j].whole = false;
-            }
-        }
-    }
-
-    llvm::SmallVector<llvm::Instruction*, 8> exits;
-    for (auto& inst : llvm::instructions(entry)) {
-        if (const auto* call = llvm::dyn_cast<llvm::CallInst>(&inst); call && call->isMustTailCall())
-            exits.push_back(&inst);
-        else if (const auto* load = llvm::dyn_cast<llvm::LoadInst>(&inst);
-                 load && load->isVolatile() && load->getType()->isIntegerTy(128))
-            exits.push_back(&inst);
-    }
-
-    llvm::IRBuilder<> ir(&*entry.getEntryBlock().getFirstInsertionPt());
-    llvm::SmallVector<llvm::AllocaInst*, 8> slots;
-    for (size_t i = 0; i < registers.size(); ++i) {
-        const auto& reg = registers[i];
-        if (!reg.whole || !reg.in_cycle) continue;
-        auto* slot = ir.CreateAlloca(ir.getInt64Ty(), nullptr, "gpr");
-        auto* field = ir.CreateConstGEP1_64(ir.getInt8Ty(), state, i * word_bytes);
-        ir.CreateStore(ir.CreateLoad(ir.getInt64Ty(), field), slot);
-        slots.push_back(slot);
-        for (auto* inst : reg.accesses) inst->setOperand(llvm::isa<llvm::StoreInst>(inst) ? 1 : 0, slot);
-        if (reg.written) {
-            for (auto* exit : exits) {
-                llvm::IRBuilder<> out(exit);
-                out.CreateStore(out.CreateLoad(out.getInt64Ty(), slot), field);
-            }
-        }
-    }
-    llvm::PromoteMemToReg(slots, dom);
+    constexpr size_t kWordBytes = sizeof(uint64_t);
+    constexpr size_t kGprCount = 32;
+    static_assert(offsetof(State, x) == 0 && offsetof(State, sp) == (kGprCount - 1) * kWordBytes);
+    static constexpr auto kOffsets = [] {
+        std::array<size_t, kGprCount> result{};
+        for (size_t i = 0; i < kGprCount; ++i) result[i] = i * kWordBytes;
+        return result;
+    }();
+    PromoteCyclicStateFields(entry, {
+                                        .field_bits = 64,
+                                        .offsets = kOffsets,
+                                        .use_alias_analysis = false,
+                                        .clear_aa_metadata = false,
+                                    });
 }
 
 class Builder {
@@ -242,16 +151,10 @@ class Builder {
         return ir_.CreateConstGEP1_64(ir_.getInt8Ty(), first, -int64_t(sizeof(BasicBlock)));
     }
 
-    llvm::LoadInst* LoadRegionField(llvm::Type* type, llvm::Value* field) {
-        auto* load = ir_.CreateLoad(type, field);
-        // A published region's page and membership are fixed for this invocation.
-        load->setMetadata(llvm::LLVMContext::MD_invariant_load, llvm::MDNode::get(module_.getContext(), {}));
-        return load;
-    }
-
     llvm::Value* MemberFirst(size_t index) {
         auto* field = ir_.CreateConstGEP1_64(ir_.getPtrTy(), region_ops_, index);
-        return ir_.CreateConstGEP1_64(ir_.getInt8Ty(), LoadRegionField(ir_.getPtrTy(), field), sizeof(BasicBlock));
+        return ir_.CreateConstGEP1_64(ir_.getInt8Ty(), LoadInvariantRegionField(ir_, ir_.getPtrTy(), field),
+                                      sizeof(BasicBlock));
     }
 
     void PublishMember(llvm::Value* first) {
@@ -297,26 +200,10 @@ class Builder {
     }
 
     void RegionWrappers(llvm::StringRef name, std::span<const Member> members) {
-        for (size_t i = 0; i < members.size(); ++i) {
-            auto* wrapper = llvm::Function::Create(entry_.getFunctionType(), llvm::GlobalValue::ExternalLinkage,
-                                                   name + "_" + llvm::Twine(i), module_);
-            wrapper->setCallingConv(entry_.getCallingConv());
-            wrapper->addFnAttr(llvm::Attribute::NoUnwind);
-            ir_.SetInsertPoint(llvm::BasicBlock::Create(module_.getContext(), "entry", wrapper));
-            llvm::SmallVector<llvm::Value*, 8> args;
-            for (auto& arg : wrapper->args()) args.push_back(&arg);
-            auto* context = ir_.CreateConstGEP1_64(ir_.getInt8Ty(), args[1],
-                                                   BasicBlock::RegionContextOffset(members[i].SlotCount()));
-            auto* table = ir_.CreateLoad(ir_.getPtrTy(), context);
-            // The threaded ABI has no branch argument. The internal body
-            // receives the table and member number in the same op argument.
-            auto* selector = ir_.CreateOr(ir_.CreatePtrToInt(table, ir_.getInt64Ty()), ir_.getInt64(i));
-            args[1] = ir_.CreateIntToPtr(selector, ir_.getPtrTy());
-            auto* call = ir_.CreateCall(&entry_, args);
-            call->setCallingConv(entry_.getCallingConv());
-            call->setTailCallKind(llvm::CallInst::TCK_MustTail);
-            ir_.CreateRet(call);
-        }
+        llvm::SmallVector<size_t, 16> offsets;
+        offsets.reserve(members.size());
+        for (const auto& member : members) offsets.push_back(BasicBlock::RegionContextOffset(member.SlotCount()));
+        EmitRegionEntryWrappers(module_, entry_, name, offsets);
     }
 
     void ExitMember(const char* name, llvm::Value* slot, llvm::Value* pc) {
@@ -426,12 +313,11 @@ public:
         if (members.size() > 1) {
             entry_.addFnAttr(llvm::Attribute::NoInline);
             using Region = mem::PageRegion<BasicBlock>;
-            constexpr uint64_t member_mask = Region::MemberMask;
-            auto* input = ir_.CreatePtrToInt(current_, ir_.getInt64Ty());
-            selector = ir_.CreateAnd(input, ir_.getInt64(member_mask));
-            region_ops_ = ir_.CreateIntToPtr(ir_.CreateAnd(input, ir_.getInt64(~member_mask)), ir_.getPtrTy());
-            auto* page_field = ir_.CreateConstGEP1_64(ir_.getInt8Ty(), region_ops_, offsetof(Region, guest_page));
-            page_ = LoadRegionField(ir_.getInt64Ty(), page_field);
+            const auto decoded = DecodeRegionSelector(ir_, current_, Region::MemberMask, offsetof(Region, guest_page),
+                                                      ir_.getInt64Ty(), ir_.getInt64Ty());
+            selector = decoded.index;
+            region_ops_ = decoded.table;
+            page_ = decoded.page;
         }
         leave_ = Block("leave");
 
@@ -625,7 +511,13 @@ public:
         }
         if (should_cancel && should_cancel()) return false;
         if (llvm::verifyModule(module_, &llvm::errs()) ||
-            !OptimizeLLVMArmModule(entry_, pipeline, fold_operand_loads, should_cancel) ||
+            !OptimizeLLVMFunction(entry_,
+                                  {
+                                      .prune_dead_globals = true,
+                                      .custom_pipeline = pipeline,
+                                      .fold_operand_loads = fold_operand_loads,
+                                      .should_cancel = should_cancel,
+                                  }) ||
             (should_cancel && should_cancel()))
             return false;
         if (region_ops_ && pipeline.empty()) PromoteRegionGprs(entry_);

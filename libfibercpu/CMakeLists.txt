@@ -944,7 +944,7 @@ ${setting}=${${setting}}")
     file(GLOB_RECURSE _linked_abi_sources RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}"
         CONFIGURE_DEPENDS "src/*.h")
     list(APPEND _linked_abi_sources CMakeLists.txt cmake/BakingPresets.cmake src/decoder.cpp src/jit/block_recipe.cpp src/jit/llvm_block_ir.cpp
-        src/jit/llvm_block_jit.cpp src/jit/llvm_operand_ir.cpp ../scripts/gen_instruction_catalog.py)
+        src/jit/llvm_block_jit.cpp src/jit/llvm_ir_common.h src/jit/llvm_ir_common.cpp src/jit/llvm_operand_ir.cpp ../scripts/gen_instruction_catalog.py)
     foreach(source IN LISTS _linked_abi_sources)
         set(path "${CMAKE_CURRENT_SOURCE_DIR}/${source}")
         set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${path}")
@@ -1001,18 +1001,42 @@ if(FIBERCPU_DYNAMIC_OPERANDS OR FIBERCPU_ENABLE_LLVM_JIT)
         llvm_map_components_to_libnames(_llvm_components native orcjit passes)
     endif()
 
-    if(FIBERCPU_GUEST_I386)
-        add_library(fibercpu_block_ir OBJECT src/jit/llvm_block_ir.cpp)
-        add_dependencies(fibercpu_block_ir fibercpu_instruction_catalog)
-        set_target_properties(fibercpu_block_ir PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF POSITION_INDEPENDENT_CODE ON)
-        target_compile_definitions(fibercpu_block_ir PRIVATE $<TARGET_PROPERTY:fibercpu_core,COMPILE_DEFINITIONS>)
-        target_compile_options(fibercpu_block_ir PRIVATE $<TARGET_PROPERTY:fibercpu_core,COMPILE_OPTIONS>
+    function(fibercpu_add_llvm_template_ir target source)
+        cmake_parse_arguments(ARG "" "" "DEPENDS;DEFINITIONS;INCLUDE_DIRS" ${ARGN})
+        add_library(${target} OBJECT "${source}")
+        if(ARG_DEPENDS)
+            add_dependencies(${target} ${ARG_DEPENDS})
+        endif()
+        set_target_properties(${target} PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF POSITION_INDEPENDENT_CODE ON)
+        target_compile_definitions(${target} PRIVATE $<TARGET_PROPERTY:fibercpu_core,COMPILE_DEFINITIONS> ${ARG_DEFINITIONS})
+        target_compile_options(${target} PRIVATE $<TARGET_PROPERTY:fibercpu_core,COMPILE_OPTIONS>
             -O1 -fno-lto -fno-stack-protector -emit-llvm)
-        target_include_directories(fibercpu_block_ir PRIVATE $<TARGET_PROPERTY:fibercpu_core,INCLUDE_DIRECTORIES>)
-        target_link_libraries(fibercpu_block_ir PRIVATE unordered_dense::unordered_dense)
+        target_include_directories(${target} PRIVATE ${ARG_INCLUDE_DIRS} $<TARGET_PROPERTY:fibercpu_core,INCLUDE_DIRECTORIES>)
+        target_link_libraries(${target} PRIVATE unordered_dense::unordered_dense)
+    endfunction()
+
+    function(fibercpu_embed_llvm_template_bitcode target output)
+        set(_embed_script "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/embed_llvm_bitcode.py")
+        get_filename_component(_output_dir "${output}" DIRECTORY)
+        add_custom_command(OUTPUT "${output}"
+            COMMAND "${CMAKE_COMMAND}" -E make_directory "${_output_dir}"
+            COMMAND "${Python3_EXECUTABLE}" "${_embed_script}" $<TARGET_OBJECTS:${target}> "${output}"
+            DEPENDS ${target} $<TARGET_OBJECTS:${target}> "${_embed_script}"
+            COMMAND_EXPAND_LISTS VERBATIM)
+        target_sources(fibercpu PRIVATE "${output}")
+    endfunction()
+
+    if(FIBERCPU_GUEST_I386)
+        set(_block_ir_defs "")
+        if(FIBERCPU_ENABLE_LLVM_JIT AND FIBERCPU_LLVM_SHARED_REGION_EXITS)
+            list(APPEND _block_ir_defs FIBERCPU_LLVM_SHARED_REGION_EXITS=1)
+        endif()
+        fibercpu_add_llvm_template_ir(fibercpu_block_ir src/jit/llvm_block_ir.cpp
+            DEPENDS fibercpu_instruction_catalog
+            DEFINITIONS ${_block_ir_defs})
     endif()
 
-    add_library(fibercpu_llvm_codegen OBJECT src/jit/llvm_operand_ir.cpp)
+    add_library(fibercpu_llvm_codegen OBJECT src/jit/llvm_ir_common.cpp src/jit/llvm_operand_ir.cpp)
     set_target_properties(fibercpu_llvm_codegen PROPERTIES POSITION_INDEPENDENT_CODE ON)
     add_dependencies(fibercpu_llvm_codegen fibercpu_instruction_catalog)
     target_compile_definitions(fibercpu_llvm_codegen PRIVATE $<TARGET_PROPERTY:fibercpu_core,COMPILE_DEFINITIONS>)
@@ -1021,7 +1045,6 @@ if(FIBERCPU_DYNAMIC_OPERANDS OR FIBERCPU_ENABLE_LLVM_JIT)
     target_link_libraries(fibercpu_llvm_codegen PRIVATE unordered_dense::unordered_dense)
 
     if(FIBERCPU_ENABLE_LLVM_JIT AND FIBERCPU_GUEST_I386 AND FIBERCPU_LLVM_SHARED_REGION_EXITS)
-        target_compile_definitions(fibercpu_block_ir PRIVATE FIBERCPU_LLVM_SHARED_REGION_EXITS=1)
         target_compile_definitions(fibercpu_llvm_codegen PRIVATE FIBERCPU_LLVM_SHARED_REGION_EXITS=1)
     endif()
 
@@ -1075,15 +1098,8 @@ if(FIBERCPU_DYNAMIC_OPERANDS)
 endif()
 
 if(FIBERCPU_ENABLE_LLVM_JIT)
-    set(_embed_script "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/embed_llvm_bitcode.py")
     if(FIBERCPU_GUEST_I386)
-        set(_llvm_bitcode "${_llvm_dir}/llvm_block_bitcode.inc")
-        add_custom_command(OUTPUT "${_llvm_bitcode}"
-            COMMAND "${CMAKE_COMMAND}" -E make_directory "${_llvm_dir}"
-            COMMAND "${Python3_EXECUTABLE}" "${_embed_script}" $<TARGET_OBJECTS:fibercpu_block_ir> "${_llvm_bitcode}"
-            DEPENDS fibercpu_block_ir $<TARGET_OBJECTS:fibercpu_block_ir> "${_embed_script}"
-            COMMAND_EXPAND_LISTS VERBATIM)
-        target_sources(fibercpu PRIVATE "${_llvm_bitcode}")
+        fibercpu_embed_llvm_template_bitcode(fibercpu_block_ir "${_llvm_dir}/llvm_block_bitcode.inc")
     endif()
     target_compile_definitions(fibercpu_core PRIVATE FIBERCPU_LLVM_JIT=1)
     target_compile_definitions(fibercpu PRIVATE FIBERCPU_LLVM_JIT=1)
@@ -1091,20 +1107,9 @@ if(FIBERCPU_ENABLE_LLVM_JIT)
     target_include_directories(fibercpu SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
     target_sources(fibercpu PRIVATE src/jit/llvm_block_jit.cpp src/jit/llvm_block_memory.cpp)
     if(FIBERCPU_GUEST_AARCH64)
-        add_library(fibercpu_arm_block_ir OBJECT src/jit/llvm_arm_kernel.cpp)
-        set_target_properties(fibercpu_arm_block_ir PROPERTIES INTERPROCEDURAL_OPTIMIZATION OFF POSITION_INDEPENDENT_CODE ON)
-        target_compile_definitions(fibercpu_arm_block_ir PRIVATE $<TARGET_PROPERTY:fibercpu_core,COMPILE_DEFINITIONS>)
-        target_compile_options(fibercpu_arm_block_ir PRIVATE $<TARGET_PROPERTY:fibercpu_core,COMPILE_OPTIONS>
-            -O1 -fno-lto -fno-stack-protector -emit-llvm)
-        target_include_directories(fibercpu_arm_block_ir PRIVATE src $<TARGET_PROPERTY:fibercpu_core,INCLUDE_DIRECTORIES>)
-        target_link_libraries(fibercpu_arm_block_ir PRIVATE unordered_dense::unordered_dense)
-        set(_arm_bitcode "${_llvm_dir}/llvm_arm_bitcode.inc")
-        add_custom_command(OUTPUT "${_arm_bitcode}"
-            COMMAND "${CMAKE_COMMAND}" -E make_directory "${_llvm_dir}"
-            COMMAND "${Python3_EXECUTABLE}" "${_embed_script}" $<TARGET_OBJECTS:fibercpu_arm_block_ir> "${_arm_bitcode}"
-            DEPENDS fibercpu_arm_block_ir $<TARGET_OBJECTS:fibercpu_arm_block_ir> "${_embed_script}"
-            COMMAND_EXPAND_LISTS VERBATIM)
-        target_sources(fibercpu PRIVATE src/jit/llvm_arm_ir.cpp src/jit/llvm_arm_jit.cpp "${_arm_bitcode}")
+        fibercpu_add_llvm_template_ir(fibercpu_arm_block_ir src/jit/llvm_arm_kernel.cpp INCLUDE_DIRS src)
+        fibercpu_embed_llvm_template_bitcode(fibercpu_arm_block_ir "${_llvm_dir}/llvm_arm_bitcode.inc")
+        target_sources(fibercpu PRIVATE src/jit/llvm_arm_ir.cpp src/jit/llvm_arm_jit.cpp)
         set_property(SOURCE src/jit/llvm_arm_ir.cpp APPEND PROPERTY COMPILE_DEFINITIONS
             FIBERCPU_LLVM_SHARED_REGION_EXITS=$<BOOL:${FIBERCPU_LLVM_SHARED_REGION_EXITS}>)
     endif()

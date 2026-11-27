@@ -10,17 +10,15 @@
 #include <llvm/Support/Error.h>
 
 #include "jit/block_recipe.h"
+#include "jit/llvm_ir_common.h"
 
 namespace llvm {
 class Module;
 class Function;
-class TargetMachine;
 }  // namespace llvm
 
 namespace fiberish {
 
-bool InitializeLLVMTarget();
-llvm::Expected<std::unique_ptr<llvm::TargetMachine>> CreateLLVMObjectTarget(const llvm::Module& templates);
 class LLVMOperandTemplates {
 public:
     explicit LLVMOperandTemplates(const llvm::Module* module);
@@ -34,8 +32,6 @@ private:
     bool valid_ = false;
     std::array<const llvm::Function*, block_recipe::kOpIdCount * 2> functions_{};
 };
-
-llvm::Expected<std::string> ParseLLVMBlockPipeline(llvm::StringRef level, llvm::StringRef passes);
 
 std::unique_ptr<llvm::Module> PrepareLLVMBlock(const LLVMOperandTemplates& templates, block_recipe::BlockKeyView key,
                                                llvm::StringRef entry_name, bool prune_dead_globals = false,
