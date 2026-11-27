@@ -320,8 +320,13 @@ public:
         leave_op_ = ir_.CreatePHI(ir_.getPtrTy(), unsigned(members.size()), "resume.op");
 
         std::vector<llvm::BasicBlock*> bodies;
+        std::vector<llvm::BasicBlock*> run_bodies;
         bodies.reserve(members.size());
-        for (size_t i = 0; i < members.size(); ++i) bodies.push_back(Block("member"));
+        run_bodies.reserve(members.size());
+        for (size_t i = 0; i < members.size(); ++i) {
+            bodies.push_back(Block("member"));
+            run_bodies.push_back(members.size() > 1 ? Block("region.run") : bodies.back());
+        }
 
         if (region_ops_) {
             auto* unreachable = Block("invalid.entry");
@@ -335,35 +340,33 @@ public:
                 entry_switch->addCase(ir_.getInt64(i), target);
                 ir_.SetInsertPoint(target);
                 ir_.CreateStore(ir_.CreateAdd(limit_, ir_.getInt64(member.steps.size())), remaining_);
-                ir_.CreateBr(bodies[i]);
+                // The caller already verified and charged the entry member.
+                ir_.CreateBr(run_bodies[i]);
             }
         } else {
             ir_.SetInsertPoint(entry_dispatch);
-            ir_.CreateBr(bodies.front());
+            ir_.CreateBr(run_bodies.front());
         }
 
         for (size_t i = 0; i < members.size(); ++i) {
-            ir_.SetInsertPoint(bodies[i]);
             auto* first = current_;
             if (members.size() > 1) {
+                ir_.SetInsertPoint(bodies[i]);
+                auto* exhausted = Block("region.budget");
+                ir_.CreateCondBr(ir_.CreateICmpSGE(Load64(remaining_), ir_.getInt64(0)), run_bodies[i], exhausted);
+                ir_.SetInsertPoint(exhausted);
+                auto* exit_block =
+                    ir_.CreateLoad(ir_.getPtrTy(), ir_.CreateConstGEP1_64(ir_.getPtrTy(), region_ops_, i));
+                Leave(PC(members[i].offset), ir_.CreateConstGEP1_64(ir_.getInt8Ty(), exit_block, sizeof(BasicBlock)));
+
+                ir_.SetInsertPoint(run_bodies[i]);
                 auto* record = ir_.CreateConstGEP1_64(ir_.getPtrTy(), region_ops_, i);
                 auto* block = ir_.CreateLoad(ir_.getPtrTy(), record);
                 auto* last_block = ir_.CreateConstGEP1_64(ir_.getInt8Ty(), state_, offsetof(State, last_block));
                 ir_.CreateStore(block, last_block);
                 first = ir_.CreateConstGEP1_64(ir_.getInt8Ty(), block, sizeof(BasicBlock));
-                auto* body = Block("region.run");
-                auto* exhausted = Block("region.budget");
-                auto* reserve = Block("region.budget.reserve");
-                auto* remaining = Load64(remaining_);
-                ir_.CreateCondBr(ir_.CreateICmpSGE(remaining, ir_.getInt64(0)), body, reserve);
-                ir_.SetInsertPoint(reserve);
-                auto* enough = ir_.CreateCall(module_.getFunction("FiberArmJitCanChainWithinReserve"),
-                                              {state_, remaining, ir_.getInt32(members[i].steps.size())});
-                inline_calls_.push_back(enough);
-                ir_.CreateCondBr(enough, body, exhausted);
-                ir_.SetInsertPoint(exhausted);
-                Leave(PC(members[i].offset), first);
-                ir_.SetInsertPoint(body);
+            } else {
+                ir_.SetInsertPoint(run_bodies[i]);
             }
             EmitMember(members, bodies, members[i], first);
         }
@@ -519,7 +522,6 @@ std::unique_ptr<llvm::Module> Prepare(std::span<const Member> members, llvm::Str
     llvm::SmallSetVector<const llvm::Function*, 32> kernels;
     kernels.insert(source.getFunction("FiberArmJitABI"));
     kernels.insert(source.getFunction("FiberArmJitTryLink"));
-    if (members.size() > 1) kernels.insert(source.getFunction("FiberArmJitCanChainWithinReserve"));
     for (const auto& member : members) {
         for (const auto& step : member.steps) {
             const auto binding = BindOperation(DecodeFields(step.word));

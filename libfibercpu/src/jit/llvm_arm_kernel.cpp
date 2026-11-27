@@ -16,10 +16,6 @@ extern "C" FIBERCPU_AARCH64_HANDLER_ABI int64_t FiberArmJitABI(A64_HANDLER_PARAM
     ATTR_MUSTTAIL return FiberArmJitRetry(A64_HANDLER_ARGS);
 }
 
-extern "C" bool FiberArmJitCanChainWithinReserve(State& state, int64_t remaining, unsigned count) {
-    return remaining + state.active_run->budget_reserve + 1 >= count;
-}
-
 extern "C" HandlerFunc FiberArmJitTryLink(State& state, const DecodedOp* sentinel, int64_t& remaining,
                                           const DecodedOp*& next, uint64_t indirect_pc, BlockExitLink kind) {
     auto* link = &sentinel->payload;
