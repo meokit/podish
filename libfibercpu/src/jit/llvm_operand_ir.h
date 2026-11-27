@@ -1,10 +1,10 @@
 #pragma once
 
+#include <array>
 #include <memory>
 #include <string>
 #include <vector>
 
-#include <llvm/ADT/SmallPtrSet.h>
 #include <llvm/ADT/StringRef.h>
 #include <llvm/Support/Error.h>
 
@@ -13,8 +13,6 @@
 namespace llvm {
 class Module;
 class Function;
-class GlobalValue;
-class GlobalVariable;
 class TargetMachine;
 }  // namespace llvm
 
@@ -26,16 +24,14 @@ class LLVMOperandTemplates {
 public:
     explicit LLVMOperandTemplates(const llvm::Module* module);
 
-    bool IsValid() const { return table_ != nullptr; }
+    bool IsValid() const { return valid_; }
     const llvm::Module& Module() const { return *module_; }
     const llvm::Function* Get(block_recipe::OpId id, bool exact) const;
-    bool IsTemplateGlobal(const llvm::GlobalValue* value) const;
 
 private:
     const llvm::Module* module_;
-    const llvm::GlobalVariable* table_ = nullptr;
+    bool valid_ = false;
     std::array<const llvm::Function*, block_recipe::kOpIdCount * 2> functions_{};
-    llvm::SmallPtrSet<const llvm::GlobalValue*, 32> kernels_;
 };
 
 llvm::Expected<std::string> ParseLLVMBlockPipeline(llvm::StringRef level, llvm::StringRef passes);

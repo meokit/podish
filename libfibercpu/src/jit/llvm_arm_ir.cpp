@@ -19,6 +19,7 @@
 #include "aarch64/dispatch.h"
 #include "aarch64/flag_liveness.h"
 #include "aarch64/operation_binding.h"
+#include "jit/llvm_kernel_module.h"
 #include "mem/page_region.h"
 
 namespace fiberish {
@@ -44,80 +45,6 @@ struct Templates {
             module = std::move(*parsed);
         else
             llvm::logAllUnhandledErrors(parsed.takeError(), llvm::errs(), "A64 JIT: ");
-    }
-};
-
-// Copy only the selected kernels and the globals they actually reference.
-// Even the declaration shells for other kernels grow with the operation
-// catalog, while most recipes need only a few entries.
-class KernelModule final : private llvm::ValueMaterializer {
-    std::unique_ptr<llvm::Module> module_;
-    llvm::ValueToValueMapTy mappings_;
-    llvm::SmallVector<const llvm::GlobalValue*, 16> pending_;
-
-    llvm::Value* materialize(llvm::Value* value) override {
-        if (const auto* function = llvm::dyn_cast<llvm::Function>(value)) {
-            auto* copy = llvm::Function::Create(function->getFunctionType(), function->getLinkage(),
-                                                function->getAddressSpace(), function->getName(), module_.get());
-            copy->copyAttributesFrom(function);
-            if (!function->isDeclaration()) pending_.push_back(function);
-            return copy;
-        }
-        if (const auto* global = llvm::dyn_cast<llvm::GlobalVariable>(value)) {
-            auto* copy =
-                new llvm::GlobalVariable(*module_, global->getValueType(), global->isConstant(), global->getLinkage(),
-                                         nullptr, global->getName(), nullptr, global->getThreadLocalMode(),
-                                         global->getAddressSpace(), global->isExternallyInitialized());
-            copy->copyAttributesFrom(global);
-            pending_.push_back(global);
-            return copy;
-        }
-        return nullptr;
-    }
-
-public:
-    std::unique_ptr<llvm::Module> Clone(const llvm::Module& source, llvm::ArrayRef<const llvm::Function*> kernels) {
-        // Apple ARM bitcode has no aliases, ifuncs, module initializers or
-        // explicit symbol retention. Keep LLVM's full clone for those cases.
-        if (!source.alias_empty() || !source.ifunc_empty() || source.getNamedGlobal("llvm.global_ctors") ||
-            source.getNamedGlobal("llvm.global_dtors") || source.getNamedGlobal("llvm.used") ||
-            source.getNamedGlobal("llvm.compiler.used"))
-            return llvm::CloneModule(source);
-
-        module_ = std::make_unique<llvm::Module>(source.getModuleIdentifier(), source.getContext());
-        module_->setDataLayout(source.getDataLayout());
-        module_->setTargetTriple(source.getTargetTriple());
-        module_->setSourceFileName(source.getSourceFileName());
-        module_->setModuleInlineAsm(source.getModuleInlineAsm());
-        for (const auto* kernel : kernels) llvm::MapValue(kernel, mappings_, llvm::RF_None, nullptr, this);
-        for (const auto& named : source.named_metadata()) {
-            auto* copy = module_->getOrInsertNamedMetadata(named.getName());
-            for (const auto* node : named.operands())
-                copy->addOperand(llvm::MapMetadata(node, mappings_, llvm::RF_None, nullptr, this));
-        }
-
-        // Mapping each definition may append further definitions to the queue.
-        for (size_t i = 0; i < pending_.size(); ++i) {
-            if (const auto* function = llvm::dyn_cast<llvm::Function>(pending_[i])) {
-                auto* copy = llvm::cast<llvm::Function>(mappings_.lookup(function));
-                auto arg = copy->arg_begin();
-                for (const auto& old_arg : function->args()) {
-                    arg->setName(old_arg.getName());
-                    mappings_[&old_arg] = &*arg++;
-                }
-                llvm::SmallVector<llvm::ReturnInst*, 4> returns;
-                llvm::CloneFunctionInto(copy, function, mappings_, llvm::CloneFunctionChangeType::ClonedModule, returns,
-                                        "", nullptr, nullptr, this);
-            } else {
-                const auto* global = llvm::cast<llvm::GlobalVariable>(pending_[i]);
-                auto* copy = llvm::cast<llvm::GlobalVariable>(mappings_.lookup(global));
-                llvm::ValueMapper mapper(mappings_, llvm::RF_None, nullptr, this);
-                if (global->hasInitializer()) copy->setInitializer(mapper.mapConstant(*global->getInitializer()));
-                copy->copyMetadata(global, 0);
-                mapper.remapGlobalObjectMetadata(*copy);
-            }
-        }
-        return std::move(module_);
     }
 };
 
@@ -519,7 +446,7 @@ std::unique_ptr<llvm::Module> Prepare(std::span<const Member> members, llvm::Str
     thread_local Templates templates;
     if (!templates.module) return {};
     const auto& source = *templates.module;
-    llvm::SmallSetVector<const llvm::Function*, 32> kernels;
+    llvm::SmallSetVector<const llvm::GlobalValue*, 32> kernels;
     kernels.insert(source.getFunction("FiberArmJitABI"));
     kernels.insert(source.getFunction("FiberArmJitTryLink"));
     for (const auto& member : members) {

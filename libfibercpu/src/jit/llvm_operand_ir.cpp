@@ -1,5 +1,6 @@
 #include "jit/llvm_operand_ir.h"
 #include "exec_utils.h"
+#include "jit/llvm_kernel_module.h"
 #include "state.h"
 
 #include <array>
@@ -7,6 +8,7 @@
 #include <vector>
 
 #include <llvm/ADT/DenseMap.h>
+#include <llvm/ADT/SetVector.h>
 #include <llvm/ADT/SmallBitVector.h>
 #include <llvm/ADT/SmallPtrSet.h>
 #include <llvm/Analysis/SimplifyQuery.h>
@@ -647,9 +649,8 @@ LLVMOperandTemplates::LLVMOperandTemplates(const llvm::Module* module) : module_
         const auto* fn = llvm::dyn_cast<llvm::Function>(array->getOperand(i)->stripPointerCasts());
         if (!fn || fn->isDeclaration()) return;
         functions_[i] = fn;
-        kernels_.insert(fn);
     }
-    table_ = table;
+    valid_ = true;
 }
 
 const llvm::Function* LLVMOperandTemplates::Get(block_recipe::OpId id, bool exact) const {
@@ -657,16 +658,21 @@ const llvm::Function* LLVMOperandTemplates::Get(block_recipe::OpId id, bool exac
     return index < block_recipe::kOpIdCount ? functions_[2 * index + exact] : nullptr;
 }
 
-bool LLVMOperandTemplates::IsTemplateGlobal(const llvm::GlobalValue* value) const {
-    return value == table_ || kernels_.contains(value);
-}
-
 namespace {
 
 std::unique_ptr<llvm::Module> CloneBlockModule(const LLVMOperandTemplates& templates,
                                                std::span<const BlockKeyView> keys) {
     if (!templates.IsValid()) return {};
-    llvm::SmallPtrSet<const llvm::GlobalValue*, 32> kernels;
+    const auto& source = templates.Module();
+    const auto* entry = source.getFunction("FiberLLVMEntry");
+    if (!entry) return {};
+    llvm::SmallSetVector<const llvm::GlobalValue*, 32> roots;
+    roots.insert(entry);
+#ifdef FIBERCPU_LLVM_SHARED_REGION_EXITS
+    // The region builder reads this table directly when grouping memory exits.
+    if (keys.size() > 1)
+        if (const auto* memory_exits = source.getNamedGlobal("FiberLLVMRegionMemoryExits")) roots.insert(memory_exits);
+#endif
     for (const auto key : keys) {
         if (key.operations.size() > block_recipe::kMaxOps ||
             (key.IsExact() && key.operands.size() != key.operations.size()) ||
@@ -676,13 +682,15 @@ std::unique_ptr<llvm::Module> CloneBlockModule(const LLVMOperandTemplates& templ
             if (step.shape.slots < 1 || step.shape.slots > 2) return {};
             const auto* kernel = templates.Get(step.id, key.IsExact());
             if (!kernel) return {};
-            kernels.insert(kernel);
+            roots.insert(kernel);
         }
     }
-    llvm::ValueToValueMapTy values;
-    return llvm::CloneModule(templates.Module(), values, [&](const llvm::GlobalValue* def) {
-        return kernels.contains(def) || !templates.IsTemplateGlobal(def);
-    });
+    auto module = KernelModule().Clone(source, roots.getArrayRef());
+    // The catalog normally stays in the source module. Let DCE remove it
+    // if LLVM had to clone the entire module for module-level constructs.
+    if (auto* table = module->getNamedGlobal("FiberLLVMOperationTable"))
+        table->setLinkage(llvm::GlobalValue::InternalLinkage);
+    return module;
 }
 
 bool SpecializeBlockEntry(const LLVMOperandTemplates& templates, llvm::Function& entry, BlockKeyView key,
