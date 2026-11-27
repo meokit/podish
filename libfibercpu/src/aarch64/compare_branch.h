@@ -105,7 +105,7 @@ A64_COMPARE_BRANCH_INLINE bool CompareAndTest(State& state, const DecodedInstruc
 }
 
 template <Kind kind, unsigned width, unsigned condition>
-FIBERCPU_AARCH64_HANDLER_ABI uint64_t CompareBranchHandler(A64_HANDLER_PARAMS) {
+FIBERCPU_AARCH64_HANDLER_ABI int64_t CompareBranchHandler(A64_HANDLER_PARAMS) {
     const auto compare = GetOpOperands<kind>(*current);
     const bool taken = CompareAndTest<kind, width, condition>(state, compare, flags_cache A64_HANDLER_PIN_ARGS);
     current = current->NextOp<false>();

@@ -10,13 +10,17 @@
 
 namespace fiberish::aarch64::detail {
 
-extern "C" FIBERCPU_AARCH64_HANDLER_ABI uint64_t FiberArmJitRetry(A64_HANDLER_PARAMS);
+extern "C" FIBERCPU_AARCH64_HANDLER_ABI int64_t FiberArmJitRetry(A64_HANDLER_PARAMS);
 
-extern "C" FIBERCPU_AARCH64_HANDLER_ABI uint64_t FiberArmJitABI(A64_HANDLER_PARAMS) {
+extern "C" FIBERCPU_AARCH64_HANDLER_ABI int64_t FiberArmJitABI(A64_HANDLER_PARAMS) {
     ATTR_MUSTTAIL return FiberArmJitRetry(A64_HANDLER_ARGS);
 }
 
-extern "C" HandlerFunc FiberArmJitTryLink(State& state, const DecodedOp* sentinel, uint64_t& remaining,
+extern "C" bool FiberArmJitCanChainWithinReserve(State& state, int64_t remaining, unsigned count) {
+    return remaining + state.active_run->budget_reserve + 1 >= count;
+}
+
+extern "C" HandlerFunc FiberArmJitTryLink(State& state, const DecodedOp* sentinel, int64_t& remaining,
                                           const DecodedOp*& next, uint64_t indirect_pc, BlockExitLink kind) {
     auto* link = &sentinel->payload;
     const uint64_t fallthrough = state.last_block->end_pc();

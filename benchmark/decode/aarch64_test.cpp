@@ -595,7 +595,7 @@ bool Va39BlockLink() {
     detail::RunFrame frame{memory};
     state.active_run = &frame;
     const detail::BasicBlock* target = nullptr;
-    uint64_t budget = 10;
+    int64_t budget = 10;
     if (detail::TryChainBlock(state, target, detail::BlockLink(&block), Pc & UINT32_MAX, budget) || budget != 10)
         return false;
     if (detail::TryChainBlock(state, target, detail::BlockLink(&block), Pc, budget) != block.header.entry ||

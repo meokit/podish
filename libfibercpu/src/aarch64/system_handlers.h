@@ -132,7 +132,7 @@ inline StepResult SystemInstruction(State& state, const Memory& memory, const De
 }
 
 template <SystemOp operation>
-FIBERCPU_AARCH64_HANDLER_ABI uint64_t SystemHandler(A64_HANDLER_PARAMS) {
+FIBERCPU_AARCH64_HANDLER_ABI int64_t SystemHandler(A64_HANDLER_PARAMS) {
     const auto rd = Field(uint32_t(current->Operands()), 0, 5);
     const HotRegisters registers{state A64_HANDLER_PIN_ARGS};
     if constexpr (operation == SystemOp::Refetch) {

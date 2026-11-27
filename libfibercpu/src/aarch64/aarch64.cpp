@@ -89,11 +89,11 @@ __declspec(noinline)
 #elif defined(__GNUC__) || defined(__clang__)
 [[gnu::cold, gnu::noinline]]
 #endif
-FIBERCPU_AARCH64_HANDLER_ABI uint64_t ResolveBranchTargetSlow(A64_HANDLER_PARAMS) {
+FIBERCPU_AARCH64_HANDLER_ABI int64_t ResolveBranchTargetSlow(A64_HANDLER_PARAMS) {
     auto& frame = *state.active_run;
     const auto target_pc = frame.exit_target;
     const auto& memory = frame.memory;
-    if (instr_limit && memory.lookup_cached_block) {
+    if (instr_limit + frame.budget_reserve >= 0 && memory.lookup_cached_block) {
 #ifdef ENABLE_TLB_STATS
         auto* stats = memory.dispatch_stats;
 #endif
@@ -102,7 +102,7 @@ FIBERCPU_AARCH64_HANDLER_ABI uint64_t ResolveBranchTargetSlow(A64_HANDLER_PARAMS
                                  : memory.lookup_cached_block(memory.context, target_pc, nullptr);
         if (target && target->IsValid()) {
             *frame.exit_link = BlockLink(target);
-            if (instr_limit >= target->inst_count()) {
+            if (instr_limit >= 0 || instr_limit + frame.budget_reserve + 1 >= target->inst_count()) {
 #ifdef ENABLE_TLB_STATS
                 if (stats) {
                     ++stats->resolved_links;
@@ -490,8 +490,12 @@ DecodedInstruction Decode(uint32_t instruction) {
     return op;
 }
 
-RunResult Run(State& state, const Memory& memory, uint64_t budget, const Profile& profile) {
-    detail::RunFrame frame{memory};
+RunResult Run(State& state, const Memory& memory, uint64_t budget, const Profile& profile, BudgetMode budget_mode) {
+    constexpr int64_t MaxBatch = std::numeric_limits<int64_t>::max() - BlockMax;
+    // Reserve room for the signed dispatch arithmetic and the returned
+    // lifetime instruction count. Single steps always use exact accounting.
+    const bool exact = budget_mode == BudgetMode::Exact || budget == 1 || budget > MaxBatch;
+    detail::RunFrame frame{memory, exact ? BlockMax - 1 : 0};
     const RunScope scope(state, frame);
     uint64_t executed = 0;
     uint64_t mapped_page = 0;
@@ -519,7 +523,8 @@ RunResult Run(State& state, const Memory& memory, uint64_t budget, const Profile
                 block = DecodeBlock(pc, frame.executable, profile, memory, local ? &*local : nullptr);
                 if (!block) return {Stop::CachePressure, executed, pc, 0, 0, Access::Execute};
                 if (previous && previous->IsValid() && memory.lookup_cached_block) *previous_link = BlockLink(block);
-                count = unsigned(std::min<uint64_t>(block->inst_count(), budget - executed));
+                count = block->inst_count();
+                if (exact) count = unsigned(std::min<uint64_t>(count, budget - executed));
                 full_block = count == block->inst_count();
             }
         }
@@ -549,10 +554,11 @@ RunResult Run(State& state, const Memory& memory, uint64_t budget, const Profile
 #if FIBERCPU_LLVM_JIT
             CountLLVMBlockEntry(state, *block, block->header.chain);
 #endif
-            const auto remaining =
-                block->header.entry(state, slots, budget - executed - count, mem::InvalidMicroTlbAbiTags(), 0,
-                                    state.nzcv A64_HANDLER_PIN_INIT);
-            executed = budget - remaining;
+            const auto batch = int64_t(std::min<uint64_t>(budget - executed, MaxBatch));
+            const auto available = batch - frame.budget_reserve - 1;
+            const auto remaining = block->header.entry(state, slots, available - count, mem::InvalidMicroTlbAbiTags(),
+                                                       0, state.nzcv A64_HANDLER_PIN_INIT);
+            executed += uint64_t(available - remaining);
             step = frame.exit;
             stop_op = frame.exit_op;
             if (frame.exit_link) {
@@ -608,7 +614,7 @@ RunResult Run(State& state, const Memory& memory, uint64_t budget, const Profile
             }
         }
     }
-    return {Stop::Budget, budget, state.pc, 0, 0, Access::Execute};
+    return {Stop::Budget, executed, state.pc, 0, 0, Access::Execute};
 }
 
 }  // namespace fiberish::aarch64

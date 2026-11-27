@@ -145,13 +145,13 @@ inline uint64_t& PinSlot(State& state) {
 #define A64_HANDLER_PIN_INIT FIBERCPU_AARCH64_FOR_EACH_PIN(A64_PIN_INIT)
 #define A64_HOT_PIN_REF FIBERCPU_AARCH64_FOR_EACH_PIN(A64_PIN_REF)
 
-#define A64_HANDLER_PARAMS                                                                     \
-    State &state, const ::fiberish::aarch64::detail::DecodedOp *current, uint64_t instr_limit, \
-        [[maybe_unused]] uint64_t utlb_tags, [[maybe_unused]] uintptr_t utlb_addend,           \
+#define A64_HANDLER_PARAMS                                                                    \
+    State &state, const ::fiberish::aarch64::detail::DecodedOp *current, int64_t instr_limit, \
+        [[maybe_unused]] uint64_t utlb_tags, [[maybe_unused]] uintptr_t utlb_addend,          \
         uint32_t flags_cache A64_HANDLER_PIN_PARAMS
 #define A64_HANDLER_ARGS state, current, instr_limit, utlb_tags, utlb_addend, flags_cache A64_HANDLER_PIN_ARGS
 
-using HandlerFunc = uint64_t(FIBERCPU_AARCH64_HANDLER_ABI*)(A64_HANDLER_PARAMS);
+using HandlerFunc = int64_t(FIBERCPU_AARCH64_HANDLER_ABI*)(A64_HANDLER_PARAMS);
 }  // namespace detail
 
 enum class Kind : uint8_t {
@@ -239,6 +239,9 @@ struct RunResult {
 };
 
 DecodedInstruction Decode(uint32_t instruction);
-RunResult Run(State& state, const Memory& memory, uint64_t budget, const Profile& profile = {});
+enum class BudgetMode { Exact, Block };
+
+RunResult Run(State& state, const Memory& memory, uint64_t budget, const Profile& profile = {},
+              BudgetMode budget_mode = BudgetMode::Exact);
 
 }  // namespace fiberish::aarch64

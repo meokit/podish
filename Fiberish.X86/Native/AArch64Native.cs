@@ -22,6 +22,9 @@ internal static unsafe partial class AArch64Native
     [LibraryImport(X86Native.LibName, EntryPoint = "AArch64_Run")]
     internal static partial int Run(nint state, ulong endPc, ulong budget, int singleStep);
 
+    [LibraryImport(X86Native.LibName, EntryPoint = "AArch64_RunSlice")]
+    internal static partial int RunSlice(nint state, ulong budget);
+
     [LibraryImport(X86Native.LibName, EntryPoint = "AArch64_MemMapHostPage")]
     internal static partial int MemMapHostPage(nint state, ulong address, void* hostPage, byte perms);
 
@@ -59,6 +62,7 @@ internal static unsafe partial class AArch64Native
     internal static ulong Read(nint state, int index) => throw new PlatformNotSupportedException();
     internal static void Write(nint state, int index, ulong value) => throw new PlatformNotSupportedException();
     internal static int Run(nint state, ulong endPc, ulong budget, int singleStep) => throw new PlatformNotSupportedException();
+    internal static int RunSlice(nint state, ulong budget) => throw new PlatformNotSupportedException();
     internal static int MemMapHostPage(nint state, ulong address, void* hostPage, byte perms)
         => throw new PlatformNotSupportedException();
     internal static void MemUnmap(nint state, ulong address, ulong size)

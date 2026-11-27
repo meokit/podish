@@ -226,7 +226,7 @@ aarch64::ScalarHandlerFunc FindBakedArmSequence(const uint32_t* words, unsigned 
                                                 aarch64::detail::HandlerFunc&);
 #endif
 
-int RunArmEngine(EmuState& engine, uint64_t end_pc, uint64_t budget, bool step) {
+int RunArmEngine(EmuState& engine, uint64_t end_pc, uint64_t budget, bool step, bool block_budget) {
     if (!engine.arm) AArch64_Reset(&engine);
     auto& cpu = *engine.arm;
     engine.status = EmuStatus::Running;
@@ -269,8 +269,9 @@ int RunArmEngine(EmuState& engine, uint64_t end_pc, uint64_t budget, bool step) 
 #if FIBERCPU_LLVM_JIT
         PollLLVMArmCompilations(engine);
 #endif
-        auto result = aarch64::Run(cpu, memory, end_pc ? 1 : remaining, profile);
-        remaining -= result.executed;
+        const auto mode = block_budget ? aarch64::BudgetMode::Block : aarch64::BudgetMode::Exact;
+        auto result = aarch64::Run(cpu, memory, end_pc ? 1 : remaining, profile, mode);
+        remaining -= std::min(remaining, result.executed);
         const bool cache_pressure = result.reason == aarch64::Stop::CachePressure;
         if (cache_pressure && remaining) {
             // As with x86's stack decoder, retire one instruction even when a single

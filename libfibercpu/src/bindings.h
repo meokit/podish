@@ -68,6 +68,8 @@ uint32_t AArch64_ReadSyscall(EmuState* state, uint64_t* arguments);
 uint64_t AArch64_RegRead(EmuState* state, int index);
 void AArch64_RegWrite(EmuState* state, int index, uint64_t value);
 int AArch64_Run(EmuState* state, uint64_t end_pc, uint64_t budget, int single_step);
+// The scheduling slice may finish its final block past the budget.
+int AArch64_RunSlice(EmuState* state, uint64_t budget);
 int AArch64_MemMapHostPage(EmuState* state, uint64_t address, void* host_page, uint8_t perms);
 void AArch64_MemUnmap(EmuState* state, uint64_t address, uint64_t size);
 void AArch64_MemProtect(EmuState* state, uint64_t address, uint64_t size, uint8_t perms);

@@ -1879,7 +1879,7 @@ public partial class FiberTask
             BeginGuestCpuAccounting();
             try
             {
-                CPU.Run(maxInsts: (ulong)instructionLimit);
+                CPU.RunSlice((ulong)instructionLimit);
             }
             finally
             {

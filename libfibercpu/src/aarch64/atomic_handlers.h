@@ -53,7 +53,7 @@ struct CachedAtomicTransfers {
     }
 
 template <Kind kind>
-FIBERCPU_AARCH64_HANDLER_ABI uint64_t AtomicHandler(A64_HANDLER_PARAMS) {
+FIBERCPU_AARCH64_HANDLER_ABI int64_t AtomicHandler(A64_HANDLER_PARAMS) {
     constexpr bool lse = kind == Kind::LoadStoreAtomic;
     const auto op = GetOpOperands<kind>(*current);
     const HotRegisters registers{state A64_HANDLER_PIN_ARGS};

@@ -866,6 +866,19 @@ public partial class Engine : IGuestCpu, IDisposable
             throw new InvalidOperationException("Native guest execution cannot be re-entered from a callback.");
     }
 
+    internal void RunSlice(ulong maxInsts)
+    {
+        if (!IsAArch64)
+        {
+            Run(maxInsts: maxInsts);
+            return;
+        }
+
+        AssertNotDisposed();
+        if (AArch64Native.RunSlice(State, maxInsts) == 0)
+            throw new InvalidOperationException("Native guest execution cannot be re-entered from a callback.");
+    }
+
     public void Run(ulong endPc, ulong maxInsts = 0)
     {
         if (endPc <= uint.MaxValue || !IsAArch64)

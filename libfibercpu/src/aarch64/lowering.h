@@ -17,7 +17,7 @@ inline StepResult TrapInstruction(State& state, const Memory&, const DecodedInst
 
 #if FIBERCPU_AARCH64_TAIL_DISPATCH
 template <Stop reason>
-FIBERCPU_AARCH64_HANDLER_ABI uint64_t TrapHandler(A64_HANDLER_PARAMS) {
+FIBERCPU_AARCH64_HANDLER_ABI int64_t TrapHandler(A64_HANDLER_PARAMS) {
     const uint16_t immediate = reason == Stop::Undefined ? 0 : uint16_t(current->Operands());
     return ReturnFromBlock(state, current, instr_limit, flags_cache A64_HANDLER_PIN_ARGS,
                            {reason, Access::Execute, immediate, current->GetStartPc(state)});
@@ -36,12 +36,12 @@ constexpr HandlerBinding BindTrapHandler() {
 inline StepResult NopInstruction(State&, const Memory&, const DecodedInstruction&) { return {}; }
 
 #if FIBERCPU_AARCH64_TAIL_DISPATCH
-FIBERCPU_AARCH64_HANDLER_ABI inline uint64_t NopHandler(A64_HANDLER_PARAMS) {
+FIBERCPU_AARCH64_HANDLER_ABI inline int64_t NopHandler(A64_HANDLER_PARAMS) {
     A64_DISPATCH_NEXT(current->NextOp<false>());
 }
 
 template <Kind kind, unsigned width, int operation, int mode, int shift, int vector>
-FIBERCPU_AARCH64_HANDLER_ABI uint64_t LoadStoreHandler(A64_HANDLER_PARAMS) {
+FIBERCPU_AARCH64_HANDLER_ABI int64_t LoadStoreHandler(A64_HANDLER_PARAMS) {
     const auto op = GetOpOperands<kind>(*current);
     if (!ProbeLoadStore<kind, width, operation, mode, shift, vector>(state, op, BlockTarget<kind>(op), state.data_tlb,
                                                                      utlb_tags, utlb_addend A64_HANDLER_PIN_ARGS))
@@ -64,7 +64,7 @@ constexpr HandlerBinding BindMemoryHandler() {
 
 #if FIBERCPU_AARCH64_TAIL_DISPATCH
 template <Kind kind, unsigned width, int operation, int shift, bool write_nzcv, IntegerForm form>
-FIBERCPU_AARCH64_HANDLER_ABI uint64_t IntegerHandler(A64_HANDLER_PARAMS) {
+FIBERCPU_AARCH64_HANDLER_ABI int64_t IntegerHandler(A64_HANDLER_PARAMS) {
     const auto op = GetOpOperands<kind>(*current);
     uint64_t pc = 0;
     if constexpr (kind == Kind::BranchImmediate) {

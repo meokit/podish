@@ -187,6 +187,37 @@ void CheckRegionReplay(EmuState* state) {
     AArch64_MemUnmap(state, Pc, PageBytes);
 }
 
+void CheckBudgetModes(EmuState* state, bool region) {
+    alignas(PageBytes) std::array<uint8_t, PageBytes> code{};
+    Put(code.data(), std::array{0x91000421u,   // add x1, x1, #1
+                                0x14000001u,   // b .+4
+                                0x91000821u,   // add x1, x1, #2
+                                0x91001021u,   // add x1, x1, #4
+                                0x17fffffcu}); // b .-16
+    assert(AArch64_MemMapHostPage(state, Pc, code.data(), 5));
+    const auto check = [&] {
+        AArch64_RegWrite(state, 1, 0);
+        Run(state, Pc, 3);
+        assert(AArch64_RegRead(state, 1) == 3 && AArch64_RegRead(state, 32) == Pc + 12);
+
+        AArch64_RegWrite(state, 1, 0);
+        AArch64_RegWrite(state, 32, Pc);
+        assert(AArch64_RunSlice(state, 3));
+        assert(AArch64_RegRead(state, 1) == 7 && AArch64_RegRead(state, 32) == Pc);
+
+        assert(AArch64_RunSlice(state, 1));
+        assert(AArch64_RegRead(state, 1) == 8 && AArch64_RegRead(state, 32) == Pc + 4);
+
+        AArch64_RegWrite(state, 32, Pc + 8);
+        assert(AArch64_RunSlice(state, 2));
+        assert(AArch64_RegRead(state, 1) == 14 && AArch64_RegRead(state, 32) == Pc);
+    };
+    check();
+    WaitForJit(state, Pc, 20, code.data(), region ? 2 : 1);
+    check();
+    AArch64_MemUnmap(state, Pc, PageBytes);
+}
+
 void CheckRegionExternalLink(EmuState* state, bool indirect) {
     alignas(PageBytes) std::array<uint8_t, PageBytes> code{}, next{};
     constexpr auto external = Pc + PageBytes;
@@ -420,6 +451,7 @@ int main(int argc, char**) {
     AArch64_Reset(state);
     const auto before = X86_GetLLVMJitBlockCount();
     CheckLoop(state, region);
+    CheckBudgetModes(state, region);
     CheckMemory(state);
     CheckRegisterAndRefetch(state, region);
     CheckAtomicAndSystemReplay(state);

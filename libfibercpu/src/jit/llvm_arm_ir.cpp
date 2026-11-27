@@ -353,7 +353,13 @@ public:
                 first = ir_.CreateConstGEP1_64(ir_.getInt8Ty(), block, sizeof(BasicBlock));
                 auto* body = Block("region.run");
                 auto* exhausted = Block("region.budget");
-                auto* enough = ir_.CreateICmpUGE(Load64(remaining_), ir_.getInt64(members[i].steps.size()));
+                auto* reserve = Block("region.budget.reserve");
+                auto* remaining = Load64(remaining_);
+                ir_.CreateCondBr(ir_.CreateICmpSGE(remaining, ir_.getInt64(0)), body, reserve);
+                ir_.SetInsertPoint(reserve);
+                auto* enough = ir_.CreateCall(module_.getFunction("FiberArmJitCanChainWithinReserve"),
+                                              {state_, remaining, ir_.getInt32(members[i].steps.size())});
+                inline_calls_.push_back(enough);
                 ir_.CreateCondBr(enough, body, exhausted);
                 ir_.SetInsertPoint(exhausted);
                 Leave(PC(members[i].offset), first);
@@ -513,6 +519,7 @@ std::unique_ptr<llvm::Module> Prepare(std::span<const Member> members, llvm::Str
     llvm::SmallSetVector<const llvm::Function*, 32> kernels;
     kernels.insert(source.getFunction("FiberArmJitABI"));
     kernels.insert(source.getFunction("FiberArmJitTryLink"));
+    if (members.size() > 1) kernels.insert(source.getFunction("FiberArmJitCanChainWithinReserve"));
     for (const auto& member : members) {
         for (const auto& step : member.steps) {
             const auto binding = BindOperation(DecodeFields(step.word));

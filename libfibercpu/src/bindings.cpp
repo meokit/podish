@@ -1276,7 +1276,7 @@ int X86_Run(EmuState*, uint32_t, uint64_t) { return 0; }
 #endif
 
 #if FIBERCPU_GUEST_AARCH64
-int AArch64_Run(EmuState* state, uint64_t end_pc, uint64_t budget, int step) {
+static int RunArm(EmuState* state, uint64_t end_pc, uint64_t budget, bool step, bool block_budget) {
     if (!state || g_native_execution_active || state->native_execution_active) return step ? -1 : 0;
     if (!state->mmu.has_arm_address_space()) [[unlikely]]
         state->mmu.enable_arm_address_space();
@@ -1286,8 +1286,14 @@ int AArch64_Run(EmuState* state, uint64_t end_pc, uint64_t budget, int step) {
     state->mmu.flush_pending_code_cache_before_run();
     ScopedNativeExecution execution(state);
     if (!execution) return step ? -1 : 0;
-    return RunArmEngine(*state, end_pc, budget, step != 0);
+    return RunArmEngine(*state, end_pc, budget, step, block_budget);
 }
+
+int AArch64_Run(EmuState* state, uint64_t end_pc, uint64_t budget, int step) {
+    return RunArm(state, end_pc, budget, step != 0, false);
+}
+
+int AArch64_RunSlice(EmuState* state, uint64_t budget) { return RunArm(state, 0, budget, false, true); }
 #endif
 
 void X86_GetBlockStats(EmuState* state, X86_BlockStats* stats) {

@@ -17,7 +17,7 @@
 
 namespace fiberish::aarch64::detail {
 
-extern "C" FIBERCPU_AARCH64_HANDLER_ABI uint64_t FiberArmJitRetry(A64_HANDLER_PARAMS) {
+extern "C" FIBERCPU_AARCH64_HANDLER_ABI int64_t FiberArmJitRetry(A64_HANDLER_PARAMS) {
     if (state.last_block->IsValid()) {
         instr_limit -= state.last_block->inst_count() - current->GuestIndex();
         ATTR_MUSTTAIL return current->handler(A64_HANDLER_ARGS);
@@ -25,7 +25,7 @@ extern "C" FIBERCPU_AARCH64_HANDLER_ABI uint64_t FiberArmJitRetry(A64_HANDLER_PA
     ATTR_MUSTTAIL return FiberArmJitLeave(A64_HANDLER_ARGS);
 }
 
-extern "C" FIBERCPU_AARCH64_HANDLER_ABI uint64_t FiberArmJitRefetch(A64_HANDLER_PARAMS) {
+extern "C" FIBERCPU_AARCH64_HANDLER_ABI int64_t FiberArmJitRefetch(A64_HANDLER_PARAMS) {
     auto& frame = *state.active_run;
     frame.exit_link = nullptr;
     if (state.last_block->IsValid()) {
@@ -41,7 +41,7 @@ extern "C" FIBERCPU_AARCH64_HANDLER_ABI uint64_t FiberArmJitRefetch(A64_HANDLER_
     return instr_limit - 1;
 }
 
-extern "C" FIBERCPU_AARCH64_HANDLER_ABI uint64_t FiberArmJitLeave(A64_HANDLER_PARAMS) {
+extern "C" FIBERCPU_AARCH64_HANDLER_ABI int64_t FiberArmJitLeave(A64_HANDLER_PARAMS) {
     CommitDispatchState(state, state.pc, flags_cache A64_HANDLER_PIN_ARGS);
     auto& frame = *state.active_run;
     frame.exit_op = current;

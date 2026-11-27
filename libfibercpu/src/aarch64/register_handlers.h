@@ -6,7 +6,7 @@ namespace fiberish::aarch64::detail {
 
 #if FIBERCPU_AARCH64_TAIL_DISPATCH
 template <FloatFamily family>
-FIBERCPU_AARCH64_HANDLER_ABI uint64_t FloatHandler(A64_HANDLER_PARAMS) {
+FIBERCPU_AARCH64_HANDLER_ABI int64_t FloatHandler(A64_HANDLER_PARAMS) {
     const auto op = BaseInstruction(uint32_t(current->Operands()));
     bool valid;
 #if defined(__clang__)
@@ -20,7 +20,7 @@ FIBERCPU_AARCH64_HANDLER_ABI uint64_t FloatHandler(A64_HANDLER_PARAMS) {
 }
 
 template <VectorFamily family>
-FIBERCPU_AARCH64_HANDLER_ABI uint64_t VectorHandler(A64_HANDLER_PARAMS) {
+FIBERCPU_AARCH64_HANDLER_ABI int64_t VectorHandler(A64_HANDLER_PARAMS) {
     const auto op = BaseInstruction(uint32_t(current->Operands()));
     const HotRegisters registers{state A64_HANDLER_PIN_ARGS};
     if constexpr (family == VectorFamily::Structure) {
@@ -47,7 +47,7 @@ FIBERCPU_AARCH64_HANDLER_ABI uint64_t VectorHandler(A64_HANDLER_PARAMS) {
 
 #if (defined(__aarch64__) && !defined(_MSC_VER)) || FIBERCPU_AARCH64_SIMDE
 template <ByteVectorOp op>
-FIBERCPU_AARCH64_HANDLER_ABI uint64_t ByteVectorHandler(A64_HANDLER_PARAMS) {
+FIBERCPU_AARCH64_HANDLER_ABI int64_t ByteVectorHandler(A64_HANDLER_PARAMS) {
     ExecuteByteVector<op>(state, uint32_t(current->Operands()));
     A64_DISPATCH_NEXT(current->NextOp<false>());
 }

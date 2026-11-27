@@ -120,7 +120,7 @@ A64_BAKED_INLINE BakedStop ExecuteBakedOps(State& state, const detail::DecodedOp
 }
 
 template <uint32_t dead, bool dynamic_imm12, uint32_t... Words>
-FIBERCPU_AARCH64_HANDLER_ABI uint64_t BakedHandler(A64_HANDLER_PARAMS) {
+FIBERCPU_AARCH64_HANDLER_ABI int64_t BakedHandler(A64_HANDLER_PARAMS) {
     const auto result = ExecuteBakedOps<dead, dynamic_imm12, Words...>(state, current, utlb_tags, utlb_addend,
                                                                        flags_cache A64_HANDLER_PIN_ARGS);
     if constexpr ((IsBakedTransfer(detail::DecodeFields(Words).kind) || ...)) {
