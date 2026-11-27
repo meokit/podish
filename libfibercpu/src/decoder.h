@@ -503,7 +503,8 @@ struct BasicBlockChainPrefix {
     uint64_t weighted_profile : 1;
     uint64_t jit_execution_profile : 1;
     uint64_t has_region_context : 1;
-    uint64_t reserved : 4;
+    uint64_t has_exec_count : 1;
+    uint64_t reserved : 3;
     uint64_t llvm_hot_count : 16;
 };
 
@@ -513,19 +514,16 @@ struct alignas(16) BasicBlock {
 #if INTPTR_MAX == INT32_MAX
     uint32_t entry_padding = 0;
 #endif
-    uint32_t end_eip;
-    uint8_t slot_count;  // Physical slots, including data and sentinel.
-    uint8_t sentinel_slot_index;
-    uint8_t anchor_count;
+    uint32_t end_eip = 0;
+    uint32_t sentinel_eip = 0;
+    uint8_t slot_count = 0;  // Physical slots, including data and sentinel.
+    uint8_t sentinel_slot_index = 0;
+    uint8_t anchor_count = 0;
     // LOCK is invalid for RET, leaving that bit free to mark a link-only tail.
     uint8_t link_only_return_prefixes = 0;
-    uint32_t sentinel_eip;
-    uint32_t branch_target_eip = 0;
-    uint32_t fallthrough_eip = 0;
     uint8_t terminal_kind_raw = 0;
     bool has_unfused_handlers = false;
     uint16_t invalidation_revision = 0;
-    uint64_t exec_count = 0;  // Number of times block was executed
 
     // Flexible Array Member - fixed-size decoded op stream.
     alignas(16) std::byte slots[sizeof(DecodedOp)];
@@ -538,13 +536,14 @@ struct alignas(16) BasicBlock {
     }
 
     static constexpr size_t CalculateSize(BlockSlotLayout layout, bool retain_scalar_handlers = false,
-                                          bool retain_region_context = false) {
+                                          bool retain_region_context = false, bool retain_exec_count = false) {
         if (!layout.logical_slot_count) return sizeof(BasicBlock);
         size_t size = offsetof(BasicBlock, slots) + SlotStorageSize(layout.PhysicalSlotCount(), layout.data_slot_count);
         if (retain_region_context) size += sizeof(void*);
         size +=
             (layout.logical_slot_count - 1) * (sizeof(uint16_t) + (retain_scalar_handlers ? sizeof(HandlerFunc) : 0));
         if (layout.anchor_count) size = AlignFooter(size) + sizeof(uint64_t) + sizeof(uint32_t) * layout.anchor_count;
+        if (retain_exec_count) size = AlignFooter(size) + sizeof(uint64_t);
         return size;
     }
 
@@ -634,6 +633,22 @@ struct alignas(16) BasicBlock {
                            reinterpret_cast<const std::byte*>(this));
     }
 
+    size_t ExecCountOffset() const {
+        const auto offset = AnchorOffset();
+        return anchor_count ? AlignFooter(offset + sizeof(uint64_t) + sizeof(uint32_t) * anchor_count) : offset;
+    }
+#if defined(FIBERCPU_LLVM_BLOCK_TEMPLATE)
+    [[gnu::noinline]]
+#endif
+    uint64_t& ExecCountStorage() {
+        assert(chain.has_exec_count);
+        return *reinterpret_cast<uint64_t*>(reinterpret_cast<std::byte*>(this) + ExecCountOffset());
+    }
+    uint64_t ExecCount() const {
+        if (!chain.has_exec_count) return 0;
+        return *reinterpret_cast<const uint64_t*>(reinterpret_cast<const std::byte*>(this) + ExecCountOffset());
+    }
+
     FORCE_INLINE BasicBlock* FallthroughLink() const { return Sentinel()->LoadBlockLink(); }
     FORCE_INLINE void SetFallthroughLink(BasicBlock* target) { Sentinel()->StoreBlockLink(target); }
 
@@ -669,6 +684,12 @@ struct alignas(16) BasicBlock {
 
     BlockTerminalKind terminal_kind() const { return static_cast<BlockTerminalKind>(terminal_kind_raw); }
     void set_terminal_kind(BlockTerminalKind kind) { terminal_kind_raw = static_cast<uint8_t>(kind); }
+    uint32_t BranchTargetEip() const {
+        const auto kind = terminal_kind();
+        if (kind == BlockTerminalKind::DirectJmpRel || kind == BlockTerminalKind::DirectJccRel)
+            return LogicalOp(inst_count() - 1)->Primary();
+        return 0;
+    }
 
     uint32_t start_eip() const { return static_cast<uint32_t>(chain.start_eip); }
     void set_start_eip(uint32_t start_eip) { chain.start_eip = start_eip; }
@@ -691,10 +712,11 @@ static_assert(offsetof(BasicBlock, entry) == 8, "BasicBlock: entry must start at
 static_assert(sizeof(BasicBlockChainPrefix) == 8, "BasicBlockChainPrefix must be exactly 8 bytes");
 
 static_assert(offsetof(BasicBlock, end_eip) == 16);
-static_assert(offsetof(BasicBlock, slot_count) == 20);
-static_assert(offsetof(BasicBlock, branch_target_eip) == 28);
-static_assert(offsetof(BasicBlock, exec_count) == 40);
-static_assert(offsetof(BasicBlock, slots) == 48, "BasicBlock: slots must start at offset 48");
+static_assert(offsetof(BasicBlock, sentinel_eip) == 20);
+static_assert(offsetof(BasicBlock, slot_count) == 24);
+static_assert(offsetof(BasicBlock, sentinel_slot_index) == 25);
+static_assert(offsetof(BasicBlock, terminal_kind_raw) == 28);
+static_assert(offsetof(BasicBlock, slots) == 32, "BasicBlock: slots must start at offset 32");
 
 // Decoder Logic
 enum class InstructionDecodeResult : uint8_t { Success, NeedMoreBytes, Invalid, FetchFault };

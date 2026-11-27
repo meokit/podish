@@ -60,15 +60,7 @@ struct PageDirectory {
 inline void InitializeInvalidBasicBlock(BasicBlock& block) {
     block.set_start_eip(0);
     block.set_valid(false);
-    block.end_eip = 0;
     block.set_inst_count(0);
-    block.slot_count = 0;
-    block.sentinel_slot_index = 0;
-    block.link_only_return_prefixes = 0;
-    block.branch_target_eip = 0;
-    block.fallthrough_eip = 0;
-    block.set_terminal_kind(BlockTerminalKind::None);
-    block.exec_count = 0;
     block.entry = nullptr;
 }
 

@@ -1092,8 +1092,8 @@ std::optional<CapturedRegion> CapturePage(EmuState& state, BasicBlock& root) {
     for (size_t i = 0; i < selected.size() && selected.size() < max_members; ++i) {
         auto* from = selected[i];
         for (auto* candidate : available) {
-            if (candidate->start_eip() == from->branch_target_eip || candidate->start_eip() == from->fallthrough_eip ||
-                candidate->branch_target_eip == from->start_eip() || candidate->fallthrough_eip == from->start_eip())
+            if (candidate->start_eip() == from->BranchTargetEip() || candidate->start_eip() == from->end_eip ||
+                candidate->BranchTargetEip() == from->start_eip() || candidate->end_eip == from->start_eip())
                 add(candidate);
         }
     }
@@ -1554,6 +1554,8 @@ bool ConfigureLLVMBlockJit(const SharedJitOptions& settings, std::string& error)
 bool LLVMPageRegionsEnabled(const EmuState& state) { return RuntimeMode(state) == JitMode::Region; }
 
 #if FIBERCPU_GUEST_I386
+bool LLVMJitTraceEnabled() { return JitSchedulerTrace() != nullptr; }
+
 bool LLVMWeightedProfileEnabled(const EmuState& state) {
     const auto* options = RunOptions(state);
     return options && options->profile;
@@ -1593,7 +1595,7 @@ void RetireLLVMWeightedProfile(const mem::CodeCacheState& cache) {
     for (const auto* block : cache.all_blocks) {
         auto it = profile.blocks.find(block);
         if (it == profile.blocks.end()) continue;
-        AddWeight(profile.retired[it->second], block->exec_count);
+        AddWeight(profile.retired[it->second], block->ExecCount());
         profile.blocks.erase(it);
     }
 }
@@ -1606,7 +1608,7 @@ bool WriteWeightedLLVMProfile(WeightedProfile& profile, const char* path, std::s
         std::unique_lock execution_lock(execution_gate);
         std::lock_guard profile_lock(profile.mutex);
         weights = profile.retired;
-        for (const auto& [block, key] : profile.blocks) AddWeight(weights[key], block->exec_count);
+        for (const auto& [block, key] : profile.blocks) AddWeight(weights[key], block->ExecCount());
     }
     std::vector<ProfileRecipe> recipes;
     recipes.reserve(weights.size());
@@ -1714,7 +1716,7 @@ void PollLLVMBlockCompilations(EmuState* state) {
                     state->mmu.code_cache().has_jit_trace = true;
                     block->chain.jit_execution_profile = true;
                     std::fprintf(trace, "install,%p,%u,%u,%llu\n", static_cast<void*>(block), candidate.eip,
-                                 candidate.revision, (unsigned long long)block->exec_count);
+                                 candidate.revision, (unsigned long long)block->ExecCount());
                 }
             }
             return true;
@@ -1727,7 +1729,7 @@ void PollLLVMBlockCompilations(EmuState* state) {
 void TraceLLVMJitRetirement(const BasicBlock& block) {
     if (auto* trace = JitSchedulerTrace())
         std::fprintf(trace, "retire,%p,%u,%u,%llu\n", static_cast<const void*>(&block), block.canonical_start_eip(),
-                     block.invalidation_revision, (unsigned long long)block.exec_count);
+                     block.invalidation_revision, (unsigned long long)block.ExecCount());
 }
 
 void RetireLLVMJitTrace(const mem::CodeCacheState& cache) {

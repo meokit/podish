@@ -607,13 +607,11 @@ bool RedecodeGenericInstruction(EmuState* state, const DecodedInstruction& publi
 
 static bool BasicBlockMatchesDecodedCandidate(const BasicBlock* candidate, uint32_t start_eip, uint32_t end_eip,
                                               uint32_t inst_count, uint32_t slot_count, BlockTerminalKind terminal_kind,
-                                              uint32_t branch_target_eip, uint32_t fallthrough_eip, bool compare_scalar,
-                                              std::span<const DecodedInstTmp> temp_ops,
+                                              bool compare_scalar, std::span<const DecodedInstTmp> temp_ops,
                                               std::span<const ScalarBindingIndex> binding_indices) {
     if (!candidate || candidate->is_valid()) return false;
     if (candidate->canonical_start_eip() != start_eip || candidate->end_eip != end_eip ||
-        candidate->inst_count() != inst_count || candidate->terminal_kind() != terminal_kind ||
-        candidate->branch_target_eip != branch_target_eip || candidate->fallthrough_eip != fallthrough_eip) {
+        candidate->inst_count() != inst_count || candidate->terminal_kind() != terminal_kind) {
         return false;
     }
 
@@ -919,17 +917,13 @@ finalize:
     const auto binding_indices = std::span(binding_storage).first(decoded_inst_count);
 
     BlockTerminalKind terminal_kind = BlockTerminalKind::None;
-    uint32_t branch_target_eip = 0;
-    uint32_t fallthrough_eip = end_eip;
     if (decoded_inst_count != 0 && index_count != 0) {
         const uint16_t last_handler_index = index_storage[index_count - 1];
         const DecodedInstruction& last_op = op_storage[decoded_inst_count - 1].head;
         if (IsDirectRelativeJmpHandlerIndex(last_handler_index)) {
             terminal_kind = BlockTerminalKind::DirectJmpRel;
-            branch_target_eip = GetControlTargetEip(&last_op);
         } else if (IsDirectRelativeJccHandlerIndex(last_handler_index)) {
             terminal_kind = BlockTerminalKind::DirectJccRel;
-            branch_target_eip = GetControlTargetEip(&last_op);
         } else if (last_op.meta.flags.is_control_flow) {
             terminal_kind = BlockTerminalKind::OtherControlFlow;
         }
@@ -937,8 +931,8 @@ finalize:
 
     const auto matches_candidate = [&](bool compare_scalar) {
         return BasicBlockMatchesDecodedCandidate(invalidated_candidate, start_eip, end_eip, inst_count, slot_count,
-                                                 terminal_kind, branch_target_eip, fallthrough_eip, compare_scalar,
-                                                 std::span(op_storage.data(), op_count), binding_indices);
+                                                 terminal_kind, compare_scalar, std::span(op_storage.data(), op_count),
+                                                 binding_indices);
     };
     const bool candidate_has_jit = invalidated_candidate && invalidated_candidate->has_unfused_handlers &&
                                    invalidated_candidate->entry != invalidated_candidate->FirstOp()->handler;
@@ -970,7 +964,18 @@ finalize:
 #if FIBERCPU_LINKED_BLOCK_CACHE
     retain_region_context |= hot_count && LinkedPageRegionsEnabled();
 #endif
-    size_t alloc_size = BasicBlock::CalculateSize(layout, hot_count != 0, retain_region_context);
+    bool weighted_profile = false;
+#if FIBERCPU_LLVM_JIT
+    weighted_profile = hot_count && LLVMWeightedProfileEnabled(*state);
+#endif
+#if defined(FIBERCPU_ENABLE_BLOCK_PROFILE) || defined(FIBERCPU_ENABLE_HANDLER_PROFILE)
+    const bool retain_exec_count = true;
+#elif FIBERCPU_LLVM_JIT
+    const bool retain_exec_count = weighted_profile || (hot_count && LLVMJitTraceEnabled());
+#else
+    const bool retain_exec_count = false;
+#endif
+    size_t alloc_size = BasicBlock::CalculateSize(layout, hot_count != 0, retain_region_context, retain_exec_count);
     void* mem = state->mmu.try_allocate_block_bytes(alloc_size, start_eip);
     if (!mem) {
         if (use_single_step) *use_single_step = true;
@@ -983,19 +988,16 @@ finalize:
     block->set_valid(true);
     block->end_eip = end_eip;
     block->set_inst_count(inst_count);
-    block->exec_count = 0;
-    block->branch_target_eip = branch_target_eip;
-    block->fallthrough_eip = fallthrough_eip;
     block->set_terminal_kind(terminal_kind);
     block->chain.llvm_hot_count = hot_count;
-#if FIBERCPU_LLVM_JIT
-    block->chain.weighted_profile = hot_count && LLVMWeightedProfileEnabled(*state);
-#endif
+    block->chain.weighted_profile = weighted_profile;
     block->has_unfused_handlers = hot_count != 0;
     block->chain.has_region_context = retain_region_context;
+    block->chain.has_exec_count = retain_exec_count;
 
     block->WriteOps(layout, final_ops, state->mmu.invalid_code_block(), false, binding_indices);
     if (retain_region_context) block->SetRegionContext(nullptr);
+    if (retain_exec_count) block->ExecCountStorage() = 0;
 #if FIBERCPU_BLOCK_COMPILATION
     if (hot_count) std::copy_n(scalar_handlers.data(), decoded_inst_count, block->UnfusedHandlers());
 #endif

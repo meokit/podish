@@ -166,7 +166,7 @@ static FORCE_INLINE ATTR_PRESERVE_NONE int64_t ChainToKnownBlock(EmuState* RESTR
     DecodedOp* next_head = next_block->FirstOp();
     CountLLVMBlockEntry(state, next_block, next_block->chain);
 #if defined(FIBERCPU_ENABLE_BLOCK_PROFILE) || defined(FIBERCPU_ENABLE_HANDLER_PROFILE)
-    next_block->exec_count++;
+    next_block->ExecCountStorage()++;
 #endif
 #ifdef FIBERCPU_ENABLE_HANDLER_PROFILE
     state->current_block_head = next_head;

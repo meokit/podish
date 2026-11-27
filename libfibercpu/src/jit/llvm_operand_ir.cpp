@@ -839,11 +839,12 @@ bool CanInlinePageMember(const llvm::Function& entry) {
         if (!callee) return false;
         const auto name = callee->getName();
         // These calls cannot run a guest observer or invalidate the page.
-        // GetNextEip receives the block itself, which is bound before inlining.
+        // GetNextEip and ExecCountStorage receive the block itself, which is bound before inlining.
         if (!callee->isIntrinsic() && name != kWriteArithmeticFlags && name != kWriteLogicalFlags &&
             name != kReadFlag && name != "FiberLLVMRegionEdge" && name != "FiberLLVMRegionExit" &&
-            name != "FiberLLVMRegionBase" && name != "_ZNK8fiberish10BasicBlock10GetNextEipEm" && name != "memcpy" &&
-            name != "memmove" && name != "memset" && name != "memcmp")
+            name != "FiberLLVMRegionBase" && name != "_ZNK8fiberish10BasicBlock10GetNextEipEm" &&
+            name != "_ZN8fiberish10BasicBlock16ExecCountStorageEv" && name != "memcpy" && name != "memmove" &&
+            name != "memset" && name != "memcmp")
             return false;
     }
     return true;

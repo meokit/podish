@@ -82,7 +82,7 @@ extern ATTR_PRESERVE_NONE int64_t ResolveBranchTargetSlowDoubleSlot(EmuState* RE
 FORCE_INLINE void CountLLVMBlockEntry(EmuState* state, BasicBlock* block, BasicBlockChainPrefix chain) {
 #if FIBERCPU_BLOCK_COMPILATION
 #if FIBERCPU_LLVM_JIT && !defined(FIBERCPU_ENABLE_BLOCK_PROFILE) && !defined(FIBERCPU_ENABLE_HANDLER_PROFILE)
-    if (chain.weighted_profile || chain.jit_execution_profile) ++block->exec_count;
+    if (chain.weighted_profile || chain.jit_execution_profile) ++block->ExecCountStorage();
 #endif
     const auto count = chain.llvm_hot_count;
     if (count > 1) {
@@ -147,7 +147,7 @@ FORCE_INLINE BlockChainTarget TryChainBlock(EmuState* state, DecodedOp* op, uint
     DecodedOp* next_head = next_block->FirstOp();
     CountLLVMBlockEntry(state, next_block, header_ptr->chain);
 #if defined(FIBERCPU_ENABLE_BLOCK_PROFILE) || defined(FIBERCPU_ENABLE_HANDLER_PROFILE)
-    next_block->exec_count++;
+    next_block->ExecCountStorage()++;
 #endif
 #ifdef FIBERCPU_ENABLE_HANDLER_PROFILE
     state->current_block_head = next_head;

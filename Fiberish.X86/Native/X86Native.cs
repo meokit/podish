@@ -347,18 +347,16 @@ public unsafe partial class X86Native
         }
     }
 
-    [StructLayout(LayoutKind.Explicit, Size = 48)]
+    [StructLayout(LayoutKind.Explicit, Size = 32)]
     public struct BasicBlock
     {
         [FieldOffset(0)] public BasicBlockChainPrefix chain;
         [FieldOffset(8)] public IntPtr entry;
         [FieldOffset(16)] public uint end_eip;
-        [FieldOffset(20)] public byte slot_count; // Includes physical data slots and the sentinel.
-        [FieldOffset(21)] public byte sentinel_slot_index;
-        [FieldOffset(28)] public uint branch_target_eip;
-        [FieldOffset(32)] public uint fallthrough_eip;
-        [FieldOffset(36)] public byte terminal_kind_raw;
-        [FieldOffset(40)] public ulong exec_count;
+        [FieldOffset(20)] public uint sentinel_eip;
+        [FieldOffset(24)] public byte slot_count; // Includes physical data slots and the sentinel.
+        [FieldOffset(25)] public byte sentinel_slot_index;
+        [FieldOffset(28)] public byte terminal_kind_raw;
 
         // Convenience properties for start_eip and inst_count
         public uint start_eip

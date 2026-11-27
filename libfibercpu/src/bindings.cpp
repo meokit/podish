@@ -271,7 +271,7 @@ static bool BlockIsConcatCandidateTerminal(const BasicBlock* block) {
 static bool BlockFormsSmallLoopWith(const BasicBlock* source, const BasicBlock* target) {
     if (!source || !target) return false;
     if (source->start_eip() == target->start_eip()) return true;
-    return target->branch_target_eip == source->start_eip();
+    return target->BranchTargetEip() == source->start_eip();
 }
 
 static BasicBlock* CacheDecodedBlock(EmuState* state, uint32_t cache_eip, BasicBlock* block) {
@@ -352,8 +352,9 @@ static BasicBlock* BuildBlockConcat(EmuState* state, const BasicBlock* a, const 
 #endif
     const auto layout = BlockSlotLayout::Inspect(start_eip, ops);
     const bool retain_region_context = a->chain.has_region_context && b->chain.has_region_context;
+    const bool retain_exec_count = a->chain.has_exec_count;
     void* mem = state->mmu.try_allocate_block_bytes(
-        BasicBlock::CalculateSize(layout, retain_scalar_handlers, retain_region_context), start_eip);
+        BasicBlock::CalculateSize(layout, retain_scalar_handlers, retain_region_context, retain_exec_count), start_eip);
     if (!mem) return nullptr;
     // Static scalar lowering depends on each instruction's original operands.
     // In this build the published slots already carry the correct handlers.
@@ -370,13 +371,13 @@ static BasicBlock* BuildBlockConcat(EmuState* state, const BasicBlock* a, const 
     concat->set_valid(true);
     concat->end_eip = b->end_eip;
     concat->set_inst_count(concat_count);
-    concat->branch_target_eip = b->branch_target_eip;
-    concat->fallthrough_eip = b->fallthrough_eip;
     concat->set_terminal_kind(b->terminal_kind());
     concat->has_unfused_handlers = retain_scalar_handlers;
     concat->chain.has_region_context = retain_region_context;
+    concat->chain.has_exec_count = retain_exec_count;
     concat->WriteOps(layout, ops, state->mmu.invalid_code_block(), preserve_handlers);
     if (retain_region_context) concat->SetRegionContext(nullptr);
+    if (retain_exec_count) concat->ExecCountStorage() = 0;
 
 #if FIBERCPU_BLOCK_COMPILATION
     if (retain_scalar_handlers) {
@@ -419,7 +420,7 @@ static __attribute__((noinline, cold)) BasicBlock* ResolveBlockForRunSlow(EmuSta
 
     state->block_stats.block_concat_attempts++;
     const bool is_direct_jmp = new_block->terminal_kind() == BlockTerminalKind::DirectJmpRel;
-    const uint32_t successor_eip = is_direct_jmp ? new_block->branch_target_eip : new_block->fallthrough_eip;
+    const uint32_t successor_eip = is_direct_jmp ? new_block->BranchTargetEip() : new_block->end_eip;
     if (successor_eip == eip) {
         state->block_stats.block_concat_reject_loop++;
         return CacheDecodedBlock(state, eip, new_block);
@@ -1142,7 +1143,7 @@ int X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
             state->sequence_history_length = 0;
 #endif
 #if defined(FIBERCPU_ENABLE_BLOCK_PROFILE) || defined(FIBERCPU_ENABLE_HANDLER_PROFILE)
-            block_ptr->exec_count++;
+            block_ptr->ExecCountStorage()++;
 #endif
 
             if (state->last_block->inst_count() > 0) {
@@ -1321,10 +1322,11 @@ void X86_GetBlockExecStats(EmuState* state, X86_BlockExecStats* stats) {
     for (const auto& entry : state->mmu.code_cache().block_entries) {
         const BasicBlock* block = entry.block;
         if (!block || block == invalid_block || !block->is_valid() || block->inst_count() == 0) continue;
-        stats->executed_block_entries += block->exec_count;
-        stats->executed_inst_total += block->exec_count * block->inst_count();
-        stats->exec_weighted_histogram[std::min<uint32_t>(block->inst_count(), 64)] += block->exec_count;
-        try_insert_top(block->start_eip(), block->inst_count(), block->exec_count);
+        const auto exec_count = block->ExecCount();
+        stats->executed_block_entries += exec_count;
+        stats->executed_inst_total += exec_count * block->inst_count();
+        stats->exec_weighted_histogram[std::min<uint32_t>(block->inst_count(), 64)] += exec_count;
+        try_insert_top(block->start_eip(), block->inst_count(), exec_count);
     }
 
     stats->exec_weighted_avg_block_insts =
@@ -1759,7 +1761,7 @@ int X86_ReadBlockDump(const BasicBlock* block, X86_BlockDumpHeader* header, X86_
     if (!block || !header) return 0;
     const auto count = block->inst_count();
     if (count > capacity || (count && !ops)) return 0;
-    *header = {block->exec_count, block->start_eip(), block->end_eip, count, 0};
+    *header = {block->ExecCount(), block->start_eip(), block->end_eip, count, 0};
     for (uint32_t i = 0; i < count; ++i) {
         const auto op = block->ReadOp(i);
         const auto memory = HasMem(&op) ? (uint64_t{op.ext.data.ea_desc} << 32) | op.ext.data.disp : 0;
