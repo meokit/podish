@@ -339,7 +339,7 @@ const BasicBlock* DecodeBlock(uint64_t pc, const uint8_t* executable, const Prof
         if (slot.fused) {
             if (!profile.trusted_baking && !handler) slot.flags |= UntrustedFused;
             slot.handler = handler ? handler : GetFusedDispatchHandler();
-            if (dead_from_here & ((1u << slot.fused_length) - 1)) slot.flags |= OmitsFlags;
+            if (dead_from_here & (UINT32_MAX >> (32 - slot.fused_length))) slot.flags |= OmitsFlags;
         } else if (dead_from_here & 1) {
             auto binding = profile.resolve ? profile.resolve(slot.op, true) : HandlerBinding{};
             if (binding.scalar_handler && !profile.trusted_baking && !binding.handler)

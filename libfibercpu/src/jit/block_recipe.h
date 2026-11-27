@@ -10,7 +10,9 @@
 
 namespace fiberish::block_recipe {
 
+// The generated LLVM template and offline recipe format have 64 slots.
 inline constexpr size_t kMaxOps = 64;
+static_assert(BlockMax <= kMaxOps);
 
 enum LLVMRequirement : uint8_t {
     kRegisterOperand = 1,

@@ -10,6 +10,7 @@
 #include <utility>
 #include <vector>
 #include "block_handler_storage.h"
+#include "block_limits.h"
 #include "common.h"
 #include "handler_abi.h"
 #include "mem/tlb.h"
@@ -490,11 +491,10 @@ FORCE_INLINE uint32_t GetControlTargetEip(const DecodedOp* op) {
 
 struct BlockSlotLayout {
     uint8_t logical_slot_count;
-    uint8_t anchor_count;
     uint8_t data_slot_count;
 
     constexpr size_t PhysicalSlotCount() const { return size_t(logical_slot_count) + data_slot_count; }
-    static BlockSlotLayout Inspect(uint32_t start_eip, std::span<const DecodedInstruction> ops);
+    static BlockSlotLayout Inspect(std::span<const DecodedInstruction> ops);
 };
 
 struct BasicBlockChainPrefix {
@@ -519,7 +519,7 @@ struct alignas(16) BasicBlock {
     uint32_t sentinel_eip = 0;
     uint8_t slot_count = 0;  // Physical slots, including data and sentinel.
     uint8_t sentinel_slot_index = 0;
-    uint8_t anchor_count = 0;
+    uint8_t reserved = 0;  // Preserve the managed header offsets.
     // LOCK is invalid for RET, leaving that bit free to mark a link-only tail.
     uint8_t link_only_return_prefixes = 0;
     uint8_t terminal_kind_raw = 0;
@@ -543,7 +543,6 @@ struct alignas(16) BasicBlock {
         size_t size = offsetof(BasicBlock, slots) + SlotStorageSize(layout.PhysicalSlotCount(), layout.data_slot_count);
         if (retain_region_context) size += sizeof(void*);
         size += (layout.logical_slot_count - 1) * (sizeof(uint16_t) + BlockHandlerWidth<HandlerFunc>(unfused));
-        if (layout.anchor_count) size = AlignFooter(size) + sizeof(uint64_t) + sizeof(uint32_t) * layout.anchor_count;
         if (retain_exec_count) size = AlignFooter(size) + sizeof(uint64_t);
         return size;
     }
@@ -649,15 +648,11 @@ struct alignas(16) BasicBlock {
                                                  inst_count() * BlockHandlerWidth<HandlerFunc>(unfused_storage));
     }
 
-    size_t AnchorOffset() const {
+    size_t ExecCountOffset() const {
         return AlignFooter(reinterpret_cast<const std::byte*>(PCEnds() + inst_count()) -
                            reinterpret_cast<const std::byte*>(this));
     }
 
-    size_t ExecCountOffset() const {
-        const auto offset = AnchorOffset();
-        return anchor_count ? AlignFooter(offset + sizeof(uint64_t) + sizeof(uint32_t) * anchor_count) : offset;
-    }
 #if defined(FIBERCPU_LLVM_BLOCK_TEMPLATE)
     [[gnu::noinline]]
 #endif
@@ -673,25 +668,24 @@ struct alignas(16) BasicBlock {
     FORCE_INLINE BasicBlock* FallthroughLink() const { return Sentinel()->LoadBlockLink(); }
     FORCE_INLINE void SetFallthroughLink(BasicBlock* target) { Sentinel()->StoreBlockLink(target); }
 
-    FORCE_INLINE uint32_t PCAdjustment(size_t slot) const {
-        const auto* anchors =
-            reinterpret_cast<const uint64_t*>(reinterpret_cast<const std::byte*>(this) + AnchorOffset());
-        const auto mask = *anchors & (UINT64_MAX >> (63 - slot));
-        if (!mask) return 0;
-        const auto* adjustments = reinterpret_cast<const uint32_t*>(anchors + 1);
-        return adjustments[std::popcount(mask) - 1];
-    }
     [[gnu::pure, gnu::noinline]] inline uint32_t GetNextEip(size_t slot) const {
         if (slot == inst_count()) return sentinel_eip;
-        return start_eip() + PCEnds()[slot] + (anchor_count ? PCAdjustment(slot) : 0);
+        return start_eip() + PCEnds()[slot];
     }
     FORCE_INLINE uint32_t GetNextEip(const DecodedOp* op) const { return GetNextEip(LogicalIndex(op)); }
-    FORCE_INLINE uint32_t GetStartEip(const DecodedOp* op) const {
+    // Keep the native handlers' EIP recovery out of line. LLVM region
+    // compilation still binds the current block while inlining its template.
+#if defined(FIBERCPU_LLVM_BLOCK_TEMPLATE)
+    FORCE_INLINE
+#else
+    [[gnu::pure, gnu::noinline]] inline
+#endif
+    uint32_t GetStartEip(const DecodedOp* op) const {
         const auto slot = LogicalIndex(op);
         if (slot == inst_count()) [[unlikely]]
             return sentinel_eip;
         const auto offset = slot ? PCEnds()[slot - 1] : 0;
-        return start_eip() + offset + (anchor_count ? PCAdjustment(slot) : 0);
+        return start_eip() + offset;
     }
     FORCE_INLINE uint8_t GetOpLength(size_t slot) const {
         if (slot == inst_count()) return 0;
@@ -700,7 +694,7 @@ struct alignas(16) BasicBlock {
     }
 
     void WriteOps(BlockSlotLayout layout, std::span<const DecodedInstruction> ops, BasicBlock* invalid,
-                  bool preserve_handlers = false, std::span<const ScalarBindingIndex> binding_indices = {});
+                  std::span<const ScalarBindingIndex> binding_indices = {});
     DecodedInstruction ReadOp(size_t slot) const;
 
     BlockTerminalKind terminal_kind() const { return static_cast<BlockTerminalKind>(terminal_kind_raw); }

@@ -42,8 +42,7 @@ A match replaces the current entry handler. The matcher steps to the next
 instruction in the decoded array, so another entry can also start a fusion.
 The compiled handler advances by the baked slot widths, including the data slot
 for any two-slot instruction. An entry with no matching operand clone uses the
-scalar binding. Block concat can restore the canonical identities and run
-matching again on the joined instruction array. See
+scalar binding. See
 [superopcodes.cpp](../libfibercpu/src/superopcodes.cpp),
 [the sequence generator](../Podish.PerfTools/Program.SuperopcodeSequences.cs)
 and [bindings.cpp](../libfibercpu/src/bindings.cpp).
@@ -52,8 +51,8 @@ The decoder's reverse lookup relies on distinct handler addresses. For example,
 opposite SUB encodings can produce identical machine code for one pair of
 registers while still requiring different ModRM interpretations. Windows links
 libfibercpu and the NativeAOT CLI with `/OPT:NOICF` to preserve those identities.
-The [block concat regression](../Fiberish.X86.Tests/Regression/BlockConcatTests.cs)
-checks the operand direction after a Jcc fallthrough concat.
+The [conditional branch regression](../Fiberish.X86.Tests/Regression/ConditionalBranchTests.cs)
+checks the operand direction across a Jcc fallthrough.
 
 ## Execution and replay
 

@@ -1,4 +1,5 @@
 #include "bindings.h"
+#include "block_limits.h"
 
 #undef NDEBUG
 #include <array>
@@ -67,13 +68,14 @@ void profile_block_boundaries() {
     alignas(PageSize) std::array<uint8_t, PageSize> first{}, second{};
     put(first.data() + PageSize - 8, A);
     put(first.data() + PageSize - 4, B);
-    for (unsigned i = 0; i < 24; ++i)
+    constexpr auto max = fiberish::BlockMax;
+    for (unsigned i = 0; i < max; ++i)
         put(second.data() + i * 4, C);
-    put(second.data() + 24 * 4, BCond); // b.eq .+4, a block boundary even on fallthrough
-    put(second.data() + 25 * 4, D);
-    put(second.data() + 26 * 4, BSkip); // jump over an unexecuted word
-    put(second.data() + 28 * 4, E);
-    put(second.data() + 29 * 4, Load); // ldr x1,[x2] faults at zero
+    put(second.data() + max * 4, BCond); // b.eq .+4, a block boundary even on fallthrough
+    put(second.data() + (max + 1) * 4, D);
+    put(second.data() + (max + 2) * 4, BSkip); // jump over an unexecuted word
+    put(second.data() + (max + 4) * 4, E);
+    put(second.data() + (max + 5) * 4, Load); // ldr x1,[x2] faults at zero
     const std::array extra{A, B, C, Nop, A, B, C};
     std::memcpy(first.data(), extra.data(), sizeof(extra));
     const std::array with_hook{A, Load, C};
@@ -81,8 +83,8 @@ void profile_block_boundaries() {
     assert(AArch64_MemMapHostPage(state, HighPc, first.data(), 5));
     assert(AArch64_MemMapHostPage(state, HighPc + PageSize, second.data(), 5));
     for (unsigned i = 0; i < 2; ++i) {
-        run(state, HighPc + PageSize - 8, 40);
-        assert(X86_GetFaultVector(state) == 14 && AArch64_RegRead(state, 32) == HighPc + PageSize + 29 * 4);
+        run(state, HighPc + PageSize - 8, max + 16);
+        assert(X86_GetFaultVector(state) == 14 && AArch64_RegRead(state, 32) == HighPc + PageSize + (max + 5) * 4);
     }
     run(state, HighPc, extra.size());
     AArch64_RegWrite(state, 32, HighPc);
@@ -114,7 +116,7 @@ void profile_block_boundaries() {
     assert(!std::remove(path.c_str()));
     assert(json.find(R"("version":2,"architecture":"aarch64")") != std::string::npos);
     const std::map<std::vector<uint32_t>, unsigned> expected = {
-        {{A, B}, 2},    {std::vector<uint32_t>(24, C), 2},
+        {{A, B}, 2},    {std::vector<uint32_t>(max, C), 2},
         {{BCond}, 2},   {{D, BSkip}, 2},
         {{E}, 2},       {std::vector<uint32_t>(extra.begin(), extra.end()), 1},
         {{A}, 1},       {{B}, 1},

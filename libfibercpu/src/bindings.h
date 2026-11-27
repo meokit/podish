@@ -228,6 +228,7 @@ typedef struct {
     uint64_t total_block_insts;
     uint64_t stop_reason_counts[8];
     uint64_t inst_histogram[65];
+    // Reserved ABI fields for the previous concatenation counters.
     uint64_t block_concat_attempts;
     uint64_t block_concat_success;
     uint64_t block_concat_success_direct_jmp;

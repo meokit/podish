@@ -41,8 +41,8 @@ inline void* Mmu::try_allocate_block_bytes(size_t size, uint32_t guest_eip) {
     auto& cache = code_cache();
     if (code_cache_flush_pending()) return nullptr;
     if (cache.ShouldFlushForAllocation(size)) {
-        // A block allocation must never reclaim storage borrowed by a decoder,
-        // concatenation builder, or a running native operation chain.
+        // A block allocation must never reclaim storage borrowed by a decoder
+        // or a running native operation chain.
         if (cache.requested_block_bytes == 0) return nullptr;
         cache.pending_flush = true;
         cache.pending_budget_flush = true;

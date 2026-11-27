@@ -7,7 +7,7 @@ namespace Fiberish.X86.Tests.Regression;
 public sealed class RevalidatedBlockCoherenceTests
 {
     [Fact]
-    public void RevalidatedSource_WhenConcatIsBuilt_RemainsRegisteredForLaterInvalidation()
+    public void RevalidatedSource_RemainsRegisteredForLaterInvalidation()
     {
         using var cpu = new CpuSandbox(mapDefaults: false);
         const uint caller = CpuSandbox.CodeAddress;
@@ -18,22 +18,20 @@ public sealed class RevalidatedBlockCoherenceTests
         cpu.MapMemory(source, CpuSandbox.PageSize, 7);
         cpu.WriteMemory(caller, Jump(caller, source));
         cpu.WriteMemory(source, [0xB8, 7, 0, 0, 0, .. Jump(source + 5, successor)]);
-        // Source has two instructions; successor has 64. Their direct-jump
-        // concat would have 65, so the initial source must be cached separately.
+        // Warm the cached source and successor.
         cpu.WriteMemory(successor, Enumerable.Repeat((byte)0x41, 64).ToArray());
         RunCaller();
         Assert.Equal(7u, cpu[Reg.EAX]);
         Assert.Equal(64u, cpu[Reg.ECX]);
 
-        // Invalidate the page, leaving the source bytes unchanged. Its old
-        // decoded block can be revalidated, but a concat now fits as well.
+        // Invalidate the page, leaving the source bytes unchanged so its
+        // decoded block can be revalidated.
         cpu.WriteMemory(successor, Jump(successor, end));
         RunCaller();
         Assert.Equal(7u, cpu[Reg.EAX]);
 
-        // The caller's cached target still refers to that revalidated source.
-        // A second page invalidation must reach it, even if concat publication
-        // chose an already-valid block rather than the new concat.
+        // A second page invalidation must reach the revalidated source
+        // still referenced by the caller's cached target.
         cpu.WriteMemory(source + 1, BitConverter.GetBytes(9u));
         RunCaller();
         Assert.Equal(9u, cpu[Reg.EAX]);
@@ -58,16 +56,15 @@ public sealed class RevalidatedBlockCoherenceTests
         cpu.MapMemory(caller, CpuSandbox.PageSize, 7);
         cpu.MapMemory(source, CpuSandbox.PageSize, 7);
 
-        // Warm the source alone: two instructions plus the 64-instruction
-        // successor exceed the concat limit.
+        // Warm the caller's link to the source on the second page.
         cpu.WriteMemory(caller, Jump(caller, source));
         cpu.WriteMemory(source, [0xB8, 7, 0, 0, 0, .. Jump(source + 5, successor)]);
         cpu.WriteMemory(successor, Enumerable.Repeat((byte)0x41, 64).ToArray());
         RunCaller();
         Assert.Equal(7u, cpu[Reg.EAX]);
 
-        // Invalidate the source page. Revalidation now also fits a short concat
-        // with the rewritten successor, so the revalidated block is republished.
+        // The successor write invalidates their shared page. The source
+        // is revalidated when the caller reaches it again.
         cpu.WriteMemory(successor, Jump(successor, end));
         RunCaller();
         Assert.Equal(7u, cpu[Reg.EAX]);

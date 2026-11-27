@@ -37,10 +37,6 @@ static bool CheckCompactSlots(EmuState* state) {
     uint32_t guest_pc = start;
     std::array<DecodedInstruction, std::size(cases) + 1> ops{};
     for (size_t i = 0; i < std::size(cases); ++i) {
-        if (i == 2)
-            guest_pc += 0x1234;
-        if (i == 7)
-            guest_pc -= 0x4567;
         auto bytes = cases[i].bytes;
         DecodedInstTmp decoded{};
         uint16_t opcode = 0;
@@ -58,10 +54,10 @@ static bool CheckCompactSlots(EmuState* state) {
     ops.back().next_eip = guest_pc;
     SetExtKind(&ops.back(), ExtKind::Link);
     constexpr uint8_t count = std::tuple_size_v<decltype(ops)>;
-    alignas(BasicBlock) std::byte storage[BasicBlock::CalculateSize({count, count, count})];
+    alignas(BasicBlock) std::byte storage[BasicBlock::CalculateSize({count, count})];
     auto* block = new (storage) BasicBlock;
     block->set_start_eip(start);
-    block->WriteOps(BlockSlotLayout::Inspect(start, ops), ops, state->mmu.invalid_code_block());
+    block->WriteOps(BlockSlotLayout::Inspect(ops), ops, state->mmu.invalid_code_block());
     for (size_t i = 0; i < std::size(cases); ++i) {
         auto* slot = block->LogicalOp(i);
         const auto got = block->ReadOp(i);
@@ -102,7 +98,7 @@ static bool CheckCompactSlots(EmuState* state) {
 
 static bool CheckMaximalPhysicalSlots(EmuState* state, uint32_t address, std::byte* page) {
     constexpr uint8_t code[] = {0x80, 0x83, 0x78, 0x56, 0x34, 0x12, 0xab};
-    constexpr uint32_t count = 64;
+    constexpr uint32_t count = BlockMax;
     for (unsigned i = 0; i < count; ++i)
         std::memcpy(page + i * sizeof(code), code, sizeof(code));
     state->mmu.reset_code_cache();
@@ -118,7 +114,7 @@ static bool CheckMaximalPhysicalSlots(EmuState* state, uint32_t address, std::by
             block->GetStartEip(slot) != address + i * sizeof(code) || block->GetOpLength(i) != sizeof(code))
             return false;
     }
-    // The branch's second slot stays adjacent even in a full 129-slot block.
+    // The branch's second slot stays adjacent even in a full block.
     std::array<DecodedInstruction, count + 1> ops;
     for (unsigned i = 0; i <= count; ++i)
         ops[i] = block->ReadOp(i);
@@ -130,7 +126,7 @@ static bool CheckMaximalPhysicalSlots(EmuState* state, uint32_t address, std::by
     branch.head.SetLength(sizeof(code));
     FinalizeDecodedInstruction(state, address, opcode, &branch.head);
     ops[0] = branch.head;
-    const auto layout = BlockSlotLayout::Inspect(address, ops);
+    const auto layout = BlockSlotLayout::Inspect(ops);
     auto* storage = state->mmu.try_allocate_block_bytes(BasicBlock::CalculateSize(layout), address);
     if (!storage)
         return false;
@@ -407,16 +403,15 @@ static bool CheckBoundScalarWidths() {
     return true;
 }
 
-static bool CheckMemoryFaultEip(bool write, bool single_step, bool concat = false) {
+static bool CheckMemoryFaultEip(bool write, bool single_step, bool jump_to_access = false) {
     constexpr uint32_t code_address = 0x1000;
     constexpr uint32_t data_address = 0x2000;
-    // INC EDX, optionally followed by a JMP over UD2. The concatenated block
-    // removes the JMP and has a PC discontinuity before the replaying access.
+    // INC EDX, optionally followed by a JMP over UD2 to the faulting access.
     constexpr uint8_t prefix[] = {0x42, 0xeb, 0x02, 0x0f, 0x0b};
     constexpr uint8_t load[] = {0x8b, 0x01, 0x42};
     constexpr uint8_t store[] = {0xc7, 0x01, 0x78, 0x56, 0x34, 0x12, 0x42};
     const auto code = write ? std::span<const uint8_t>(store) : std::span<const uint8_t>(load);
-    const uint32_t prefix_size = concat ? sizeof(prefix) : 1;
+    const uint32_t prefix_size = jump_to_access ? sizeof(prefix) : 1;
     const auto fault_eip = code_address + prefix_size;
     TestPageBacking pages;
     std::unique_ptr<EmuState, decltype(&X86_Destroy)> state(X86_Create(), X86_Destroy);
@@ -446,9 +441,9 @@ static bool CheckMemoryFaultEip(bool write, bool single_step, bool concat = fals
     } else {
         X86_Run(state.get(), fault_eip + static_cast<uint32_t>(code.size()), 16);
     }
-    return (!concat || state->block_stats.block_concat_success_direct_jmp == 1) && fault.count == 1 && fault.matched &&
-           state->status == EmuStatus::Fault && X86_GetEIP(state.get()) == fault_eip &&
-           X86_RegRead(state.get(), EDX) == 1 && state->mem_op_type == PendingMemOp::None;
+    return fault.count == 1 && fault.matched && state->status == EmuStatus::Fault &&
+           X86_GetEIP(state.get()) == fault_eip && X86_RegRead(state.get(), EDX) == 1 &&
+           state->mem_op_type == PendingMemOp::None;
 }
 
 static bool CheckPageLocalBlockCache() {
@@ -523,7 +518,7 @@ int main() {
         }
         return true;
     };
-    bool ok = check(0, 0, 64, address + 64) && check(0, 1, 1, address + 1) &&
+    bool ok = check(0, 0, BlockMax, address + BlockMax) && check(0, 1, 1, address + 1) &&
               check(address + 17, 0, 17, address + 17) && CheckCompactSlots(state);
     if (!CheckBoundScalarWidths()) {
         std::fprintf(stderr, "LEA or immediate MOV width binding failed\n");
@@ -534,8 +529,8 @@ int main() {
         ok = false;
     }
     // Invalid 15-byte prefix sequence at the last available decoded-op slot.
-    std::memset(page + 63, 0x66, 15);
-    ok = check(0, 0, 64, address + 64) && ok;
+    std::memset(page + BlockMax - 1, 0x66, 15);
+    ok = check(0, 0, BlockMax, address + BlockMax) && ok;
     // A one-byte instruction at the end of a page must not fetch the next page.
     page[4095] = std::byte{0x40};
     uint8_t buffer[15]{};

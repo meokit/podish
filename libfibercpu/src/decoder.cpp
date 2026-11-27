@@ -640,19 +640,18 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
         if (use_single_step) *use_single_step = true;
         return nullptr;
     }
-    // At most 64 decoded ops, followed by a sentinel. A fault can append a
+    // At most BlockMax decoded ops, followed by a sentinel. A fault can append a
     // synthetic op and sentinel while the loop still has room for an op.
-    constexpr size_t MAX_INSTS = 64;
-    std::array<DecodedInstTmp, MAX_INSTS + 1> op_storage;
+    std::array<DecodedInstTmp, BlockMax + 1> op_storage;
     size_t op_count = 0;
-    std::array<uint16_t, MAX_INSTS> index_storage;
-    std::array<ScalarBindingIndex, MAX_INSTS> binding_storage;
+    std::array<uint16_t, BlockMax> index_storage;
+    std::array<ScalarBindingIndex, BlockMax> binding_storage;
     size_t index_count = 0;
 
     uint32_t current_eip = start_eip;
     uint32_t inst_count = 0;
 
-    uint64_t effective_limit = std::min<uint64_t>(MAX_INSTS, max_insts == 0 ? MAX_INSTS : max_insts);
+    uint64_t effective_limit = std::min<uint64_t>(BlockMax, max_insts == 0 ? BlockMax : max_insts);
 
     // DFE Live Flags - declared here to avoid goto skip error
     uint32_t live_flags = DFE_ALL_FLAGS;
@@ -901,9 +900,8 @@ BasicBlock* DecodeBlock(EmuState* state, uint32_t start_eip, uint32_t limit_eip,
 finalize:
     if (!success || op_count == 0) return nullptr;
 
-    // An executable-fetch callback may have invalidated the candidate (or the
-    // source block held by a concatenation builder). The pool is still alive,
-    // but neither the candidate nor the decoded bytes may now be published.
+    // An executable-fetch callback may have invalidated the candidate. The
+    // pool is still alive, but neither the candidate nor the decoded bytes may be published.
     if (state->mmu.code_cache_flush_pending() || state->mmu.code_cache().reset_request_epoch != reset_request_epoch) {
         if (use_single_step) *use_single_step = true;
         return nullptr;
@@ -945,7 +943,7 @@ finalize:
     }
     hot_count = decoded_inst_count ? block_recipe::HotThreshold(*state) : 0;
     if (hot_count && candidate_has_jit) hot_count = 1;
-    std::array<HandlerFunc, MAX_INSTS> scalar_handlers;
+    std::array<HandlerFunc, BlockMax> scalar_handlers;
     if (hot_count) {
         // Runtime registrations have no generated scalar binding index.
         const bool indexed = std::ranges::find(binding_indices, ScalarBindingIndex::Unknown) == binding_indices.end();
@@ -954,14 +952,14 @@ finalize:
             for (uint32_t i = 0; i < decoded_inst_count; ++i) scalar_handlers[i] = scalar_ops[i].handler;
     }
 #endif
-    ApplySuperOpcodesToBlockOps(scalar_ops, decoded_inst_count, false, binding_indices);
+    ApplySuperOpcodesToBlockOps(scalar_ops, decoded_inst_count, binding_indices);
     if (!candidate_has_jit && matches_candidate(false)) {
         invalidated_candidate->Revalidate();
         return invalidated_candidate;
     }
 
     const std::span<const DecodedInstruction> final_ops(scalar_ops, slot_count);
-    const auto layout = BlockSlotLayout::Inspect(start_eip, final_ops);
+    const auto layout = BlockSlotLayout::Inspect(final_ops);
     bool retain_region_context = false;
 #if FIBERCPU_LLVM_JIT
     retain_region_context = hot_count && LLVMPageRegionsEnabled(*state);
@@ -1000,7 +998,7 @@ finalize:
     block->chain.has_region_context = retain_region_context;
     block->chain.has_exec_count = retain_exec_count;
 
-    block->WriteOps(layout, final_ops, state->mmu.invalid_code_block(), false, binding_indices);
+    block->WriteOps(layout, final_ops, state->mmu.invalid_code_block(), binding_indices);
     if (retain_region_context) block->SetRegionContext(nullptr);
     if (retain_exec_count) block->ExecCountStorage() = 0;
 #if FIBERCPU_BLOCK_COMPILATION
@@ -1052,47 +1050,32 @@ uint64_t PackOperand(const DecodedInstruction& op) {
 
 }  // namespace
 
-BlockSlotLayout BlockSlotLayout::Inspect(uint32_t start_eip, std::span<const DecodedInstruction> ops) {
-    assert(!ops.empty() && ops.size() <= 65);
-    BlockSlotLayout layout{static_cast<uint8_t>(ops.size()), 0, 0};
-    auto expected = start_eip;
+BlockSlotLayout BlockSlotLayout::Inspect(std::span<const DecodedInstruction> ops) {
+    assert(!ops.empty() && ops.size() <= BlockMax + 1);
+    BlockSlotLayout layout{static_cast<uint8_t>(ops.size()), 0};
     for (const auto& op : ops.first(ops.size() - 1)) {
-        if (op.next_eip - op.len != expected) ++layout.anchor_count;
-        expected = op.next_eip;
         if (HasExtraOperandSlot(op.meta.all, op.prefixes.all, GetImm(&op))) ++layout.data_slot_count;
     }
     return layout;
 }
 
 void BasicBlock::WriteOps(BlockSlotLayout layout, std::span<const DecodedInstruction> ops, BasicBlock* invalid,
-                          bool preserve_handlers, std::span<const ScalarBindingIndex> binding_indices) {
+                          std::span<const ScalarBindingIndex> binding_indices) {
     slot_count = static_cast<uint8_t>(layout.PhysicalSlotCount());
     sentinel_slot_index = slot_count - 1;
     set_inst_count(layout.logical_slot_count - 1);
     link_only_return_prefixes = 0;
-    anchor_count = layout.anchor_count;
     sentinel_eip = ops.back().next_eip;
 
-    const auto anchor_offset = AnchorOffset();
-    auto* anchors =
-        anchor_count ? reinterpret_cast<uint64_t*>(reinterpret_cast<std::byte*>(this) + anchor_offset) : nullptr;
-    auto* adjustments = anchors ? reinterpret_cast<uint32_t*>(anchors + 1) : nullptr;
     uint64_t data_mask = 0;
-    if (anchors) *anchors = 0;
     uint16_t offset = 0;
-    uint32_t expected = start_eip();
     auto* ends = const_cast<uint16_t*>(PCEnds());
     uint32_t physical_index = 0;
     for (unsigned i = 0; i < inst_count(); ++i) {
         const auto& op = ops[i];
         const uint64_t bit = uint64_t{1} << i;
-        if (op.next_eip - op.len != expected) {
-            *anchors |= bit;
-            *adjustments++ = op.next_eip - op.len - (start_eip() + offset);
-        }
         offset += op.len;
         ends[i] = offset;
-        expected = op.next_eip;
         auto& slot = FirstOp()[physical_index++];
         if (fiberish::IsLinkOnlyReturn(op.meta.all)) {
             assert(i + 1 == inst_count() && !op.prefixes.flags.lock);
@@ -1102,11 +1085,9 @@ void BasicBlock::WriteOps(BlockSlotLayout layout, std::span<const DecodedInstruc
             slot.payload = PackOperand(op);
         }
         HandlerFunc target = op.handler;
-        if (!preserve_handlers) {
-            const auto index = binding_indices.empty() ? ScalarBindingIndex::Unknown : binding_indices[i];
-            const auto binding = BindScalarHandler(op, index);
-            if (binding.handler) target = binding.handler;
-        }
+        const auto index = binding_indices.empty() ? ScalarBindingIndex::Unknown : binding_indices[i];
+        const auto binding = BindScalarHandler(op, index);
+        if (binding.handler) target = binding.handler;
         slot.SetDispatchHandler(target);
         const bool branch_link = HasBranchLinkSlot(op.meta.all);
         const bool memory_immediate = compact_imm::NeedsSeparateSlot(op);
@@ -1147,7 +1128,7 @@ DecodedInstruction BasicBlock::ReadOp(size_t slot) const {
         return result;
     }
     // Runtime handlers get a bound constant. Only the decoded snapshot
-    // needs the original encoding for concatenation, re-decode and export.
+    // needs the original encoding for re-decode and export.
     result.modrm = uint8_t(op.payload >> DecodedOp::kModRMShift);
     if (op.HasBranchOperands()) result.modrm &= 7;
     result.prefixes = op.GetPrefixes();

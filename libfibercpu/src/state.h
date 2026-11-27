@@ -75,15 +75,6 @@ struct BlockStats {
     uint64_t total_block_insts = 0;
     uint64_t stop_reason_counts[8] = {};
     uint64_t inst_histogram[65] = {};
-    uint64_t block_concat_attempts = 0;
-    uint64_t block_concat_success = 0;
-    uint64_t block_concat_success_direct_jmp = 0;
-    uint64_t block_concat_success_jcc_fallthrough = 0;
-    uint64_t block_concat_reject_not_concat_terminal = 0;
-    uint64_t block_concat_reject_cross_page = 0;
-    uint64_t block_concat_reject_size_limit = 0;
-    uint64_t block_concat_reject_loop = 0;
-    uint64_t block_concat_reject_target_missing = 0;
 
     void Record(uint32_t inst_count, BlockStopReason reason) {
         block_count++;
@@ -272,8 +263,7 @@ FORCE_INLINE uint32_t GetNextEip(const EmuState* state, const DecodedOp* op) {
 
 template <unsigned Slots = 1>
 FORCE_INLINE uint32_t GetCallReturnEip(const EmuState* state, const DecodedOp* op) {
-    // Calls end decoding. Concatenation can prepend a block to a call, but
-    // only a relative jump or a conditional branch can be an internal edge.
+    // Calls end the decoded block.
     assert(op + Slots == state->last_block->Sentinel());
     return BakeableBlockEip<LLVMBlockEipField::Next>(op, state->last_block->sentinel_eip);
 }

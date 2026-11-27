@@ -62,34 +62,15 @@ static std::vector<DecodedInstruction> BuildFusionLookupView(const DecodedInstru
 }
 #endif
 
-void ApplySuperOpcodesToBlockOps(DecodedInstruction* ops, uint32_t op_count, [[maybe_unused]] bool previously_lowered,
-                                [[maybe_unused]] std::span<const ScalarBindingIndex> binding_indices) {
+void ApplySuperOpcodesToBlockOps(DecodedInstruction* ops, uint32_t op_count,
+                                 [[maybe_unused]] std::span<const ScalarBindingIndex> binding_indices) {
     if (!ops) return;
-#if FIBERCPU_LOWER_OPERANDS || FIBERCPU_DYNAMIC_OPERANDS
-    if (previously_lowered) {
-        for (uint32_t i = 0; i < op_count; ++i) {
-            auto& op = ops[i];
-            op.handler = CanonicalBoundHandler(op.handler);
-            if (op.meta.flags.operand_lowered) {
-#if FIBERCPU_DYNAMIC_OPERANDS
-                op.handler = CanonicalDynamicOperandHandler(op.handler);
-#endif
-#if FIBERCPU_LOWER_OPERANDS
-                // Concatenation can change the sequence and its last op.
-                // Restore the scalar head so the new block can match it again.
-                op.handler = UnfuseOperandHandler(op.handler);
-#endif
-                op.meta.flags.operand_lowered = 0;
-            }
-        }
-    }
-#endif
-
 #if FIBERCPU_ENABLE_SUPEROPCODES
     assert(binding_indices.empty() || binding_indices.size() == op_count);
     // The generated indices identify canonical handlers selected during fresh decode.
-    const bool known_canonical = !previously_lowered && !binding_indices.empty() &&
-                                 std::ranges::find(binding_indices, ScalarBindingIndex::Unknown) == binding_indices.end();
+    const bool known_canonical =
+        !binding_indices.empty() &&
+        std::ranges::find(binding_indices, ScalarBindingIndex::Unknown) == binding_indices.end();
     const auto view = known_canonical ? std::vector<DecodedInstruction>{} : BuildFusionLookupView(ops, op_count);
     const auto* fusion_ops = view.empty() ? ops : view.data();
 #endif

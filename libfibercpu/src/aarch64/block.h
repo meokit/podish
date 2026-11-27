@@ -4,12 +4,13 @@
 #include <new>
 
 #include "../block_handler_storage.h"
+#include "../block_limits.h"
 #include "../mem/types.h"
 #include "aarch64.h"
 
 namespace fiberish::aarch64::detail {
 
-constexpr unsigned BlockMax = 24;
+using ::fiberish::BlockMax;
 constexpr unsigned PageBytes = 4096;
 constexpr uint64_t PageMask = PageBytes - 1;
 static_assert(BlockMax <= 32);

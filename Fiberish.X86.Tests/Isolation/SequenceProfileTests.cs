@@ -114,8 +114,7 @@ public sealed class SequenceProfileTests
         Assert.Equal(Expected(2), NGramTotal(cpu, 3));
         Assert.Equal(Expected(1), NGramTotal(cpu, 4));
         X86Native.ResetSequenceProfile(cpu.State);
-        // A taken Jcc must cross a dispatch boundary; JMP +0 may be elided
-        // by native block concatenation and legitimately leave three adjacent ops.
+        // The taken Jcc ends the block before the next two instructions.
         cpu.WriteCode([0x40, 0x75, 1, 0x47, 0x43, 0x42]);
         cpu.Run(CpuSandbox.CodeAddress + 6);
         Assert.Equal(0u, cpu[Reg.EDI]);

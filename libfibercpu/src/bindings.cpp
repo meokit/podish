@@ -257,153 +257,9 @@ static void InternalSmcBridge(void* opaque, uint32_t addr) {
 }
 
 #if FIBERCPU_GUEST_I386
-static bool BlockCrossesPage(const BasicBlock* block) {
-    if (!block || block->inst_count() == 0 || block->end_eip <= block->start_eip()) return false;
-    return ((block->start_eip() ^ (block->end_eip - 1)) & 0xFFFFF000u) != 0;
-}
-
-static bool BlockIsConcatCandidateTerminal(const BasicBlock* block) {
-    if (!block) return false;
-    return block->terminal_kind() == BlockTerminalKind::DirectJmpRel ||
-           block->terminal_kind() == BlockTerminalKind::DirectJccRel;
-}
-
-static bool BlockFormsSmallLoopWith(const BasicBlock* source, const BasicBlock* target) {
-    if (!source || !target) return false;
-    if (source->start_eip() == target->start_eip()) return true;
-    return target->BranchTargetEip() == source->start_eip();
-}
-
-static BasicBlock* CacheDecodedBlock(EmuState* state, uint32_t cache_eip, BasicBlock* block) {
-    return state->mmu.cache_decoded_block(cache_eip, block);
-}
-
-static BasicBlock* LookupOrDecodeBlockConcatSuccessor(EmuState* state, uint32_t eip, uint32_t end_eip) {
-    BasicBlock* cached_block = state->mmu.lookup_cached_block(eip);
-    if (cached_block && cached_block->is_valid()) return cached_block;
-
-    const EmuStatus saved_status = state->status;
-    const uint8_t saved_fault_vector = state->fault_vector;
-    const uint32_t saved_fault_addr = state->fault_addr;
-    BasicBlock* block = DecodeBlock(state, eip, end_eip, 0, cached_block);
-    state->status = saved_status;
-    state->fault_vector = saved_fault_vector;
-    state->fault_addr = saved_fault_addr;
-    if (!block) return nullptr;
-    return CacheDecodedBlock(state, eip, block);
-}
-
-static bool CanBlockConcatWithSuccessor(const BasicBlock* a, const BasicBlock* b, bool remove_source_terminal_inst,
-                                        BlockStats* stats) {
-    if (!a || !b || !a->is_valid() || !b->is_valid() || a->inst_count() == 0 || b->inst_count() == 0) {
-        stats->block_concat_reject_target_missing++;
-        return false;
-    }
-
-    if (BlockCrossesPage(a) || BlockCrossesPage(b) || ((a->start_eip() ^ b->start_eip()) & 0xFFFFF000u) != 0) {
-        stats->block_concat_reject_cross_page++;
-        return false;
-    }
-
-    if (BlockFormsSmallLoopWith(a, b)) {
-        stats->block_concat_reject_loop++;
-        return false;
-    }
-
-    const uint32_t removed_inst_count = remove_source_terminal_inst ? 1u : 0u;
-    const uint32_t concat_inst_count = a->inst_count() - removed_inst_count + b->inst_count();
-
-    if (concat_inst_count > 64) {
-        stats->block_concat_reject_size_limit++;
-        return false;
-    }
-
-    return true;
-}
-
-static BasicBlock* BuildBlockConcat(EmuState* state, const BasicBlock* a, const BasicBlock* b, bool remove_terminal) {
-    std::array<DecodedInstruction, 65> staged_ops;
-    const uint32_t source_count = a->inst_count() - (remove_terminal ? 1u : 0u);
-    const uint32_t concat_count = source_count + b->inst_count();
-    const uint32_t start_eip = a->start_eip();
-    auto ops = std::span(staged_ops).first(concat_count + 1);
-
-    for (uint32_t i = 0; i < source_count; ++i) {
-        ops[i] = a->ReadOp(i);
-    }
-    for (uint32_t i = 0; i < b->inst_count(); ++i) {
-        ops[source_count + i] = b->ReadOp(i);
-    }
-    ops.back() = b->ReadOp(b->inst_count());
-
-    const bool retain_scalar_handlers = a->HasUnfusedHandlers() && b->HasUnfusedHandlers();
-    auto unfused = BlockHandlerStorage::None;
-    if (retain_scalar_handlers) unfused = std::max(a->unfused_storage, b->unfused_storage);
-#if FIBERCPU_BLOCK_COMPILATION
-    if (retain_scalar_handlers) {
-        for (uint32_t i = 0; i < source_count; ++i) {
-            ops[i].handler = a->UnfusedHandler(i);
-            ops[i].meta.flags.operand_lowered = 0;
-        }
-        for (uint32_t i = 0; i < b->inst_count(); ++i) {
-            auto& op = ops[source_count + i];
-            op.handler = b->UnfusedHandler(i);
-            op.meta.flags.operand_lowered = 0;
-        }
-    }
-#endif
-    const auto layout = BlockSlotLayout::Inspect(start_eip, ops);
-    const bool retain_region_context = a->chain.has_region_context && b->chain.has_region_context;
-    const bool retain_exec_count = a->chain.has_exec_count;
-    void* mem = state->mmu.try_allocate_block_bytes(
-        BasicBlock::CalculateSize(layout, unfused, retain_region_context, retain_exec_count), start_eip);
-    if (!mem) return nullptr;
-    // Static scalar lowering depends on each instruction's original operands.
-    // In this build the published slots already carry the correct handlers.
-#if !FIBERCPU_ENABLE_SUPEROPCODES && !FIBERCPU_DYNAMIC_OPERANDS
-    const bool preserve_handlers = !retain_scalar_handlers;
-#else
-    constexpr bool preserve_handlers = false;
-#endif
-    if (!preserve_handlers) ApplySuperOpcodesToBlockOps(ops.data(), concat_count, !retain_scalar_handlers);
-    auto* concat = new (mem) BasicBlock;
-    state->mmu.remember_allocated_block(concat);
-
-    concat->set_start_eip(start_eip);
-    concat->set_valid(true);
-    concat->end_eip = b->end_eip;
-    concat->set_inst_count(concat_count);
-    concat->set_terminal_kind(b->terminal_kind());
-    concat->unfused_storage = unfused;
-    concat->chain.has_region_context = retain_region_context;
-    concat->chain.has_exec_count = retain_exec_count;
-    concat->WriteOps(layout, ops, state->mmu.invalid_code_block(), preserve_handlers);
-    if (retain_region_context) concat->SetRegionContext(nullptr);
-    if (retain_exec_count) concat->ExecCountStorage() = 0;
-
-#if FIBERCPU_BLOCK_COMPILATION
-    if (retain_scalar_handlers) {
-        if (unfused == BlockHandlerStorage::Indexed) {
-            auto* indices = concat->UnfusedIndices();
-            std::copy_n(a->UnfusedIndices(), source_count, indices);
-            std::copy_n(b->UnfusedIndices(), b->inst_count(), indices + source_count);
-        } else {
-            auto* handlers = reinterpret_cast<HandlerFunc*>(concat->UnfusedFooter());
-            for (uint32_t i = 0; i < source_count; ++i) handlers[i] = a->UnfusedHandler(i);
-            for (uint32_t i = 0; i < b->inst_count(); ++i) handlers[source_count + i] = b->UnfusedHandler(i);
-        }
-        concat->chain.weighted_profile = a->chain.weighted_profile;
-        concat->chain.llvm_hot_count =
-            concat->chain.weighted_profile ? block_recipe::HotThreshold(*state) : a->chain.llvm_hot_count;
-    }
-#endif
-    return concat;
-}
-
-static __attribute__((noinline, cold)) BasicBlock* ResolveBlockForRunSlow(EmuState* state, uint32_t eip,
-                                                                          uint32_t end_eip, BasicBlock* cached_block,
-                                                                          bool* use_single_step) {
-    const uint64_t reset_request_epoch = state->mmu.code_cache().reset_request_epoch;
+static __attribute__((noinline, cold))
+BasicBlock* ResolveBlockForRunSlow(EmuState* state, uint32_t eip, uint32_t end_eip, BasicBlock* cached_block,
+                                   bool* use_single_step) {
     BasicBlock* new_block = DecodeBlock(state, eip, end_eip, 0, cached_block, use_single_step);
 
     if (!new_block) {
@@ -417,57 +273,7 @@ static __attribute__((noinline, cold)) BasicBlock* ResolveBlockForRunSlow(EmuSta
         }
         return nullptr;
     }
-
-    if (new_block->entry != new_block->FirstOp()->handler) {
-        return CacheDecodedBlock(state, eip, new_block);
-    }
-    if (!BlockIsConcatCandidateTerminal(new_block)) {
-        state->block_stats.block_concat_reject_not_concat_terminal++;
-        return CacheDecodedBlock(state, eip, new_block);
-    }
-
-    state->block_stats.block_concat_attempts++;
-    const bool is_direct_jmp = new_block->terminal_kind() == BlockTerminalKind::DirectJmpRel;
-    const uint32_t successor_eip = is_direct_jmp ? new_block->BranchTargetEip() : new_block->end_eip;
-    if (successor_eip == eip) {
-        state->block_stats.block_concat_reject_loop++;
-        return CacheDecodedBlock(state, eip, new_block);
-    }
-
-    const uint64_t new_block_generation = state->mmu.code_cache().generation;
-    BasicBlock* successor_block = LookupOrDecodeBlockConcatSuccessor(state, successor_eip, end_eip);
-    if (state->mmu.code_cache().reset_request_epoch != reset_request_epoch) {
-        *use_single_step = true;
-        return nullptr;
-    }
-    if (!successor_block) {
-        state->block_stats.block_concat_reject_target_missing++;
-        return CacheDecodedBlock(state, eip, new_block);
-    }
-    if (state->mmu.code_cache().generation != new_block_generation) {
-        *use_single_step = true;
-        return nullptr;
-    }
-
-    if (!CanBlockConcatWithSuccessor(new_block, successor_block, is_direct_jmp, &state->block_stats)) {
-        return CacheDecodedBlock(state, eip, new_block);
-    }
-
-    BasicBlock* concat_block = BuildBlockConcat(state, new_block, successor_block, is_direct_jmp);
-    // The budget warning itself invokes a host log callback. An explicit
-    // reset from that callback must not publish the pre-reset source block.
-    if (state->mmu.code_cache().reset_request_epoch != reset_request_epoch) {
-        *use_single_step = true;
-        return nullptr;
-    }
-    if (!concat_block) return CacheDecodedBlock(state, eip, new_block);
-    state->block_stats.block_concat_success++;
-    if (is_direct_jmp) {
-        state->block_stats.block_concat_success_direct_jmp++;
-    } else {
-        state->block_stats.block_concat_success_jcc_fallthrough++;
-    }
-    return CacheDecodedBlock(state, eip, concat_block);
+    return state->mmu.cache_decoded_block(eip, new_block);
 }
 
 #endif
@@ -1022,10 +828,10 @@ static bool ExecuteSingleInstructionOnStack(EmuState* state) {
     ops.back().next_eip = inst.head.next_eip;
     SetExtKind(&ops.back(), ExtKind::Link);
 
-    alignas(BasicBlock) std::byte block_storage[BasicBlock::CalculateSize({2, 1, 1})];
+    alignas(BasicBlock) std::byte block_storage[BasicBlock::CalculateSize({2, 1})];
     auto* scratch = new (block_storage) BasicBlock;
     scratch->set_start_eip(state->ctx.eip);
-    scratch->WriteOps(BlockSlotLayout::Inspect(state->ctx.eip, ops), ops, state->mmu.invalid_code_block());
+    scratch->WriteOps(BlockSlotLayout::Inspect(ops), ops, state->mmu.invalid_code_block());
     auto* head = scratch->FirstOp();
     auto* previous_block = state->last_block;
     state->last_block = scratch;
@@ -1299,20 +1105,12 @@ int AArch64_RunSlice(EmuState* state, uint64_t budget) { return RunArm(state, 0,
 void X86_GetBlockStats(EmuState* state, X86_BlockStats* stats) {
     if (!state || !stats) return;
 
+    *stats = {};
     const auto& src = state->block_stats;
     stats->block_count = src.block_count;
     stats->total_block_insts = src.total_block_insts;
     std::memcpy(stats->stop_reason_counts, src.stop_reason_counts, sizeof(stats->stop_reason_counts));
     std::memcpy(stats->inst_histogram, src.inst_histogram, sizeof(stats->inst_histogram));
-    stats->block_concat_attempts = src.block_concat_attempts;
-    stats->block_concat_success = src.block_concat_success;
-    stats->block_concat_success_direct_jmp = src.block_concat_success_direct_jmp;
-    stats->block_concat_success_jcc_fallthrough = src.block_concat_success_jcc_fallthrough;
-    stats->block_concat_reject_not_concat_terminal = src.block_concat_reject_not_concat_terminal;
-    stats->block_concat_reject_cross_page = src.block_concat_reject_cross_page;
-    stats->block_concat_reject_size_limit = src.block_concat_reject_size_limit;
-    stats->block_concat_reject_loop = src.block_concat_reject_loop;
-    stats->block_concat_reject_target_missing = src.block_concat_reject_target_missing;
 }
 
 void X86_GetBlockExecStats(EmuState* state, X86_BlockExecStats* stats) {

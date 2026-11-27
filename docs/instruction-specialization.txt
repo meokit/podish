@@ -280,7 +280,7 @@ independent block recipes. Supply a region trace to compile page regions.
 
 A block key contains the exit and ordered catalog-assigned operation IDs.
 Exact keys include decoded operand shapes and the relative guest EIP
-layout, including discontinuities introduced by concatenation. Compiled
+layout. Compiled
 handlers derive their guest EIP base from the installed block, so identical
 recipes can share code across guest addresses. The profile and linked bundle
 must be regenerated for the relative EIP key format. LLVM

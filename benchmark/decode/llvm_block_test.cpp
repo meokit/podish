@@ -234,7 +234,7 @@ bool VerifyDirectBranch(bool enabled) {
     if (!X86_Run(state.get(), end, 16) || X86_GetEIP(state.get()) != end)
         return false;
     auto* block = FindCompiledBlock(state.get());
-    return enabled ? block && block->inst_count() == 4 : block == nullptr;
+    return enabled ? block && block->inst_count() == 3 : block == nullptr;
 }
 
 bool VerifyRelocatedWordBranch(bool enabled) {
@@ -326,7 +326,7 @@ bool VerifyFlagConsumers(bool enabled) {
     return true;
 }
 
-bool VerifyGenericConcat(bool enabled) {
+bool VerifyGenericAcrossJump(bool enabled) {
     // MOVSX EDX, CX; NOP; JMP past UD2; ADD EDX, -1; LEA EAX, [EDX+8]; MOVZX ESI, AL.
     constexpr uint8_t code[] = {0x0f, 0xbf, 0xd1, 0x90, 0xeb, 2,    0x0f, 0x0b, 0x83,
                                 0xc2, 0xff, 0x8d, 0x42, 8,    0x0f, 0xb6, 0xf0};
@@ -339,13 +339,16 @@ bool VerifyGenericConcat(bool enabled) {
         X86_RegRead(state.get(), 6) != 6)
         return false;
     auto* block = FindCompiledBlock(state.get());
+    const auto* target = FindCompiledBlock(state.get(), code_address + 8);
     if (!enabled)
-        return block == nullptr;
-    if (!block || block->inst_count() != 4 || block->GetOpLength(0) != 4)
+        return !block && !target;
+    if (!block || block->inst_count() != 2 || block->GetOpLength(0) != 4 ||
+        X86_GetOpIdForHandler(reinterpret_cast<void*>(block->FirstOp()->handler)) != 0x1bf || !target ||
+        target->inst_count() != 3)
         return false;
-    const int32_t opcodes[] = {0x1bf, 0x83, 0x8d, 0x1b6};
+    const int32_t opcodes[] = {0x83, 0x8d, 0x1b6};
     for (unsigned i = 0; i < std::size(opcodes); ++i) {
-        if (X86_GetOpIdForHandler(reinterpret_cast<void*>(block->LogicalOp(i)->handler)) != opcodes[i])
+        if (X86_GetOpIdForHandler(reinterpret_cast<void*>(target->LogicalOp(i)->handler)) != opcodes[i])
             return false;
     }
     return true;
@@ -1426,8 +1429,8 @@ int main(int argc, char** argv) {
         std::fprintf(stderr, "LLVM flag consumers, exit flags or memory replay mismatch\n");
         return 1;
     }
-    if (!VerifyGenericConcat(enabled) || X86_GetLLVMJitLiveBlockCount() != 0) {
-        std::fprintf(stderr, "LLVM generic re-decode or concatenated block mismatch\n");
+    if (!VerifyGenericAcrossJump(enabled) || X86_GetLLVMJitLiveBlockCount() != 0) {
+        std::fprintf(stderr, "LLVM re-decode across a direct jump mismatch\n");
         return 1;
     }
     if (!VerifyGroup1Registers(enabled) || !VerifyGroup1Memory(enabled) || X86_GetLLVMJitLiveBlockCount() != 0) {

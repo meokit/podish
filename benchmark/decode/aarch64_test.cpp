@@ -645,7 +645,7 @@ bool ReplacedSuccessorUsesCurrentProfile() {
 }
 
 bool TruncatedBlocks() {
-    constexpr unsigned Words = 24;
+    constexpr unsigned Words = detail::BlockMax;
     constexpr uint32_t Add = 0x91000421; // add x1, x1, #1
     Profile profile;
     profile.trusted_baking = true;
