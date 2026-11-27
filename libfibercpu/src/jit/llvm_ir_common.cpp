@@ -4,12 +4,15 @@
 #include <optional>
 #include <utility>
 
+#include <llvm/ADT/PostOrderIterator.h>
 #include <llvm/ADT/SCCIterator.h>
 #include <llvm/ADT/SmallBitVector.h>
 #include <llvm/ADT/SmallPtrSet.h>
 #include <llvm/ADT/SmallVector.h>
 #include <llvm/Analysis/AliasAnalysis.h>
+#include <llvm/Analysis/CFG.h>
 #include <llvm/Analysis/LoopInfo.h>
+#include <llvm/Analysis/SimplifyQuery.h>
 #include <llvm/Analysis/ValueTracking.h>
 #include <llvm/ExecutionEngine/Orc/JITTargetMachineBuilder.h>
 #include <llvm/IR/Constants.h>
@@ -19,14 +22,156 @@
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/IntrinsicInst.h>
 #include <llvm/IR/Module.h>
+#include <llvm/IR/PatternMatch.h>
+#include <llvm/IR/ValueHandle.h>
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/Transforms/IPO/GlobalDCE.h>
 #include <llvm/Transforms/Scalar/InstSimplifyPass.h>
 #include <llvm/Transforms/Scalar/SimplifyCFG.h>
+#include <llvm/Transforms/Utils/Local.h>
 #include <llvm/Transforms/Utils/PromoteMemToReg.h>
 
 namespace fiberish {
+namespace {
+
+std::optional<bool> KnownBit(llvm::Value* value, unsigned bit, const llvm::SimplifyQuery& query) {
+    const auto known = llvm::computeKnownBits(value, query);
+    if (known.Zero[bit]) return false;
+    if (known.One[bit]) return true;
+    return {};
+}
+
+struct BitSource {
+    llvm::Value* predicate = nullptr;
+    bool inverted = false;
+
+    bool operator==(const BitSource&) const = default;
+};
+
+BitSource TracePackedBit(llvm::Value* value, unsigned bit, bool inverted, const llvm::SimplifyQuery& query,
+                         unsigned& remaining) {
+    const auto constant = [&](bool set) -> BitSource {
+        return {llvm::ConstantInt::getBool(value->getContext(), set != inverted)};
+    };
+    // Bound each search, including both arms of a select, for online
+    // compilation. Loads and PHIs end the search.
+    while (remaining) {
+        --remaining;
+        if (auto* bits = llvm::dyn_cast<llvm::ConstantInt>(value)) return constant(bits->getValue()[bit]);
+        if (value->getType()->isIntegerTy(1)) return {value, inverted};
+        auto* inst = llvm::dyn_cast<llvm::Instruction>(value);
+        if (!inst || !inst->getNumOperands()) return {};
+        auto* input = inst->getOperand(0);
+        switch (inst->getOpcode()) {
+            case llvm::Instruction::Trunc:
+            case llvm::Instruction::ZExt:
+            case llvm::Instruction::SExt: {
+                const auto width = input->getType()->getIntegerBitWidth();
+                if (bit >= width && inst->getOpcode() == llvm::Instruction::ZExt) return constant(false);
+                bit = std::min(bit, width - 1);
+                break;
+            }
+            case llvm::Instruction::Shl:
+            case llvm::Instruction::LShr:
+            case llvm::Instruction::AShr: {
+                const auto width = value->getType()->getIntegerBitWidth();
+                const auto* shift = llvm::dyn_cast<llvm::ConstantInt>(inst->getOperand(1));
+                if (!shift || shift->getValue().uge(width)) return {};
+                const auto amount = unsigned(shift->getZExtValue());
+                if (inst->getOpcode() == llvm::Instruction::Shl) {
+                    if (bit < amount) return constant(false);
+                    bit -= amount;
+                } else {
+                    bit += amount;
+                    if (bit >= width && inst->getOpcode() == llvm::Instruction::LShr) return constant(false);
+                    bit = std::min(bit, width - 1);
+                }
+                break;
+            }
+            case llvm::Instruction::And:
+            case llvm::Instruction::Or:
+            case llvm::Instruction::Xor: {
+                auto* other = inst->getOperand(1);
+                auto known = KnownBit(other, bit, query);
+                if (!known) {
+                    known = KnownBit(input, bit, query);
+                    if (!known) return {};
+                    input = other;
+                }
+                if (inst->getOpcode() == llvm::Instruction::Xor) {
+                    inverted ^= *known;
+                } else if (*known == (inst->getOpcode() == llvm::Instruction::Or)) {
+                    return constant(*known);
+                }
+                break;
+            }
+            case llvm::Instruction::Select: {
+                const auto yes = KnownBit(inst->getOperand(1), bit, query);
+                const auto no = KnownBit(inst->getOperand(2), bit, query);
+                if (yes && no) {
+                    if (*yes == *no) return constant(*yes);
+                    return {input, inverted != !*yes};
+                }
+                // Packing another flag can select between words that
+                // both carry the same predicate in the requested bit.
+                const auto true_source = TracePackedBit(inst->getOperand(1), bit, inverted, query, remaining);
+                if (!true_source.predicate) return {};
+                const auto false_source = TracePackedBit(inst->getOperand(2), bit, inverted, query, remaining);
+                return true_source == false_source ? true_source : BitSource{};
+            }
+            default:
+                return {};
+        }
+        value = input;
+    }
+    return {};
+}
+
+class ForwardPackedBitTestsPass : public llvm::PassInfoMixin<ForwardPackedBitTestsPass> {
+public:
+    llvm::PreservedAnalyses run(llvm::Function& entry, llvm::FunctionAnalysisManager&) {
+        using namespace llvm::PatternMatch;
+        const auto query = llvm::SimplifyQuery(entry.getParent()->getDataLayout()).getWithoutUndef();
+        llvm::SmallVector<llvm::WeakTrackingVH, 16> dead;
+        for (auto& inst : llvm::instructions(entry)) {
+            if (!inst.getType()->isIntegerTy(1) || inst.use_empty()) continue;
+            llvm::Value* packed = nullptr;
+            unsigned bit = 0;
+            bool inverted = false;
+            if (auto* cmp = llvm::dyn_cast<llvm::ICmpInst>(&inst); cmp && cmp->isEquality()) {
+                llvm::Value* masked = cmp->getOperand(0);
+                auto* expected = llvm::dyn_cast<llvm::ConstantInt>(cmp->getOperand(1));
+                if (!expected) {
+                    masked = cmp->getOperand(1);
+                    expected = llvm::dyn_cast<llvm::ConstantInt>(cmp->getOperand(0));
+                }
+                const llvm::APInt* mask;
+                if (!expected || !match(masked, m_c_And(m_Value(packed), m_APInt(mask))) || !mask->isPowerOf2() ||
+                    (!expected->isZero() && expected->getValue() != *mask))
+                    continue;
+                bit = mask->logBase2();
+                inverted = (cmp->getPredicate() == llvm::ICmpInst::ICMP_EQ) == expected->isZero();
+            } else if (!match(&inst, m_Trunc(m_Value(packed)))) {
+                continue;
+            }
+            unsigned remaining = 16;
+            const auto source = TracePackedBit(packed, bit, inverted, query.getWithInstruction(&inst), remaining);
+            if (!source.predicate) continue;
+            llvm::IRBuilder<> builder(&inst);
+            auto* predicate = source.inverted ? builder.CreateNot(source.predicate) : source.predicate;
+            inst.replaceAllUsesWith(predicate);
+            dead.emplace_back(&inst);
+        }
+        if (dead.empty()) return llvm::PreservedAnalyses::all();
+        llvm::RecursivelyDeleteTriviallyDeadInstructions(dead);
+        llvm::PreservedAnalyses preserved;
+        preserved.preserveSet<llvm::CFGAnalyses>();
+        return preserved;
+    }
+};
+
+}  // namespace
 
 bool InitializeLLVMTarget() {
     static const bool initialized = [] {
@@ -111,11 +256,12 @@ bool OptimizeLLVMFunction(llvm::Function& entry, const LLVMOptimizeOptions& opti
     pipeline.run(*entry.getParent(), modules);
     if (cancelled()) return false;
 
-    if (options.post_pipeline) {
-        options.post_pipeline(entry, functions);
-        if (cancelled()) return false;
-    }
-    return true;
+    // Work on the optimized SSA so the result is independent of which guest
+    // kernels supplied or consumed a packed bit. Packed exit values stay live.
+    llvm::FunctionPassManager entry_passes;
+    entry_passes.addPass(ForwardPackedBitTestsPass());
+    entry_passes.run(entry, functions);
+    return !cancelled();
 }
 
 llvm::LoadInst* LoadInvariantRegionField(llvm::IRBuilder<>& builder, llvm::Type* type, llvm::Value* field) {
@@ -169,6 +315,19 @@ void EmitRegionEntryWrappers(llvm::Module& module, llvm::Function& body, llvm::S
 void PromoteCyclicStateFields(llvm::Function& body, const CyclicStatePromotionSpec& spec,
                               llvm::FunctionAnalysisManager* functions) {
     if (spec.offsets.empty()) return;
+    std::optional<llvm::DominatorTree> local_dom;
+    if (spec.only_irreducible) {
+        llvm::DominatorTree* dom = nullptr;
+        if (functions) {
+            dom = &functions->getResult<llvm::DominatorTreeAnalysis>(body);
+        } else {
+            local_dom.emplace(body);
+            dom = &*local_dom;
+        }
+        llvm::LoopInfo loops(*dom);
+        llvm::ReversePostOrderTraversal<llvm::Function*> order(&body);
+        if (!llvm::containsIrreducibleCFG<llvm::BasicBlock*>(order, loops)) return;
+    }
     llvm::SmallPtrSet<const llvm::BasicBlock*, 32> cyclic;
     for (auto scc = llvm::scc_begin(&body); !scc.isAtEnd(); ++scc)
         if (scc.hasCycle()) cyclic.insert(scc->begin(), scc->end());
@@ -342,8 +501,8 @@ void PromoteCyclicStateFields(llvm::Function& body, const CyclicStatePromotionSp
         llvm::PromoteMemToReg(shadows, dom);
         functions->invalidate(body, llvm::PreservedAnalyses::none());
     } else {
-        llvm::DominatorTree dom(body);
-        llvm::PromoteMemToReg(shadows, dom);
+        if (!local_dom) local_dom.emplace(body);
+        llvm::PromoteMemToReg(shadows, *local_dom);
     }
 }
 

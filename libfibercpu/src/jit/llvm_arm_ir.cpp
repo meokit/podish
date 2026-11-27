@@ -95,6 +95,7 @@ void PromoteRegionGprs(llvm::Function& entry) {
                                         .offsets = kOffsets,
                                         .use_alias_analysis = false,
                                         .clear_aa_metadata = false,
+                                        .only_irreducible = true,
                                     });
 }
 

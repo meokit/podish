@@ -33,7 +33,6 @@ struct LLVMOptimizeOptions {
     bool fold_operand_loads = false;
     llvm::function_ref<bool()> should_cancel = {};
     llvm::function_ref<void(llvm::Function&, llvm::FunctionAnalysisManager&)> pre_pipeline = {};
-    llvm::function_ref<void(llvm::Function&, llvm::FunctionAnalysisManager&)> post_pipeline = {};
 };
 
 bool OptimizeLLVMFunction(llvm::Function& entry, const LLVMOptimizeOptions& options);
@@ -65,6 +64,10 @@ struct CyclicStatePromotionSpec {
     // conservatively walk all uses of `arg(0)` to guarantee state does not escape.
     bool use_alias_analysis = true;
     bool clear_aa_metadata = false;
+    // Restrict promotion to irreducible CFGs where LLVM LICM cannot hoist
+    // register file loads/stores on its own (avoids over-promoting large
+    // 32-GPR reducible loops on AArch64 after O2).
+    bool only_irreducible = false;
 };
 
 // Promote scalar fields of `arg(0)` accessed inside cyclic SCCs of a region
