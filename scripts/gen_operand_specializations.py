@@ -3,7 +3,6 @@
 
 import argparse
 import json
-from itertools import groupby
 from pathlib import Path
 
 from gen_instruction_catalog import read_catalog, supports_exact_operands
@@ -195,8 +194,6 @@ def generate_aarch64(plan, budget, pair_budget, sequence_budget, partial_budget=
             raise ValueError(f"invalid AArch64 profile entry: {row!r}")
         counts[word] = counts.get(word, 0) + count
     words = sorted(counts, key=lambda word: (-counts[word], word))[:budget]
-    cases = [f"    case 0x{word:08x}u: return aarch64::BakedBinding<0x{word:08x}u>(omit_nzcv);"
-             for word in sorted(words)]
     if "partials" in plan:
         shapes = plan["partials"]
         if not isinstance(shapes, list) or any(
@@ -207,8 +204,6 @@ def generate_aarch64(plan, budget, pair_budget, sequence_budget, partial_budget=
         partials = shapes[:partial_budget]
     else:
         partials = aarch64_imm12_shapes(counts, set(words), partial_budget)
-    partial_cases = [f"    case 0x{word:08x}u: return aarch64::BakedBinding<0x{word:08x}u, true>(omit_nzcv);"
-                     for word in sorted(partials)]
     pairs = {}
     for row in plan.get("pairs", []):
         first, second, count = row["first"], row["second"], row["count"]
@@ -217,8 +212,6 @@ def generate_aarch64(plan, budget, pair_budget, sequence_budget, partial_budget=
         key = (first, second)
         pairs[key] = pairs.get(key, 0) + count
     ranked = sorted(pairs, key=lambda key: (-pairs[key], key))[:pair_budget]
-    pair_cases = [f"    case 0x{a:08x}{b:08x}ull: return aarch64::BindBakedFusion<0x{a:08x}u, 0x{b:08x}u>(dead);"
-                  for a, b in sorted(ranked)]
     sequences = {}
     for row in plan.get("sequences", []):
         words_in_row, count = tuple(row["words"]), row["count"]
@@ -228,25 +221,116 @@ def generate_aarch64(plan, budget, pair_budget, sequence_budget, partial_budget=
             raise ValueError(f"invalid AArch64 sequence count: {count!r}")
         sequences[words_in_row] = sequences.get(words_in_row, 0) + count
     ranked_sequences = sorted(sequences, key=lambda seq: (-sequences[seq] * (len(seq) - 1), seq))[:sequence_budget]
-    sequence_cases = []
-    for first, group in groupby(sorted(ranked_sequences, key=lambda seq: (seq[0], -len(seq), seq)), lambda seq: seq[0]):
-        sequence_cases.append(f"    case 0x{first:08x}u:")
-        for seq in group:
-            literals = ", ".join(f"0x{word:08x}u" for word in seq)
-            sequence_cases.extend(["        {", f"            static constexpr std::array recipe{{{literals}}};",
-                f"            if (count >= {len(seq)} && std::equal(recipe.begin()+1, recipe.end(), words+1)) {{",
-                f"                *matched = {len(seq)};",
-                f"                return aarch64::BindBakedFusion<{literals}>(dead);", "            }", "        }"])
-        sequence_cases.append("        break;")
-    return "\n".join(['#include <algorithm>', '#include "aarch64/baked.h"', 'namespace fiberish {',
-                      'aarch64::detail::HandlerFunc FindBakedArmHandler(const aarch64::DecodedInstruction& op, bool omit_nzcv) {',
-                      '    switch (op.word) {', *cases, '    }',
-                      '    switch (op.word & ~(0xfffu << 10)) {', *partial_cases, '    }', '    return nullptr;', '}',
-                      'aarch64::detail::HandlerFunc FindBakedArmPair(uint32_t a, uint32_t b, uint32_t dead) {',
-                      '    switch ((uint64_t{a} << 32) | b) {', *pair_cases,
-                      '    default: return nullptr;', '    }', '}',
-                      'aarch64::detail::HandlerFunc FindBakedArmSequence(const uint32_t* words, unsigned count, unsigned* matched, uint32_t dead) {',
-                      '    switch (words[0]) {', *sequence_cases, '    }', '    return nullptr;', '}', '}', ''])
+    return render_aarch64_tables(words, partials, ranked, ranked_sequences)
+
+
+def render_aarch64_tables(words, partials, pairs, sequences):
+    def scalar_rows(words, dynamic_imm12=False):
+        for word in sorted(words):
+            literal = f"0x{word:08x}u"
+            template = f"{literal}, true" if dynamic_imm12 else literal
+            yield f"    {{{literal}, ScalarHandlers<{template}>}},"
+
+    pair_rows = [
+        f"    {{0x{a:08x}{b:08x}ull, aarch64::BakedFusion<0x{a:08x}u, 0x{b:08x}u>}},"
+        for a, b in sorted(pairs)
+    ]
+    word_pool = []
+    offset = 0
+    sequence_rows = []
+    for seq in sorted(sequences, key=lambda seq: (seq[0], -len(seq), seq)):
+        literals = ", ".join(f"0x{word:08x}u" for word in seq)
+        tail = ", ".join(f"0x{word:08x}u" for word in seq[1:])
+        word_pool.append(f"    {tail},")
+        sequence_rows.append(
+            f"    {{0x{seq[0]:08x}u, {offset}, {len(seq)}, aarch64::BakedFusion<{literals}>}},")
+        offset += len(seq) - 1
+    newline = "\n"
+    return f'''#include <algorithm>
+#include <array>
+#include "aarch64/baked.h"
+
+namespace fiberish {{
+namespace {{
+
+using aarch64::detail::HandlerFunc;
+
+struct ScalarVariants {{
+    HandlerFunc normal;
+    HandlerFunc omit_nzcv;
+}};
+template <uint32_t Word, bool DynamicImm12 = false>
+constexpr ScalarVariants ScalarHandlers{{
+    aarch64::BakedBinding<Word, DynamicImm12>(false), aarch64::BakedBinding<Word, DynamicImm12>(true),
+}};
+struct ScalarBinding {{
+    uint32_t word;
+    ScalarVariants handlers;
+}};
+constexpr std::array<ScalarBinding, {len(words)}> BakedExact = {{{{
+{newline.join(scalar_rows(words))}
+}}}};
+constexpr std::array<ScalarBinding, {len(partials)}> BakedImm12 = {{{{
+{newline.join(scalar_rows(partials, dynamic_imm12=True))}
+}}}};
+
+struct PairBinding {{
+    uint64_t key;
+    aarch64::BakedFusionBinding handlers;
+}};
+constexpr std::array<PairBinding, {len(pairs)}> BakedPairs = {{{{
+{newline.join(pair_rows)}
+}}}};
+
+struct SequenceBinding {{
+    uint32_t first;
+    uint32_t tail_offset;
+    unsigned length;
+    aarch64::BakedFusionBinding handlers;
+}};
+constexpr std::array<uint32_t, {offset}> BakedSequenceTails = {{{{
+{newline.join(word_pool)}
+}}}};
+// Within each first word, try the longest sequence first.
+constexpr std::array<SequenceBinding, {len(sequences)}> BakedSequences = {{{{
+{newline.join(sequence_rows)}
+}}}};
+
+}}  // namespace
+
+aarch64::detail::HandlerFunc FindBakedArmHandler(const aarch64::DecodedInstruction& op, bool omit_nzcv) {{
+    const auto exact = std::ranges::lower_bound(BakedExact, op.word, {{}}, &ScalarBinding::word);
+    if (exact != BakedExact.end() && exact->word == op.word)
+        return omit_nzcv ? exact->handlers.omit_nzcv : exact->handlers.normal;
+
+    const uint32_t shape = op.word & ~(0xfffu << 10);
+    const auto partial = std::ranges::lower_bound(BakedImm12, shape, {{}}, &ScalarBinding::word);
+    if (partial != BakedImm12.end() && partial->word == shape)
+        return omit_nzcv ? partial->handlers.omit_nzcv : partial->handlers.normal;
+    return nullptr;
+}}
+
+aarch64::detail::HandlerFunc FindBakedArmPair(uint32_t a, uint32_t b, uint32_t dead) {{
+    const uint64_t key = (uint64_t{{a}} << 32) | b;
+    const auto pair = std::ranges::lower_bound(BakedPairs, key, {{}}, &PairBinding::key);
+    return pair != BakedPairs.end() && pair->key == key ? pair->handlers.Select(dead, 2) : nullptr;
+}}
+
+aarch64::detail::HandlerFunc FindBakedArmSequence(const uint32_t* words, unsigned count,
+                                                unsigned* matched, uint32_t dead) {{
+    if (count < 3) return nullptr;
+    auto seq = std::ranges::lower_bound(BakedSequences, words[0], {{}}, &SequenceBinding::first);
+    for (; seq != BakedSequences.end() && seq->first == words[0]; ++seq) {{
+        const auto* tail = BakedSequenceTails.data() + seq->tail_offset;
+        if (count >= seq->length && std::equal(tail, tail + (seq->length - 1), words + 1)) {{
+            *matched = seq->length;
+            return seq->handlers.Select(dead, seq->length);
+        }}
+    }}
+    return nullptr;
+}}
+}}  // namespace fiberish
+'''
 
 
 def main():

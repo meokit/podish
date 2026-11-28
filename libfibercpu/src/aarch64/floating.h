@@ -41,7 +41,7 @@ struct FPLayout {
     uint64_t quiet;
 };
 
-constexpr FPLayout FPBits(unsigned width) {
+A64_FORCE_INLINE constexpr FPLayout FPBits(unsigned width) {
     const unsigned fraction = width == 16 ? 10 : width == 32 ? 23 : 52;
     const unsigned exponent = width - fraction - 1;
     return {fraction,
@@ -53,11 +53,13 @@ constexpr FPLayout FPBits(unsigned width) {
             uint64_t{1} << (fraction - 1)};
 }
 
-inline bool FPNaN(uint64_t bits, FPLayout f) { return (bits & f.exponent) == f.exponent && (bits & f.fraction) != 0; }
+A64_FORCE_INLINE bool FPNaN(uint64_t bits, FPLayout f) {
+    return (bits & f.exponent) == f.exponent && (bits & f.fraction) != 0;
+}
 
-inline bool FPSignalingNaN(uint64_t bits, FPLayout f) { return FPNaN(bits, f) && !(bits & f.quiet); }
+A64_FORCE_INLINE bool FPSignalingNaN(uint64_t bits, FPLayout f) { return FPNaN(bits, f) && !(bits & f.quiet); }
 
-inline uint64_t FPInput(State& state, uint64_t bits, FPLayout f) {
+A64_FORCE_INLINE uint64_t FPInput(State& state, uint64_t bits, FPLayout f) {
     if ((state.fpcr & (1u << 24)) && !(bits & f.exponent) && (bits & f.fraction)) {
         state.fpsr |= FPInputDenormal;
         return bits & f.sign;
@@ -100,7 +102,7 @@ inline bool FPHandleNaNs(State& state, FPLayout f, std::initializer_list<uint64_
     return false;
 }
 
-inline int FPCompare(uint64_t left, uint64_t right, FPLayout f) {
+A64_FORCE_INLINE int FPCompare(uint64_t left, uint64_t right, FPLayout f) {
     if (left == right || ((left | right) & ~f.sign) == 0) return 0;
     const bool negative = left & f.sign;
     if ((left ^ right) & f.sign) return negative ? -1 : 1;
@@ -260,7 +262,7 @@ inline uint64_t FPCompute(unsigned width, FPOp op, uint64_t a, uint64_t b, uint6
 
 #endif
 
-inline FPRound FPRounding(const State& state) { return FPRound((state.fpcr >> 22) & 3); }
+A64_FORCE_INLINE FPRound FPRounding(const State& state) { return FPRound((state.fpcr >> 22) & 3); }
 
 inline uint64_t FPArithmetic(State& state, unsigned width, FPOp op, uint64_t a, uint64_t b = 0, uint64_t c = 0,
                              FPRound direction = Nearest, bool exact = false) {
@@ -474,13 +476,15 @@ inline uint64_t FPToInt(State& state, unsigned width, uint64_t bits, unsigned in
     return negative ? uint64_t{0} - magnitude : magnitude;
 }
 
-constexpr uint64_t FPImmediate(unsigned width, unsigned b) {
+A64_FORCE_INLINE constexpr uint64_t FPImmediate(unsigned width, unsigned b) {
     const auto f = FPBits(width);
     const auto top = (b >> 6) & 1;
     const auto exponent =
         (uint64_t(top ^ 1) << (f.exponent_bits - 1)) | (top ? Ones(f.exponent_bits - 3) << 2 : 0) | ((b >> 4) & 3);
     return (b & 128 ? f.sign : 0) | (exponent << f.fraction_bits) | (uint64_t(b & 15) << (f.fraction_bits - 4));
 }
+
+A64_FORCE_INLINE void WriteFloatResult(State& state, unsigned rd, uint64_t value) { state.v[rd] = {value, 0}; }
 
 template <FloatFamily family, bool jit = false, class Registers>
 inline bool FloatRegisterOp(State& state, const DecodedInstruction& op, uint32_t& flags, const Registers& registers) {
@@ -490,21 +494,21 @@ inline bool FloatRegisterOp(State& state, const DecodedInstruction& op, uint32_t
     const auto f = FPBits(width);
     const auto left = state.v[op.rn].lo & Ones(width);
     const auto right = state.v[op.rm].lo & Ones(width);
-    const auto set = [&state, &op](uint64_t value) { state.v[op.rd] = {value, 0}; };
 
     if constexpr (family == FloatFamily::Convert) {
         const auto operation = Field(word, 15, 6);
         if (type == 2 || operation - 4 == type) return false;
         const unsigned dest = operation == 4 ? 32 : operation == 5 ? 64 : 16;
-        set(BoundFPConvert<jit>(state, width, dest, left));
+        WriteFloatResult(state, op.rd, BoundFPConvert<jit>(state, width, dest, left));
         return true;
     }
     if constexpr (family == FloatFamily::Fused) {
         const bool negate_addend = Field(word, 21, 1);
         const bool negate_product = negate_addend != bool(Field(word, 15, 1));
         const auto addend = (state.v[op.ra].lo & Ones(width)) ^ (negate_addend ? f.sign : 0);
-        set(BoundFPArithmetic<jit>(state, width, FPOp::Fused, left ^ (negate_product ? f.sign : 0), right, addend,
-                                   Nearest, false));
+        WriteFloatResult(state, op.rd,
+                         BoundFPArithmetic<jit>(state, width, FPOp::Fused, left ^ (negate_product ? f.sign : 0), right,
+                                                addend, Nearest, false));
         return true;
     }
     if constexpr (family == FloatFamily::Compare) {
@@ -519,33 +523,35 @@ inline bool FloatRegisterOp(State& state, const DecodedInstruction& op, uint32_t
         return true;
     }
     if constexpr (family == FloatFamily::Select) {
-        set(ConditionHolds(flags, Field(word, 12, 4)) ? left : right);
+        WriteFloatResult(state, op.rd, ConditionHolds(flags, Field(word, 12, 4)) ? left : right);
         return true;
     }
     if constexpr (family == FloatFamily::Binary) {
         const auto operation = Field(word, 12, 4);
         if (operation > unsigned(FPOp::NegMul)) return false;
-        set(BoundFPArithmetic<jit>(state, width, FPOp(operation), left, right, 0, Nearest, false));
+        WriteFloatResult(state, op.rd,
+                         BoundFPArithmetic<jit>(state, width, FPOp(operation), left, right, 0, Nearest, false));
         return true;
     }
     if constexpr (family == FloatFamily::Immediate) {
-        set(FPImmediate(width, Field(word, 13, 8)));
+        WriteFloatResult(state, op.rd, FPImmediate(width, Field(word, 13, 8)));
         return true;
     }
     if constexpr (family == FloatFamily::Unary) {
         const auto operation = Field(word, 15, 6);
         switch (operation) {
             case 0:
-                set(left);
+                WriteFloatResult(state, op.rd, left);
                 return true;
             case 1:
-                set(left & ~f.sign);
+                WriteFloatResult(state, op.rd, left & ~f.sign);
                 return true;
             case 2:
-                set(left ^ f.sign);
+                WriteFloatResult(state, op.rd, left ^ f.sign);
                 return true;
             case 3:
-                set(BoundFPArithmetic<jit>(state, width, FPOp::Sqrt, left, 0, 0, Nearest, false));
+                WriteFloatResult(state, op.rd,
+                                 BoundFPArithmetic<jit>(state, width, FPOp::Sqrt, left, 0, 0, Nearest, false));
                 return true;
             case 8:
             case 9:
@@ -554,9 +560,10 @@ inline bool FloatRegisterOp(State& state, const DecodedInstruction& op, uint32_t
             case 12:
             case 14:
             case 15:
-                set(BoundFPArithmetic<jit>(state, width, FPOp::Round, left, 0, 0,
-                                           operation < 13 ? FPRound(operation - 8) : FPRounding(state),
-                                           operation == 14));
+                WriteFloatResult(state, op.rd,
+                                 BoundFPArithmetic<jit>(state, width, FPOp::Round, left, 0, 0,
+                                                        operation < 13 ? FPRound(operation - 8) : FPRounding(state),
+                                                        operation == 14));
                 return true;
             default:
                 return false;
@@ -568,7 +575,7 @@ inline bool FloatRegisterOp(State& state, const DecodedInstruction& op, uint32_t
         return true;
     }
     if constexpr (family == FloatFamily::MoveToVector) {
-        set(registers.Read(op.rn, width));
+        WriteFloatResult(state, op.rd, registers.Read(op.rn, width));
         return true;
     }
 
@@ -589,13 +596,14 @@ inline bool FloatRegisterOp(State& state, const DecodedInstruction& op, uint32_t
     const unsigned scale = fixed ? 64 - Field(word, 10, 6) : 0;
     if (scale > integer_width) return false;
     if (operation == 2 || operation == 3) {
-        set(BoundIntToFP<jit>(state, width, registers.Read(op.rn, integer_width), integer_width, operation == 3,
-                              scale));
+        WriteFloatResult(state, op.rd,
+                         BoundIntToFP<jit>(state, width, registers.Read(op.rn, integer_width), integer_width,
+                                           operation == 3, scale));
     } else if (!fixed && integer_width == width && (operation == 6 || operation == 7)) {
         if (operation == 6)
             registers.Write(op.rd, integer_width, left);
         else
-            set(registers.Read(op.rn, integer_width));
+            WriteFloatResult(state, op.rd, registers.Read(op.rn, integer_width));
     } else {
         const auto mode = operation >> 3;
         const auto conversion = operation & 7;

@@ -70,8 +70,8 @@ class Imm12TrainingTests(unittest.TestCase):
         self.assertEqual([row["word"] for row in plan["entries"]], [add + (1 << 10)])
         self.assertEqual(plan["partials"], [load, add])
         generated = generate_aarch64(plan, 1, 0, 0, partial_budget=1)
-        self.assertIn(f"BakedBinding<0x{load:08x}u, true>", generated)
-        self.assertNotIn(f"BakedBinding<0x{add:08x}u, true>", generated)
+        self.assertIn(f"ScalarHandlers<0x{load:08x}u, true>", generated)
+        self.assertNotIn(f"ScalarHandlers<0x{add:08x}u, true>", generated)
         self.assertEqual(arm_partial_pool(pools["entries"], 1, 0), [])
 
     def test_explicit_shapes_require_canonical_unique_encodings(self):
@@ -79,6 +79,33 @@ class Imm12TrainingTests(unittest.TestCase):
             with self.subTest(shapes=shapes), self.assertRaises(ValueError):
                 generate_aarch64({"version": 1, "architecture": "aarch64", "entries": [],
                                   "partials": shapes}, 0, 0, 0)
+
+
+class BakedLookupTests(unittest.TestCase):
+    def test_tables_keep_priority_cuts_and_longest_prefix_order(self):
+        add = 0x91000400
+        plan = {
+            "architecture": "aarch64", "version": 1,
+            "entries": [{"word": add + i, "count": 1} for i in [4, 2, 3]],
+            "pairs": [{"first": add + i, "second": add, "count": 1} for i in [3, 1, 2]],
+            "sequences": [
+                {"words": [add, add, add + 1], "count": 1},
+                {"words": [add, add, add, add], "count": 1},
+                {"words": [add, add, add], "count": 1},
+                {"words": [add + 1, add, add], "count": 1},
+            ],
+        }
+        generated = generate_aarch64(plan, 2, 2, 4)
+        self.assertIn("std::array<ScalarBinding, 2> BakedExact", generated)
+        self.assertLess(generated.index("{0x91000402u,"), generated.index("{0x91000403u,"))
+        self.assertNotIn("{0x91000404u,", generated)
+        self.assertIn("std::array<PairBinding, 2> BakedPairs", generated)
+        self.assertLess(generated.index("0x9100040191000400ull"), generated.index("0x9100040291000400ull"))
+        sequence_rows = generated.split(" BakedSequences = ", 1)[1].splitlines()[1:5]
+        self.assertEqual([row.split("aarch64::", 1)[0].strip() for row in sequence_rows],
+                         ["{0x91000400u, 0, 4,", "{0x91000400u, 3, 3,",
+                          "{0x91000400u, 5, 3,", "{0x91000401u, 7, 3,"])
+        self.assertIn("0x91000400u, 0x91000400u, 0x91000401u>", sequence_rows[2])
 
 
 class GrowthBudgetTests(unittest.TestCase):

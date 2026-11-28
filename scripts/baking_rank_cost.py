@@ -328,8 +328,9 @@ def fit(trials, features, classes):
         for group in (f"{kind}:{width}:{op}", f"{kind}:{width}", kind):
             groups[group].append(size)
     model = {"spans": spans, "groups": {k: median(v) for k, v in groups.items() if len(v) >= 3}}
-    # Fit class multipliers to total growth, including emitted switches,
-    # shared recipes and code folded by LTO. A relative error loss keeps the
+    # Fit class multipliers to text growth, including resolver code, shared
+    # recipes and code folded by LTO. Lookup tables in data are outside the
+    # native text budget. A relative error loss keeps the
     # small cap represented. A ridge prior toward observed spans stabilizes
     # classes that co-occur across the available historical plans.
     X, residual = [], []

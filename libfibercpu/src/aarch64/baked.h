@@ -132,29 +132,53 @@ constexpr uint32_t DeadSequenceFlags(uint32_t live) {
     return dead;
 }
 
+struct BakedFusionBinding {
+    detail::HandlerFunc normal = nullptr;
+    detail::HandlerFunc omit_live_out = nullptr;
+    detail::HandlerFunc omit_dead_out = nullptr;
+    uint32_t live_out = 0;
+    uint32_t dead_out = 0;
+
+    constexpr detail::HandlerFunc Select(uint32_t block_dead, unsigned length) const {
+        const uint32_t dead = block_dead & ((1u << length) - 1);
+        if (dead == live_out && omit_live_out) return omit_live_out;
+        if (dead == dead_out && omit_dead_out) return omit_dead_out;
+        return normal;
+    }
+};
+
 template <uint32_t... Words>
-detail::HandlerFunc BindBakedFusion(uint32_t block_dead) {
+constexpr BakedFusionBinding GetBakedFusion() {
     constexpr unsigned length = sizeof...(Words);
     static_assert(length >= 2 && length <= 24);
+    BakedFusionBinding binding{};
     if constexpr (CanBakeSequence<Words...>()) {
         // Whitelisted writers replace all four bits. The final producer is
         // the only one whose eligibility can depend on the rest of the block.
         constexpr auto live_out = DeadSequenceFlags<Words...>(detail::FlagMask);
         constexpr auto dead_out = DeadSequenceFlags<Words...>(0);
-        const uint32_t dead = block_dead & ((1u << length) - 1);
+        binding.normal =
+            &detail::DispatchWrapper<detail::BakedLogic<0, false, Words...>, detail::BakedPolicy<Words...>()>;
         if constexpr (live_out != 0) {
-            if (dead == live_out)
-                return &detail::DispatchWrapper<detail::BakedLogic<live_out, false, Words...>,
-                                                detail::BakedPolicy<Words...>()>;
+            binding.live_out = live_out;
+            binding.omit_live_out = &detail::DispatchWrapper<detail::BakedLogic<live_out, false, Words...>,
+                                                             detail::BakedPolicy<Words...>()>;
         }
         if constexpr (dead_out != 0 && dead_out != live_out) {
-            if (dead == dead_out)
-                return &detail::DispatchWrapper<detail::BakedLogic<dead_out, false, Words...>,
-                                                detail::BakedPolicy<Words...>()>;
+            binding.dead_out = dead_out;
+            binding.omit_dead_out = &detail::DispatchWrapper<detail::BakedLogic<dead_out, false, Words...>,
+                                                             detail::BakedPolicy<Words...>()>;
         }
-        return &detail::DispatchWrapper<detail::BakedLogic<0, false, Words...>, detail::BakedPolicy<Words...>()>;
     }
-    return nullptr;
+    return binding;
+}
+
+template <uint32_t... Words>
+inline constexpr auto BakedFusion = GetBakedFusion<Words...>();
+
+template <uint32_t... Words>
+detail::HandlerFunc BindBakedFusion(uint32_t block_dead) {
+    return BakedFusion<Words...>.Select(block_dead, sizeof...(Words));
 }
 
 }  // namespace fiberish::aarch64

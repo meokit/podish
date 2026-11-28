@@ -17,6 +17,12 @@ class StaticCostTests(unittest.TestCase):
             cost.arm_symbol("15DispatchWrapperIXadL_ZN7fiberish7aarch646detail10BakedLogicILj1ELb0EJLj5ELj7ELj11EEEE"),
             cost.binding("sequences", {"words": [5, 7, 11]})[0],
         )
+        for dead in (0, 1, 2):
+            self.assertEqual(
+                cost.arm_symbol(f"15DispatchWrapperIXadL_ZN7fiberish7aarch646detail10BakedLogicILj{dead}ELb0EJLj5ELj7EEEE"),
+                cost.binding("pairs", {"first": 5, "second": 7})[0],
+            )
+        self.assertIsNone(cost.arm_symbol("12BakedExact"))
         self.assertIsNone(cost.arm_symbol("RunBlock"))
         self.assertIsNone(cost.arm_symbol("10BakedLogicILj1ELb1EJLj13EEE"))
 

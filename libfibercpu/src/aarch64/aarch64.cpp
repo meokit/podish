@@ -255,12 +255,14 @@ struct RunScope {
     }
 };
 
-std::byte* WriteDecodedSlot(std::byte* bytes, const DecodedOpBinding& binding, uint64_t block_pc) {
+std::byte* WriteDecodedSlot(std::byte* bytes, const DecodedOpBinding& binding, uint64_t block_pc,
+                            unsigned block_inst_count) {
     const auto& op = binding.op;
     const auto operands = UsesRawWordOperands(op.kind) ? uint64_t{op.word} : PackOpOperands(op);
     const DecodedOp slot{
         .handler = binding.handler,
-        .payload = DecodedOp::Pack(operands, binding.ordinal, binding.flags, binding.span),
+        .payload = DecodedOp::Pack(operands, binding.ordinal, binding.flags, binding.span,
+                                   IsConditionalBranch(op.kind) ? block_inst_count - binding.ordinal - 1 : 0),
     };
     if (slot.Has(HasDataSlot)) {
         const auto primary = HasBlockTarget(op.kind)           ? op.target_pc
@@ -405,7 +407,7 @@ const BasicBlock* DecodeBlock(uint64_t pc, const uint8_t* executable, const Prof
     block.executable_page = executable;
 
     auto* bytes = reinterpret_cast<std::byte*>(&block + 1);
-    for (unsigned i = 0; i < slot_count; ++i) bytes = WriteDecodedSlot(bytes, decoded[i], pc);
+    for (unsigned i = 0; i < slot_count; ++i) bytes = WriteDecodedSlot(bytes, decoded[i], pc, count);
     new (bytes) DecodedOp{.handler = GetExitHandlerFallthrough(), .payload = BlockLink(&BasicBlock::Invalid)};
     if (retain_region_context) block.SetRegionContext(nullptr);
     std::memcpy(const_cast<uint32_t*>(block.Words()), words.data(), count * sizeof(uint32_t));
@@ -442,7 +444,7 @@ SingleStepResult ExecuteSingleInstructionOnStack(State& state, RunFrame& frame, 
     block.header.chain = BasicBlockChainPrefix::Pack(pc, 1, false, false);
     block.sentinel_slot_index = uint8_t(units);
 
-    auto* bytes = WriteDecodedSlot(reinterpret_cast<std::byte*>(&block + 1), binding, pc);
+    auto* bytes = WriteDecodedSlot(reinterpret_cast<std::byte*>(&block + 1), binding, pc, 1);
     new (bytes) DecodedOp{.handler = &OpExitSingleStep, .payload = BlockLink(&BasicBlock::Invalid)};
     auto raw_word = word;
     if constexpr (std::endian::native == std::endian::big) raw_word = std::byteswap(raw_word);

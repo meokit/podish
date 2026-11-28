@@ -19,6 +19,7 @@ enum SlotFlag : uint8_t {
     RetainsPage = 2,
     HasBranchLink = 4,
 };
+static_assert((HasDataSlot | RetainsPage | HasBranchLink) < (1u << 3));
 
 struct alignas(16) DecodedOp {
     HandlerFunc handler = nullptr;
@@ -26,18 +27,22 @@ struct alignas(16) DecodedOp {
     uint32_t thread_padding = 0;
 #endif
     // Low 40 bits hold the operands. Byte 5 holds the guest ordinal, byte 6
-    // holds the fused instruction span, and byte 7 holds SlotFlag bits.
+    // holds the fused instruction span, and byte 7 holds SlotFlag bits and
+    // the conditional branch's remaining guest instruction count.
     // The sentinel uses the entire payload for its fallthrough link.
     mutable uint64_t payload = 0;
 
     static constexpr uint64_t OperandMask = (uint64_t{1} << 40) - 1;
-    static constexpr uint64_t Pack(uint64_t operands, unsigned ordinal, uint8_t flags, uint8_t span = 1) {
-        return operands | (uint64_t{ordinal} << 40) | (uint64_t{span} << 48) | (uint64_t{flags} << 56);
+    static constexpr uint64_t Pack(uint64_t operands, unsigned ordinal, uint8_t flags, uint8_t span,
+                                   unsigned branch_suffix) {
+        return operands | (uint64_t{ordinal} << 40) | (uint64_t{span} << 48) | (uint64_t{flags} << 56) |
+               (uint64_t{branch_suffix} << 59);
     }
 
     uint64_t Operands() const { return payload & OperandMask; }
     unsigned GuestIndex() const { return (payload >> 40) & 0xff; }
     unsigned Span() const { return (payload >> 48) & 0xff; }
+    unsigned BranchSuffix() const { return payload >> 59; }
     bool Has(SlotFlag flag) const { return (payload >> 56) & flag; }
 
     const DecodedOp* Advance(unsigned units) const {

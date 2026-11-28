@@ -13,19 +13,19 @@
 
 namespace fiberish::aarch64::detail {
 
-inline uint64_t Element(Vector128 v, unsigned width, unsigned index) {
+A64_FORCE_INLINE uint64_t Element(Vector128 v, unsigned width, unsigned index) {
     const unsigned bit = index * width;
     return ((bit >= 64 ? v.hi : v.lo) >> (bit & 63)) & Ones(width);
 }
 
-inline void SetElement(Vector128& v, unsigned width, unsigned index, uint64_t value) {
+A64_FORCE_INLINE void SetElement(Vector128& v, unsigned width, unsigned index, uint64_t value) {
     const unsigned bit = index * width;
     auto& half = bit >= 64 ? v.hi : v.lo;
     const unsigned shift = bit & 63;
     half = (half & ~(Ones(width) << shift)) | ((value & Ones(width)) << shift);
 }
 
-inline Vector128 Splat(uint64_t element, unsigned width, bool q) {
+A64_FORCE_INLINE Vector128 Splat(uint64_t element, unsigned width, bool q) {
 #if FIBERCPU_AARCH64_SIMDE
     if constexpr (UseSimdeVectors) {
         switch (width) {
@@ -44,19 +44,20 @@ inline Vector128 Splat(uint64_t element, unsigned width, bool q) {
     return {word, q ? word : 0};
 }
 
-inline uint64_t ShiftRightElement(uint64_t value, unsigned width, unsigned shift, bool is_unsigned, bool rounding) {
+A64_FORCE_INLINE uint64_t ShiftRightElement(uint64_t value, unsigned width, unsigned shift, bool is_unsigned,
+                                            bool rounding) {
     const bool negative = !is_unsigned && (value >> (width - 1));
     const auto rounded = rounding && (shift > width ? negative : shift && ((value >> (shift - 1)) & 1));
     if (shift >= width) return (negative ? UINT64_MAX : 0) + rounded;
     return (negative ? uint64_t(Signed(value, width) >> shift) : value >> shift) + rounded;
 }
 
-inline uint64_t SelectMinMax(uint64_t a, uint64_t b, unsigned width, bool is_unsigned, bool max) {
+A64_FORCE_INLINE uint64_t SelectMinMax(uint64_t a, uint64_t b, unsigned width, bool is_unsigned, bool max) {
     const bool greater = is_unsigned ? a > b : Signed(a, width) > Signed(b, width);
     return (max == greater) ? a : b;
 }
 
-inline uint64_t Saturate(State& state, __int128_t value, unsigned width, bool is_unsigned) {
+A64_FORCE_INLINE uint64_t Saturate(State& state, __int128_t value, unsigned width, bool is_unsigned) {
     const auto sign = __int128_t{1} << (width - 1);
     const auto lower = is_unsigned ? 0 : -sign;
     const auto upper = is_unsigned ? __int128_t(Ones(width)) : sign - 1;
@@ -64,7 +65,7 @@ inline uint64_t Saturate(State& state, __int128_t value, unsigned width, bool is
     return uint64_t(std::clamp(value, lower, upper));
 }
 
-inline uint64_t VectorLogical(uint64_t old, uint64_t a, uint64_t b, unsigned op) {
+A64_FORCE_INLINE uint64_t VectorLogical(uint64_t old, uint64_t a, uint64_t b, unsigned op) {
     switch (op) {
         case 0:
             return a & b;
@@ -121,7 +122,7 @@ A64_VECTOR_INLINE bool VectorThree(State& state, const DecodedInstruction& op, b
             case 28: {
                 if (!u && size_high) return false;
                 const auto f = FPBits(width);
-                Vector128 result;
+                Vector128 result{};
                 const unsigned lanes = scalar ? 1 : (q ? 128 : 64) / width;
                 for (unsigned i = 0; i < lanes; ++i) {
                     const auto a = FPInput(state, Element(left, width, i), f);
@@ -152,7 +153,7 @@ A64_VECTOR_INLINE bool VectorThree(State& state, const DecodedInstruction& op, b
         }
         const unsigned lanes = (q ? 128 : 64) / width;
         const unsigned half = lanes / 2;
-        Vector128 result;
+        Vector128 result{};
         for (unsigned i = 0; i < lanes; ++i) {
             auto a = Element(left, width, i);
             auto b = Element(right, width, i);
@@ -209,7 +210,7 @@ A64_VECTOR_INLINE bool VectorThree(State& state, const DecodedInstruction& op, b
     const bool pairwise = operation == 20 || operation == 21 || operation == 23;
     const unsigned lanes = scalar ? 1 : (q ? 128 : 64) / width;
     const unsigned half = lanes / 2;
-    Vector128 result;
+    Vector128 result{};
     for (unsigned i = 0; i < lanes; ++i) {
         auto a = Element(left, width, i);
         auto b = Element(right, width, i);
@@ -307,7 +308,7 @@ A64_VECTOR_INLINE bool VectorWiden(State& state, const DecodedInstruction& op, b
         return true;
     }
 #endif
-    Vector128 result;
+    Vector128 result{};
     if (opcode == 4 || opcode == 6) {
         if (q) result.lo = old.lo;
         for (unsigned i = 0; i < lanes; ++i) {
@@ -376,7 +377,7 @@ A64_VECTOR_INLINE bool VectorMisc(State& state, const DecodedInstruction& op, bo
     const unsigned operation = Field(op.word, 12, 5);
     const auto source = state.v[op.rn];
     unsigned width = 8u << size;
-    Vector128 result;
+    Vector128 result{};
     if constexpr (floating) {
         width = (size & 1) ? 64 : 32;
         if (width == 64 && !q && !scalar) return false;
@@ -478,8 +479,8 @@ A64_VECTOR_INLINE bool VectorMisc(State& state, const DecodedInstruction& op, bo
                     value = u ? (~a & UINT8_MAX) : std::popcount(a);
                 else if (size == 1 && u) {
                     // RBIT is encoded with size 01 but operates on byte lanes.
-                    const auto reverse_bytes = [](uint64_t bits) { return std::byteswap(ReverseBits(bits, 64)); };
-                    state.v[op.rd] = {reverse_bytes(source.lo), q ? reverse_bytes(source.hi) : 0};
+                    state.v[op.rd] = {std::byteswap(ReverseBits(source.lo, 64)),
+                                      q ? std::byteswap(ReverseBits(source.hi, 64)) : 0};
                     return true;
                 } else
                     return false;
@@ -589,7 +590,7 @@ A64_VECTOR_INLINE bool VectorShiftImmediate(State& state, const DecodedInstructi
     const auto operation = Field(op.word, 11, 5);
     const auto old = state.v[op.rd];
     const auto source = state.v[op.rn];
-    Vector128 result;
+    Vector128 result{};
     if (width < 8) return false;
 #if FIBERCPU_AARCH64_SIMDE
     if constexpr (UseSimdeVectors) {
@@ -729,7 +730,7 @@ A64_VECTOR_INLINE bool VectorPermute(State& state, const DecodedInstruction& op,
 #endif
     const bool second = opcode & 4;
     const unsigned half = lanes / 2;
-    Vector128 result;
+    Vector128 result{};
     for (unsigned i = 0; i < half; ++i) {
         if ((opcode & 3) == 1) {
             SetElement(result, width, i, Element(a, width, i * 2 + second));
@@ -755,7 +756,7 @@ A64_VECTOR_INLINE bool VectorExtract(State& state, const DecodedInstruction& op,
         return true;
     }
 #endif
-    Vector128 result;
+    Vector128 result{};
     for (unsigned i = 0; i < bytes; ++i) {
         const auto j = i + index;
         SetElement(result, 8, i, j < bytes ? Element(first, 8, j) : Element(second, 8, j - bytes));
@@ -774,7 +775,7 @@ A64_VECTOR_INLINE void VectorTable(State& state, const DecodedInstruction& op, b
         return;
     }
 #endif
-    Vector128 result;
+    Vector128 result{};
     for (unsigned i = 0; i < (q ? 16u : 8u); ++i) {
         const auto index = unsigned(Element(indexes, 8, i));
         const auto value = index < 16 * length ? Element(state.v[(op.rn + index / 16) & 31], 8, index % 16)

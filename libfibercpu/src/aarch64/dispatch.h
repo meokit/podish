@@ -234,7 +234,7 @@ FIBERCPU_AARCH64_HANDLER_ABI int64_t DispatchWrapper(A64_HANDLER_PARAMS) {
                     step.address);
             } else {
                 if constexpr (Policy.branch == DispatchBranch::DirectConditional)
-                    instr_limit += state.last_block->inst_count() - current->GuestIndex() - 1;
+                    instr_limit += current->BranchSuffix();
                 const auto& branch = GetExtraOperands(*current);
                 A64_RESOLVE_BRANCH_TARGET_INLINE(branch.secondary, branch.primary);
             }

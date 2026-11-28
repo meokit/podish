@@ -72,7 +72,7 @@ inline uint64_t ReadCounterValue() noexcept {
 }
 
 template <SystemOp operation, class Registers, auto read_counter = ReadCounterValue>
-inline void SystemRegisterOp(State& state, unsigned rd, uint32_t& flags, const Registers& registers) {
+A64_FORCE_INLINE void SystemRegisterOp(State& state, unsigned rd, uint32_t& flags, const Registers& registers) {
     if constexpr (operation == SystemOp::ClearExclusive)
         state.ClearExclusive();
     else if constexpr (operation == SystemOp::DataBarrier)

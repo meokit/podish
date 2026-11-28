@@ -44,9 +44,10 @@ inline bool ReadMemory(const Memory& memory, uint64_t address, void* data, size_
 }
 
 inline void ClearOverlappingExclusive(State& state, uint64_t address, size_t bytes) {
-    if (state.exclusive_size &&
-        (address - state.exclusive_address < state.exclusive_size || state.exclusive_address - address < bytes))
-        state.ClearExclusive();
+    if (state.exclusive_size != 0) [[unlikely]] {
+        if (address - state.exclusive_address < state.exclusive_size || state.exclusive_address - address < bytes)
+            state.ClearExclusive();
+    }
 }
 
 inline bool WriteMemory(State& state, const Memory& memory, uint64_t address, const void* data, size_t bytes) {
@@ -188,8 +189,13 @@ A64_MEMORY_INLINE StepResult LoadStoreTransfer(State& state, const DecodedInstru
     if constexpr (literal) {
         address = literal_address;
     } else {
-        const auto base = ReadTransferRegister<touches_pin>(state, op.rn, true, pinned);
-        if (op.rn == 31 && (base & 15)) return Alignment(base, access);
+        uint64_t base;
+        if (op.rn == 31) {
+            base = state.sp;
+            if (base & 15) return Alignment(base, access);
+        } else {
+            base = ReadTransferRegister<touches_pin>(state, op.rn, false, pinned);
+        }
         if constexpr (kind == Kind::LoadStoreRegister) {
             const auto index = ReadTransferRegister<touches_pin>(state, op.rm, false, pinned);
             address = base + Extend(index, mode, shift, 64);
