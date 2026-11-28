@@ -37,6 +37,13 @@ ArmBlock* Lookup(EmuState* state, uint64_t pc, const uint8_t* code) {
     return state->mmu.lookup_arm_block(pc, code);
 }
 
+uint64_t& BranchLink(const ArmBlock& block) {
+    for (const auto* op = block.FirstOp(); op != block.Sentinel(); op = op->NextOp())
+        if (op->Has(HasBranchLink))
+            return GetExtraOperands(*op).secondary;
+    std::abort();
+}
+
 void WaitForJit(EmuState* state, uint64_t pc, unsigned budget, const uint8_t* code, unsigned minimum_size) {
     const auto timeout = std::chrono::steady_clock::now() + std::chrono::seconds(10);
     do {
@@ -62,7 +69,7 @@ void WaitForJit(EmuState* state, uint64_t pc, unsigned budget, const uint8_t* co
 void CheckLoop(EmuState* state, bool region) {
     alignas(PageBytes) std::array<uint8_t, PageBytes> code{};
     const std::array loop{0x91000421u,  // add x1, x1, #1
-                          0x10000005u,  // adr x5, .
+                          0xb0000005u,  // adrp x5, next page
                           0xd503201fu,  // nop, folded in the decoder
                           0x14000001u,  // b .+4
                           0xf1000400u,  // subs x0, x0, #1
@@ -74,31 +81,24 @@ void CheckLoop(EmuState* state, bool region) {
     WaitForJit(state, Pc, 32, code.data(), region ? 2 : 1);
     const auto* first = Lookup(state, Pc, code.data());
     const auto* second = Lookup(state, Pc + 16, code.data());
-    assert(first && second);
-    const auto branch_link = [](const ArmBlock& block) -> uint64_t& {
-        for (const auto* op = block.FirstOp(); op != block.Sentinel(); op = op->NextOp())
-            if (op->Has(HasBranchLink))
-                return GetExtraOperands(*op).secondary;
-        std::abort();
-    };
+    assert(first && second && !first->HasSentinel() && !second->HasSentinel());
     if (region) {
         assert(first->header.entry != second->header.entry);
         assert(first->RegionContext() == second->RegionContext());
         for (const auto* member : {first, second})
-            branch_link(*member) = member->Sentinel()->payload = BlockLink(&ArmBlock::Invalid);
+            BranchLink(*member) = BlockLink(&ArmBlock::Invalid);
     }
     AArch64_RegWrite(state, 0, 3);
     AArch64_RegWrite(state, 1, 0);
     Run(state, Pc, 18);
     assert(AArch64_RegRead(state, 0) == 0 && AArch64_RegRead(state, 1) == 3);
     assert(AArch64_RegRead(state, 32) == Pc + 24);
+    assert(AArch64_RegRead(state, 5) == Pc + PageBytes);
     assert(state->arm->nzcv == 0x60000000);
     if (region) {
         // The loop stays in JIT code, leaving the interpreter links empty.
-        for (auto* member : {first, second}) {
-            assert(!LoadBlockLink(branch_link(*member))->IsValid());
-            assert(!LoadBlockLink(member->Sentinel()->payload)->IsValid());
-        }
+        for (auto* member : {first, second})
+            assert(!LoadBlockLink(BranchLink(*member))->IsValid());
     }
 
     AArch64_RegWrite(state, 0, 2);
@@ -111,7 +111,7 @@ void CheckLoop(EmuState* state, bool region) {
     assert(alias->header.entry == first->header.entry);
     if (region)
         assert(alias->RegionContext() && alias->RegionContext() != first->RegionContext());
-    assert(AArch64_RegRead(state, 5) == Alias + 4);
+    assert(AArch64_RegRead(state, 5) == Alias + PageBytes);
     // The host changed an instruction through an alias and then flushed it,
     // as the managed MMU does for out-of-band writes.
     const auto* context = static_cast<const fiberish::mem::PageRegion<ArmBlock>*>(first->RegionContext());
@@ -367,7 +367,7 @@ void CheckRegionExternalLink(EmuState* state, bool indirect) {
     Put(code.data() + PageBytes - 32, std::array{
                                           0x10000005u,                          // adr x5, .
                                           0xd503201fu,                          // nop (no slot)
-                                          0x14000001u,                          // b .+4
+                                          0x94000001u,                          // bl .+4
                                           0x91000421u,                          // add x1, x1, #1
                                           0x10000006u,                          // adr x6, .
                                           0xd503201fu,                          // nop (no slot)
@@ -387,7 +387,8 @@ void CheckRegionExternalLink(EmuState* state, bool indirect) {
     auto* target = Lookup(state, external, next.data());
     assert(first && second && target && first->header.entry != second->header.entry);
     assert(first->RegionContext() && first->RegionContext() == second->RegionContext());
-    auto& first_exit = first->Sentinel()->payload;
+    assert(!first->HasSentinel() && second->HasSentinel());
+    auto& first_exit = BranchLink(*first);
     auto& second_exit = second->Sentinel()->payload;
     first_exit = second_exit = BlockLink(&ArmBlock::Invalid);
     AArch64_RegWrite(state, 7, external);
@@ -396,6 +397,7 @@ void CheckRegionExternalLink(EmuState* state, bool indirect) {
         AArch64_RegWrite(state, 1, 0);
         Run(state, start, 10);
         assert(AArch64_RegRead(state, 1) == 9 && AArch64_RegRead(state, 32) == external + 4);
+        assert(AArch64_RegRead(state, 30) == second_pc);
         assert(LoadBlockLink(first_exit) == &ArmBlock::Invalid && LoadBlockLink(second_exit) == target);
     }
 

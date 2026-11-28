@@ -71,7 +71,7 @@ constexpr GenericHandlerBinding BindMemoryHandler() {
 template <Kind kind, unsigned width, int operation, int shift, bool write_nzcv, IntegerForm form, bool TouchesPin>
 A64_FORCE_INLINE StepResult IntegerLogic(State& state, const DecodedOp*& current A64_UTLB_REF_PARAMS,
                                          uint32_t& flags_cache A64_HOT_PIN_REF) {
-    const auto op = GetOpOperands<kind>(*current);
+    const auto op = GetOpOperands<kind, operation>(*current);
     uint64_t pc = 0;
     if constexpr (kind == Kind::BranchImmediate) {
         if (op.operation != 0) pc = current->GetStartPc(state);
@@ -85,7 +85,7 @@ A64_FORCE_INLINE StepResult IntegerLogic(State& state, const DecodedOp*& current
 template <Kind kind, unsigned width = 0, int operation = -1, int shift = -1, bool write_nzcv = true,
           IntegerForm form = IntegerForm::Default>
 constexpr GenericHandlerBinding BindIntegerKernel() {
-    constexpr DispatchPolicy policy{.wide = HasExtraOperandSlot(kind), .branch = BranchPolicy(kind)};
+    constexpr DispatchPolicy policy{.wide = HasExtraOperandSlot(kind, operation), .branch = BranchPolicy(kind)};
     constexpr bool touches_pin = kind != Kind::BranchCondition;
     constexpr HandlerBinding binding{
         &DispatchWrapper<IntegerLogic<kind, width, operation, shift, write_nzcv, form, touches_pin>, policy>};
@@ -113,6 +113,7 @@ constexpr auto Handlers = [] {
 #undef ARM_MEMORY
 #undef ARM_BRANCH
 #undef ARM_INTEGER
+    handlers[size_t(Kind::Address)] = BindIntegerKernel<Kind::Address, 0, 0>();
     handlers[size_t(Kind::LoadStoreExclusive)] = BindAtomicHandler<Kind::LoadStoreExclusive>();
     handlers[size_t(Kind::LoadStoreAtomic)] = BindAtomicHandler<Kind::LoadStoreAtomic>();
     handlers[size_t(Kind::Syscall)] = BindTrapHandler<Stop::Syscall>();
@@ -183,6 +184,8 @@ inline GenericHandlerBinding Lower(const DecodedInstruction& op) {
         return HandlerBinding{&DispatchWrapper<NopLogic, nop_policy>};
     }
     switch (op.kind) {
+        case Kind::Address:
+            return op.operation ? BindIntegerKernel<Kind::Address, 0, 1>() : Handlers[size_t(Kind::Address)];
         case Kind::System:
             if (auto binding = LowerSystem(op.word); binding.handler) return binding;
             break;

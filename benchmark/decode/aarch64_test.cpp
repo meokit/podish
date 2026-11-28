@@ -1845,6 +1845,36 @@ bool CompactBitfieldOperands() {
            state.x[2] == 0xffffffff'80000006;
 }
 
+struct CachedBacking : Backing {
+    alignas(detail::BasicBlock) std::array<std::array<std::byte, 1024>, 4> storage;
+    std::array<detail::BasicBlock*, 4> blocks{};
+    std::array<size_t, 4> sizes{};
+    unsigned allocations = 0;
+
+    Memory Callbacks() {
+        auto memory = Backing::Callbacks();
+        memory.lookup_cached_block = [](void* context, uint64_t pc, const uint8_t*) -> detail::BasicBlock* {
+            const auto& backing = *static_cast<const CachedBacking*>(static_cast<const Backing*>(context));
+            for (auto* block : backing.blocks)
+                if (block && block->start_pc() == pc)
+                    return block;
+            return nullptr;
+        };
+        memory.allocate_block = [](void* context, size_t size, uint64_t) -> void* {
+            auto& backing = *static_cast<CachedBacking*>(static_cast<Backing*>(context));
+            if (backing.allocations >= backing.storage.size() || size > backing.storage.front().size())
+                return nullptr;
+            backing.sizes[backing.allocations] = size;
+            return backing.storage[backing.allocations].data();
+        };
+        memory.cache_block = [](void* context, detail::BasicBlock* block) {
+            auto& backing = *static_cast<CachedBacking*>(static_cast<Backing*>(context));
+            backing.blocks[backing.allocations++] = block;
+        };
+        return memory;
+    }
+};
+
 bool CompactSlotsAndFoldedNopBudgets() {
     constexpr uint32_t Add = 0x91000421; // add x1, x1, #1
     constexpr uint32_t Nop = 0xd503201f;
@@ -1854,35 +1884,10 @@ bool CompactSlotsAndFoldedNopBudgets() {
     constexpr auto Branch = Base + 128;
     constexpr auto FaultAddress = Base + 2 * Page;
 
-    struct CachedBacking : Backing {
-        alignas(detail::BasicBlock) std::array<std::array<std::byte, 1024>, 4> storage;
-        std::array<detail::BasicBlock*, 4> blocks{};
-        unsigned allocations = 0;
-        size_t initial_size = 0;
-    } backing;
+    CachedBacking backing;
     backing.Code(Base, {Add, Nop, Nop, Mov, Nop, Load, Nop, Svc});
     backing.Code(Branch, {0x17ffffe1}); // b Base + 4
-
-    auto memory = backing.Callbacks();
-    memory.lookup_cached_block = [](void* context, uint64_t pc, const uint8_t*) -> detail::BasicBlock* {
-        const auto& backing = static_cast<const CachedBacking&>(*static_cast<const Backing*>(context));
-        for (const auto* block : backing.blocks)
-            if (block && block->start_pc() == pc)
-                return const_cast<detail::BasicBlock*>(block);
-        return nullptr;
-    };
-    memory.allocate_block = [](void* context, size_t size, uint64_t) -> void* {
-        auto& backing = static_cast<CachedBacking&>(*static_cast<Backing*>(context));
-        if (backing.allocations >= backing.storage.size() || size > backing.storage.front().size())
-            return nullptr;
-        if (!backing.allocations)
-            backing.initial_size = size;
-        return backing.storage[backing.allocations].data();
-    };
-    memory.cache_block = [](void* context, detail::BasicBlock* block) {
-        auto& backing = static_cast<CachedBacking&>(*static_cast<Backing*>(context));
-        backing.blocks[backing.allocations++] = block;
-    };
+    const auto memory = backing.Callbacks();
 
     for (unsigned budget = 1; budget <= 8; ++budget) {
         State state;
@@ -1901,16 +1906,16 @@ bool CompactSlotsAndFoldedNopBudgets() {
     }
 
     const auto& block = *backing.blocks.front();
-    if (backing.allocations != 1 || block.inst_count() != 8 || block.sentinel_slot_index != 5 ||
-        backing.initial_size != 160 || block.Word(1) != Nop || block.Word(2) != Nop || block.Word(4) != Nop ||
-        block.Word(6) != Nop)
+    if (backing.allocations != 1 || block.inst_count() != 8 || block.sentinel_slot_index != 4 || !block.HasSentinel() ||
+        block.HasInlineWords() || backing.sizes[0] != 112 || block.Word(1) != Nop || block.Word(2) != Nop ||
+        block.Word(4) != Nop || block.Word(6) != Nop)
         return false;
     State inspect;
     inspect.last_block = &block;
     const auto* slot = block.FirstOp();
     for (const unsigned ordinal : {0u, 3u, 5u, 7u}) {
         if (slot->GuestIndex() != ordinal || slot->GetStartPc(inspect) != Base + 4 * ordinal ||
-            slot->Has(detail::HasDataSlot) != (ordinal == 3))
+            slot->Has(detail::HasDataSlot))
             return false;
         slot = slot->NextOp();
     }
@@ -1921,7 +1926,119 @@ bool CompactSlotsAndFoldedNopBudgets() {
     state.pc = Branch;
     const auto result = Run(state, memory, 2);
     return result.reason == Stop::Budget && result.executed == 2 && state.pc == Base + 8 && state.x[1] == 0 &&
-           backing.allocations == 3 && backing.blocks[2]->start_pc() == Base + 4 && backing.blocks[2]->Word(0) == Nop;
+           backing.allocations == 3 && !backing.blocks[1]->HasSentinel() && !backing.blocks[1]->HasInlineWords() &&
+           backing.sizes[1] == 64 && backing.blocks[2]->start_pc() == Base + 4 && backing.blocks[2]->Word(0) == Nop;
+}
+
+bool CompactOperandDispatch() {
+    constexpr uint32_t Adrp = 0xb0000005; // adrp x5, Base + Page
+    constexpr uint32_t Mov = 0xd2e24680;  // movz x0, #0x1234, lsl #48
+    constexpr uint32_t Pair = 0xa9bf0860; // stp x0, x2, [x3, #-16]!
+    constexpr uint32_t Bl = 0x94000002;   // bl .+8
+    constexpr uint32_t AdrpKey = detail::CanonicalizeBakedWord(Adrp);
+    constexpr uint32_t MovKey = Mov & ~PartialImmediateMask(detail::DecodeFields(Mov));
+    constexpr uint32_t PairKey = Pair & ~PartialImmediateMask(detail::DecodeFields(Pair));
+    constexpr auto Data = Base + Page;
+    constexpr uint64_t Value = 0x1234'0000'0000'0000;
+
+    const Profile baked{.resolve = [](const DecodedInstruction& op, bool) -> detail::HandlerFunc {
+        switch (detail::CanonicalizeBakedWord(op)) {
+        case AdrpKey:
+            return GetBakedHandler<AdrpKey>();
+        case Mov:
+            return GetBakedHandler<Mov>();
+        case Pair:
+            return GetBakedHandler<Pair>();
+        case detail::CanonicalizeBakedWord(Bl):
+            return GetBakedHandler<detail::CanonicalizeBakedWord(Bl)>();
+        default:
+            return nullptr;
+        }
+    }};
+    const Profile partial{
+        .resolve_sequence =
+            [](const uint32_t* words, unsigned count, unsigned* length, uint32_t dead) {
+                if (count < 3 || words[0] != AdrpKey || words[1] != Mov || words[2] != Pair)
+                    return detail::HandlerFunc{};
+                *length = 3;
+                return PartialBakedFusion<6, AdrpKey, MovKey, PairKey>.Select(dead, 3);
+            },
+    };
+    for (const auto& profile : {Profile{}, baked, partial}) {
+        CachedBacking backing;
+        backing.Code(Base, {Adrp, Mov, Pair, Bl});
+        auto memory = backing.Callbacks();
+        fiberish::mem::SoftTlb tlb{};
+        const auto tag = ArmPageTag(Data);
+        tlb.write_tlb[tag & fiberish::mem::TLB_INDEX_MASK] = {
+            fiberish::mem::PackMicroTlbTags(fiberish::mem::kInvalidMicroTlbTag, tag),
+            reinterpret_cast<uintptr_t>(backing.data.data() + Page) - Data,
+        };
+        memory.data_tlb = &tlb;
+        State state{};
+        state.pc = Base;
+        state.x[2] = 7;
+        state.x[3] = Data + 128;
+        const auto result = Run(state, memory, 4, profile);
+        if (result.reason != Stop::Budget || result.executed != 4 || state.pc != Base + 20 || state.x[0] != Value ||
+            state.x[3] != Data + 112 || state.x[5] != Data || state.x[30] != Base + 16 ||
+            detail::ReadLittle<uint64_t>(&backing.data[Page + 112]) != Value ||
+            detail::ReadLittle<uint64_t>(&backing.data[Page + 120]) != 7 || backing.allocations != 1)
+            return false;
+
+        const auto& block = *backing.blocks.front();
+        if (block.HasSentinel() || block.HasInlineWords() || backing.sizes.front() != 112 ||
+            block.FirstOp()->Span() != (profile.resolve_sequence ? 3 : 1))
+            return false;
+        const auto* slot = block.FirstOp();
+        for (unsigned ordinal = 0; ordinal < 3; ++ordinal, slot = slot->NextOp()) {
+            if (slot->GuestIndex() != ordinal || slot->Has(detail::HasDataSlot))
+                return false;
+        }
+        if (!slot->Has(detail::HasDataSlot) || slot->NextOp() != block.Sentinel())
+            return false;
+    }
+    return true;
+}
+
+bool CompactAdrpPreservesFullTarget() {
+    for (const auto pc : {uint64_t{0}, ArmTaskSize - 4}) {
+        for (const uint32_t word : {0x90800005u, 0xf07fffe5u}) {
+            auto decoded = Decode(word);
+            detail::BindBlockOperands(decoded, pc);
+            const detail::DecodedOp slot{.payload =
+                                             detail::DecodedOp::Pack(detail::PackOpOperands(decoded), 3, 0, 2, 0)};
+            const auto op = detail::GetOpOperands<Kind::Address>(slot);
+            if (decoded.kind != Kind::Address || op.operation != 1 || op.rd != 5 || op.target_pc != decoded.target_pc ||
+                slot.GuestIndex() != 3 || slot.Span() != 2)
+                return false;
+        }
+    }
+    return true;
+}
+
+bool MemoryFaultAfterExecutableUnmap() {
+    constexpr uint32_t Load = 0xf9400020; // ldr x0, [x1]
+    constexpr uint64_t FaultAddress = Base + 2 * Page;
+    CachedBacking backing;
+    backing.Code(Base, {Load, 0x14000001}); // b .+4
+    auto memory = backing.Callbacks();
+    memory.read = [](void* context, uint64_t address, void*, size_t, Access access) {
+        auto& backing = *static_cast<CachedBacking*>(static_cast<Backing*>(context));
+        if (access == Access::Read && address == FaultAddress && backing.blocks.front()) {
+            backing.blocks.front()->Invalidate();
+            backing.executable.front() = false;
+            backing.Put(Base, detail::NopWord);
+        }
+        return false;
+    };
+    State state{};
+    state.pc = Base;
+    state.x[1] = FaultAddress;
+    const auto result = Run(state, memory, 2);
+    return result.reason == Stop::Fault && result.executed == 0 && result.address == FaultAddress &&
+           result.access == Access::Read && result.instruction == Load && state.pc == Base &&
+           backing.allocations == 1 && !backing.executable.front() && !backing.blocks.front()->IsValid();
 }
 
 bool RefetchChangedFoldedNop() {
@@ -1998,6 +2115,9 @@ int main() {
         {"FCMP FPSR effect when its NZCV is overwritten", FlagElisionFloatingCompare()},
         {"compact bitfield preserves the six-bit endpoint", CompactBitfieldOperands()},
         {"compact slots, NOP folding, precise guest budgets and branch entry", CompactSlotsAndFoldedNopBudgets()},
+        {"compact generic, baked and partially baked operands before a sentinel-free BL", CompactOperandDispatch()},
+        {"compact ADRP preserves results outside the guest address space", CompactAdrpPreservesFullTarget()},
+        {"memory fault reports the original instruction after executable unmap", MemoryFaultAfterExecutableUnmap()},
         {"local cache refetches a modified folded NOP", RefetchChangedFoldedNop()},
     };
     for (const auto& test : tests) {

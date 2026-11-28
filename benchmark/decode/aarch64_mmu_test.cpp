@@ -14,6 +14,10 @@
 #include <string>
 #include <vector>
 
+#if defined(__unix__) || defined(__APPLE__)
+#include <sys/mman.h>
+#endif
+
 namespace {
 
 constexpr uint64_t Top = 1ull << 39;
@@ -51,6 +55,35 @@ void run(EmuState* state, uint64_t pc, uint64_t budget) {
     AArch64_RegWrite(state, 32, pc);
     assert(AArch64_Run(state, 0, budget, 0));
 }
+
+#if defined(__unix__) || defined(__APPLE__)
+void fault_unmaps_executable_backing() {
+    constexpr uint64_t FaultAddress = HighPc + PageSize;
+    auto* state = X86_CreateWithOptions(X86_CREATE_NO_FATAL_SIGNAL_HANDLERS);
+    assert(state);
+    AArch64_Reset(state);
+    auto* code =
+        static_cast<uint8_t*>(mmap(nullptr, PageSize, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0));
+    assert(code != MAP_FAILED);
+    put(code, 0xf9400041u);     // ldr x1, [x2]
+    put(code + 4, 0x14000001u); // b .+4
+    assert(AArch64_MemMapHostPage(state, HighPc, code, 5));
+    AArch64_RegWrite(state, 2, FaultAddress);
+    AArch64_SetExtendedFaultCallback(
+        state,
+        [](EmuState* cpu, uint64_t address, int flags, void* context) {
+            assert(address == FaultAddress && (flags & 3) == 0);
+            AArch64_MemUnmap(cpu, HighPc, PageSize);
+            assert(munmap(context, PageSize) == 0);
+            return 0;
+        },
+        code);
+    run(state, HighPc, 2);
+    assert(X86_GetFaultVector(state) == 14 && AArch64_GetFaultAddress(state) == FaultAddress);
+    assert(AArch64_RegRead(state, 32) == HighPc);
+    X86_Destroy(state);
+}
+#endif
 
 void profile_block_boundaries() {
     const auto nonce = std::chrono::steady_clock::now().time_since_epoch().count();
@@ -184,6 +217,9 @@ void switch_address_space() {
 
 int main() {
     profile_block_boundaries();
+#if defined(__unix__) || defined(__APPLE__)
+    fault_unmaps_executable_backing();
+#endif
 #if FIBERCPU_GUEST_I386
     switch_address_space();
 #endif

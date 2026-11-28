@@ -79,7 +79,10 @@ A64_FORCE_INLINE StepResult ExecuteBakedOps(State& state, const DecodedOp*& memb
     }
     const auto& operands = BakedOperands<Word, (dynamic_mask & 1) != 0>(*member);
     uint64_t target = 0;
-    if constexpr (HasBlockTarget(op.kind)) target = GetExtraOperands(*member).primary;
+    if constexpr (op.kind == Kind::Address)
+        target = GetAddressTarget<op.operation>(*member);
+    else if constexpr (HasBlockTarget(op.kind))
+        target = GetExtraOperands(*member).primary;
     if constexpr (IsBakedTransfer(op.kind)) {
         if (!ProbeLoadStore<op.kind, op.width, op.operation, op.mode, op.shift, Field(Word, 26, 1)>(
                 state, operands, target, state.data_tlb A64_UTLB_ARGS A64_HANDLER_PIN_ARGS)) [[unlikely]]
@@ -97,7 +100,7 @@ A64_FORCE_INLINE StepResult ExecuteBakedOps(State& state, const DecodedOp*& memb
         return {};
     } else {
         static_assert(CanFollowInBakedSequence(Word));
-        member = member->NextOp<HasExtraOperandSlot(op.kind)>();
+        member = member->NextOp<HasExtraOperandSlot(op)>();
         return ExecuteBakedOps<(dead >> 1), (dynamic_mask >> 1), Rest...>(state, member A64_UTLB_ARGS,
                                                                           flags_cache A64_HANDLER_PIN_ARGS);
     }
@@ -112,12 +115,12 @@ A64_FORCE_INLINE StepResult BakedLogic(State& state, const DecodedOp*& current A
 
 template <uint32_t... Words>
 constexpr DispatchPolicy BakedPolicy() {
-    constexpr auto terminal = std::array{DecodeFields(Words).kind...}.back();
+    constexpr auto terminal = std::array{DecodeFields(Words)...}.back();
     return {
         .wide = HasExtraOperandSlot(terminal),
         .may_replay = (IsBakedTransfer(DecodeFields(Words).kind) || ...),
         .may_exit = false,
-        .branch = BranchPolicy(terminal),
+        .branch = BranchPolicy(terminal.kind),
     };
 }
 

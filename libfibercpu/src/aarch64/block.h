@@ -1,6 +1,8 @@
 #pragma once
 
 #include <bit>
+#include <cassert>
+#include <cstring>
 #include <new>
 
 #include "../block_limits.h"
@@ -46,8 +48,7 @@ struct alignas(16) DecodedOp {
     bool Has(SlotFlag flag) const { return (payload >> 56) & flag; }
 
     const DecodedOp* Advance(unsigned units) const {
-        return std::launder(
-            reinterpret_cast<const DecodedOp*>(reinterpret_cast<const std::byte*>(this) + units * sizeof(DecodedOp)));
+        return reinterpret_cast<const DecodedOp*>(reinterpret_cast<const std::byte*>(this) + units * sizeof(DecodedOp));
     }
 
     template <bool wide>
@@ -125,10 +126,12 @@ struct alignas(16) BasicBlockHeader {
 struct alignas(16) BasicBlock {
     static const BasicBlock Invalid;
 
+    enum : uint8_t { HasSentinelFlag = 1, HasInlineWordsFlag = 2 };
+
     BasicBlockHeader header;
     const uint8_t* executable_page = nullptr;
     uint8_t sentinel_slot_index = 0;
-    uint8_t reserved = 0;
+    uint8_t flags = 0;
     uint16_t invalidation_revision = 0;
 
     uint64_t start_pc() const { return header.start_pc(); }
@@ -141,35 +144,46 @@ struct alignas(16) BasicBlock {
         ++invalidation_revision;
     }
 
-    static constexpr size_t RegionContextOffset(unsigned units) {
-        return units * sizeof(DecodedOp) + sizeof(DecodedOp);
+    static constexpr size_t RegionContextOffset(unsigned units, bool has_sentinel) {
+        return (units + has_sentinel) * sizeof(DecodedOp);
     }
 
-    static constexpr size_t CalculateSize(unsigned units, unsigned count, bool retain_region_context) {
-        return sizeof(BasicBlock) + RegionContextOffset(units) + (retain_region_context ? sizeof(void*) : 0) +
-               count * sizeof(uint32_t);
+    static constexpr size_t CalculateSize(unsigned units, bool has_sentinel, bool retain_region_context,
+                                          unsigned inline_word_count) {
+        return sizeof(BasicBlock) + RegionContextOffset(units, has_sentinel) +
+               (retain_region_context ? sizeof(void*) : 0) + inline_word_count * sizeof(uint32_t);
     }
 
     const DecodedOp* FirstOp() const { return reinterpret_cast<const DecodedOp*>(this + 1); }
+    // End of the instruction slots, even when no sentinel is stored there.
     const DecodedOp* Sentinel() const { return FirstOp()->Advance(sentinel_slot_index); }
     HandlerFunc& EntryHandler() { return header.entry; }
+    bool HasSentinel() const { return flags & HasSentinelFlag; }
+    bool HasInlineWords() const { return flags & HasInlineWordsFlag; }
     bool HasRegionContext() const { return header.chain.metadata & BasicBlockChainPrefix::HasRegionContext; }
+    size_t RegionContextOffset() const { return RegionContextOffset(sentinel_slot_index, HasSentinel()); }
     const void* RegionContext() const {
-        return HasRegionContext() ? *reinterpret_cast<const void* const*>(Sentinel() + 1) : nullptr;
+        return HasRegionContext() ? *reinterpret_cast<const void* const*>(reinterpret_cast<const std::byte*>(this + 1) +
+                                                                          RegionContextOffset())
+                                  : nullptr;
     }
     void SetRegionContext(const void* context) {
-        *reinterpret_cast<const void**>(reinterpret_cast<std::byte*>(this + 1) +
-                                        RegionContextOffset(sentinel_slot_index)) = context;
+        *reinterpret_cast<const void**>(reinterpret_cast<std::byte*>(this + 1) + RegionContextOffset()) = context;
     }
 
     // The footer uses guest ordinals, so it includes instructions with no slot.
     const uint32_t* Words() const {
-        const auto* footer = reinterpret_cast<const std::byte*>(Sentinel() + 1);
+        assert(HasInlineWords());
+        const auto* footer = reinterpret_cast<const std::byte*>(this + 1) + RegionContextOffset();
         return reinterpret_cast<const uint32_t*>(footer + (HasRegionContext() ? sizeof(void*) : 0));
     }
 
     uint32_t Word(unsigned ordinal) const {
-        const auto word = Words()[ordinal];
+        uint32_t word;
+        if (HasInlineWords())
+            word = Words()[ordinal];
+        else
+            std::memcpy(&word, executable_page + (start_pc() & PageMask) + ordinal * sizeof(word), sizeof(word));
         if constexpr (std::endian::native == std::endian::big) return std::byteswap(word);
         return word;
     }

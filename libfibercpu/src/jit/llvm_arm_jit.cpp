@@ -37,15 +37,14 @@ extern "C" FIBERCPU_AARCH64_HANDLER_ABI int64_t FiberArmJitRefetch(A64_HANDLER_P
     // The instruction already ran. Refetch after it even if its slot is
     // unavailable (for example, after discarding an invalid source block).
     CommitDispatchState(state, state.pc, flags_cache A64_HANDLER_PIN_ARGS);
-    frame.exit_op = current;
     frame.exit = {Stop::Refetch};
     return instr_limit - 1;
 }
 
 extern "C" FIBERCPU_AARCH64_HANDLER_ABI int64_t FiberArmJitLeave(A64_HANDLER_PARAMS) {
+    (void)current;
     CommitDispatchState(state, state.pc, flags_cache A64_HANDLER_PIN_ARGS);
     auto& frame = *state.active_run;
-    frame.exit_op = current;
     frame.exit = {Stop::Branch, Access::Execute, 0, state.pc};
     frame.exit_link = nullptr;
     return instr_limit;
@@ -120,7 +119,7 @@ RegionCandidate RegionEdges(ArmBlock& block) {
 }
 
 arm_jit::Member CaptureMember(const ArmBlock& block) {
-    arm_jit::Member member{uint16_t(block.start_pc() & PageMask), {}};
+    arm_jit::Member member{uint16_t(block.start_pc() & PageMask), block.HasSentinel(), {}};
     member.steps.reserve(block.inst_count());
     const auto* op = block.FirstOp();
     const auto* sentinel = block.Sentinel();

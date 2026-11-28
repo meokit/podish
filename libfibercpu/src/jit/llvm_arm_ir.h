@@ -29,6 +29,7 @@ struct Step {
 
 struct Member {
     uint16_t offset;
+    bool has_sentinel;
     std::vector<Step> steps;
 
     unsigned SlotCount() const {

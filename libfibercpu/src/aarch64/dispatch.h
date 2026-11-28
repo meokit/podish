@@ -24,7 +24,7 @@ struct RunFrame {
     // and one. A nonnegative value can enter another block.
     int64_t budget_reserve = 0;
     const uint8_t* executable = nullptr;
-    const DecodedOp* exit_op = nullptr;
+    uint32_t exit_word = 0;
     StepResult exit{};
     uint64_t* exit_link = nullptr;
     uint64_t exit_target = 0;
@@ -88,10 +88,10 @@ inline void ReloadDispatchPins([[maybe_unused]] State& state A64_HOT_PIN_REF) {
 }
 
 inline int64_t ReturnFromBlock(State& state, const DecodedOp* current, int64_t instr_limit,
-                               uint32_t flags_cache A64_HANDLER_PIN_PARAMS, StepResult step) {
+                               uint32_t flags_cache A64_HANDLER_PIN_PARAMS, StepResult step, uint32_t word = 0) {
     CommitDispatchState(state, current->GetStartPc(state), flags_cache A64_HANDLER_PIN_ARGS);
     auto& frame = *state.active_run;
-    frame.exit_op = current;
+    frame.exit_word = word;
     frame.exit = step;
     return instr_limit + state.last_block->inst_count() - current->GuestIndex() - int64_t(RetiresOnExit(step.reason));
 }
@@ -226,7 +226,7 @@ FIBERCPU_AARCH64_HANDLER_ABI int64_t DispatchWrapper(A64_HANDLER_PARAMS) {
         }
     }
     if constexpr (Policy.branch != DispatchBranch::None) {
-        if (step.reason == Stop::Branch) {
+        if (Policy.branch == DispatchBranch::DirectUnconditional || step.reason == Stop::Branch) {
             if constexpr (Policy.branch == DispatchBranch::Indirect) {
                 const auto& extra = GetExtraOperands(*current);
                 A64_RESOLVE_BRANCH_TARGET_INLINE(
@@ -242,7 +242,8 @@ FIBERCPU_AARCH64_HANDLER_ABI int64_t DispatchWrapper(A64_HANDLER_PARAMS) {
     }
     if constexpr (Policy.may_exit) {
         if (step.reason != Stop::Continue) [[unlikely]] {
-            return ReturnFromBlock(state, current, instr_limit, flags_cache A64_HANDLER_PIN_ARGS, step);
+            const auto word = state.last_block->Word(current->GuestIndex());
+            return ReturnFromBlock(state, current, instr_limit, flags_cache A64_HANDLER_PIN_ARGS, step, word);
         }
     }
     A64_DISPATCH_NEXT(current->template NextOp<Policy.wide>());

@@ -213,7 +213,8 @@ class Builder {
     void RegionWrappers(llvm::StringRef name, std::span<const Member> members) {
         llvm::SmallVector<size_t, 16> offsets;
         offsets.reserve(members.size());
-        for (const auto& member : members) offsets.push_back(BasicBlock::RegionContextOffset(member.SlotCount()));
+        for (const auto& member : members)
+            offsets.push_back(BasicBlock::RegionContextOffset(member.SlotCount(), member.has_sentinel));
         EmitRegionEntryWrappers(module_, entry_, name, offsets);
     }
 

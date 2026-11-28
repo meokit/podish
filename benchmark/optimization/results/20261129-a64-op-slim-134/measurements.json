@@ -1,0 +1,427 @@
+{
+  "baseline_commit": "9d076205e8c481ff9064b6534f1340c2051ac3e8",
+  "host": "Apple M5 Max, macOS 27.2.1",
+  "toolchains": {
+    "native": "Homebrew Clang and LLVM 21.1.8, macOS arm64, Release ThinLTO, LLVM JIT enabled",
+    "wasm": "Emscripten 5.0.4, Release static library and standalone reactor module",
+    "managed": ".NET 11.0.100",
+    "builds": "Dual guest, stock 3m baking preset"
+  },
+  "timing_method": "Five alternating A/B pairs using nested_baking_workloads.run_workloads under the shared benchmark lock. Timings are host seconds across each guest workload marker pair. Each workload uses the median of its five paired baseline/slim ratios. Panel and overall geomeans weight workloads equally.",
+  "timing": {
+    "manifest": "benchmark/optimization/results/20261126-default-3m/measurements.json",
+    "native_sha256": {
+      "baseline": "2a589158f075df4d41612f4726ffdff33d49f2253a464fe9629fc0f0276b5b98",
+      "slim": "1ea37a687563d046e63b9ff990c75095408bd5d41da32f2c4dbe757b747bd68b"
+    },
+    "managed_cli_sha256": "1356718334a05322e7de6742ab429eb4038068ba3ddb00ab314f5d4ba7173fa0",
+    "guest_jit": "off",
+    "block_cache_mib": 64,
+    "guest_memory_gib": 1,
+    "host_dotnet_tiered_compilation": false,
+    "verified_outputs": 170,
+    "rounds": [
+      {
+        "round": 1,
+        "order": [
+          "baseline",
+          "slim"
+        ],
+        "baseline": {
+          "gzip": 0.2079897079966031,
+          "gunzip": 0.08555679197888821,
+          "sed": 0.247753458970692,
+          "sort": 0.06526712502818555,
+          "sha256": 0.08115920796990395,
+          "tar": 0.04750420799246058,
+          "du": 0.15705612499732524,
+          "ls": 0.07220712496200576,
+          "grep-fixed": 0.04862312495242804,
+          "grep-regex": 0.06383045803522691,
+          "node-minify": 1.3968347500194795,
+          "mawk-aggregate": 0.29591345897642896,
+          "diff-revisions": 0.1543829589500092,
+          "blind-perl-groups": 0.5354613329982385,
+          "blind-rev-lines": 0.5432615409954451,
+          "codegen-gzip-o1": 0.15029012504965067,
+          "codegen-gzip-o3": 0.1453945420216769
+        },
+        "slim": {
+          "gzip": 0.21237462502904236,
+          "gunzip": 0.0867686250130646,
+          "sed": 0.2334655420272611,
+          "sort": 0.06097474996931851,
+          "sha256": 0.08089258300606161,
+          "tar": 0.03547633299604058,
+          "du": 0.15389670903095976,
+          "ls": 0.07086987496586516,
+          "grep-fixed": 0.04720349999843165,
+          "grep-regex": 0.06377725000493228,
+          "node-minify": 1.2812058329582214,
+          "mawk-aggregate": 0.290317207982298,
+          "diff-revisions": 0.1496805420028977,
+          "blind-perl-groups": 0.5018705409602262,
+          "blind-rev-lines": 0.5453307080315426,
+          "codegen-gzip-o1": 0.1375220000045374,
+          "codegen-gzip-o3": 0.14179312501801178
+        }
+      },
+      {
+        "round": 2,
+        "order": [
+          "slim",
+          "baseline"
+        ],
+        "slim": {
+          "gzip": 0.2086802909616381,
+          "gunzip": 0.08610941702499986,
+          "sed": 0.2282830830081366,
+          "sort": 0.061582458030898124,
+          "sha256": 0.07961825001984835,
+          "tar": 0.03614712500711903,
+          "du": 0.15360591700300574,
+          "ls": 0.07073329197010025,
+          "grep-fixed": 0.046988791960757226,
+          "grep-regex": 0.06468070799019188,
+          "node-minify": 1.2756855830084532,
+          "mawk-aggregate": 0.2876370410085656,
+          "diff-revisions": 0.15024587500374764,
+          "blind-perl-groups": 0.5047181669506244,
+          "blind-rev-lines": 0.5436926249531098,
+          "codegen-gzip-o1": 0.13968891702825204,
+          "codegen-gzip-o3": 0.1395580000244081
+        },
+        "baseline": {
+          "gzip": 0.24029012501705438,
+          "gunzip": 0.08337462501367554,
+          "sed": 0.225428500038106,
+          "sort": 0.0643007910111919,
+          "sha256": 0.07979829201940447,
+          "tar": 0.03523916704580188,
+          "du": 0.15437241597101092,
+          "ls": 0.0712849170085974,
+          "grep-fixed": 0.04744200001005083,
+          "grep-regex": 0.06339958298485726,
+          "node-minify": 1.303853083983995,
+          "mawk-aggregate": 0.2873793329927139,
+          "diff-revisions": 0.14945212501334026,
+          "blind-perl-groups": 0.5149260420002975,
+          "blind-rev-lines": 0.5426115420414135,
+          "codegen-gzip-o1": 0.1469074580236338,
+          "codegen-gzip-o3": 0.14649120898684487
+        }
+      },
+      {
+        "round": 3,
+        "order": [
+          "baseline",
+          "slim"
+        ],
+        "baseline": {
+          "gzip": 0.20403616700787097,
+          "gunzip": 0.08387970796320587,
+          "sed": 0.23288508300902322,
+          "sort": 0.06235891598043963,
+          "sha256": 0.08000200003152713,
+          "tar": 0.03653199999826029,
+          "du": 0.15468762500677258,
+          "ls": 0.0713669159449637,
+          "grep-fixed": 0.048613584018312395,
+          "grep-regex": 0.06363549997331575,
+          "node-minify": 1.299172125000041,
+          "mawk-aggregate": 0.2902402500039898,
+          "diff-revisions": 0.14924729097401723,
+          "blind-perl-groups": 0.5183184159686789,
+          "blind-rev-lines": 0.5464738750015385,
+          "codegen-gzip-o1": 0.14700120803900063,
+          "codegen-gzip-o3": 0.145016124995891
+        },
+        "slim": {
+          "gzip": 0.20712762500625104,
+          "gunzip": 0.08610345795750618,
+          "sed": 0.24174233298981562,
+          "sort": 0.062435375002678484,
+          "sha256": 0.07990754203638062,
+          "tar": 0.03513054101495072,
+          "du": 0.15383183298399672,
+          "ls": 0.0844524169806391,
+          "grep-fixed": 0.04716545803239569,
+          "grep-regex": 0.06475883297389373,
+          "node-minify": 1.2818864160217345,
+          "mawk-aggregate": 0.2946797080221586,
+          "diff-revisions": 0.150474458001554,
+          "blind-perl-groups": 0.5046771250199527,
+          "blind-rev-lines": 0.5464692919631489,
+          "codegen-gzip-o1": 0.1379955830052495,
+          "codegen-gzip-o3": 0.14223762502660975
+        }
+      },
+      {
+        "round": 4,
+        "order": [
+          "slim",
+          "baseline"
+        ],
+        "slim": {
+          "gzip": 0.20698504196479917,
+          "gunzip": 0.08592316700378433,
+          "sed": 0.22708375001093373,
+          "sort": 0.0627534999512136,
+          "sha256": 0.08021045802161098,
+          "tar": 0.034965583006851375,
+          "du": 0.15572774998145178,
+          "ls": 0.07123633299488574,
+          "grep-fixed": 0.047509208030533046,
+          "grep-regex": 0.06424658303149045,
+          "node-minify": 1.278286124987062,
+          "mawk-aggregate": 0.29492070799460635,
+          "diff-revisions": 0.16717341600451618,
+          "blind-perl-groups": 0.5037842920282856,
+          "blind-rev-lines": 0.55709154199576,
+          "codegen-gzip-o1": 0.1437062089680694,
+          "codegen-gzip-o3": 0.1534746660036035
+        },
+        "baseline": {
+          "gzip": 0.20471075002569705,
+          "gunzip": 0.08379929099464789,
+          "sed": 0.22842137498082593,
+          "sort": 0.06225595797877759,
+          "sha256": 0.08002508396748453,
+          "tar": 0.03563245898112655,
+          "du": 0.15496508299838752,
+          "ls": 0.07153125002514571,
+          "grep-fixed": 0.04797945899190381,
+          "grep-regex": 0.06373120902571827,
+          "node-minify": 1.308285832987167,
+          "mawk-aggregate": 0.29336550005245954,
+          "diff-revisions": 0.15096083300886676,
+          "blind-perl-groups": 0.5205093330005184,
+          "blind-rev-lines": 0.5460351659567095,
+          "codegen-gzip-o1": 0.16034058399964124,
+          "codegen-gzip-o3": 0.1503170839860104
+        }
+      },
+      {
+        "round": 5,
+        "order": [
+          "baseline",
+          "slim"
+        ],
+        "baseline": {
+          "gzip": 0.20449191599618644,
+          "gunzip": 0.08447674999479204,
+          "sed": 0.23057133296970278,
+          "sort": 0.06363345799036324,
+          "sha256": 0.08193687500897795,
+          "tar": 0.036020540981553495,
+          "du": 0.15588370797922835,
+          "ls": 0.07176274998346344,
+          "grep-fixed": 0.047491999983321875,
+          "grep-regex": 0.06589195801643655,
+          "node-minify": 1.330098000005819,
+          "mawk-aggregate": 0.3055790420039557,
+          "diff-revisions": 0.1525752079905942,
+          "blind-perl-groups": 0.5260484999744222,
+          "blind-rev-lines": 0.5457706250017509,
+          "codegen-gzip-o1": 0.14762829197570682,
+          "codegen-gzip-o3": 0.14459300000453368
+        },
+        "slim": {
+          "gzip": 0.20622683403780684,
+          "gunzip": 0.08750795800006017,
+          "sed": 0.22781395900528878,
+          "sort": 0.06219879200216383,
+          "sha256": 0.08006533305160701,
+          "tar": 0.035227499960456043,
+          "du": 0.15422595897689462,
+          "ls": 0.07189345796359703,
+          "grep-fixed": 0.04700762504944578,
+          "grep-regex": 0.06416491599520668,
+          "node-minify": 1.2741923749563284,
+          "mawk-aggregate": 0.29001224995590746,
+          "diff-revisions": 0.15202658402267843,
+          "blind-perl-groups": 0.49984362500254065,
+          "blind-rev-lines": 0.5563570839585736,
+          "codegen-gzip-o1": 0.14518141699954867,
+          "codegen-gzip-o3": 0.14381258300272748
+        }
+      }
+    ],
+    "median_paired_speedups": {
+      "gzip": 0.9890122884363359,
+      "gunzip": 0.9741735111800298,
+      "sed": 1.005890447774567,
+      "sort": 1.0230658175507572,
+      "sha256": 1.0022613157097933,
+      "tar": 1.0225119869984434,
+      "du": 1.0055631659987103,
+      "ls": 1.004139980510804,
+      "grep-fixed": 1.0103041779576527,
+      "grep-regex": 0.9919781880770288,
+      "node-minify": 1.0234686956337014,
+      "mawk-aggregate": 0.9991040513594909,
+      "diff-revisions": 0.9947169931261834,
+      "blind-perl-groups": 1.033198813930653,
+      "blind-rev-lines": 0.996205665652744,
+      "codegen-gzip-o1": 1.0652602412166232,
+      "codegen-gzip-o3": 1.019534212334897
+    },
+    "panel_geomean_speedup": {
+      "training": 1.0032130128148367,
+      "regression": 1.0038476774870952,
+      "blind": 1.0145336427065452,
+      "compiler": 1.0421464680938435
+    },
+    "overall_geomean_speedup": 1.00923576810833
+  },
+  "cache_allocation_method": "Separate instrumented pair with the same workload panel and lock. Counts and requested bytes are cumulative across successful AArch64 MMU block-pool allocations. Sizes are measured at Mmu::try_allocate_arm_block_bytes and exclude allocator padding and pool reservation.",
+  "cache": {
+    "manifest": "benchmark/optimization/results/20261126-default-3m/measurements.json",
+    "native_sha256": {
+      "baseline": "ff1bf47f283d43a6435a30f0bcb57b7413d391623cf541cb334ec248fd9c125b",
+      "slim": "d8740615decdffd19c701e61cd061d986a7cf86c6feea14bde7ac451282927c6"
+    },
+    "managed_cli_sha256": "1356718334a05322e7de6742ab429eb4038068ba3ddb00ab314f5d4ba7173fa0",
+    "guest_jit": "off",
+    "block_cache_mib": 64,
+    "guest_memory_gib": 1,
+    "host_dotnet_tiered_compilation": false,
+    "verified_outputs": 34,
+    "rounds": [
+      {
+        "round": 1,
+        "order": [
+          "baseline",
+          "slim"
+        ],
+        "baseline": {
+          "blocks": 233224,
+          "bytes": 73689272,
+          "mean_bytes": 315.9592151751106
+        },
+        "slim": {
+          "blocks": 233205,
+          "bytes": 55334736,
+          "mean_bytes": 237.27937222615296
+        }
+      }
+    ],
+    "total_bytes_delta_pct": -24.908016461337823,
+    "mean_block_bytes_delta_pct": -24.90189846349371
+  },
+  "native_text_bytes": {
+    "baseline": 4402924,
+    "slim": 4424332,
+    "delta_pct": 0.4862223377010366
+  },
+  "wasm": {
+    "baseline": {
+      "module_bytes": 3448625,
+      "code_section_bytes": 3089844
+    },
+    "slim": {
+      "module_bytes": 3465971,
+      "code_section_bytes": 3107145
+    },
+    "module_delta_pct": 0.5029830729638585,
+    "validation": "Node WebAssembly.Module validated both modules and confirmed exports for both guest engines."
+  },
+  "objdump_audit": {
+    "method": "Native llvm-objdump disassembly of the affected generic dispatch handlers and every shipped scalar or fused baked wrapper containing LoadStorePair, MoveWide, ADR or ADRP. Counts are numbers of wrappers containing each pattern.",
+    "baseline": {
+      "baked-exact": {
+        "calls": 0,
+        "frames": 0,
+        "spills": 0,
+        "stack_accesses": 0,
+        "symbols": 638
+      },
+      "baked-fused": {
+        "calls": 0,
+        "frames": 0,
+        "spills": 0,
+        "stack_accesses": 0,
+        "symbols": 2345
+      },
+      "baked-partial": {
+        "calls": 0,
+        "frames": 0,
+        "spills": 0,
+        "stack_accesses": 0,
+        "symbols": 155
+      },
+      "generic-address": {
+        "calls": 0,
+        "frames": 0,
+        "spills": 0,
+        "stack_accesses": 0,
+        "symbols": 2
+      },
+      "generic-movwide": {
+        "calls": 0,
+        "frames": 0,
+        "spills": 0,
+        "stack_accesses": 0,
+        "symbols": 18
+      },
+      "generic-pair": {
+        "calls": 0,
+        "frames": 0,
+        "spills": 0,
+        "stack_accesses": 0,
+        "symbols": 18
+      }
+    },
+    "slim": {
+      "baked-exact": {
+        "calls": 0,
+        "frames": 0,
+        "spills": 0,
+        "stack_accesses": 0,
+        "symbols": 638
+      },
+      "baked-fused": {
+        "calls": 0,
+        "frames": 0,
+        "spills": 0,
+        "stack_accesses": 0,
+        "symbols": 2345
+      },
+      "baked-partial": {
+        "calls": 0,
+        "frames": 0,
+        "spills": 0,
+        "stack_accesses": 0,
+        "symbols": 155
+      },
+      "generic-address": {
+        "calls": 0,
+        "frames": 0,
+        "spills": 0,
+        "stack_accesses": 0,
+        "symbols": 4
+      },
+      "generic-movwide": {
+        "calls": 0,
+        "frames": 0,
+        "spills": 0,
+        "stack_accesses": 0,
+        "symbols": 18
+      },
+      "generic-pair": {
+        "calls": 0,
+        "frames": 0,
+        "spills": 0,
+        "stack_accesses": 0,
+        "symbols": 18
+      }
+    }
+  },
+  "tests": {
+    "native_ctest": "24/24",
+    "aarch64_native_differential": "pass",
+    "dotnet": "3276/3276",
+    "python": "55/55",
+    "standalone_wasm": "pass"
+  }
+}

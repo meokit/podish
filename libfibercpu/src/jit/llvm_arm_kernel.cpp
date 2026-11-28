@@ -1,3 +1,4 @@
+#include "aarch64/block_operands.h"
 #include "aarch64/dispatch.h"
 #include "aarch64/memory.h"
 #include "aarch64/operation_binding.h"
@@ -42,7 +43,10 @@ template <Kind kind>
 OperationFlow RunInteger(State& state, const DecodedOp& slot, const DecodedInstruction& op, uint64_t pc, uint32_t& nzcv,
                          bool dead, uint64_t& target A64_HOT_PIN_REF) {
     uint64_t bound_target = 0;
-    if constexpr (HasBlockTarget(kind)) bound_target = GetExtraOperands(slot).primary;
+    if constexpr (kind == Kind::Address)
+        bound_target = op.operation ? GetAddressTarget<1>(slot) : GetAddressTarget<0>(slot);
+    else if constexpr (HasBlockTarget(kind))
+        bound_target = GetExtraOperands(slot).primary;
     if constexpr (kind == Kind::AddSubImmediate || kind == Kind::AddSubShifted || kind == Kind::AddSubExtended ||
                   kind == Kind::AddSubCarry || kind == Kind::LogicalImmediate || kind == Kind::LogicalShifted ||
                   kind == Kind::ConditionalCompare) {

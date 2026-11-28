@@ -72,13 +72,14 @@ FIBERCPU_AARCH64_HANDLER_ABI int64_t MemoryOpGeneric(A64_HANDLER_PARAMS) {
 #ifdef ENABLE_TLB_STATS
     if (auto* stats = memory.dispatch_stats) ++stats->memory_replays;
 #endif
+    // A slow access can unmap the executable page before reporting a fault.
     const auto word = state.last_block->Word(current->GuestIndex());
     auto step = CompleteStep(state, current, ExecuteMemorySlow(state, memory, word));
     A64_UTLB_INVALIDATE();
     flags_cache = state.nzcv;
     ReloadDispatchPins(state A64_HANDLER_PIN_ARGS);
     if (step.reason != Stop::Continue) {
-        return ReturnFromBlock(state, current, instr_limit, flags_cache A64_HANDLER_PIN_ARGS, step);
+        return ReturnFromBlock(state, current, instr_limit, flags_cache A64_HANDLER_PIN_ARGS, step, word);
     }
     A64_DISPATCH_NEXT(current->NextOp());
 }
@@ -89,6 +90,7 @@ __declspec(noinline)
 [[gnu::cold, gnu::noinline]]
 #endif
 FIBERCPU_AARCH64_HANDLER_ABI int64_t ResolveBranchTargetSlow(A64_HANDLER_PARAMS) {
+    (void)current;
     auto& frame = *state.active_run;
     const auto target_pc = frame.exit_target;
 #if FIBERCPU_AARCH64_TAIL_DISPATCH
@@ -134,7 +136,6 @@ FIBERCPU_AARCH64_HANDLER_ABI int64_t ResolveBranchTargetSlow(A64_HANDLER_PARAMS)
 #endif
     // The caller has charged only the retired prefix, including the branch.
     CommitDispatchState(state, target_pc, flags_cache A64_HANDLER_PIN_ARGS);
-    frame.exit_op = current;
     frame.exit = {};
     return instr_limit;
 }
@@ -148,7 +149,6 @@ FIBERCPU_AARCH64_HANDLER_ABI int64_t OpExitSingleStep(A64_HANDLER_PARAMS) {
     (void)current;
     CommitDispatchState(state, state.last_block->end_pc(), flags_cache A64_HANDLER_PIN_ARGS);
     auto& frame = *state.active_run;
-    frame.exit_op = nullptr;
     frame.exit = {};
     return instr_limit;
 }
@@ -210,7 +210,7 @@ DecodedOpBinding BindDecodedOp(uint32_t word, const Profile& profile) {
     slot.can_follow = !branch && (IsInteger(kind) || data_transfer || arithmetic || slot.nop || binding.can_follow);
     if (slot.can_follow || branch) slot.flags |= RetainsPage;
     if (branch) slot.flags |= HasBranchLink;
-    if (HasExtraOperandSlot(kind)) slot.flags |= HasDataSlot;
+    if (HasExtraOperandSlot(slot.op)) slot.flags |= HasDataSlot;
     return slot;
 }
 
@@ -287,12 +287,14 @@ const BasicBlock* DecodeBlock(uint64_t pc, const uint8_t* executable, const Prof
     const auto* code = executable + (pc & PageMask);
 #if FIBERCPU_AARCH64_UNMANAGED_CACHE
     const bool managed = memory.lookup_cached_block != nullptr;
+    const bool has_inline_words = !managed;
     auto* cached = managed ? memory.lookup_cached_block(memory.context, pc, executable) : nullptr;
     if (!managed) {
         const auto it = local->by_pc.find(pc);
         if (it != local->by_pc.end()) cached = it->second;
     }
 #else
+    constexpr bool has_inline_words = false;
     const auto* cached = memory.lookup_cached_block(memory.context, pc, executable);
 #endif
     const bool valid = cached && cached->IsValid() && cached->executable_page == executable;
@@ -327,7 +329,7 @@ const BasicBlock* DecodeBlock(uint64_t pc, const uint8_t* executable, const Prof
     while (count < limit) {
         uint32_t raw_word;
         std::memcpy(&raw_word, code + count * 4, sizeof(raw_word));
-        words[count] = raw_word;
+        if (has_inline_words) words[count] = raw_word;
         auto word = raw_word;
         if constexpr (std::endian::native == std::endian::big) word = std::byteswap(word);
         const auto& binding = DecodeOpBinding(word, profile);
@@ -402,7 +404,9 @@ const BasicBlock* DecodeBlock(uint64_t pc, const uint8_t* executable, const Prof
 #else
     const bool retain_region_context = false;
 #endif
-    const auto size = BasicBlock::CalculateSize(units, count, retain_region_context);
+    const bool has_sentinel = decoded[slot_count - 1].op.kind != Kind::BranchImmediate;
+    const auto size =
+        BasicBlock::CalculateSize(units, has_sentinel, retain_region_context, has_inline_words ? count : 0);
 #if FIBERCPU_AARCH64_UNMANAGED_CACHE
     auto* storage = memory.allocate_block ? memory.allocate_block(memory.context, size, pc)
                                           : local->pool.allocate(size, alignof(BasicBlock));
@@ -413,13 +417,16 @@ const BasicBlock* DecodeBlock(uint64_t pc, const uint8_t* executable, const Prof
     auto& block = *new (storage) BasicBlock;
     block.header.chain = BasicBlockChainPrefix::Pack(pc, count, retain_region_context);
     block.sentinel_slot_index = uint8_t(units);
+    block.flags =
+        (has_sentinel ? BasicBlock::HasSentinelFlag : 0) | (has_inline_words ? BasicBlock::HasInlineWordsFlag : 0);
     block.executable_page = executable;
 
     auto* bytes = reinterpret_cast<std::byte*>(&block + 1);
     for (unsigned i = 0; i < slot_count; ++i) bytes = WriteDecodedSlot(bytes, decoded[i], pc, count);
-    new (bytes) DecodedOp{.handler = GetExitHandlerFallthrough(), .payload = BlockLink(&BasicBlock::Invalid)};
+    if (has_sentinel)
+        new (bytes) DecodedOp{.handler = GetExitHandlerFallthrough(), .payload = BlockLink(&BasicBlock::Invalid)};
     if (retain_region_context) block.SetRegionContext(nullptr);
-    std::memcpy(const_cast<uint32_t*>(block.Words()), words.data(), count * sizeof(uint32_t));
+    if (has_inline_words) std::memcpy(const_cast<uint32_t*>(block.Words()), words.data(), count * sizeof(uint32_t));
     block.header.entry = block.FirstOp()->handler;
 #if FIBERCPU_AARCH64_UNMANAGED_CACHE
     if (memory.cache_block)
@@ -447,11 +454,12 @@ SingleStepResult ExecuteSingleInstructionOnStack(State& state, RunFrame& frame, 
     BindBlockOperands(binding.op, pc);
 
     const unsigned units = 1u + binding.Has(HasDataSlot);
-    alignas(BasicBlock) std::byte storage[BasicBlock::CalculateSize(2, 1, false)];
+    alignas(BasicBlock) std::byte storage[BasicBlock::CalculateSize(2, true, false, 1)];
     auto& block = *new (storage) BasicBlock;
     // Leave Valid clear so nothing can ever link to a stack-allocated block.
     block.header.chain = BasicBlockChainPrefix::Pack(pc, 1, false, false);
     block.sentinel_slot_index = uint8_t(units);
+    block.flags = BasicBlock::HasSentinelFlag | BasicBlock::HasInlineWordsFlag;
 
     auto* bytes = WriteDecodedSlot(reinterpret_cast<std::byte*>(&block + 1), binding, pc, 1);
     new (bytes) DecodedOp{.handler = &OpExitSingleStep, .payload = BlockLink(&BasicBlock::Invalid)};
@@ -461,7 +469,6 @@ SingleStepResult ExecuteSingleInstructionOnStack(State& state, RunFrame& frame, 
 
     const auto* saved_block = std::exchange(state.last_block, &block);
     frame.exit_link = nullptr;
-    frame.exit_op = nullptr;
     frame.exit = {};
     // Keep both instr_limit < 0 and instr_limit + budget_reserve < 0 so neither
     // TryChainBlock nor ResolveBranchTargetSlow can chain out of this stack block.
@@ -470,7 +477,6 @@ SingleStepResult ExecuteSingleInstructionOnStack(State& state, RunFrame& frame, 
         binding.handler(state, block.FirstOp(), initial_limit A64_UTLB_INIT, state.nzcv A64_HANDLER_PIN_INIT);
     state.last_block = saved_block;
     frame.exit_link = nullptr;
-    frame.exit_op = nullptr;
     const unsigned retired = unsigned((initial_limit + 1) - remaining);
     return {frame.exit, retired};
 }
@@ -544,7 +550,6 @@ RunResult Run(State& state, const Memory& memory, uint64_t budget, const Profile
                 block->header.entry(state, slots, available - count A64_UTLB_INIT, state.nzcv A64_HANDLER_PIN_INIT);
             executed += uint64_t(available - remaining);
             const auto step = frame.exit;
-            const auto* stop_op = frame.exit_op;
             if (frame.exit_link) {
                 const auto* source = state.last_block;
                 if (source->IsValid()) {
@@ -571,10 +576,8 @@ RunResult Run(State& state, const Memory& memory, uint64_t budget, const Profile
                 case Stop::Syscall:
                     state.pc += 4;
                     [[fallthrough]];
-                default: {
-                    const auto word = state.last_block->Word(stop_op->GuestIndex());
-                    return {step.reason, executed, step.address, word, step.immediate, step.access};
-                }
+                default:
+                    return {step.reason, executed, step.address, frame.exit_word, step.immediate, step.access};
             }
         } else if (block) {
             for (unsigned i = 0; i < count; ++i) {
