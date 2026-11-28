@@ -29,7 +29,7 @@ inline void Mmu::on_code_cache_hard_reset() {
     seen_code_cache_generation_ = core_ ? core_->code_cache.generation : 0;
     if (auto* state = get_state()) {
         state->last_block = invalid_code_block();
-#if FIBERCPU_BLOCK_COMPILATION
+#if FIBERCPU_BLOCK_COMPILATION || FIBERCPU_WASM_JIT
         state->llvm_hot_block = nullptr;
 #endif
     }

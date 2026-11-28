@@ -156,6 +156,15 @@ uint64_t X86_GetLLVMJitBlockCount();
 uint64_t X86_GetLLVMJitLiveBlockCount();
 uint64_t X86_GetLinkedBlockHitCount();
 uint64_t X86_GetLinkedPageRegionHitCount();
+// Wasm JIT (Route B) controls and diagnostics
+void X86_SetWasmJitEnabled(int enabled);
+int X86_GetWasmJitEnabled(void);
+void X86_SetWasmJitHotThreshold(uint16_t threshold);
+void X86_SetWasmJitPoolSize(uint32_t pool_size);
+void X86_SetWasmJitStatsEnabled(int enabled);
+int X86_DumpWasmJitStats(char* buffer, size_t buffer_size);
+void X86_ResetWasmJitStats(void);
+void X86_ResetWasmJitPool(void);
 // Returns the number of compiled entries, or -1 on failure.
 int X86_BuildLinkedLLVMBlockCache(const char* profile_path, const char* cache_path);
 int X86_BuildLinkedLLVMBlockCacheWithOptions(const char* profile_path, const char* cache_path, uint32_t limit,

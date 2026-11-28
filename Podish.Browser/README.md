@@ -3,9 +3,12 @@
 `Podish.Browser` targets `net11.0` and uses the CoreCLR `browser-wasm` runtime. The
 .NET SDK links the Emscripten build of `libfibercpu` into the Wasm runtime and
 produces the fingerprinted and compressed assets used by the browser frontend.
-The i386 interpreter uses threaded dispatch. The browser defaults to the `3m`
-[baking preset](../docs/build-presets.md). Set `-p:FibercpuBakingPreset=1.5m`
-when publishing to use smaller instruction tables.
+On Emscripten, the i386 engine enables the hand-written single-block WebAssembly
+JIT (`FIBERCPU_ENABLE_WASM_JIT=ON`, with native Wasm FP/SIMD128 SSE/SSE2 lowering
+and threaded interpreter fallback), disables i386 static baking by default
+(`FIBERCPU_I386_STATIC_SPECIALIZATION=AUTO`), and omits offline handler reflection
+symbol tables (`FIBERCPU_ENABLE_HANDLER_REFLECTION=OFF`). Set
+`-p:FibercpuBakingPreset=1.5m` when publishing to shrink AArch64 baked tables.
 
 ## Build and serve
 

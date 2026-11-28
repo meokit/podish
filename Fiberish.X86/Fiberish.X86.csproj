@@ -24,6 +24,8 @@
         <DynamicInstructionSpecialization Condition="'$(DynamicInstructionSpecialization)' == '' And '$(IsBrowserWasm)' == 'true'">OFF</DynamicInstructionSpecialization>
         <DynamicInstructionSpecialization Condition="'$(DynamicInstructionSpecialization)' == ''">ON</DynamicInstructionSpecialization>
         <LlvmBlockJit Condition="'$(LlvmBlockJit)' == ''">OFF</LlvmBlockJit>
+        <WasmBlockJit Condition="'$(WasmBlockJit)' == '' And '$(IsBrowserWasm)' == 'true' And '$(FiberGuestI386)' != 'false'">ON</WasmBlockJit>
+        <WasmBlockJit Condition="'$(WasmBlockJit)' == ''">OFF</WasmBlockJit>
         <GprPin Condition="'$(GprPin)' == '' And '$(IsBrowserWasm)' == 'true'">OFF</GprPin>
         <GprPin Condition="'$(GprPin)' == ''">AUTO</GprPin>
         <AArch64PinRegister Condition="'$(AArch64PinRegister)' == ''">-1</AArch64PinRegister>
@@ -117,7 +119,7 @@
                Text="Unknown FibercpuBakingPreset '$(NativeBakingPreset)'. Choose custom, 1.5m, 3m or 10m." />
         <MakeDir Directories="$(SuperOpcodeGenerationDir)" />
         <WriteLinesToFile File="$(SuperOpcodeGenerationDir)/native-options.txt"
-            Lines="i386=$(FiberGuestI386);aarch64=$(FiberGuestAArch64);aarch64_plan=$(AArch64OperandPlanFile);aarch64_pin=$(AArch64PinRegister);aarch64_pins=$(AArch64PinRegisters);baking_preset=$(NativeBakingPreset);fusion=$(FusionStrategy);budget=$(OperandBudget);pin=$(GprPin);pins=$(GprPinRegisters);writeback=$(GprWriteBack);coverage=$(PinSpecialization);plan=$(OperandPlanFile);static=$(StaticInstructionSpecialization);dynamic=$(DynamicInstructionSpecialization);dynamic_plan=$(DynamicOperandPlanFile);llvm=$(LlvmBlockJit);llvm_dir=$(LlvmConfigDir);native_clang=$(NativeClangDir);super=$(EnableSuperOpcodes);source=$(SuperOpcodeSource);handler=$(EnableHandlerProfile);block=$(EnableBlockProfile);sequence=$(EnableSequenceProfile)"
+            Lines="i386=$(FiberGuestI386);aarch64=$(FiberGuestAArch64);aarch64_plan=$(AArch64OperandPlanFile);aarch64_pin=$(AArch64PinRegister);aarch64_pins=$(AArch64PinRegisters);baking_preset=$(NativeBakingPreset);fusion=$(FusionStrategy);budget=$(OperandBudget);pin=$(GprPin);pins=$(GprPinRegisters);writeback=$(GprWriteBack);coverage=$(PinSpecialization);plan=$(OperandPlanFile);static=$(StaticInstructionSpecialization);dynamic=$(DynamicInstructionSpecialization);dynamic_plan=$(DynamicOperandPlanFile);llvm=$(LlvmBlockJit);wasm_jit=$(WasmBlockJit);llvm_dir=$(LlvmConfigDir);native_clang=$(NativeClangDir);super=$(EnableSuperOpcodes);source=$(SuperOpcodeSource);handler=$(EnableHandlerProfile);block=$(EnableBlockProfile);sequence=$(EnableSequenceProfile)"
             Overwrite="true" WriteOnlyWhenDifferent="true" />
     </Target>
 
@@ -164,7 +166,7 @@
             <CMakeArgs>$(CMakeArgs) -DFIBERCPU_STATIC_SPECIALIZATION=$(StaticInstructionSpecialization) -DFIBERCPU_ENABLE_DYNAMIC_SPECIALIZATION=$(DynamicInstructionSpecialization) -DFIBERCPU_ENABLE_LLVM_JIT=$(LlvmBlockJit)</CMakeArgs>
             <CMakeArgs Condition="'$(LlvmConfigDir)' != ''">$(CMakeArgs) -DLLVM_DIR=&quot;$(LlvmConfigDir)&quot;</CMakeArgs>
             <CMakeGeneratorArgs Condition="'$(IsBrowserWasm)' == 'true'">-G Ninja</CMakeGeneratorArgs>
-            <CMakeArgs Condition="'$(IsBrowserWasm)' == 'true'">$(CMakeArgs) -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY -DCMAKE_TOOLCHAIN_FILE=&quot;$(EmscriptenToolchainFile)&quot; -DCMAKE_CROSSCOMPILING_EMULATOR=&quot;$(BrowserWasmNodeExecutable)&quot;</CMakeArgs>
+            <CMakeArgs Condition="'$(IsBrowserWasm)' == 'true'">$(CMakeArgs) -DFIBERCPU_ENABLE_WASM_JIT=$(WasmBlockJit) -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY -DCMAKE_TOOLCHAIN_FILE=&quot;$(EmscriptenToolchainFile)&quot; -DCMAKE_CROSSCOMPILING_EMULATOR=&quot;$(BrowserWasmNodeExecutable)&quot;</CMakeArgs>
         </PropertyGroup>
 
         <Message Text="Building libfibercpu with CMake (Incremental check passed)..." Importance="High"/>

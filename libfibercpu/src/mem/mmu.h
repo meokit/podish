@@ -38,6 +38,9 @@ void LLVMJitMmuDestroyed();
 void RetireLLVMWeightedProfile(const mem::CodeCacheState& cache);
 void RetireLLVMJitTrace(const mem::CodeCacheState& cache);
 #endif
+#if FIBERCPU_WASM_JIT
+void WasmJitRetireCodeCache(const mem::CodeCacheState& cache);
+#endif
 }  // namespace fiberish
 
 namespace fiberish::mem {
@@ -507,6 +510,9 @@ struct CodeCacheState {
         if (has_weighted_profile) RetireLLVMWeightedProfile(*this);
         if (has_jit_trace) RetireLLVMJitTrace(*this);
 #endif
+#if FIBERCPU_WASM_JIT && FIBERCPU_GUEST_I386
+        WasmJitRetireCodeCache(*this);
+#endif
     }
 
     void InvalidateBlock(BasicBlock& block) {
@@ -940,6 +946,16 @@ struct ArmMmuRuntime {
 
 class Mmu {
 public:
+#if defined(__clang__) || defined(__GNUC__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Winvalid-offsetof"
+#endif
+    static constexpr size_t ReadTlbOffset() { return offsetof(Mmu, tlb) + offsetof(SoftTlb, read_tlb); }
+    static constexpr size_t WriteTlbOffset() { return offsetof(Mmu, tlb) + offsetof(SoftTlb, write_tlb); }
+#if defined(__clang__) || defined(__GNUC__)
+#pragma GCC diagnostic pop
+#endif
+
     // Fast non-owning alias for access paths.
     PageDirectory* page_dir = nullptr;
 

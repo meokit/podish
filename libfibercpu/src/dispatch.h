@@ -79,7 +79,7 @@ extern ATTR_PRESERVE_NONE int64_t ResolveBranchTargetSlowDoubleSlot(EmuState* RE
 
 // Return true when the entry needs profiling before it can dispatch.
 FORCE_INLINE bool CountLLVMBlockEntryFast(EmuState* state, BasicBlock* block, BasicBlockChainPrefix chain) {
-#if FIBERCPU_BLOCK_COMPILATION
+#if FIBERCPU_BLOCK_COMPILATION || FIBERCPU_WASM_JIT
 #if FIBERCPU_LLVM_JIT
     if (chain.weighted_profile || chain.jit_execution_profile) [[unlikely]]
         return true;

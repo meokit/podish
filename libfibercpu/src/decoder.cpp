@@ -18,6 +18,9 @@
 #if FIBERCPU_BLOCK_COMPILATION
 #include "jit/block_recipe.h"
 #endif
+#if FIBERCPU_WASM_JIT
+#include "jit/wasm_block_jit.h"
+#endif
 #if FIBERCPU_LINKED_BLOCK_CACHE
 #include "jit/linked_block_cache.h"
 #endif
@@ -390,12 +393,10 @@ InstructionDecodeResult DecodeInstructionBounded(const uint8_t* code, size_t ava
 
     op->SetLength(ptr - start);
 
-    // For these scalar SSE encodings F3 selects the instruction, so it
-    // cannot repeat or change EIP. Keep the legacy repeat boundary otherwise.
-    const bool scalar_single = map == 1 &&
-                               (op->prefixes.all & (prefix::REP | prefix::REPNE | prefix::OPSIZE)) == prefix::REP &&
-                               (opcode == 0x10 || opcode == 0x11 || opcode == 0x58 || opcode == 0x59);
-    bool is_rep = map <= 1 && (op->prefixes.flags.rep || op->prefixes.flags.repne) && !scalar_single;
+    // Legacy REP/REPNE repeat prefixes only apply to map 0 string instructions.
+    // On map 1 (0x0F ...) and extended maps, 0xF2/0xF3 are mandatory opcode
+    // prefixes (SSE/SSE2/SSE3/etc.) and never repeat or modify EIP.
+    bool is_rep = map == 0 && (op->prefixes.flags.rep || op->prefixes.flags.repne);
 
     // Rule 2: Table-based lookup for branching opcodes
     // Access bitmap using map & 1 to ensure safe indexing.
@@ -964,6 +965,8 @@ finalize:
         if (!indexed)
             for (uint32_t i = 0; i < decoded_inst_count; ++i) scalar_handlers[i] = scalar_ops[i].handler;
     }
+#elif FIBERCPU_WASM_JIT
+    hot_count = decoded_inst_count ? WasmJitHotThreshold(*state) : 0;
 #endif
     ApplySuperOpcodesToBlockOps(scalar_ops, decoded_inst_count, binding_indices);
     if (!candidate_has_jit && matches_candidate(false)) {

@@ -164,6 +164,7 @@ struct EmuState {
     // before leaving execution or returning stack-backed decoded storage.
     PendingMemOp mem_op_type = PendingMemOp::None;
     PendingMemoryAccess mem_op;
+    alignas(16) std::array<uint8_t, 16> wasm_jit_scratch{};
     BasicBlock* llvm_hot_block = nullptr;
     std::shared_ptr<aarch64::State> arm;
     uint64_t arm_fault_address = 0;

@@ -26,6 +26,9 @@
 #if FIBERCPU_LLVM_JIT
 #include "jit/llvm_block_jit.h"
 #endif
+#if FIBERCPU_WASM_JIT
+#include "jit/wasm_block_jit.h"
+#endif
 #if FIBERCPU_LINKED_BLOCK_CACHE
 #include "jit/linked_block_cache.h"
 #endif
@@ -122,6 +125,9 @@ void BasicBlock::Invalidate() {
         TraceLLVMJitRetirement(*this);
         chain.jit_execution_profile = false;
     }
+#endif
+#if FIBERCPU_WASM_JIT && FIBERCPU_GUEST_I386
+    WasmJitOnBlockInvalidate(*this);
 #endif
     set_valid(false);
     ++invalidation_revision;
@@ -891,7 +897,7 @@ int X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
 
     // Reset chaining state for this run
     state->last_block = state->mmu.invalid_code_block();
-#if FIBERCPU_BLOCK_COMPILATION
+#if FIBERCPU_BLOCK_COMPILATION || FIBERCPU_WASM_JIT
     state->llvm_hot_block = nullptr;
     const auto compile_hot_block = [&] {
 #if FIBERCPU_LLVM_JIT
@@ -904,6 +910,9 @@ int X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
 #endif
 #if FIBERCPU_LLVM_JIT
         CompileHotLLVMBlock(state, block);
+#endif
+#if FIBERCPU_WASM_JIT
+        CompileHotWasmBlock(state, block);
 #endif
     };
 #endif
@@ -966,7 +975,7 @@ int X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
             state->last_block = block_ptr;
             if (block_ptr->inst_count() == 0) return;
 
-#if FIBERCPU_BLOCK_COMPILATION
+#if FIBERCPU_BLOCK_COMPILATION || FIBERCPU_WASM_JIT
             CountLLVMBlockEntry(state, block_ptr, block_ptr->chain);
             compile_hot_block();
 #endif
@@ -1059,7 +1068,7 @@ int X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
         }
 
         execute_block(block_ptr);
-#if FIBERCPU_BLOCK_COMPILATION
+#if FIBERCPU_BLOCK_COMPILATION || FIBERCPU_WASM_JIT
         compile_hot_block();
 #endif
         if (state->status != EmuStatus::Running) break;
@@ -1073,6 +1082,9 @@ int X86_Run(EmuState* state, uint32_t end_eip, uint64_t max_insts) {
     // Sync FPU state back
 #ifdef FIBERCPU_ENABLE_HANDLER_PROFILE
     state->current_block_head = nullptr;
+#endif
+#if FIBERCPU_WASM_JIT
+    WasmJitRecordExecutedInsts(total_run_insts);
 #endif
     return 1;
 }
@@ -1744,6 +1756,67 @@ int X86_BuildLinkedLLVMBlockCacheWithOptions(const char* profile_path, const cha
     (void)opt_level;
     (void)pass_pipeline;
     return -1;
+#endif
+}
+
+void X86_SetWasmJitEnabled(int enabled) {
+#if FIBERCPU_WASM_JIT && FIBERCPU_GUEST_I386
+    SetWasmJitEnabled(enabled != 0);
+#else
+    (void)enabled;
+#endif
+}
+
+int X86_GetWasmJitEnabled(void) {
+#if FIBERCPU_WASM_JIT && FIBERCPU_GUEST_I386
+    return WasmJitEnabled() ? 1 : 0;
+#else
+    return 0;
+#endif
+}
+
+void X86_SetWasmJitHotThreshold(uint16_t threshold) {
+#if FIBERCPU_WASM_JIT && FIBERCPU_GUEST_I386
+    SetWasmJitHotThreshold(threshold);
+#else
+    (void)threshold;
+#endif
+}
+
+void X86_SetWasmJitPoolSize(uint32_t pool_size) {
+#if FIBERCPU_WASM_JIT && FIBERCPU_GUEST_I386
+    SetWasmJitPoolSize(pool_size);
+#else
+    (void)pool_size;
+#endif
+}
+
+void X86_SetWasmJitStatsEnabled(int enabled) {
+#if FIBERCPU_WASM_JIT && FIBERCPU_GUEST_I386
+    SetWasmJitStatsEnabled(enabled != 0);
+#else
+    (void)enabled;
+#endif
+}
+
+int X86_DumpWasmJitStats(char* buffer, size_t buffer_size) {
+#if FIBERCPU_WASM_JIT && FIBERCPU_GUEST_I386
+    return WasmJitDumpStats(buffer, buffer_size);
+#else
+    if (!buffer || buffer_size == 0) return -1;
+    return std::snprintf(buffer, buffer_size, "{\"enabled\":0}");
+#endif
+}
+
+void X86_ResetWasmJitStats(void) {
+#if FIBERCPU_WASM_JIT && FIBERCPU_GUEST_I386
+    WasmJitResetStats();
+#endif
+}
+
+void X86_ResetWasmJitPool(void) {
+#if FIBERCPU_WASM_JIT && FIBERCPU_GUEST_I386
+    WasmJitResetPool();
 #endif
 }
 

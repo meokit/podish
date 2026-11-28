@@ -139,10 +139,38 @@ option(FIBERCPU_ENABLE_BLOCK_PROFILE "Enable lightweight per-block execution cou
 option(FIBERCPU_ENABLE_HANDLER_PROFILE "Enable approximate per-handler execution profiling" OFF)
 option(FIBERCPU_ENABLE_SEQUENCE_PROFILE "Count actual unfused within-block Continue edges (training only)" OFF)
 include(cmake/BakingPresets.cmake)
+if(EMSCRIPTEN AND FIBERCPU_GUEST_I386)
+    set(_default_wasm_jit ON)
+else()
+    set(_default_wasm_jit OFF)
+endif()
+option(FIBERCPU_ENABLE_WASM_JIT "Enable the hand-written WebAssembly basic-block JIT for i386" ${_default_wasm_jit})
+if(EMSCRIPTEN)
+    set(_default_handler_reflection OFF)
+else()
+    set(_default_handler_reflection ON)
+endif()
+option(FIBERCPU_ENABLE_HANDLER_REFLECTION "Generate handler symbol reflection tables for profiling and training" ${_default_handler_reflection})
+set(FIBERCPU_I386_STATIC_SPECIALIZATION "AUTO" CACHE STRING "Build profile-baked i386 instruction variants (AUTO: OFF on Emscripten, follows FIBERCPU_STATIC_SPECIALIZATION elsewhere; ON/OFF)")
+set_property(CACHE FIBERCPU_I386_STATIC_SPECIALIZATION PROPERTY STRINGS AUTO ON OFF)
+string(TOUPPER "${FIBERCPU_I386_STATIC_SPECIALIZATION}" _i386_static_request)
+if(_i386_static_request STREQUAL "AUTO")
+    if(EMSCRIPTEN)
+        set(_i386_static_specialization OFF)
+    else()
+        set(_i386_static_specialization ${FIBERCPU_STATIC_SPECIALIZATION})
+    endif()
+elseif(_i386_static_request STREQUAL "ON" OR _i386_static_request STREQUAL "TRUE" OR _i386_static_request STREQUAL "1")
+    set(_i386_static_specialization ON)
+elseif(_i386_static_request STREQUAL "OFF" OR _i386_static_request STREQUAL "FALSE" OR _i386_static_request STREQUAL "0")
+    set(_i386_static_specialization OFF)
+else()
+    message(FATAL_ERROR "Invalid FIBERCPU_I386_STATIC_SPECIALIZATION '${FIBERCPU_I386_STATIC_SPECIALIZATION}'. Choose AUTO, ON or OFF.")
+endif()
 if(NOT FIBERCPU_GUEST_I386)
     set(FIBERCPU_LINKED_BLOCK_CACHE_FILE "")
 endif()
-if(NOT FIBERCPU_STATIC_SPECIALIZATION OR NOT FIBERCPU_GUEST_I386)
+if(NOT _i386_static_specialization OR NOT FIBERCPU_GUEST_I386)
     set(FIBERCPU_ENABLE_SUPEROPCODES OFF)
 endif()
 if(FIBERCPU_ENABLE_SEQUENCE_PROFILE AND FIBERCPU_ENABLE_SUPEROPCODES)
@@ -400,7 +428,7 @@ set(_modrm_plan_input)
 set(_static_operand_args)
 set(_static_operand_inputs)
 set(_static_operand_hashes)
-if(FIBERCPU_GUEST_I386 AND FIBERCPU_STATIC_SPECIALIZATION)
+if(FIBERCPU_GUEST_I386 AND _i386_static_specialization)
     set(_modrm_plan_input "${FIBERCPU_MODRM_PLAN_FILE}")
     set(_modrm_plan_args --modrm-plan "${_modrm_plan_input}")
     if(FIBERCPU_STATIC_OPERAND_PLAN_FILE)
@@ -578,7 +606,7 @@ file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/generated/optimization_config.h"
 
 add_library(fibercpu_core OBJECT ${SOURCES} ${_catalog_products})
 add_dependencies(fibercpu_core fibercpu_instruction_catalog)
-target_compile_definitions(fibercpu_core PRIVATE FIBERCPU_STATIC_SPECIALIZATION=$<BOOL:${FIBERCPU_STATIC_SPECIALIZATION}>)
+target_compile_definitions(fibercpu_core PRIVATE FIBERCPU_STATIC_SPECIALIZATION=$<BOOL:${_i386_static_specialization}>)
 set_target_properties(fibercpu_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 target_include_directories(fibercpu_core PRIVATE . "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_include_directories(fibercpu_core SYSTEM PRIVATE ${simde_SOURCE_DIR})
@@ -656,37 +684,44 @@ if(USE_SOFTFLOAT OR _aarch64_software_fp)
     add_subdirectory(3rdparty/softfloat)
 endif()
 
-set(FIBERCPU_GENERATED_HANDLER_REFLECTION_CPP
-    "${CMAKE_CURRENT_BINARY_DIR}/generated/handler_reflection.generated.cpp")
+set(FIBERCPU_FINAL_SOURCES $<TARGET_OBJECTS:fibercpu_core>)
+if(FIBERCPU_GUEST_I386)
+    list(APPEND FIBERCPU_FINAL_SOURCES src/handler_reflection_exports.cpp)
+    if(FIBERCPU_ENABLE_HANDLER_REFLECTION)
+        set(FIBERCPU_GENERATED_HANDLER_REFLECTION_CPP
+            "${CMAKE_CURRENT_BINARY_DIR}/generated/handler_reflection.generated.cpp")
 
-# The full macOS solution also puts the Emscripten LLVM tools on PATH.
-# Its llvm-nm may not understand the newer Apple Clang host LTO bitcode.
-# Select Xcode's matching symbol reader for host objects only.
-set(FIBERCPU_REFLECTION_TOOL_ARGS)
-if(APPLE AND CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang" AND NOT EMSCRIPTEN)
-    execute_process(COMMAND xcrun --find nm
-        OUTPUT_VARIABLE FIBERCPU_APPLE_NM
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-        COMMAND_ERROR_IS_FATAL ANY)
-    list(APPEND FIBERCPU_REFLECTION_TOOL_ARGS --nm "${FIBERCPU_APPLE_NM}")
+        # The full macOS solution also puts the Emscripten LLVM tools on PATH.
+        # Its llvm-nm may not understand the newer Apple Clang host LTO bitcode.
+        # Select Xcode's matching symbol reader for host objects only.
+        set(FIBERCPU_REFLECTION_TOOL_ARGS)
+        if(APPLE AND CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang" AND NOT EMSCRIPTEN)
+            execute_process(COMMAND xcrun --find nm
+                OUTPUT_VARIABLE FIBERCPU_APPLE_NM
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+                COMMAND_ERROR_IS_FATAL ANY)
+            list(APPEND FIBERCPU_REFLECTION_TOOL_ARGS --nm "${FIBERCPU_APPLE_NM}")
+        endif()
+
+        add_custom_command(
+            OUTPUT ${FIBERCPU_GENERATED_HANDLER_REFLECTION_CPP}
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/generated"
+            COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../scripts/gen_handler_reflection.py
+                    ${FIBERCPU_REFLECTION_TOOL_ARGS}
+                    --output ${FIBERCPU_GENERATED_HANDLER_REFLECTION_CPP}
+                    --compiler ${CMAKE_CXX_COMPILER}
+                    $<TARGET_OBJECTS:fibercpu_core>
+            # The object-library target supplies ordering, not file-level invalidation.
+            # Re-scan after any handler object changes (including a different selected set).
+            DEPENDS fibercpu_core $<TARGET_OBJECTS:fibercpu_core>
+                    ${CMAKE_CURRENT_SOURCE_DIR}/../scripts/gen_handler_reflection.py
+            COMMENT "Generating handler reflection table from fibercpu_core objects"
+            COMMAND_EXPAND_LISTS
+            VERBATIM
+        )
+        list(APPEND FIBERCPU_FINAL_SOURCES ${FIBERCPU_GENERATED_HANDLER_REFLECTION_CPP})
+    endif()
 endif()
-
-add_custom_command(
-    OUTPUT ${FIBERCPU_GENERATED_HANDLER_REFLECTION_CPP}
-    COMMAND ${CMAKE_COMMAND} -E make_directory "${CMAKE_CURRENT_BINARY_DIR}/generated"
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../scripts/gen_handler_reflection.py
-            ${FIBERCPU_REFLECTION_TOOL_ARGS}
-            --output ${FIBERCPU_GENERATED_HANDLER_REFLECTION_CPP}
-            --compiler ${CMAKE_CXX_COMPILER}
-            $<TARGET_OBJECTS:fibercpu_core>
-    # The object-library target supplies ordering, not file-level invalidation.
-    # Re-scan after any handler object changes (including a different selected set).
-    DEPENDS fibercpu_core $<TARGET_OBJECTS:fibercpu_core>
-            ${CMAKE_CURRENT_SOURCE_DIR}/../scripts/gen_handler_reflection.py
-    COMMENT "Generating handler reflection table from fibercpu_core objects"
-    COMMAND_EXPAND_LISTS
-    VERBATIM
-)
 
 # Final library includes objects from core
 set(FIBERCPU_LIBRARY_TYPE SHARED)
@@ -694,16 +729,18 @@ if(FIBERCPU_BUILD_STATIC)
     set(FIBERCPU_LIBRARY_TYPE STATIC)
 endif()
 
-set(FIBERCPU_FINAL_SOURCES
-    $<TARGET_OBJECTS:fibercpu_core>
-    src/handler_reflection_exports.cpp
-    ${FIBERCPU_GENERATED_HANDLER_REFLECTION_CPP}
-)
-
-if(NOT FIBERCPU_GUEST_I386)
-    set(FIBERCPU_FINAL_SOURCES $<TARGET_OBJECTS:fibercpu_core>)
-endif()
 add_library(fibercpu ${FIBERCPU_LIBRARY_TYPE} ${FIBERCPU_FINAL_SOURCES})
+target_compile_definitions(fibercpu PRIVATE FIBERCPU_ENABLE_HANDLER_REFLECTION=$<BOOL:${FIBERCPU_ENABLE_HANDLER_REFLECTION}>)
+if(EMSCRIPTEN)
+    target_compile_options(fibercpu PRIVATE
+        $<$<COMPILE_LANGUAGE:C>:-mtail-call>
+        $<$<COMPILE_LANGUAGE:C>:-msimd128>
+        $<$<COMPILE_LANGUAGE:C>:-Wno-pass-failed>
+        $<$<COMPILE_LANGUAGE:CXX>:-mtail-call>
+        $<$<COMPILE_LANGUAGE:CXX>:-msimd128>
+        $<$<COMPILE_LANGUAGE:CXX>:-Wno-pass-failed>
+    )
+endif()
 fibercpu_report_baking_size(fibercpu)
 
 # Instruction variant lookup uses handler addresses as identities.
@@ -1078,6 +1115,18 @@ if(FIBERCPU_DYNAMIC_OPERANDS)
     target_sources(fibercpu PRIVATE src/dynamic_operand_specialization.cpp "${_bundle}")
 endif()
 
+if(NOT FIBERCPU_GUEST_I386)
+    set(FIBERCPU_ENABLE_WASM_JIT OFF)
+endif()
+if(FIBERCPU_ENABLE_WASM_JIT)
+    if(NOT EMSCRIPTEN)
+        message(FATAL_ERROR "FIBERCPU_ENABLE_WASM_JIT requires EMSCRIPTEN")
+    endif()
+    target_compile_definitions(fibercpu_core PRIVATE FIBERCPU_WASM_JIT=1)
+    target_compile_definitions(fibercpu PRIVATE FIBERCPU_WASM_JIT=1)
+    target_sources(fibercpu PRIVATE src/jit/wasm_block_jit.cpp)
+endif()
+
 if(FIBERCPU_ENABLE_LLVM_JIT)
     if(FIBERCPU_GUEST_I386)
         fibercpu_embed_llvm_template_bitcode(fibercpu_block_ir "${_llvm_dir}/llvm_block_bitcode.inc")
@@ -1116,6 +1165,23 @@ if(APPLE)
             COMMAND /usr/bin/codesign -f -s "${_codesign_identity}" --timestamp=none "$<TARGET_FILE:fibercpu>"
             COMMENT "Codesigning fibercpu with identity: ${_codesign_identity}"
             VERBATIM)
+    endif()
+endif()
+
+option(FIBERCPU_BUILD_WASM_BENCH "Build the standalone i386 static-ELF Wasm/native benchmark and self-test runner" OFF)
+if(FIBERCPU_BUILD_WASM_BENCH AND FIBERCPU_GUEST_I386)
+    add_executable(fibercpu_wasm_bench ../benchmark/wasm_jit/fibercpu_wasm_bench.cpp)
+    target_include_directories(fibercpu_wasm_bench PRIVATE src)
+    target_link_libraries(fibercpu_wasm_bench PRIVATE fibercpu)
+    if(EMSCRIPTEN)
+        target_compile_options(fibercpu_wasm_bench PRIVATE -O3 -mtail-call -msimd128 -Wno-pass-failed)
+        target_link_options(fibercpu_wasm_bench PRIVATE
+            -O3 -mtail-call -msimd128
+            -sALLOW_TABLE_GROWTH=1
+            -sWASM_BIGINT=1
+            -sINITIAL_MEMORY=268435456
+            -sNODERAWFS=1
+            -sEXIT_RUNTIME=1)
     endif()
 endif()
 
