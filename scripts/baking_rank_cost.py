@@ -16,6 +16,7 @@ import re
 from statistics import median
 import struct
 
+from aarch64_baked_words import canonicalize_baked_word
 from gen_instruction_catalog import read_catalog
 from operand_specialization_data import generated_fusions, resolve_training_plan, training_handlers
 
@@ -32,7 +33,7 @@ def read(path):
 
 
 def arm_key(kind, words):
-    return kind + "/" + ".".join(f"{w:08x}" for w in words)
+    return kind + "/" + ".".join(f"{canonicalize_baked_word(w):08x}" for w in words)
 
 
 def x86_key(kind, *fields):
@@ -54,7 +55,7 @@ def binding(kind, row):
             words = (row["first"], row["second"])
         else:
             words = row["words"]
-        return arm_key(kind, words), (kind, len(words), words[0] >> 24)
+        return arm_key(kind, words), (kind, len(words), canonicalize_baked_word(words[0]) >> 24)
     if kind in ("modrm", "policies"):
         fields = (row["training_id"], row["slots"], row["modrm"])
         policy = (row["width"], row["flags"]) if kind == "policies" else ()
@@ -129,7 +130,7 @@ def codegen_digest():
     paths.extend((repo / "Podish.PerfTools").glob("Program.Superopcode*.cs"))
     paths.extend((repo / "scripts" / name) for name in (
         "gen_instruction_catalog.py", "gen_operand_specializations.py", "scalar_modrm.py",
-        "operand_specialization_data.py", "gen_handler_reflection.py"))
+        "operand_specialization_data.py", "gen_handler_reflection.py", "aarch64_baked_words.py"))
     paths.extend((repo / "libfibercpu/cmake").glob("*.cmake"))
     paths.append(repo / "libfibercpu/CMakeLists.txt")
     digest = hashlib.sha256()

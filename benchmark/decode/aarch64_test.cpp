@@ -735,19 +735,61 @@ bool CompareBranchPair() {
     return true;
 }
 
+bool CanonicalBakedWords() {
+    const auto preserves_fields = [](uint32_t word) {
+        const auto raw = detail::DecodeFields(word);
+        const auto key = detail::CanonicalizeBakedWord(raw);
+        const auto baked = detail::DecodeFields(key);
+        return raw.kind == baked.kind && raw.width == baked.width && raw.operation == baked.operation &&
+               raw.mode == baked.mode && raw.shift == baked.shift && raw.rd == baked.rd && raw.rn == baked.rn &&
+               raw.rm == baked.rm && raw.ra == baked.ra && raw.mask == baked.mask &&
+               detail::CanonicalizeBakedWord(baked) == key &&
+               (detail::HasBlockTarget(raw.kind) ? baked.immediate == 0 : key == word);
+    };
+    // Vary every prefix and low register/condition combination, including the fixed
+    // bit in B.cond and the reserved SIMD literal size.
+    for (uint32_t prefix = 0; prefix < 256; ++prefix) {
+        for (uint32_t low = 0; low < 32; ++low) {
+            for (const uint32_t offset : {0u, 0x00555540u, 0x00aaaaa0u, 0x00ffffe0u}) {
+                if (!preserves_fields((prefix << 24) | offset | low))
+                    return false;
+            }
+        }
+    }
+    constexpr std::pair<uint32_t, uint32_t> examples[]{
+        {0x17ffffff, 0x14000000}, // B
+        {0x97ffffff, 0x94000000}, // BL
+        {0x54ffffed, 0x5400000d}, // B.LE
+        {0x54fffffd, 0x54fffffd}, // B.cond fixed bit 4 is set
+        {0xb5ffffe9, 0xb5000009}, // CBNZ X9
+        {0xb7ffffe9, 0xb7f80009}, // TBNZ X9, #63
+        {0x70ffffea, 0x1000000a}, // ADR X10
+        {0xf0ffffea, 0x9000000a}, // ADRP X10
+        {0x9cffffeb, 0x9c00000b}, // LDR Q11, literal
+        {0xd8ffffec, 0xd800000c}, // PRFM, literal
+        {0xdcffffeb, 0xdcffffeb}, // Reserved SIMD literal
+    };
+    for (const auto [word, key] : examples) {
+        if (detail::CanonicalizeBakedWord(word) != key || !preserves_fields(word))
+            return false;
+    }
+    return true;
+}
+
 bool BakedCompareBranchSuffix() {
     constexpr uint32_t Prefix = 0x91000483;  // add x3, x4, #1
     constexpr uint32_t Compare = 0xeb01001f; // cmp x0, x1
     constexpr uint32_t Less = 0x5400004b;    // b.lt +8
+    constexpr auto LessKey = detail::CanonicalizeBakedWord(Less);
     Backing backing;
     backing.Code(Base, {Prefix, Compare, Less, 0x91000463, 0xf94000a6}); // add x3, x3, #1; ldr x6, [x5]
     const Profile profile{
         .resolve_sequence = [](const uint32_t* words, unsigned count, unsigned* length,
                                uint32_t dead) -> detail::HandlerFunc {
-            if (count < 3 || words[0] != Prefix || words[1] != Compare || words[2] != Less)
+            if (count < 3 || words[0] != Prefix || words[1] != Compare || words[2] != LessKey)
                 return nullptr;
             *length = 3;
-            return BindBakedFusion<Prefix, Compare, Less>(dead);
+            return BindBakedFusion<Prefix, Compare, LessKey>(dead);
         },
     };
 
@@ -836,12 +878,13 @@ bool PartialImmediateOperands() {
 }
 
 bool FusedDispatch() {
-    constexpr uint32_t Add = 0x91000400;    // add x0, x0, #1
-    constexpr uint32_t Load = 0xb9400062;   // ldr w2, [x3]
-    constexpr uint32_t Branch = 0x14000002; // b +8
+    constexpr uint32_t Add = 0x91000400;  // add x0, x0, #1
+    constexpr uint32_t Load = 0xb9400062; // ldr w2, [x3]
+    constexpr uint32_t Branch = 0x14000000;
+    static unsigned branch_matches = 0;
+    branch_matches = 0;
     Backing backing;
     backing.Code(Base, {Add, Load});
-    backing.Code(Base + 64, {Add, Branch, Add});
     const auto memory = backing.Callbacks();
     State state;
     state.pc = Base;
@@ -851,8 +894,10 @@ bool FusedDispatch() {
             return nullptr;
         if (second == Load)
             return BindBakedFusion<Add, Load>(dead);
-        if (second == Branch)
+        if (second == Branch) {
+            ++branch_matches;
             return BindBakedFusion<Add, Branch>(dead);
+        }
         return nullptr;
     };
     auto result = Run(state, memory, 2, profile);
@@ -863,9 +908,16 @@ bool FusedDispatch() {
     result = Run(state, memory, 1, profile);
     if (result.reason != Stop::Budget || result.executed != 1 || state.pc != Base + 4 || state.x[0] != 2)
         return false;
-    state.pc = Base + 64;
-    result = Run(state, memory, 2, profile);
-    return result.reason == Stop::Budget && result.executed == 2 && state.pc == Base + 76 && state.x[0] == 3;
+    for (const auto displacement : {8u, 20u}) {
+        state.pc = Base + 64;
+        state.x[0] = 0;
+        backing.Code(state.pc, {Add, Branch | displacement / 4});
+        result = Run(state, memory, 2, profile);
+        if (result.reason != Stop::Budget || result.executed != 2 || state.pc != Base + 68 + displacement ||
+            state.x[0] != 1)
+            return false;
+    }
+    return branch_matches == 2;
 }
 
 bool StackPointerAndZeroRegisterRoles() {
@@ -1075,43 +1127,50 @@ bool FusedPCRelativeMembers() {
     constexpr unsigned Counter = PinnedRegisterOr(8);
     constexpr unsigned AddressReg = Counter == 3 ? 4 : 3;
     constexpr uint32_t Adds = 0x31000400 | (Counter << 5) | Counter; // adds wCounter, wCounter, #1
-    constexpr uint32_t Address = 0x10000060 | AddressReg;            // adr xAddress, +12
-    constexpr uint32_t Link = 0x94000002;                            // bl +8
-    constexpr uint32_t Equal = 0x54000040;                           // b.eq +8
+    constexpr uint32_t Address = 0x10000000 | AddressReg;
+    constexpr uint32_t Link = 0x94000000;
+    constexpr uint32_t Equal = 0x54000000;
     constexpr uint32_t ZAndC = 0x60000000;
+    static unsigned sequence_matches = 0;
+    sequence_matches = 0;
     const Profile profile{.resolve_sequence = [](const uint32_t* words, unsigned count, unsigned* matched,
                                                  uint32_t dead) -> detail::HandlerFunc {
         if (count != 3 || words[0] != Adds || words[1] != Address)
             return nullptr;
         if (words[2] == Link) {
+            ++sequence_matches;
             *matched = 3;
             return BindBakedFusion<Adds, Address, Link>(dead);
         }
         if (words[2] == Equal) {
+            ++sequence_matches;
             *matched = 3;
             return BindBakedFusion<Adds, Address, Equal>(dead);
         }
         return nullptr;
     }};
     Backing backing;
-    backing.Code(Base, {Adds, Address, Link});
-    backing.Code(Base + 64, {Adds, Address, Equal});
     const auto memory = backing.Callbacks();
-    for (const auto start : {Base, Base + 64}) {
-        for (unsigned budget : {2u, 3u}) {
-            State state;
-            state.pc = start;
-            state.x[Counter] = UINT64_MAX;
-            const auto result = Run(state, memory, budget, profile);
-            const bool linked = start == Base && budget == 3;
-            const auto expected_counter = Counter == 30 && linked ? start + 12 : 0;
-            if (result.reason != Stop::Budget || result.executed != budget ||
-                state.pc != start + (budget == 3 ? 16 : 8) || state.x[Counter] != expected_counter ||
-                state.x[AddressReg] != start + 16 || state.x[30] != (linked ? start + 12 : 0) || state.nzcv != ZAndC)
-                return false;
+    for (const auto [start, branch] : {std::pair{Base, Link}, std::pair{Base + 64, Equal}}) {
+        for (const unsigned displacement : {8u, 20u}) {
+            backing.Code(start, {Adds, Address | (displacement << 3),
+                                 branch | (branch == Link ? displacement / 4 : displacement << 3)});
+            for (unsigned budget : {2u, 3u}) {
+                State state;
+                state.pc = start;
+                state.x[Counter] = UINT64_MAX;
+                const auto result = Run(state, memory, budget, profile);
+                const bool linked = branch == Link && budget == 3;
+                const auto expected_counter = Counter == 30 && linked ? start + 12 : 0;
+                if (result.reason != Stop::Budget || result.executed != budget ||
+                    state.pc != start + 8 + (budget == 3 ? displacement : 0) || state.x[Counter] != expected_counter ||
+                    state.x[AddressReg] != start + 4 + displacement || state.x[30] != (linked ? start + 12 : 0) ||
+                    state.nzcv != ZAndC)
+                    return false;
+            }
         }
     }
-    return true;
+    return sequence_matches == 8;
 }
 
 template <uint32_t... Words>
@@ -1358,6 +1417,8 @@ bool BoundLiteralAddress() {
     constexpr uint32_t Add = 0x11000421;    // add w1, w1, #1
     constexpr uint32_t Load = 0x18ffffc2;   // ldr w2, pc - 8
     constexpr uint32_t Branch = 0x14000001; // b +4
+    constexpr auto LoadKey = detail::CanonicalizeBakedWord(Load);
+    constexpr auto BranchKey = detail::CanonicalizeBakedWord(Branch);
     Backing backing;
     backing.Put(Base + 28, 123);
     backing.Code(Base + 32, {Add, Load, Branch});
@@ -1374,10 +1435,10 @@ bool BoundLiteralAddress() {
     Profile fused;
     fused.resolve_sequence = [](const uint32_t* words, unsigned count, unsigned* length,
                                 uint32_t dead) -> detail::HandlerFunc {
-        if (count < 3 || words[0] != Add || words[1] != Load || words[2] != Branch)
+        if (count < 3 || words[0] != Add || words[1] != LoadKey || words[2] != BranchKey)
             return nullptr;
         *length = 3;
-        return BindBakedFusion<Add, Load, Branch>(dead);
+        return BindBakedFusion<Add, LoadKey, BranchKey>(dead);
     };
     for (const auto& profile : {Profile{}, fused}) {
         for (const unsigned budget : {2u, 3u}) {
@@ -1765,6 +1826,7 @@ int main() {
         {"linked successor sees a replaced cache entry", ReplacedSuccessorUsesCurrentProfile()},
         {"truncated blocks and fusions at every budget", TruncatedBlocks()},
         {"baked dispatch and profiling", BakedDispatch()},
+        {"PC-relative baking keys preserve decoded operands and reserved encodings", CanonicalBakedWords()},
         {"partial immediate shapes retain the decoded arithmetic value and scaled offset", PartialImmediateOperands()},
         {"fused dispatch branch, budget and fault accounting", FusedDispatch()},
         {"standalone conditional branches test all NZCV combinations", StandaloneConditionBranch()},

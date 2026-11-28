@@ -3,6 +3,7 @@
 from collections import Counter, defaultdict
 from math import fsum
 
+from aarch64_baked_words import canonicalize_baked_word
 from nested_baking_candidates import modrm_key
 
 
@@ -24,7 +25,7 @@ def arm_layouts(pools, ids, cases, profiles):
         if profile.get("version") != 2 or not profile.get("blocks"):
             raise ValueError(f"{case['id']}: ordered AArch64 blocks required; recapture with profile v2")
         for block in profile["blocks"]:
-            words = block["words"]
+            words = tuple(map(canonicalize_baked_word, block["words"]))
             if not 0 < len(words) <= 24 or block["count"] <= 0:
                 raise ValueError("invalid AArch64 weighted block")
             positions = []

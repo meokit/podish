@@ -5,6 +5,7 @@ import argparse
 import json
 from pathlib import Path
 
+from aarch64_baked_words import canonicalize_baked_word
 from gen_instruction_catalog import read_catalog, supports_exact_operands
 from operand_specialization_data import (
     FUSION_CALL, NO_FLAGS, Operand, generated_fusions, resolve_training_plan, specialize_fusion, training_plan_match,
@@ -192,6 +193,7 @@ def generate_aarch64(plan, budget, pair_budget, sequence_budget, partial_budget=
         word, count = row["word"], row["count"]
         if type(word) is not int or not 0 <= word < 2**32 or type(count) is not int or count <= 0:
             raise ValueError(f"invalid AArch64 profile entry: {row!r}")
+        word = canonicalize_baked_word(word)
         counts[word] = counts.get(word, 0) + count
     words = sorted(counts, key=lambda word: (-counts[word], word))[:budget]
     if "partials" in plan:
@@ -209,7 +211,7 @@ def generate_aarch64(plan, budget, pair_budget, sequence_budget, partial_budget=
         first, second, count = row["first"], row["second"], row["count"]
         if any(type(w) is not int or not 0 <= w < 2**32 for w in (first, second)) or type(count) is not int or count <= 0:
             raise ValueError(f"invalid AArch64 pair: {row!r}")
-        key = (first, second)
+        key = (canonicalize_baked_word(first), canonicalize_baked_word(second))
         pairs[key] = pairs.get(key, 0) + count
     ranked = sorted(pairs, key=lambda key: (-pairs[key], key))[:pair_budget]
     sequences = {}
@@ -219,6 +221,7 @@ def generate_aarch64(plan, budget, pair_budget, sequence_budget, partial_budget=
             raise ValueError(f"invalid AArch64 sequence: {row!r}")
         if type(count) is not int or count < 1:
             raise ValueError(f"invalid AArch64 sequence count: {count!r}")
+        words_in_row = tuple(map(canonicalize_baked_word, words_in_row))
         sequences[words_in_row] = sequences.get(words_in_row, 0) + count
     ranked_sequences = sorted(sequences, key=lambda seq: (-sequences[seq] * (len(seq) - 1), seq))[:sequence_budget]
     return render_aarch64_tables(words, partials, ranked, ranked_sequences)
@@ -299,8 +302,9 @@ constexpr std::array<SequenceBinding, {len(sequences)}> BakedSequences = {{{{
 }}  // namespace
 
 aarch64::detail::HandlerFunc FindBakedArmHandler(const aarch64::DecodedInstruction& op, bool omit_nzcv) {{
-    const auto exact = std::ranges::lower_bound(BakedExact, op.word, {{}}, &ScalarBinding::word);
-    if (exact != BakedExact.end() && exact->word == op.word)
+    const auto word = aarch64::detail::CanonicalizeBakedWord(op);
+    const auto exact = std::ranges::lower_bound(BakedExact, word, {{}}, &ScalarBinding::word);
+    if (exact != BakedExact.end() && exact->word == word)
         return omit_nzcv ? exact->handlers.omit_nzcv : exact->handlers.normal;
 
     const uint32_t shape = op.word & ~(0xfffu << 10);

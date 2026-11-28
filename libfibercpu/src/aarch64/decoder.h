@@ -202,11 +202,18 @@ constexpr DecodedInstruction BaseInstruction(uint32_t word) {
     return op;
 }
 
+constexpr void DecodePcRelativeOperands(DecodedInstruction& op, Kind kind) {
+    op.kind = kind;
+    // BaseInstruction extracts register fields that these encodings use for the offset.
+    if (kind == Kind::BranchImmediate || kind == Kind::BranchCondition) op.rd = 0;
+    op.rn = op.rm = op.ra = 0;
+}
+
 constexpr DecodedInstruction DecodeFields(uint32_t word) {
     auto op = BaseInstruction(word);
     switch (LookupEncoding(word)) {
         case Encoding::Address: {
-            op.kind = Kind::Address;
+            DecodePcRelativeOperands(op, Kind::Address);
             op.operation = Field(word, 31, 1);
             op.immediate = SignExtend((Field(word, 5, 19) << 2) | Field(word, 29, 2), 21) << (op.operation ? 12 : 0);
             return op;
@@ -324,7 +331,7 @@ constexpr DecodedInstruction DecodeFields(uint32_t word) {
             return op;
         }
         case Encoding::BranchImmediate: {
-            op.kind = Kind::BranchImmediate;
+            DecodePcRelativeOperands(op, Kind::BranchImmediate);
             op.operation = Field(word, 31, 1);
             op.immediate = SignExtend(Field(word, 0, 26), 26) << 2;
             return op;
@@ -335,19 +342,19 @@ constexpr DecodedInstruction DecodeFields(uint32_t word) {
             return op;
         }
         case Encoding::BranchCondition: {
-            op.kind = Kind::BranchCondition;
+            DecodePcRelativeOperands(op, Kind::BranchCondition);
             op.shift = Field(word, 0, 4);
             op.immediate = SignExtend(Field(word, 5, 19), 19) << 2;
             return op;
         }
         case Encoding::CompareBranch: {
-            op.kind = Kind::CompareBranch;
+            DecodePcRelativeOperands(op, Kind::CompareBranch);
             op.operation = Field(word, 24, 1);
             op.immediate = SignExtend(Field(word, 5, 19), 19) << 2;
             return op;
         }
         case Encoding::TestBranch: {
-            op.kind = Kind::TestBranch;
+            DecodePcRelativeOperands(op, Kind::TestBranch);
             op.operation = Field(word, 24, 1);
             op.shift = (Field(word, 31, 1) << 5) | Field(word, 19, 5);
             op.immediate = SignExtend(Field(word, 5, 14), 14) << 2;
@@ -380,7 +387,7 @@ constexpr DecodedInstruction DecodeFields(uint32_t word) {
             op.operation = vector || size <= 1 ? Load : (size == 2 ? LoadSigned64 : Prefetch);
             op.width = vector ? 32 << size : (size == 1 ? 64 : 32);
             op.immediate = SignExtend(Field(word, 5, 19), 19) << 2;
-            op.kind = Kind::LoadLiteral;
+            DecodePcRelativeOperands(op, Kind::LoadLiteral);
             return op;
         }
         case Encoding::Exclusive: {
@@ -445,5 +452,31 @@ constexpr DecodedInstruction DecodeFields(uint32_t word) {
     }
     return op;
 }
+
+// Keep in sync with canonicalize_baked_word in scripts/aarch64_baked_words.py.
+constexpr uint32_t BakedPcRelativeMask(Kind kind) {
+    switch (kind) {
+        case Kind::BranchImmediate:
+            return 0x03ffffff;
+        case Kind::BranchCondition:
+        case Kind::CompareBranch:
+        case Kind::LoadLiteral:
+            return 0x00ffffe0;
+        case Kind::TestBranch:
+            return 0x0007ffe0;
+        case Kind::Address:
+            return 0x60ffffe0;
+        default:
+            return 0;
+    }
+}
+
+constexpr bool HasBlockTarget(Kind kind) { return BakedPcRelativeMask(kind) != 0; }
+
+constexpr uint32_t CanonicalizeBakedWord(const DecodedInstruction& op) {
+    return op.word & ~BakedPcRelativeMask(op.kind);
+}
+
+constexpr uint32_t CanonicalizeBakedWord(uint32_t word) { return CanonicalizeBakedWord(DecodeFields(word)); }
 
 }  // namespace fiberish::aarch64::detail

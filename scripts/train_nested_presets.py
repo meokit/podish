@@ -13,6 +13,7 @@ import subprocess
 import tempfile
 import time
 
+from aarch64_baked_words import canonicalize_baked_word
 from baking_joint_rank import joint_rank
 from baking_rank_builds import materialize
 from baking_rank_cost import PRIORS, rank_costs
@@ -253,10 +254,11 @@ def plan_keys(directory):
 def arm_plan_keys(directory):
     plan = read_json(directory / "scalar.json")
     return [
-        {row["word"] for row in plan["entries"]},
+        {canonicalize_baked_word(row["word"]) for row in plan["entries"]},
         set(plan["partials"]),
-        {(row["first"], row["second"]) for row in plan["pairs"]},
-        {tuple(row["words"]) for row in plan["sequences"]},
+        {(canonicalize_baked_word(row["first"]), canonicalize_baked_word(row["second"]))
+         for row in plan["pairs"]},
+        {tuple(map(canonicalize_baked_word, row["words"])) for row in plan["sequences"]},
     ]
 
 
@@ -311,7 +313,8 @@ def rank_arm_profiles(profiles, families=None):
             rows = profile.get(group, [])
             total = sum(row["count"] for row in rows)
             for row in rows:
-                key = tuple(tuple(row[f]) if f == "words" else row[f] for f in fields)
+                key = tuple(tuple(map(canonicalize_baked_word, row[f])) if f == "words"
+                            else canonicalize_baked_word(row[f]) for f in fields)
                 weight = row["count"] / (total * sizes[family])
                 weights[key] += weight
                 if group == "sequences" and profile.get("version") == 2:

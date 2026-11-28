@@ -4,6 +4,9 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from aarch64_baked_words import canonicalize_baked_word
+from baking_rank_cost import arm_symbol, binding
+from baking_replay import arm_layouts
 from gen_operand_specializations import generate_aarch64
 from train_nested_presets import (
     ARM_CLASSES, arm_partial_pool, arm_plan, guest_configs, load_training_config, rank_arm_profiles,
@@ -106,6 +109,50 @@ class BakedLookupTests(unittest.TestCase):
                          ["{0x91000400u, 0, 4,", "{0x91000400u, 3, 3,",
                           "{0x91000400u, 5, 3,", "{0x91000401u, 7, 3,"])
         self.assertIn("0x91000400u, 0x91000400u, 0x91000401u>", sequence_rows[2])
+
+    def test_pc_relative_keys_preserve_instruction_fields(self):
+        for word, key in (
+            (0x17ffffff, 0x14000000), (0x97ffffff, 0x94000000),
+            (0x54ffffed, 0x5400000d), (0x54fffffd, 0x54fffffd),
+            (0xb5ffffe9, 0xb5000009), (0xb7ffffe9, 0xb7f80009),
+            (0x70ffffea, 0x1000000a), (0xf0ffffea, 0x9000000a),
+            (0x9cffffeb, 0x9c00000b), (0xd8ffffec, 0xd800000c),
+            (0xdcffffeb, 0xdcffffeb), (0x91000400, 0x91000400),
+        ):
+            with self.subTest(word=hex(word)):
+                self.assertEqual(canonicalize_baked_word(word), key)
+                self.assertEqual(canonicalize_baked_word(key), key)
+
+    def test_pc_relative_counts_pool_before_generator_and_trainer_rank(self):
+        add, branch = 0x91000400, 0x54000001
+        variants = [(6, branch + 0x40), (6, branch + 0xa0), (10, branch + 1)]
+        plan = {
+            "architecture": "aarch64", "version": 2,
+            "entries": [dict(word=w, count=n) for n, w in variants],
+            "pairs": [dict(first=add, second=w, count=n) for n, w in variants],
+            "sequences": [dict(words=[add, add, w], count=n) for n, w in variants],
+            "blocks": [{"words": [add, add, branch + 0x140], "count": 7}],
+        }
+        generated = generate_aarch64(plan, 1, 1, 1)
+        self.assertIn("std::array<ScalarBinding, 1> BakedExact", generated)
+        self.assertIn("ScalarHandlers<0x54000001u>", generated)
+        self.assertNotIn("ScalarHandlers<0x54000002u>", generated)
+        self.assertIn("0x9100040054000001ull", generated)
+        self.assertIn("BakedFusion<0x91000400u, 0x91000400u, 0x54000001u>", generated)
+
+        pools = rank_arm_profiles([plan]) | {"partials": []}
+        self.assertEqual([row["word"] for row in pools["entries"]], [branch, branch + 1])
+        self.assertEqual([row["second"] for row in pools["pairs"]], [branch, branch + 1])
+        self.assertEqual([row["words"][-1] for row in pools["sequences"]], [branch, branch + 1])
+        ids = dict(entries=[0, 1], partials=[], pairs=[2, 3], sequences=[4, 5])
+        self.assertEqual(list(arm_layouts(pools, ids, [{"id": "test"}], {"test": plan})),
+                         [("test", 7, ((4,), (2,), (0,)))])
+
+        address = 0xf0ffffea  # ADRP X10, -1 page
+        symbol = f"15DispatchWrapperIXadL_ZN7fiberish7aarch646detail10BakedLogicILj0ELb0EJLj{address}EEEE"
+        key, feature = binding("entries", {"word": address})
+        self.assertEqual((key, feature), ("entries/9000000a", ("entries", 1, 0x90)))
+        self.assertEqual(arm_symbol(symbol), key)
 
 
 class GrowthBudgetTests(unittest.TestCase):

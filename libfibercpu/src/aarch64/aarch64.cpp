@@ -353,7 +353,9 @@ const BasicBlock* DecodeBlock(uint64_t pc, const uint8_t* executable, const Prof
     }
 #endif
     std::array<uint32_t, BlockMax> instructions;
-    for (unsigned i = 0; i < slot_count; ++i) instructions[i] = decoded[i].op.word;
+    if (profile.resolve_pair || profile.resolve_sequence) {
+        for (unsigned i = 0; i < slot_count; ++i) instructions[i] = CanonicalizeBakedWord(decoded[i].op);
+    }
     unsigned following = 0;
     unsigned units = 0;
     for (unsigned i = slot_count; i-- > 0;) {

@@ -181,10 +181,12 @@ bool LastStateMatches(const TestCase& test, unsigned trial, const State& got, co
 }
 
 bool RelocatedBlockOperands() {
-    constexpr uint32_t adr = 0x10000060;     // adr x0, .+12
-    constexpr uint32_t adrp = 0x90000001;    // adrp x1, current page
-    constexpr uint32_t literal = 0x180000c2; // ldr w2, .+24
-    constexpr uint32_t call = 0x94000003;    // bl .+12
+    constexpr uint32_t adr = 0x10000000;
+    constexpr uint32_t adrp = 0x90000001;
+    constexpr uint32_t literal = 0x18000002;
+    constexpr uint32_t call = 0x94000000;
+    static bool call_matched = false;
+    static bool sequence_matched = false;
     struct Mapping {
         CodePage page{};
         uint64_t base = 0;
@@ -204,7 +206,7 @@ bool RelocatedBlockOperands() {
     };
     Profile baked{};
     baked.resolve = [](const DecodedInstruction& op, bool dead) -> detail::HandlerFunc {
-        switch (op.word) {
+        switch (detail::CanonicalizeBakedWord(op)) {
         case adr:
             return BakedBinding<adr>(dead);
         case adrp:
@@ -212,6 +214,7 @@ bool RelocatedBlockOperands() {
         case literal:
             return BakedBinding<literal>(dead);
         case call:
+            call_matched = true;
             return BakedBinding<call>(dead);
         default:
             return nullptr;
@@ -222,24 +225,41 @@ bool RelocatedBlockOperands() {
         if (count < 3 || words[0] != adr || words[1] != adrp || words[2] != literal)
             return nullptr;
         *matched = 3;
+        sequence_matched = true;
         return BindBakedFusion<adr, adrp, literal>(dead);
     };
-    constexpr std::array program{adr,         adrp,        literal,     call,       0xd4200000u,
-                                 0xd4200000u, 0xaa1e03e3u, 0xd4000001u, 0xe1234567u};
+    constexpr struct {
+        std::array<uint32_t, 4> program;
+        int adr_bytes, adrp_bytes, literal_bytes, call_bytes;
+    } cases[]{
+        {{0x10000060, 0xb0000001, 0x18000102, 0x94000003}, 12, 4096, 32, 12},
+        {{0x70ffffa0, 0xf0ffffe1, 0x18ffff42, 0x94000005}, -9, -4096, -24, 20},
+    };
     constexpr auto HighPc = fiberish::mem::ArmTaskSize - 4096 + 0x84;
     for (auto pc : std::array<uint64_t, 3>{0x20040, HighPc, 0x20040}) {
         mapping.base = pc & ~uint64_t{4095};
         const auto offset = pc - mapping.base;
-        for (unsigned i = 0; i < program.size(); ++i)
-            detail::WriteLittle(mapping.page.data() + offset + i * 4, program[i]);
-        for (const auto& profile : {Profile{}, baked}) {
-            State state{};
-            state.pc = pc;
-            const auto result = Run(state, memory, 10, profile);
-            if (result.reason != Stop::Syscall || result.executed != 6 || state.pc != pc + 32 ||
-                state.x[0] != pc + 12 || state.x[1] != mapping.base || state.x[2] != program.back() ||
-                state.x[30] != pc + 16 || state.x[3] != pc + 16)
-                return false;
+        for (const auto& test : cases) {
+            mapping.page.fill(0);
+            const auto target = offset + 12 + test.call_bytes;
+            constexpr uint32_t Value = 0xe1234567;
+            for (unsigned i = 0; i < test.program.size(); ++i)
+                detail::WriteLittle(mapping.page.data() + offset + i * 4, test.program[i]);
+            detail::WriteLittle(mapping.page.data() + target, 0xaa1e03e3u);     // mov x3, x30
+            detail::WriteLittle(mapping.page.data() + target + 4, 0xd4000001u); // svc #0
+            detail::WriteLittle(mapping.page.data() + offset + 8 + test.literal_bytes, Value);
+            for (const auto& profile : {Profile{}, baked}) {
+                call_matched = sequence_matched = false;
+                State state{};
+                state.pc = pc;
+                const auto result = Run(state, memory, 10, profile);
+                if (result.reason != Stop::Syscall || result.executed != 6 || state.pc != mapping.base + target + 8 ||
+                    state.x[0] != pc + test.adr_bytes || state.x[1] != mapping.base + test.adrp_bytes ||
+                    state.x[2] != Value || state.x[30] != pc + 16 || state.x[3] != pc + 16)
+                    return false;
+                if (profile.resolve && (!call_matched || !sequence_matched))
+                    return false;
+            }
         }
     }
     return true;

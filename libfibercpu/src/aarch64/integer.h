@@ -343,20 +343,6 @@ constexpr StepResult Branch(uint64_t address) { return {Stop::Branch, Access::Ex
 
 constexpr bool IsConditionalBranch(Kind kind) { return kind >= Kind::BranchCondition && kind <= Kind::TestBranch; }
 
-constexpr bool HasBlockTarget(Kind kind) {
-    switch (kind) {
-        case Kind::Address:
-        case Kind::BranchImmediate:
-        case Kind::BranchCondition:
-        case Kind::CompareBranch:
-        case Kind::TestBranch:
-        case Kind::LoadLiteral:
-            return true;
-        default:
-            return false;
-    }
-}
-
 inline void BindBlockOperands(DecodedInstruction& op, uint64_t pc) {
     if (!HasBlockTarget(op.kind)) return;
     const auto base = op.kind == Kind::Address && op.operation ? pc & ~uint64_t{4095} : pc;

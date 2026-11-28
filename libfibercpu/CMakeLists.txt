@@ -597,7 +597,8 @@ if(FIBERCPU_GUEST_AARCH64 AND FIBERCPU_STATIC_SPECIALIZATION)
         COMMAND "${Python3_EXECUTABLE}" "${_arm_generator}" --guest aarch64 --plan "${_arm_plan}"
             --budget "${FIBERCPU_AARCH64_OPERAND_BUDGET}" --pair-budget "${FIBERCPU_AARCH64_PAIR_BUDGET}"
             --partial-budget "${FIBERCPU_AARCH64_PARTIAL_BUDGET}" --sequence-budget "${FIBERCPU_AARCH64_SEQUENCE_BUDGET}" --output "${_arm_generated}"
-        DEPENDS "${_arm_generator}" "${_arm_plan}" VERBATIM)
+        DEPENDS "${_arm_generator}" "${_arm_plan}"
+            "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/aarch64_baked_words.py" VERBATIM)
     list(APPEND SOURCES "${_arm_generated}")
     add_compile_definitions(FIBERCPU_AARCH64_BAKED=1)
 endif()
