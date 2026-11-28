@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from baking_replay import Replay
+from baking_replay import Replay, arm_layouts
 from gen_instruction_catalog import read_catalog
 from operand_specialization_data import Operand, training_handlers
 
@@ -77,6 +77,31 @@ class CrossGuestReplayTests(unittest.TestCase):
                 self.assertAlmostEqual(gains["gzip"], (2 / 6 + 1 / 2) / 2)
                 self.assertEqual(gains["editor"], 0)
                 self.assertAlmostEqual(model.score(selected), 5 / 24)
+
+
+class ArmPartialReplayTests(unittest.TestCase):
+    def test_pair_masks_follow_exact_fusions_and_precede_scalar_bindings(self):
+        first, second = 0x91000063, 0xb9400062  # add x3, x3, #imm; ldr w2, [x3, #imm]
+        add, load = first | (1 << 10), second | (5 << 10)
+        pools = {
+            "entries": [{"word": add}],
+            "partials": [second],
+            "pairs": [
+                {"first": add, "second": load},
+                {"first": first, "second": load, "dynamic_mask": 1},
+                {"first": add, "second": second, "dynamic_mask": 2},
+                {"first": first, "second": second, "dynamic_mask": 3},
+            ],
+            "sequences": [{"words": [add, load, load]}],
+        }
+        ids = dict(entries=[1], partials=[2], pairs=[3, 4, 5, 6], sequences=[7])
+        cases = [{"id": "a"}]
+        block = [add, load, load] + [0xd503201f] * 29
+        profiles = {"a": {"version": 2, "blocks": [{"words": block, "count": 2}]}}
+        _, _, positions = next(arm_layouts(pools, ids, cases, profiles))
+        self.assertEqual(positions[0], (7, 3, 4, 5, 6, 1))
+        self.assertEqual(positions[1], (2,))
+        self.assertEqual(len(positions), 32)
 
 
 if __name__ == "__main__":

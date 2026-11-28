@@ -246,11 +246,26 @@ python3 scripts/train_nested_presets.py --config training.json --guest aarch64 -
 ```
 
 The stock plans use the same GNU training workloads on both guests. Node and grep were held out.
-The partials specialize ADD/SUB immediate and unsigned-offset load/store
-words. They keep the register indices, operation, scale and width fixed and
-read the decoded immediate from the slot. Training ranks shapes by residual
-frequency after allocating the exact words, using all observed encodings
-before truncating the profile. The three tiers share one ranked list. Every larger tier retains the bindings of the smaller tier. Use `--no-partial-operands` to train exact shapes alone.
+Scalar partials keep the registers, operation, width, and addressing mode
+fixed. They read the decoded ADD/SUB immediate, unsigned or pre/post-indexed
+load/store offset, paired load/store offset, move-wide value, or logical
+bitmask from the instruction slot. The existing presets
+contain ADD/SUB and unsigned-offset load/store shapes.
+
+A pair row can specify a `dynamic_mask`. Bit 0 clears the first word's
+immediate field and bit 1 clears the second word's. Pair keys can also clear
+PC-relative offsets in ADR/ADRP, literal loads, and direct branches. Those
+handlers read the target already computed for the instruction slot. The
+decoder tries longer exact sequences, exact pairs, then partial pairs. Among
+partial pairs, it tries the first-only mask, the second-only mask, then both.
+Exact scalars precede partial scalars.
+
+The trainer requires at least two observed encodings per partial shape. It
+uses ordered captures to find transfer-start partial pairs and ranks them
+with the other bindings. Set `aarch64_partial_pair_budget` to cap the
+candidate pool. It defaults to the scalar partial candidate budget. Use
+`--no-partial-operands` to disable both pools. Ranked tiers retain the
+bindings of the smaller tier.
 
 The CMake limits are `FIBERCPU_AARCH64_OPERAND_BUDGET`,
 `FIBERCPU_AARCH64_PARTIAL_BUDGET`, `FIBERCPU_AARCH64_PAIR_BUDGET`, and

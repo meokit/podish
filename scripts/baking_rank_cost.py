@@ -17,6 +17,7 @@ from statistics import median
 import struct
 
 from aarch64_baked_words import canonicalize_baked_word
+from aarch64_baking import pair_key
 from gen_instruction_catalog import read_catalog
 from operand_specialization_data import generated_fusions, resolve_training_plan, training_handlers
 
@@ -32,8 +33,11 @@ def read(path):
     return json.loads(path.read_bytes())
 
 
-def arm_key(kind, words):
-    return kind + "/" + ".".join(f"{canonicalize_baked_word(w):08x}" for w in words)
+def arm_key(kind, words, dynamic_mask=0):
+    encoded = ".".join(f"{canonicalize_baked_word(w):08x}" for w in words)
+    if kind == "pairs" and dynamic_mask:
+        return f"{kind}/{dynamic_mask}/{encoded}"
+    return f"{kind}/{encoded}"
 
 
 def x86_key(kind, *fields):
@@ -47,15 +51,16 @@ def scalar_name_ids():
 
 def binding(kind, row):
     if kind in CLASSES["aarch64"]:
+        mask = 0
         if kind == "partials":
             words = (row,)
         elif kind == "entries":
             words = (row["word"],)
         elif kind == "pairs":
-            words = (row["first"], row["second"])
+            mask, *words = pair_key(row)
         else:
             words = row["words"]
-        return arm_key(kind, words), (kind, len(words), canonicalize_baked_word(words[0]) >> 24)
+        return arm_key(kind, words, mask), (kind, len(words), canonicalize_baked_word(words[0]) >> 24)
     if kind in ("modrm", "policies"):
         fields = (row["training_id"], row["slots"], row["modrm"])
         policy = (row["width"], row["flags"]) if kind == "policies" else ()
@@ -129,8 +134,9 @@ def codegen_digest():
              if p.suffix in {".cpp", ".h", ".inc", ".def", ".json"}]
     paths.extend((repo / "Podish.PerfTools").glob("Program.Superopcode*.cs"))
     paths.extend((repo / "scripts" / name) for name in (
-        "gen_instruction_catalog.py", "gen_operand_specializations.py", "scalar_modrm.py",
-        "operand_specialization_data.py", "gen_handler_reflection.py", "aarch64_baked_words.py"))
+        "aarch64_baked_words.py", "aarch64_baking.py", "gen_instruction_catalog.py",
+        "gen_operand_specializations.py", "scalar_modrm.py", "operand_specialization_data.py",
+        "gen_handler_reflection.py"))
     paths.extend((repo / "libfibercpu/cmake").glob("*.cmake"))
     paths.append(repo / "libfibercpu/CMakeLists.txt")
     digest = hashlib.sha256()
@@ -159,7 +165,7 @@ def fingerprint(build):
 
 
 UINT = re.compile(r"Lj(\d+)E")
-BAKED_ARM = re.compile(r"10BakedLogicILj\d+ELb([01])EJ((?:Lj\d+E)+)")
+BAKED_ARM = re.compile(r"10BakedLogicILj\d+EL(?:b([01])|j(\d+))EJ((?:Lj\d+E)+)")
 PROFILE = re.compile(r"13baked_operand\d+(\w+?)INS_11OperandSpec(7Profile|14PartialProfile)IXtlNS_19DecodedOperandShapeE((?:Lj\d+E)+)EELj\d+E")
 MODRM = re.compile(r'ZNS_(?:2op)?\d+(Op\w+?)EP.*?9WithModRMI\w*?9SlotBoundILj(\d+)ELb[01]EEELh(\d+)E')
 CLONE = re.compile(r"OperandClone_(\d+)_(SuperOpcode_\w+?)EP")
@@ -172,10 +178,10 @@ def arm_symbol(symbol):
     m = BAKED_ARM.search(symbol)
     if not m:
         return None
-    words = tuple(map(int, UINT.findall(m[2])))
-    partial = m[1] == "1"
-    kind = "partials" if partial else {1: "entries", 2: "pairs"}.get(len(words), "sequences")
-    return arm_key(kind, words)
+    mask = int(m[1] or m[2])
+    words = tuple(map(int, UINT.findall(m[3])))
+    kind = {1: "partials" if mask else "entries", 2: "pairs"}.get(len(words), "sequences")
+    return arm_key(kind, words, mask)
 
 
 def x86_symbol(symbol, clones):

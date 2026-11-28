@@ -371,8 +371,15 @@ const BasicBlock* DecodeBlock(uint64_t pc, const uint8_t* executable, const Prof
                 slot.span = uint8_t(length);
             }
         }
-        if (slot.span == 1 && slot.can_follow && IsInteger(slot.op.kind) && following > 0 && profile.resolve_pair) {
-            if (const auto fusion = profile.resolve_pair(instructions[i], instructions[i + 1], dead_from_here)) {
+        if (slot.span == 1 && slot.can_follow && following > 0) {
+            const bool integer = IsInteger(slot.op.kind);
+            auto fusion = integer && profile.resolve_pair
+                              ? profile.resolve_pair(instructions[i], instructions[i + 1], dead_from_here)
+                              : nullptr;
+            const bool transfer = slot.op.kind >= Kind::LoadStoreImmediate && slot.op.kind <= Kind::LoadLiteral;
+            if (!fusion && profile.resolve_partial_pair && (integer || transfer))
+                fusion = profile.resolve_partial_pair(slot.op, decoded[i + 1].op, dead_from_here);
+            if (fusion) {
                 slot.handler = fusion;
                 slot.span = 2;
             }

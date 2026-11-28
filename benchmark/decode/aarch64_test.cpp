@@ -906,6 +906,121 @@ bool PartialImmediateOperands() {
     return true;
 }
 
+bool BroaderPartialImmediateOperands() {
+    constexpr uint64_t Data = Base + Page;
+    constexpr uint64_t Value = 0x1234'0000'abcd'0000;
+    Backing backing;
+    backing.Code(Base, {
+                           0xd2e24680, // movz x0, #0x1234, lsl #48
+                           0xf2b579a0, // movk x0, #0xabcd, lsl #16
+                           0xb2401c02, // orr x2, x0, #0xff
+                           0xa9bf0860, // stp x0, x2, [x3, #-16]!
+                           0xf85f8464, // ldr x4, [x3], #-8
+                       });
+    fiberish::mem::SoftTlb tlb{};
+    const auto tag = ArmPageTag(Data);
+    tlb.read_tlb[tag & fiberish::mem::TLB_INDEX_MASK] = tlb.write_tlb[tag & fiberish::mem::TLB_INDEX_MASK] = {
+        fiberish::mem::PackMicroTlbTags(tag, tag),
+        reinterpret_cast<uintptr_t>(backing.data.data() + Page) - Data,
+    };
+    auto memory = backing.Callbacks();
+    memory.data_tlb = &tlb;
+    Profile profile{};
+    profile.resolve = [](const DecodedInstruction& op, bool dead) -> detail::HandlerFunc {
+        switch (op.word & ~PartialImmediateMask(op)) {
+        case 0xd2e00000:
+            return BakedBinding<0xd2e00000, true>(dead);
+        case 0xf2a00000:
+            return BakedBinding<0xf2a00000, true>(dead);
+        case 0xb2000002:
+            return BakedBinding<0xb2000002, true>(dead);
+        case 0xa9800860:
+            return BakedBinding<0xa9800860, true>(dead);
+        case 0xf8400464:
+            return BakedBinding<0xf8400464, true>(dead);
+        default:
+            return nullptr;
+        }
+    };
+    State state{};
+    state.pc = Base;
+    state.x[3] = Data + 128;
+    const auto result = Run(state, memory, 5, profile);
+    return result.reason == Stop::Budget && result.executed == 5 && state.x[0] == Value &&
+           state.x[2] == (Value | 0xff) && state.x[3] == Data + 104 && state.x[4] == Value &&
+           detail::ReadLittle<uint64_t>(backing.data.data() + Page + 120) == (Value | 0xff);
+}
+
+bool PartialImmediatePairs() {
+    constexpr uint32_t Address = 0x90000003; // adrp x3, page
+    constexpr uint32_t Load = 0xb9400062;    // ldr w2, [x3, #imm]
+    constexpr uint32_t Cbz = 0x34000002;     // cbz w2, target
+    constexpr uint32_t Cmp = 0xf100005f;     // cmp x2, #imm
+    constexpr uint32_t Equal = 0x54000000;   // b.eq target
+    constexpr uint64_t Data = Base + Page;
+    static unsigned matched;
+    matched = 0;
+    const Profile profile{.resolve_partial_pair = [](const DecodedInstruction& first, const DecodedInstruction& second,
+                                                     uint32_t dead) -> detail::HandlerFunc {
+        const auto a = detail::CanonicalizeBakedWord(first) & ~PartialImmediateMask(first);
+        const auto b = detail::CanonicalizeBakedWord(second) & ~PartialImmediateMask(second);
+        if (a == Address && b == Load) {
+            matched |= 1;
+            return PartialBakedFusion<2, Address, Load>.Select(dead, 2);
+        }
+        if (a == Load && b == Cbz) {
+            matched |= 2;
+            return PartialBakedFusion<1, Load, Cbz>.Select(dead, 2);
+        }
+        if (a == Cmp && b == Equal) {
+            matched |= 4;
+            return PartialBakedFusion<1, Cmp, Equal>.Select(dead, 2);
+        }
+        return nullptr;
+    }};
+    Backing backing;
+    auto memory = backing.Callbacks();
+    fiberish::mem::SoftTlb tlb{};
+    const auto tag = ArmPageTag(Data);
+    tlb.read_tlb[tag & fiberish::mem::TLB_INDEX_MASK] = {
+        fiberish::mem::PackMicroTlbTags(tag, fiberish::mem::kInvalidMicroTlbTag),
+        reinterpret_cast<uintptr_t>(backing.data.data() + Page) - Data,
+    };
+    memory.data_tlb = &tlb;
+    for (unsigned offset : {6u, 11u}) {
+        const uint32_t load = Load | (offset << 10);
+        const uint32_t branch = offset << 5;
+        backing.Code(Base, {Address | (1u << 29), load});
+        backing.Code(Base + 64, {load, Cbz | branch, 0xd4000001});
+        backing.Code(Base + 128, {Cmp | (offset << 10), Equal | branch, 0xd4000001});
+        backing.Put(Data + offset * 4, offset);
+
+        State state{};
+        state.pc = Base;
+        if (Run(state, memory, 2, profile).reason != Stop::Budget || state.x[3] != Data || state.x[2] != offset)
+            return false;
+
+        state.pc = Base + 64;
+        state.x[3] = Data + Page; // Miss on the first member.
+        const auto fault = Run(state, memory, 2, profile);
+        if (fault.reason != Stop::Fault || fault.executed != 0 || fault.address != Data + Page + offset * 4)
+            return false;
+
+        state.pc = Base + 64;
+        state.x[3] = Data;
+        backing.Put(Data + offset * 4, 0);
+        if (Run(state, memory, 2, profile).reason != Stop::Budget || state.pc != Base + 68 + offset * 4)
+            return false;
+
+        state.pc = Base + 128;
+        state.x[2] = offset;
+        if (Run(state, memory, 2, profile).reason != Stop::Budget || state.pc != Base + 132 + offset * 4 ||
+            state.nzcv != 0x60000000)
+            return false;
+    }
+    return matched == 7;
+}
+
 bool FusedDispatch() {
     constexpr uint32_t Add = 0x91000400;  // add x0, x0, #1
     constexpr uint32_t Load = 0xb9400062; // ldr w2, [x3]
@@ -1858,6 +1973,8 @@ int main() {
         {"baked dispatch and profiling", BakedDispatch()},
         {"PC-relative baking keys preserve decoded operands and reserved encodings", CanonicalBakedWords()},
         {"partial immediate shapes retain the decoded arithmetic value and scaled offset", PartialImmediateOperands()},
+        {"partial pair, indexed, move-wide and logical immediates", BroaderPartialImmediateOperands()},
+        {"partial pairs use decoded targets, immediates and fault PCs", PartialImmediatePairs()},
         {"fused dispatch branch, budget and fault accounting", FusedDispatch()},
         {"standalone conditional branches test all NZCV combinations", StandaloneConditionBranch()},
         {"compare and conditional branch preserve flags and budget boundaries", CompareBranchPair()},

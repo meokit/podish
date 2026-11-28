@@ -22,6 +22,15 @@ class StaticCostTests(unittest.TestCase):
                 cost.arm_symbol(f"15DispatchWrapperIXadL_ZN7fiberish7aarch646detail10BakedLogicILj{dead}ELb0EJLj5ELj7EEEE"),
                 cost.binding("pairs", {"first": 5, "second": 7})[0],
             )
+        for mask in (1, 2, 3):
+            self.assertEqual(
+                cost.arm_symbol(f"15DispatchWrapperIXadL_ZN7fiberish7aarch646detail10BakedLogicILj0ELj{mask}EJLj5ELj7EEEE"),
+                cost.binding("pairs", {"first": 5, "second": 7, "dynamic_mask": mask})[0],
+            )
+        self.assertEqual(
+            cost.arm_symbol("15DispatchWrapperIXadL_ZN7fiberish7aarch646detail10BakedLogicILj1ELj1EJLj13EEEE"),
+            cost.binding("partials", 13)[0],
+        )
         self.assertIsNone(cost.arm_symbol("12BakedExact"))
         self.assertIsNone(cost.arm_symbol("RunBlock"))
         self.assertIsNone(cost.arm_symbol("10BakedLogicILj1ELb1EJLj13EEE"))

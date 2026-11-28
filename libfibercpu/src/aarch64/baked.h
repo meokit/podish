@@ -28,15 +28,34 @@ constexpr bool CanBakeSequence() {
     return CanBake(words.back());
 }
 
+// Plan keys clear only scalar immediate fields that the runtime operand slots carry.
+// PC-relative targets are canonicalized separately by CanonicalizeBakedWord.
+constexpr uint32_t PartialImmediateMask(const DecodedInstruction& op) {
+    switch (op.kind) {
+        case Kind::AddSubImmediate:
+            return 0xfffu << 10;
+        case Kind::LoadStoreImmediate:
+            if (detail::Field(op.word, 24, 1)) return 0xfffu << 10;
+            return detail::Field(op.word, 10, 1) ? 0x1ffu << 12 : 0;
+        case Kind::LoadStorePair:
+            return 0x7fu << 15;
+        case Kind::MoveWide:
+            return 0xffffu << 5;
+        case Kind::LogicalImmediate:
+            return 0x1fffu << 10;
+        default:
+            return 0;
+    }
+}
+
 namespace detail {
 
-template <uint32_t Word, bool dynamic_imm12>
+template <uint32_t Word, bool dynamic_immediate>
 A64_FORCE_INLINE decltype(auto) BakedOperands(const DecodedOp& slot) {
     static_assert(CanBake(Word));
     static constexpr auto shape = DecodeFields(Word);
-    if constexpr (dynamic_imm12) {
-        static_assert(shape.kind == Kind::AddSubImmediate ||
-                      (shape.kind == Kind::LoadStoreImmediate && Field(Word, 24, 1)));
+    static_assert(!dynamic_immediate || PartialImmediateMask(shape));
+    if constexpr (dynamic_immediate) {
         auto operands = shape;
         operands.immediate = GetOpOperands<shape.kind>(slot).immediate;
         return operands;
@@ -45,21 +64,20 @@ A64_FORCE_INLINE decltype(auto) BakedOperands(const DecodedOp& slot) {
     }
 }
 
-template <uint32_t dead, bool dynamic_imm12, uint32_t Word, uint32_t... Rest>
+template <uint32_t dead, uint32_t dynamic_mask, uint32_t Word, uint32_t... Rest>
 A64_FORCE_INLINE StepResult ExecuteBakedOps(State& state, const DecodedOp*& member A64_UTLB_REF_PARAMS,
                                             uint32_t& flags_cache A64_HOT_PIN_REF) {
     constexpr auto op = DecodeFields(Word);
-    if constexpr (HasNativeCompareBranch && sizeof...(Rest) == 1 && IsUnshiftedCompare(op) && !dynamic_imm12 &&
-                  !(dead & 1)) {
+    if constexpr (HasNativeCompareBranch && sizeof...(Rest) == 1 && IsUnshiftedCompare(op) && !(dead & 1)) {
         constexpr auto branch = DecodeFields(std::array{Rest...}.front());
         if constexpr (branch.kind == Kind::BranchCondition && branch.shift < ConditionalBranchCount) {
-            const bool taken =
-                CompareAndTest<op.kind, op.width, branch.shift>(state, op, flags_cache A64_HANDLER_PIN_ARGS);
+            const bool taken = CompareAndTest<op.kind, op.width, branch.shift>(
+                state, BakedOperands<Word, (dynamic_mask & 1) != 0>(*member), flags_cache A64_HANDLER_PIN_ARGS);
             member = member->NextOp<false>();
             return taken ? Branch(GetExtraOperands(*member).primary) : StepResult{};
         }
     }
-    const auto& operands = BakedOperands<Word, dynamic_imm12>(*member);
+    const auto& operands = BakedOperands<Word, (dynamic_mask & 1) != 0>(*member);
     uint64_t target = 0;
     if constexpr (HasBlockTarget(op.kind)) target = GetExtraOperands(*member).primary;
     if constexpr (IsBakedTransfer(op.kind)) {
@@ -78,18 +96,18 @@ A64_FORCE_INLINE StepResult ExecuteBakedOps(State& state, const DecodedOp*& memb
     if constexpr (sizeof...(Rest) == 0) {
         return {};
     } else {
-        static_assert(!dynamic_imm12 && CanFollowInBakedSequence(Word));
+        static_assert(CanFollowInBakedSequence(Word));
         member = member->NextOp<HasExtraOperandSlot(op.kind)>();
-        return ExecuteBakedOps<(dead >> 1), false, Rest...>(state, member A64_UTLB_ARGS,
-                                                            flags_cache A64_HANDLER_PIN_ARGS);
+        return ExecuteBakedOps<(dead >> 1), (dynamic_mask >> 1), Rest...>(state, member A64_UTLB_ARGS,
+                                                                          flags_cache A64_HANDLER_PIN_ARGS);
     }
 }
 
-template <uint32_t dead, bool dynamic_imm12, uint32_t... Words>
+template <uint32_t dead, uint32_t dynamic_mask, uint32_t... Words>
 A64_FORCE_INLINE StepResult BakedLogic(State& state, const DecodedOp*& current A64_UTLB_REF_PARAMS,
                                        uint32_t& flags_cache A64_HOT_PIN_REF) {
-    return ExecuteBakedOps<dead, dynamic_imm12, Words...>(state, current A64_UTLB_ARGS,
-                                                          flags_cache A64_HANDLER_PIN_ARGS);
+    return ExecuteBakedOps<dead, dynamic_mask, Words...>(state, current A64_UTLB_ARGS,
+                                                         flags_cache A64_HANDLER_PIN_ARGS);
 }
 
 template <uint32_t... Words>
@@ -105,22 +123,23 @@ constexpr DispatchPolicy BakedPolicy() {
 
 }  // namespace detail
 
-template <uint32_t Word, bool dynamic_imm12 = false>
+template <uint32_t Word, bool dynamic_immediate = false>
 constexpr detail::HandlerFunc GetBakedHandler() {
     if constexpr (CanBake(Word))
-        return &detail::DispatchWrapper<detail::BakedLogic<0, dynamic_imm12, Word>, detail::BakedPolicy<Word>()>;
+        return &detail::DispatchWrapper<detail::BakedLogic<0, dynamic_immediate, Word>, detail::BakedPolicy<Word>()>;
     return nullptr;
 }
 
-template <uint32_t Word, bool dynamic_imm12 = false>
+template <uint32_t Word, bool dynamic_immediate = false>
 constexpr detail::HandlerFunc BakedBinding(bool omit_nzcv) {
     constexpr auto op = detail::DecodeFields(Word);
     if (omit_nzcv) {
         if constexpr (detail::WritesIntegerNZCV(op))
-            return &detail::DispatchWrapper<detail::BakedLogic<1, dynamic_imm12, Word>, detail::BakedPolicy<Word>()>;
+            return &detail::DispatchWrapper<detail::BakedLogic<1, dynamic_immediate, Word>,
+                                            detail::BakedPolicy<Word>()>;
         return nullptr;
     }
-    return GetBakedHandler<Word, dynamic_imm12>();
+    return GetBakedHandler<Word, dynamic_immediate>();
 }
 
 template <uint32_t... Words>
@@ -147,10 +166,11 @@ struct BakedFusionBinding {
     }
 };
 
-template <uint32_t... Words>
+template <uint32_t dynamic_mask, uint32_t... Words>
 constexpr BakedFusionBinding GetBakedFusion() {
     constexpr unsigned length = sizeof...(Words);
     static_assert(length >= 2 && length <= 24);
+    static_assert((dynamic_mask >> length) == 0);
     BakedFusionBinding binding{};
     if constexpr (CanBakeSequence<Words...>()) {
         // Whitelisted writers replace all four bits. The final producer is
@@ -158,15 +178,15 @@ constexpr BakedFusionBinding GetBakedFusion() {
         constexpr auto live_out = DeadSequenceFlags<Words...>(detail::FlagMask);
         constexpr auto dead_out = DeadSequenceFlags<Words...>(0);
         binding.normal =
-            &detail::DispatchWrapper<detail::BakedLogic<0, false, Words...>, detail::BakedPolicy<Words...>()>;
+            &detail::DispatchWrapper<detail::BakedLogic<0, dynamic_mask, Words...>, detail::BakedPolicy<Words...>()>;
         if constexpr (live_out != 0) {
             binding.live_out = live_out;
-            binding.omit_live_out = &detail::DispatchWrapper<detail::BakedLogic<live_out, false, Words...>,
+            binding.omit_live_out = &detail::DispatchWrapper<detail::BakedLogic<live_out, dynamic_mask, Words...>,
                                                              detail::BakedPolicy<Words...>()>;
         }
         if constexpr (dead_out != 0 && dead_out != live_out) {
             binding.dead_out = dead_out;
-            binding.omit_dead_out = &detail::DispatchWrapper<detail::BakedLogic<dead_out, false, Words...>,
+            binding.omit_dead_out = &detail::DispatchWrapper<detail::BakedLogic<dead_out, dynamic_mask, Words...>,
                                                              detail::BakedPolicy<Words...>()>;
         }
     }
@@ -174,7 +194,10 @@ constexpr BakedFusionBinding GetBakedFusion() {
 }
 
 template <uint32_t... Words>
-inline constexpr auto BakedFusion = GetBakedFusion<Words...>();
+inline constexpr auto BakedFusion = GetBakedFusion<0, Words...>();
+
+template <uint32_t dynamic_mask, uint32_t... Words>
+inline constexpr auto PartialBakedFusion = GetBakedFusion<dynamic_mask, Words...>();
 
 template <uint32_t... Words>
 detail::HandlerFunc BindBakedFusion(uint32_t block_dead) {

@@ -249,6 +249,8 @@ struct Profile {
     detail::HandlerFunc (*resolve)(const DecodedInstruction&, bool omit_nzcv) = nullptr;
     // Fusion resolvers receive baking keys with PC-relative offsets cleared.
     detail::HandlerFunc (*resolve_pair)(uint32_t first, uint32_t second, uint32_t dead) = nullptr;
+    detail::HandlerFunc (*resolve_partial_pair)(const DecodedInstruction& first, const DecodedInstruction& second,
+                                                uint32_t dead) = nullptr;
     detail::HandlerFunc (*resolve_sequence)(const uint32_t* words, unsigned count, unsigned* matched,
                                             uint32_t dead) = nullptr;
 };

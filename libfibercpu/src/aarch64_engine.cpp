@@ -221,6 +221,7 @@ public:
 #if FIBERCPU_AARCH64_BAKED
 aarch64::detail::HandlerFunc FindBakedArmHandler(const aarch64::DecodedInstruction&, bool omit_nzcv);
 aarch64::detail::HandlerFunc FindBakedArmPair(uint32_t first, uint32_t second, uint32_t dead);
+decltype(aarch64::Profile::resolve_partial_pair) GetBakedArmPartialPairResolver();
 aarch64::detail::HandlerFunc FindBakedArmSequence(const uint32_t* words, unsigned count, unsigned* matched,
                                                   uint32_t dead);
 #endif
@@ -244,6 +245,7 @@ int RunArmEngine(EmuState& engine, uint64_t end_pc, uint64_t budget, bool step, 
 #if FIBERCPU_AARCH64_BAKED
     profile.resolve = FindBakedArmHandler;
     profile.resolve_pair = FindBakedArmPair;
+    profile.resolve_partial_pair = GetBakedArmPartialPairResolver();
     profile.resolve_sequence = FindBakedArmSequence;
 #endif
     const auto& options = engine.mmu.code_cache().run_options;

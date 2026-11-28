@@ -19,7 +19,7 @@ from baking_rank_builds import materialize
 from baking_rank_cost import PRIORS, rank_costs
 from baking_replay import Replay
 from check_native_text_budget import native_text_size
-from gen_operand_specializations import aarch64_imm12_shapes
+from aarch64_baking import pair_key, partial_pairs, partial_words
 from nested_baking_candidates import PARTIAL_FIELDS, build_pools, modrm_key, write_plans
 from nested_baking_workloads import (
     benchmark_lock, digest, file_digest, read_json, run_workloads, split_families, stage_cli, write_json,
@@ -256,8 +256,7 @@ def arm_plan_keys(directory):
     return [
         {canonicalize_baked_word(row["word"]) for row in plan["entries"]},
         set(plan["partials"]),
-        {(canonicalize_baked_word(row["first"]), canonicalize_baked_word(row["second"]))
-         for row in plan["pairs"]},
+        {pair_key(row) for row in plan["pairs"]},
         {tuple(map(canonicalize_baked_word, row["words"])) for row in plan["sequences"]},
     ]
 
@@ -316,7 +315,8 @@ def rank_arm_profiles(profiles, families=None):
                 key = tuple(tuple(map(canonicalize_baked_word, row[f])) if f == "words"
                             else canonicalize_baked_word(row[f]) for f in fields)
                 weight = row["count"] / (total * sizes[family])
-                weights[key] += weight
+                if group != "sequences" or len(key[0]) <= 24:
+                    weights[key] += weight
                 if group == "sequences" and profile.get("version") == 2:
                     # Also offer portable inner runs when a build changes surrounding
                     # code. Native profiles only emit legally bakeable maximal runs.
@@ -341,7 +341,7 @@ def rank_arm_profiles(profiles, families=None):
 
 def arm_partial_pool(entries, exact, budget):
     counts = {row["word"]: row["count"] for row in entries}
-    return aarch64_imm12_shapes(counts, {row["word"] for row in entries[:exact]}, budget)
+    return partial_words(counts, {row["word"] for row in entries[:exact]}, budget)
 
 
 def arm_plan(pools, counts):
@@ -413,9 +413,13 @@ def train_aarch64(cfg, root, jobs, max_builds, partial, config_hash):
     partial_budget = cfg.get("aarch64_partial_budget", 1024) if partial else 0
     if type(partial_budget) is not int or partial_budget < 0:
         raise ValueError("aarch64_partial_budget must be a nonnegative integer")
+    pair_budget = cfg.get("aarch64_partial_pair_budget", partial_budget) if partial else 0
+    if type(pair_budget) is not int or pair_budget < 0:
+        raise ValueError("aarch64_partial_pair_budget must be a nonnegative integer")
     profiles, hashes = collect_arm_profiles(cfg, root, jobs)
     provenance = {"config_sha256": config_hash, "text_growth_tiers_mib": list(TIERS),
-                  "profiles": hashes, "aarch64_partial_budget": partial_budget}
+                  "profiles": hashes, "aarch64_partial_budget": partial_budget,
+                  "aarch64_partial_pair_budget": pair_budget}
     provenance["search"] = cfg["search"]
     provenance["trainer_sha256"] = cfg["trainer_sha256"]
     check_capture_source(cfg, provenance)
@@ -423,9 +427,11 @@ def train_aarch64(cfg, root, jobs, max_builds, partial, config_hash):
     if meta_file.is_file() and read_json(meta_file) != provenance:
         raise ValueError("training workloads or captures differ from the previous run")
     if not pool_file.is_file() or not meta_file.is_file():
-        pools = rank_arm_profiles(profiles.values(), [c.get("family", c["id"]) for c in cfg["workloads"]])
+        families = [c.get("family", c["id"]) for c in cfg["workloads"]]
+        pools = rank_arm_profiles(profiles.values(), families)
         # Keep one ranking of residual shapes so larger tiers can retain the smaller prefixes.
         pools["partials"] = arm_partial_pool(pools["entries"], 128, partial_budget)
+        pools["pairs"].extend(partial_pairs(profiles.values(), families, pair_budget))
         write_json(pool_file, pools)
     write_json(meta_file, provenance)
     ranked_presets(cfg, root, jobs, max_builds, read_json(pool_file), provenance, profiles, aarch64=True)

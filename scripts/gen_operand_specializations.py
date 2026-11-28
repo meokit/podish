@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from aarch64_baked_words import canonicalize_baked_word
+from aarch64_baking import is_branch, pair_key, partial_shape, partial_words
 from gen_instruction_catalog import read_catalog, supports_exact_operands
 from operand_specialization_data import (
     FUSION_CALL, NO_FLAGS, Operand, generated_fusions, resolve_training_plan, specialize_fusion, training_plan_match,
@@ -164,27 +165,6 @@ unsigned BakedFusionWidth(HandlerFunc handler) {
     return "\n".join(code)
 
 
-def aarch64_imm12_family(word):
-    return (word & 0x1f800000) == 0x11000000 or (word & 0x3b000000) == 0x39000000
-
-
-def aarch64_imm12_shapes(counts, exact_words, budget):
-    # Both encoding families put the unsigned immediate in bits [21:10].
-    # Keep shift, transfer size, operation, and both register indices fixed.
-    imm_mask = 0xfff << 10
-    total = {}
-    distinct = {}
-    for word, count in counts.items():
-        if not aarch64_imm12_family(word):
-            continue
-        shape = word & ~imm_mask
-        distinct[shape] = distinct.get(shape, 0) + 1
-        if word not in exact_words:
-            total[shape] = total.get(shape, 0) + count
-    eligible = [shape for shape in total if distinct[shape] >= 2]
-    return sorted(eligible, key=lambda shape: (-total[shape], shape))[:budget]
-
-
 def generate_aarch64(plan, budget, pair_budget, sequence_budget, partial_budget=32):
     if plan.get("architecture") != "aarch64" or plan.get("version") not in (1, 2):
         raise ValueError("expected an AArch64 operand plan or execution profile")
@@ -199,19 +179,26 @@ def generate_aarch64(plan, budget, pair_budget, sequence_budget, partial_budget=
     if "partials" in plan:
         shapes = plan["partials"]
         if not isinstance(shapes, list) or any(
-            type(shape) is not int or not 0 <= shape < 2**32 or shape & (0xfff << 10)
-            or not aarch64_imm12_family(shape) for shape in shapes
+            type(shape) is not int or not 0 <= shape < 2**32 or partial_shape(shape) != shape
+            for shape in shapes
         ) or len(set(shapes)) != len(shapes):
-            raise ValueError("expected unique AArch64 imm12 shapes in priority order")
+            raise ValueError("expected unique canonical AArch64 partial shapes in priority order")
         partials = shapes[:partial_budget]
     else:
-        partials = aarch64_imm12_shapes(counts, set(words), partial_budget)
+        partials = partial_words(counts, set(words), partial_budget)
     pairs = {}
     for row in plan.get("pairs", []):
         first, second, count = row["first"], row["second"], row["count"]
         if any(type(w) is not int or not 0 <= w < 2**32 for w in (first, second)) or type(count) is not int or count <= 0:
             raise ValueError(f"invalid AArch64 pair: {row!r}")
-        key = (canonicalize_baked_word(first), canonicalize_baked_word(second))
+        key = pair_key(row)
+        mask, canon_first, canon_second = key
+        if (type(mask) is not int or not 0 <= mask <= 3 or
+                ("dynamic_mask" in row and not mask) or
+                (mask and is_branch(canon_first)) or
+                any(mask & (1 << i) and partial_shape(word) != word
+                    for i, word in enumerate((canon_first, canon_second)))):
+            raise ValueError(f"invalid AArch64 partial pair: {row!r}")
         pairs[key] = pairs.get(key, 0) + count
     ranked = sorted(pairs, key=lambda key: (-pairs[key], key))[:pair_budget]
     sequences = {}
@@ -228,16 +215,22 @@ def generate_aarch64(plan, budget, pair_budget, sequence_budget, partial_budget=
 
 
 def render_aarch64_tables(words, partials, pairs, sequences):
-    def scalar_rows(words, dynamic_imm12=False):
+    def scalar_rows(words, dynamic=False):
         for word in sorted(words):
             literal = f"0x{word:08x}u"
-            template = f"{literal}, true" if dynamic_imm12 else literal
+            template = f"{literal}, true" if dynamic else literal
             yield f"    {{{literal}, ScalarHandlers<{template}>}},"
 
-    pair_rows = [
-        f"    {{0x{a:08x}{b:08x}ull, aarch64::BakedFusion<0x{a:08x}u, 0x{b:08x}u>}},"
-        for a, b in sorted(pairs)
-    ]
+    pair_rows = [[] for _ in range(4)]
+    for mask, a, b in sorted(pairs):
+        fusion = "BakedFusion<" if not mask else f"PartialBakedFusion<{mask}, "
+        pair_rows[mask].append(f"    {{0x{a:08x}{b:08x}ull, aarch64::{fusion}0x{a:08x}u, 0x{b:08x}u>}},")
+    names = ("BakedPairs", "BakedFirstDynamic", "BakedSecondDynamic", "BakedBothDynamic")
+    pair_tables = "\n".join(
+        f"constexpr std::array<PairBinding, {len(rows)}> {name} = {{{{\n"
+        + "\n".join(rows) + "\n}};"
+        for name, rows in zip(names, pair_rows, strict=True)
+    )
     word_pool = []
     offset = 0
     sequence_rows = []
@@ -262,9 +255,9 @@ struct ScalarVariants {{
     HandlerFunc normal;
     HandlerFunc omit_nzcv;
 }};
-template <uint32_t Word, bool DynamicImm12 = false>
+template <uint32_t Word, bool DynamicImmediate = false>
 constexpr ScalarVariants ScalarHandlers{{
-    aarch64::BakedBinding<Word, DynamicImm12>(false), aarch64::BakedBinding<Word, DynamicImm12>(true),
+    aarch64::BakedBinding<Word, DynamicImmediate>(false), aarch64::BakedBinding<Word, DynamicImmediate>(true),
 }};
 struct ScalarBinding {{
     uint32_t word;
@@ -273,17 +266,37 @@ struct ScalarBinding {{
 constexpr std::array<ScalarBinding, {len(words)}> BakedExact = {{{{
 {newline.join(scalar_rows(words))}
 }}}};
-constexpr std::array<ScalarBinding, {len(partials)}> BakedImm12 = {{{{
-{newline.join(scalar_rows(partials, dynamic_imm12=True))}
+constexpr std::array<ScalarBinding, {len(partials)}> BakedPartial = {{{{
+{newline.join(scalar_rows(partials, dynamic=True))}
 }}}};
 
 struct PairBinding {{
     uint64_t key;
     aarch64::BakedFusionBinding handlers;
 }};
-constexpr std::array<PairBinding, {len(pairs)}> BakedPairs = {{{{
-{newline.join(pair_rows)}
-}}}};
+{pair_tables}
+
+template <size_t N>
+HandlerFunc FindPair(const std::array<PairBinding, N>& entries, uint32_t a, uint32_t b, uint32_t dead) {{
+    const uint64_t key = (uint64_t{{a}} << 32) | b;
+    const auto pair = std::ranges::lower_bound(entries, key, {{}}, &PairBinding::key);
+    return pair != entries.end() && pair->key == key ? pair->handlers.Select(dead, 2) : nullptr;
+}}
+
+HandlerFunc FindPartialPair(const aarch64::DecodedInstruction& a, const aarch64::DecodedInstruction& b,
+                            uint32_t dead) {{
+    const uint32_t ca = aarch64::detail::CanonicalizeBakedWord(a);
+    const uint32_t cb = aarch64::detail::CanonicalizeBakedWord(b);
+    const auto am = aarch64::PartialImmediateMask(a);
+    const auto bm = aarch64::PartialImmediateMask(b);
+    if (am) {{
+        if (const auto match = FindPair(BakedFirstDynamic, ca & ~am, cb, dead)) return match;
+    }}
+    if (bm) {{
+        if (const auto match = FindPair(BakedSecondDynamic, ca, cb & ~bm, dead)) return match;
+    }}
+    return am && bm ? FindPair(BakedBothDynamic, ca & ~am, cb & ~bm, dead) : nullptr;
+}}
 
 struct SequenceBinding {{
     uint32_t first;
@@ -307,17 +320,23 @@ aarch64::detail::HandlerFunc FindBakedArmHandler(const aarch64::DecodedInstructi
     if (exact != BakedExact.end() && exact->word == word)
         return omit_nzcv ? exact->handlers.omit_nzcv : exact->handlers.normal;
 
-    const uint32_t shape = op.word & ~(0xfffu << 10);
-    const auto partial = std::ranges::lower_bound(BakedImm12, shape, {{}}, &ScalarBinding::word);
-    if (partial != BakedImm12.end() && partial->word == shape)
+    const auto immediate = aarch64::PartialImmediateMask(op);
+    if (!immediate) return nullptr;
+    const uint32_t shape = op.word & ~immediate;
+    const auto partial = std::ranges::lower_bound(BakedPartial, shape, {{}}, &ScalarBinding::word);
+    if (partial != BakedPartial.end() && partial->word == shape)
         return omit_nzcv ? partial->handlers.omit_nzcv : partial->handlers.normal;
     return nullptr;
 }}
 
 aarch64::detail::HandlerFunc FindBakedArmPair(uint32_t a, uint32_t b, uint32_t dead) {{
-    const uint64_t key = (uint64_t{{a}} << 32) | b;
-    const auto pair = std::ranges::lower_bound(BakedPairs, key, {{}}, &PairBinding::key);
-    return pair != BakedPairs.end() && pair->key == key ? pair->handlers.Select(dead, 2) : nullptr;
+    return FindPair(BakedPairs, a, b, dead);
+}}
+
+decltype(aarch64::Profile::resolve_partial_pair) GetBakedArmPartialPairResolver() {{
+    if constexpr (BakedFirstDynamic.empty() && BakedSecondDynamic.empty() && BakedBothDynamic.empty())
+        return nullptr;
+    return FindPartialPair;
 }}
 
 aarch64::detail::HandlerFunc FindBakedArmSequence(const uint32_t* words, unsigned count,

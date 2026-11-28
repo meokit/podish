@@ -572,7 +572,7 @@ endif()
 set(FIBERCPU_AARCH64_OPERAND_PLAN_FILE "" CACHE FILEPATH "AArch64 instruction baking plan override")
 set(FIBERCPU_AARCH64_OPERAND_BUDGET 128 CACHE STRING "Maximum number of baked AArch64 instruction words")
 set(FIBERCPU_AARCH64_SEQUENCE_BUDGET 128 CACHE STRING "Maximum number of baked AArch64 instruction sequences")
-set(FIBERCPU_AARCH64_PARTIAL_BUDGET 32 CACHE STRING "Maximum number of AArch64 dynamic-imm12 shapes")
+set(FIBERCPU_AARCH64_PARTIAL_BUDGET 32 CACHE STRING "Maximum number of AArch64 partial-immediate shapes")
 set(FIBERCPU_AARCH64_PAIR_BUDGET 128 CACHE STRING "Maximum number of baked AArch64 instruction pairs")
 if(FIBERCPU_GUEST_AARCH64 AND FIBERCPU_STATIC_SPECIALIZATION)
     set(_arm_plan "${FIBERCPU_AARCH64_OPERAND_PLAN_FILE}")
@@ -597,8 +597,8 @@ if(FIBERCPU_GUEST_AARCH64 AND FIBERCPU_STATIC_SPECIALIZATION)
         COMMAND "${Python3_EXECUTABLE}" "${_arm_generator}" --guest aarch64 --plan "${_arm_plan}"
             --budget "${FIBERCPU_AARCH64_OPERAND_BUDGET}" --pair-budget "${FIBERCPU_AARCH64_PAIR_BUDGET}"
             --partial-budget "${FIBERCPU_AARCH64_PARTIAL_BUDGET}" --sequence-budget "${FIBERCPU_AARCH64_SEQUENCE_BUDGET}" --output "${_arm_generated}"
-        DEPENDS "${_arm_generator}" "${_arm_plan}"
-            "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/aarch64_baked_words.py" VERBATIM)
+        DEPENDS "${_arm_generator}" "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/aarch64_baked_words.py"
+            "${CMAKE_CURRENT_SOURCE_DIR}/../scripts/aarch64_baking.py" "${_arm_plan}" VERBATIM)
     list(APPEND SOURCES "${_arm_generated}")
     add_compile_definitions(FIBERCPU_AARCH64_BAKED=1)
 endif()

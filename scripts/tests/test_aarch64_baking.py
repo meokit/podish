@@ -5,6 +5,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from aarch64_baked_words import canonicalize_baked_word
+from aarch64_baking import partial_pairs, partial_shape
 from baking_rank_cost import arm_symbol, binding
 from baking_replay import arm_layouts
 from gen_operand_specializations import generate_aarch64
@@ -58,6 +59,14 @@ class ShortSequenceTests(unittest.TestCase):
         self.assertEqual(duplicate["sequences"], rows)
 
 
+    def test_32_word_runs_supply_inner_windows_within_the_fusion_limit(self):
+        seq = list(range(32))
+        profile = dict(version=2, sequences=[dict(words=seq, count=3)])
+        rows = rank_arm_profiles([profile])["sequences"]
+        self.assertIn(tuple(seq[-4:]), [row["words"] for row in rows])
+        self.assertTrue(all(len(row["words"]) <= 24 for row in rows))
+
+
 class Imm12TrainingTests(unittest.TestCase):
     def test_partial_shapes_survive_exact_budget_cut(self):
         add, load = 0x91000129, 0xf9400020
@@ -82,6 +91,44 @@ class Imm12TrainingTests(unittest.TestCase):
             with self.subTest(shapes=shapes), self.assertRaises(ValueError):
                 generate_aarch64({"version": 1, "architecture": "aarch64", "entries": [],
                                   "partials": shapes}, 0, 0, 0)
+
+
+class PartialImmediateTests(unittest.TestCase):
+    def test_partial_keys_keep_width_registers_addressing_mode_and_shift(self):
+        for word, key in (
+            (0xa9bf0460, 0xa9800460),  # stp x0, x1, [x3, #-16]!
+            (0xf85f8460, 0xf8400460),  # ldr x0, [x3], #-8
+            (0xf2b579a0, 0xf2a00000),  # movk x0, #0xabcd, lsl #16
+            (0x92401c62, 0x92000062),  # and x2, x3, #0xff
+        ):
+            with self.subTest(word=hex(word)):
+                self.assertEqual(partial_shape(word), key)
+                self.assertEqual(partial_shape(key), key)
+        self.assertIsNone(partial_shape(0x9240fc62))  # reserved bitmask
+        self.assertIsNone(partial_shape(0xf85f8060))  # unscaled offset, no writeback
+
+    def test_partial_pairs_require_distinct_encodings_and_allow_transfer_starts(self):
+        ldr, cbz = 0xf9400020, 0xb4000000
+        pairs = [(ldr + (1 << 10), cbz + (2 << 5)),
+                 (ldr + (3 << 10), cbz + (5 << 5))]
+        profile = dict(version=2, entries=[dict(word=w, count=1) for row in pairs for w in row],
+                       blocks=[dict(words=row, count=3) for row in pairs])
+        ranked = partial_pairs([profile], ["test"], 9)
+        self.assertEqual(len(ranked), 1)
+        self.assertEqual(ranked[0], dict(first=ldr, second=cbz, dynamic_mask=1, count=100_000_000))
+
+    def test_pair_plan_distinguishes_dynamic_members_and_keeps_exact_rows(self):
+        adr, add = 0x90000000, 0x91000000
+        partial = dict(first=adr, second=add, dynamic_mask=2, count=2)
+        exact = dict(first=adr, second=add, count=1)
+        plan = dict(version=1, architecture="aarch64", entries=[], pairs=[exact, partial])
+        generated = generate_aarch64(plan, 0, 2, 0)
+        self.assertIn("BakedFusion<0x90000000u, 0x91000000u>", generated)
+        self.assertIn("PartialBakedFusion<2, 0x90000000u, 0x91000000u>", generated)
+        for bad in (dict(partial, second=add + (1 << 10)), dict(partial, dynamic_mask=4),
+                    dict(partial, first=0x14000000), dict(partial, dynamic_mask=True)):
+            with self.subTest(bad=bad), self.assertRaises(ValueError):
+                generate_aarch64(dict(plan, pairs=[bad]), 0, 2, 0)
 
 
 class BakedLookupTests(unittest.TestCase):

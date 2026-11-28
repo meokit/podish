@@ -4,18 +4,24 @@ from collections import Counter, defaultdict
 from math import fsum
 
 from aarch64_baked_words import canonicalize_baked_word
+from aarch64_baking import pair_key, pair_shapes, partial_shape
 from nested_baking_candidates import modrm_key
 
 
 def arm_layouts(pools, ids, cases, profiles):
-    exact = {row["word"]: i for row, i in zip(pools["entries"], ids["entries"], strict=True)}
+    exact = {canonicalize_baked_word(row["word"]): i for row, i in zip(pools["entries"], ids["entries"], strict=True)}
     partial = dict(zip(pools["partials"], ids["partials"], strict=True))
     # The native resolver tries the longest sequence at each dispatch, then the pair.
     trie = {}
+    masked_pairs = {}
     for kind in ("pairs", "sequences"):
         for row, index in zip(pools[kind], ids[kind], strict=True):
+            if kind == "pairs" and row.get("dynamic_mask"):
+                masked_pairs[pair_key(row)] = index
+                continue
             node = trie
-            words = row["words"] if kind == "sequences" else (row["first"], row["second"])
+            words = (tuple(map(canonicalize_baked_word, row["words"])) if kind == "sequences"
+                     else (canonicalize_baked_word(row["first"]), canonicalize_baked_word(row["second"])))
             for word in words:
                 node = node.setdefault(word, {})
             node[None] = index
@@ -26,7 +32,7 @@ def arm_layouts(pools, ids, cases, profiles):
             raise ValueError(f"{case['id']}: ordered AArch64 blocks required; recapture with profile v2")
         for block in profile["blocks"]:
             words = tuple(map(canonicalize_baked_word, block["words"]))
-            if not 0 < len(words) <= 24 or block["count"] <= 0:
+            if not 0 < len(words) <= 32 or block["count"] <= 0:
                 raise ValueError("invalid AArch64 weighted block")
             positions = []
             for start, word in enumerate(words):
@@ -39,9 +45,13 @@ def arm_layouts(pools, ids, cases, profiles):
                     if None in node:
                         matches.append(node[None])
                 matches.reverse()
+                if masked_pairs and start + 1 < len(words):
+                    for key in pair_shapes(word, words[start + 1]):
+                        if key in masked_pairs:
+                            matches.append(masked_pairs[key])
                 if word in exact:
                     matches.append(exact[word])
-                shape = word & ~(0xfff << 10)
+                shape = partial_shape(word)
                 if shape in partial:
                     matches.append(partial[shape])
                 positions.append(tuple(matches))
