@@ -338,20 +338,10 @@ constexpr bool HasExtraOperandSlot(uint8_t metadata, uint8_t prefixes, uint32_t 
 
 struct alignas(16) DecodedOp {
     HandlerFunc handler;
-#if FIBERCPU_WASM_HOT_DISPATCH
-    uint32_t hot_dispatch_id;
-#elif INTPTR_MAX == INT32_MAX
+#if INTPTR_MAX == INT32_MAX
     uint32_t handler_padding;
 #endif
     uint64_t payload;
-
-#if FIBERCPU_WASM_HOT_DISPATCH
-    void SetDispatchHandler(HandlerFunc target);
-    HandlerFunc OriginalHandler() const;
-#else
-    FORCE_INLINE void SetDispatchHandler(HandlerFunc target) { handler = target; }
-    FORCE_INLINE HandlerFunc OriginalHandler() const { return handler; }
-#endif
 
     // The fields shared by handlers have fixed offsets in all operand forms.
     // The primary value is an immediate, memory displacement or absolute

@@ -1098,17 +1098,15 @@ void BasicBlock::WriteOps(BlockSlotLayout layout, std::span<const DecodedInstruc
         } else {
             slot.payload = PackOperand(op);
         }
-        HandlerFunc target = op.handler;
         const auto index = binding_indices.empty() ? ScalarBindingIndex::Unknown : binding_indices[i];
         const auto binding = BindScalarHandler(op, index);
-        if (binding.handler) target = binding.handler;
-        slot.SetDispatchHandler(target);
+        slot.handler = binding.handler ? binding.handler : op.handler;
         const bool branch_link = HasBranchLinkSlot(op.meta.all);
         const bool memory_immediate = compact_imm::NeedsSeparateSlot(op);
         if (branch_link || memory_immediate) {
             data_mask |= bit;
             auto& data = FirstOp()[physical_index++];
-            data.SetDispatchHandler(nullptr);
+            data.handler = nullptr;
             if (branch_link) {
                 slot.payload |= uint64_t{DecodedOp::BranchSuffixAfter(inst_count(), i)}
                                 << DecodedOp::kBranchSuffixShift;
@@ -1121,7 +1119,7 @@ void BasicBlock::WriteOps(BlockSlotLayout layout, std::span<const DecodedInstruc
     assert(physical_index == sentinel_slot_index);
     if (HasDataSlots())
         *reinterpret_cast<uint64_t*>(reinterpret_cast<std::byte*>(this) + DataSlotMaskOffset()) = data_mask;
-    Sentinel()->SetDispatchHandler(ops.back().handler);
+    Sentinel()->handler = ops.back().handler;
     entry = FirstOp()->handler;
     SetFallthroughLink(invalid);
 }
@@ -1129,7 +1127,7 @@ void BasicBlock::WriteOps(BlockSlotLayout layout, std::span<const DecodedInstruc
 DecodedInstruction BasicBlock::ReadOp(size_t slot) const {
     const auto& op = *LogicalOp(slot);
     DecodedInstruction result{};
-    result.handler = op.OriginalHandler();
+    result.handler = op.handler;
     result.next_eip = GetNextEip(slot);
     if (slot == inst_count()) {
         SetExtKind(&result, ExtKind::Link);

@@ -46,14 +46,14 @@ FORCE_INLINE void RecordBlockHandlersUntil(EmuState* state, const DecodedOp* sto
     if (!state->current_block_head) return;
     for (const DecodedOp* current = state->current_block_head; current != stop_op;
          current = state->last_block->NextOp(current)) {
-        state->handler_exec_counts[reinterpret_cast<uintptr_t>(current->OriginalHandler())]++;
+        state->handler_exec_counts[reinterpret_cast<uintptr_t>(current->handler)]++;
     }
 }
 
 FORCE_INLINE void RecordBlockHandlersThrough(EmuState* state, const DecodedOp* stop_op) {
     if (!state->current_block_head) return;
     for (const DecodedOp* current = state->current_block_head;; current = state->last_block->NextOp(current)) {
-        state->handler_exec_counts[reinterpret_cast<uintptr_t>(current->OriginalHandler())]++;
+        state->handler_exec_counts[reinterpret_cast<uintptr_t>(current->handler)]++;
         if (current == stop_op) break;
     }
 }
@@ -299,8 +299,8 @@ FORCE_INLINE DispatchSequenceHistory BeginDispatchSequence(EmuState* state, Deco
 FORCE_INLINE void RecordDispatchSequence(EmuState* state, DecodedOp* op, DecodedOp* next_op,
                                          const DispatchSequenceHistory& history) {
     if (next_op == state->last_block->Sentinel()) return;
-    const auto current = reinterpret_cast<uintptr_t>(op->OriginalHandler());
-    const auto next = reinterpret_cast<uintptr_t>(next_op->OriginalHandler());
+    const auto current = reinterpret_cast<uintptr_t>(op->handler);
+    const auto next = reinterpret_cast<uintptr_t>(next_op->handler);
     state->sequence_counts[{current, next}]++;
     if (history.length >= 1) state->ngram_counts[{{history.handlers[1], current, next, 0}}]++;
     if (history.length >= 2) state->ngram_counts[{{history.handlers[0], history.handlers[1], current, next}}]++;
@@ -311,18 +311,6 @@ FORCE_INLINE void RecordDispatchSequence(EmuState* state, DecodedOp* op, Decoded
 #endif
 
 template <LogicFunc Target, OperandSpec::Executable OperandPolicy>
-FORCE_INLINE LogicFlow RunScalarLogic(EmuState* RESTRICT state, DecodedOp* RESTRICT op, mem::MicroTlbAbiWord& utlb_tags,
-                                      mem::MicroTlbAbiWord& utlb_addend, uint32_t& branch, uint64_t& flags_cache,
-                                      GprCache gpr) {
-    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
-    OperandPolicy::Assume(op);
-    auto flow = Target(state, op, &utlb, OperandPolicy::Immediate(op), OperandPolicy::ModRM(op), &branch, flags_cache,
-                       OperandGprCache<OperandPolicy>(gpr));
-    mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
-    return flow;
-}
-
-template <LogicFunc Target, OperandSpec::Executable OperandPolicy>
 [[gnu::visibility("hidden")]]
 ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState* RESTRICT state, DecodedOp* RESTRICT op, int64_t instr_limit,
                                            mem::MicroTlbAbiWord utlb_tags, mem::MicroTlbAbiWord utlb_addend,
@@ -331,8 +319,11 @@ ATTR_PRESERVE_NONE int64_t DispatchWrapper(EmuState* RESTRICT state, DecodedOp* 
 #ifdef FIBERCPU_ENABLE_SEQUENCE_PROFILE
     const auto history = BeginDispatchSequence(state, op);
 #endif
-    const auto flow = RunScalarLogic<Target, OperandPolicy>(state, op, utlb_tags, utlb_addend, branch, flags_cache,
-                                                            FIBERCPU_GPR_CACHE);
+    mem::MicroTLB utlb = mem::DecodeMicroTlbAbi(utlb_tags, utlb_addend);
+    OperandPolicy::Assume(op);
+    const auto flow = Target(state, op, &utlb, OperandPolicy::Immediate(op), OperandPolicy::ModRM(op), &branch,
+                             flags_cache, OperandGprCache<OperandPolicy>(FIBERCPU_GPR_CACHE));
+    mem::EncodeMicroTlbAbi(utlb, utlb_tags, utlb_addend);
 
     switch (flow) {
         case LogicFlow::Continue:

@@ -74,8 +74,6 @@
         <NativeBuildInput Include="$(EmscriptenToolchainFile)" Condition="'$(IsBrowserWasm)' == 'true'" />
         <NativeBuildInput Include="$(MSBuildThisFileDirectory)../scripts/gen_operand_specializations.py" />
         <NativeBuildInput Include="$(MSBuildThisFileDirectory)../scripts/gen_instruction_catalog.py" />
-        <NativeBuildInput Include="$(MSBuildThisFileDirectory)../scripts/gen_wasm_hot_dispatch.py" Condition="'$(IsBrowserWasm)' == 'true' And '$(WasmHotDispatchHandlers)' != '0'" />
-        <NativeBuildInput Include="$(WasmHotDispatchPlan)" Condition="'$(IsBrowserWasm)' == 'true' And '$(WasmHotDispatchPlan)' != ''" />
         <NativeBuildInput Include="$(MSBuildThisFileDirectory)../scripts/scalar_modrm.py" />
         <NativeBuildInput Include="$(MSBuildThisFileDirectory)../scripts/check_native_text_budget.py" />
         <NativeBuildInput Include="$(MSBuildThisFileDirectory)../scripts/embed_llvm_bitcode.py" />
@@ -119,7 +117,7 @@
                Text="Unknown FibercpuBakingPreset '$(NativeBakingPreset)'. Choose custom, 1.5m, 3m or 10m." />
         <MakeDir Directories="$(SuperOpcodeGenerationDir)" />
         <WriteLinesToFile File="$(SuperOpcodeGenerationDir)/native-options.txt"
-            Lines="i386=$(FiberGuestI386);aarch64=$(FiberGuestAArch64);aarch64_plan=$(AArch64OperandPlanFile);aarch64_pin=$(AArch64PinRegister);aarch64_pins=$(AArch64PinRegisters);baking_preset=$(NativeBakingPreset);fusion=$(FusionStrategy);budget=$(OperandBudget);pin=$(GprPin);pins=$(GprPinRegisters);writeback=$(GprWriteBack);coverage=$(PinSpecialization);plan=$(OperandPlanFile);static=$(StaticInstructionSpecialization);dynamic=$(DynamicInstructionSpecialization);dynamic_plan=$(DynamicOperandPlanFile);llvm=$(LlvmBlockJit);llvm_dir=$(LlvmConfigDir);native_clang=$(NativeClangDir);super=$(EnableSuperOpcodes);source=$(SuperOpcodeSource);handler=$(EnableHandlerProfile);block=$(EnableBlockProfile);sequence=$(EnableSequenceProfile);wasm_hot_dispatch=$(WasmHotDispatchHandlers);wasm_hot_plan=$(WasmHotDispatchPlan)"
+            Lines="i386=$(FiberGuestI386);aarch64=$(FiberGuestAArch64);aarch64_plan=$(AArch64OperandPlanFile);aarch64_pin=$(AArch64PinRegister);aarch64_pins=$(AArch64PinRegisters);baking_preset=$(NativeBakingPreset);fusion=$(FusionStrategy);budget=$(OperandBudget);pin=$(GprPin);pins=$(GprPinRegisters);writeback=$(GprWriteBack);coverage=$(PinSpecialization);plan=$(OperandPlanFile);static=$(StaticInstructionSpecialization);dynamic=$(DynamicInstructionSpecialization);dynamic_plan=$(DynamicOperandPlanFile);llvm=$(LlvmBlockJit);llvm_dir=$(LlvmConfigDir);native_clang=$(NativeClangDir);super=$(EnableSuperOpcodes);source=$(SuperOpcodeSource);handler=$(EnableHandlerProfile);block=$(EnableBlockProfile);sequence=$(EnableSequenceProfile)"
             Overwrite="true" WriteOnlyWhenDifferent="true" />
     </Target>
 
@@ -164,7 +162,6 @@
             <CMakeArgs>$(CMakeArgs) -DFIBERCPU_GENERATED_SUPEROPCODES_FILE=&quot;$(SuperOpcodeSource)&quot;</CMakeArgs>
             <CMakeArgs>$(CMakeArgs) -DFIBERCPU_DYNAMIC_OPERAND_PLAN_FILE=&quot;$(DynamicOperandPlanFile)&quot;</CMakeArgs>
             <CMakeArgs>$(CMakeArgs) -DFIBERCPU_STATIC_SPECIALIZATION=$(StaticInstructionSpecialization) -DFIBERCPU_ENABLE_DYNAMIC_SPECIALIZATION=$(DynamicInstructionSpecialization) -DFIBERCPU_ENABLE_LLVM_JIT=$(LlvmBlockJit)</CMakeArgs>
-            <CMakeArgs Condition="'$(IsBrowserWasm)' == 'true'">$(CMakeArgs) -DFIBERCPU_WASM_HOT_DISPATCH_HANDLERS=$(WasmHotDispatchHandlers) -DFIBERCPU_WASM_HOT_DISPATCH_PLAN=&quot;$(WasmHotDispatchPlan)&quot;</CMakeArgs>
             <CMakeArgs Condition="'$(LlvmConfigDir)' != ''">$(CMakeArgs) -DLLVM_DIR=&quot;$(LlvmConfigDir)&quot;</CMakeArgs>
             <CMakeGeneratorArgs Condition="'$(IsBrowserWasm)' == 'true'">-G Ninja</CMakeGeneratorArgs>
             <CMakeArgs Condition="'$(IsBrowserWasm)' == 'true'">$(CMakeArgs) -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY -DCMAKE_TOOLCHAIN_FILE=&quot;$(EmscriptenToolchainFile)&quot; -DCMAKE_CROSSCOMPILING_EMULATOR=&quot;$(BrowserWasmNodeExecutable)&quot;</CMakeArgs>
