@@ -265,12 +265,10 @@ std::byte* WriteDecodedSlot(std::byte* bytes, const DecodedOpBinding& binding, u
                                    IsConditionalBranch(op.kind) ? block_inst_count - binding.ordinal - 1 : 0),
     };
     if (slot.Has(HasDataSlot)) {
-        const auto primary = HasBlockTarget(op.kind)           ? op.target_pc
+        const auto primary = HasBranchTarget(op.kind)          ? op.target_pc
                              : op.kind == Kind::BranchRegister ? block_pc + uint64_t{slot.GuestIndex()} * 4
                                                                : op.immediate;
-        const auto secondary = slot.Has(HasBranchLink)     ? BlockLink(&BasicBlock::Invalid)
-                               : op.kind == Kind::Bitfield ? op.mask
-                                                           : 0;
+        const auto secondary = slot.Has(HasBranchLink) ? BlockLink(&BasicBlock::Invalid) : 0;
         new (bytes) DecodedOpWithDataSlot{slot, primary, secondary};
         return bytes + sizeof(DecodedOpWithDataSlot);
     }

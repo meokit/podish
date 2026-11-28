@@ -50,6 +50,12 @@ constexpr uint32_t PartialImmediateMask(const DecodedInstruction& op) {
 
 namespace detail {
 
+constexpr bool UsesDynamicSlotWidth(const DecodedInstruction& op, bool dynamic_immediate) {
+    // Clearing the immediate for a partial key also removes the information
+    // that determines whether the concrete 64-bit mask fits in the head slot.
+    return dynamic_immediate && op.kind == Kind::LogicalImmediate && op.width == 64;
+}
+
 template <uint32_t Word, bool dynamic_immediate>
 A64_FORCE_INLINE decltype(auto) BakedOperands(const DecodedOp& slot) {
     static_assert(CanBake(Word));
@@ -57,7 +63,10 @@ A64_FORCE_INLINE decltype(auto) BakedOperands(const DecodedOp& slot) {
     static_assert(!dynamic_immediate || PartialImmediateMask(shape));
     if constexpr (dynamic_immediate) {
         auto operands = shape;
-        operands.immediate = GetOpOperands<shape.kind>(slot).immediate;
+        if constexpr (UsesDynamicSlotWidth(shape, dynamic_immediate))
+            operands.immediate = slot.Has(HasDataSlot) ? GetExtraOperands(slot).primary : GetInlineLogical64(slot);
+        else
+            operands.immediate = GetOpOperands<shape.kind, shape.width>(slot).immediate;
         return operands;
     } else {
         return (shape);
@@ -78,11 +87,7 @@ A64_FORCE_INLINE StepResult ExecuteBakedOps(State& state, const DecodedOp*& memb
         }
     }
     const auto& operands = BakedOperands<Word, (dynamic_mask & 1) != 0>(*member);
-    uint64_t target = 0;
-    if constexpr (op.kind == Kind::Address)
-        target = GetAddressTarget<op.operation>(*member);
-    else if constexpr (HasBlockTarget(op.kind))
-        target = GetExtraOperands(*member).primary;
+    const auto target = GetBoundTarget<op.kind>(*member);
     if constexpr (IsBakedTransfer(op.kind)) {
         if (!ProbeLoadStore<op.kind, op.width, op.operation, op.mode, op.shift, Field(Word, 26, 1)>(
                 state, operands, target, state.data_tlb A64_UTLB_ARGS A64_HANDLER_PIN_ARGS)) [[unlikely]]
@@ -100,7 +105,10 @@ A64_FORCE_INLINE StepResult ExecuteBakedOps(State& state, const DecodedOp*& memb
         return {};
     } else {
         static_assert(CanFollowInBakedSequence(Word));
-        member = member->NextOp<HasExtraOperandSlot(op)>();
+        if constexpr (UsesDynamicSlotWidth(op, (dynamic_mask & 1) != 0))
+            member = member->NextOp();
+        else
+            member = member->NextOp<HasExtraOperandSlot(op)>();
         return ExecuteBakedOps<(dead >> 1), (dynamic_mask >> 1), Rest...>(state, member A64_UTLB_ARGS,
                                                                           flags_cache A64_HANDLER_PIN_ARGS);
     }
@@ -113,14 +121,16 @@ A64_FORCE_INLINE StepResult BakedLogic(State& state, const DecodedOp*& current A
                                                          flags_cache A64_HANDLER_PIN_ARGS);
 }
 
-template <uint32_t... Words>
+template <uint32_t dynamic_mask, uint32_t... Words>
 constexpr DispatchPolicy BakedPolicy() {
     constexpr auto terminal = std::array{DecodeFields(Words)...}.back();
+    constexpr bool dynamic_width = UsesDynamicSlotWidth(terminal, (dynamic_mask >> (sizeof...(Words) - 1)) & 1);
     return {
-        .wide = HasExtraOperandSlot(terminal),
+        .wide = !dynamic_width && HasExtraOperandSlot(terminal),
         .may_replay = (IsBakedTransfer(DecodeFields(Words).kind) || ...),
         .may_exit = false,
         .branch = BranchPolicy(terminal.kind),
+        .dynamic_width = dynamic_width,
     };
 }
 
@@ -129,7 +139,8 @@ constexpr DispatchPolicy BakedPolicy() {
 template <uint32_t Word, bool dynamic_immediate = false>
 constexpr detail::HandlerFunc GetBakedHandler() {
     if constexpr (CanBake(Word))
-        return &detail::DispatchWrapper<detail::BakedLogic<0, dynamic_immediate, Word>, detail::BakedPolicy<Word>()>;
+        return &detail::DispatchWrapper<detail::BakedLogic<0, dynamic_immediate, Word>,
+                                        detail::BakedPolicy<dynamic_immediate, Word>()>;
     return nullptr;
 }
 
@@ -139,7 +150,7 @@ constexpr detail::HandlerFunc BakedBinding(bool omit_nzcv) {
     if (omit_nzcv) {
         if constexpr (detail::WritesIntegerNZCV(op))
             return &detail::DispatchWrapper<detail::BakedLogic<1, dynamic_immediate, Word>,
-                                            detail::BakedPolicy<Word>()>;
+                                            detail::BakedPolicy<dynamic_immediate, Word>()>;
         return nullptr;
     }
     return GetBakedHandler<Word, dynamic_immediate>();
@@ -172,7 +183,7 @@ struct BakedFusionBinding {
 template <uint32_t dynamic_mask, uint32_t... Words>
 constexpr BakedFusionBinding GetBakedFusion() {
     constexpr unsigned length = sizeof...(Words);
-    static_assert(length >= 2 && length <= 24);
+    static_assert(length >= 2 && length <= detail::MaxBakedFusionLength);
     static_assert((dynamic_mask >> length) == 0);
     BakedFusionBinding binding{};
     if constexpr (CanBakeSequence<Words...>()) {
@@ -180,17 +191,17 @@ constexpr BakedFusionBinding GetBakedFusion() {
         // the only one whose eligibility can depend on the rest of the block.
         constexpr auto live_out = DeadSequenceFlags<Words...>(detail::FlagMask);
         constexpr auto dead_out = DeadSequenceFlags<Words...>(0);
-        binding.normal =
-            &detail::DispatchWrapper<detail::BakedLogic<0, dynamic_mask, Words...>, detail::BakedPolicy<Words...>()>;
+        constexpr auto policy = detail::BakedPolicy<dynamic_mask, Words...>();
+        binding.normal = &detail::DispatchWrapper<detail::BakedLogic<0, dynamic_mask, Words...>, policy>;
         if constexpr (live_out != 0) {
             binding.live_out = live_out;
-            binding.omit_live_out = &detail::DispatchWrapper<detail::BakedLogic<live_out, dynamic_mask, Words...>,
-                                                             detail::BakedPolicy<Words...>()>;
+            binding.omit_live_out =
+                &detail::DispatchWrapper<detail::BakedLogic<live_out, dynamic_mask, Words...>, policy>;
         }
         if constexpr (dead_out != 0 && dead_out != live_out) {
             binding.dead_out = dead_out;
-            binding.omit_dead_out = &detail::DispatchWrapper<detail::BakedLogic<dead_out, dynamic_mask, Words...>,
-                                                             detail::BakedPolicy<Words...>()>;
+            binding.omit_dead_out =
+                &detail::DispatchWrapper<detail::BakedLogic<dead_out, dynamic_mask, Words...>, policy>;
         }
     }
     return binding;

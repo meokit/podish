@@ -7,18 +7,36 @@ namespace fiberish::aarch64::detail {
 
 constexpr uint32_t NopWord = 0xd503201f;
 
-constexpr bool HasExtraOperandSlot(Kind kind, int operation = -1) {
-    if (kind == Kind::Address) return operation != 1;
-    return HasBlockTarget(kind) || kind == Kind::BranchRegister || kind == Kind::LogicalImmediate ||
-           kind == Kind::Bitfield;
+constexpr bool HasBranchTarget(Kind kind) { return kind == Kind::BranchImmediate || IsConditionalBranch(kind); }
+
+constexpr unsigned LogicalImmediateShift = 13;
+constexpr unsigned LogicalImmediateBits = DecodedOp::SpanShift - LogicalImmediateShift;
+
+constexpr bool UsesInlineLogical64(const DecodedInstruction& op) {
+    return op.kind == Kind::LogicalImmediate && op.width == 64 &&
+           SignExtend(op.immediate & Ones(LogicalImmediateBits), LogicalImmediateBits) == op.immediate;
 }
 
-constexpr bool HasExtraOperandSlot(const DecodedInstruction& op) { return HasExtraOperandSlot(op.kind, op.operation); }
+constexpr bool HasExtraOperandSlot(Kind kind) { return HasBranchTarget(kind) || kind == Kind::BranchRegister; }
 
-// ADRP adds a signed 21-bit page offset to a 27-bit PC page number.
-// Its result can be negative or above the end of the guest address space.
-constexpr unsigned AdrpPageBits = 29;
-constexpr unsigned AddressPageShift = 6;
+constexpr bool HasExtraOperandSlot(const DecodedInstruction& op) {
+    return HasExtraOperandSlot(op.kind) ||
+           (op.kind == Kind::LogicalImmediate && op.width == 64 && !UsesInlineLogical64(op));
+}
+
+// A signed 41-bit byte target covers VA39 plus the largest ADRP displacement.
+// Literal loads can store the target in words because their addresses are aligned.
+constexpr unsigned AddressTargetBits = 41;
+constexpr unsigned AddressTargetShift = 6;
+constexpr unsigned LiteralTargetBits = 39;
+constexpr unsigned LiteralTargetShift = 10;
+constexpr unsigned BitfieldShiftsOffset = 25;
+constexpr unsigned BitfieldShiftsBits = 18;
+static_assert(mem::ArmTaskSize == (uint64_t{1} << (AddressTargetBits - 2)));
+static_assert(AddressTargetBits + AddressTargetShift <= DecodedOp::SpanShift);
+static_assert(LiteralTargetBits + LiteralTargetShift <= DecodedOp::SpanShift);
+static_assert(BitfieldShiftsOffset + BitfieldShiftsBits <= DecodedOp::SpanShift);
+static_assert(LogicalImmediateBits == 38);
 
 inline uint64_t PackOpOperands(const DecodedInstruction& op) {
     if (op.kind == Kind::Syscall || op.kind == Kind::Breakpoint) return op.immediate;
@@ -29,8 +47,23 @@ inline uint64_t PackOpOperands(const DecodedInstruction& op) {
                (uint64_t{op.width == 64} << 36);
 
     if (op.kind == Kind::Address) {
-        const auto page = (op.target_pc >> 12) & Ones(AdrpPageBits);
-        return op.rd | (uint64_t{op.operation} << 5) | (op.operation ? page << AddressPageShift : 0);
+        const auto target = op.target_pc & Ones(AddressTargetBits);
+        return op.rd | (uint64_t{op.operation} << 5) | (target << AddressTargetShift);
+    }
+    if (op.kind == Kind::LoadLiteral) {
+        const auto target = (op.target_pc >> 2) & Ones(LiteralTargetBits);
+        return op.rd | (uint64_t(std::countr_zero(unsigned(op.width) / 32)) << 5) | (uint64_t{op.operation - 1u} << 7) |
+               (uint64_t{Field(op.word, 26, 1)} << 9) | (target << LiteralTargetShift);
+    }
+    if (op.kind == Kind::LogicalImmediate) {
+        return op.rd | (uint64_t{op.rn} << 5) | (uint64_t{op.operation} << 10) | (uint64_t{op.width == 64} << 12) |
+               ((op.immediate & Ones(LogicalImmediateBits)) << LogicalImmediateShift);
+    }
+    if (op.kind == Kind::Bitfield) {
+        const auto shifts = PackBitfieldShifts(op.width, op.shift, op.rm);
+        return op.rd | (uint64_t{op.rn} << 5) | (uint64_t{op.shift} << 10) | (uint64_t{op.rm} << 16) |
+               (uint64_t{op.operation} << 22) | (uint64_t{op.width == 64} << 24) |
+               (uint64_t{shifts} << BitfieldShiftsOffset);
     }
     if (op.kind == Kind::MoveWide) {
         return op.rd | ((op.immediate >> op.shift) << 5) | (uint64_t{op.shift / 16u} << 21) |
@@ -50,11 +83,9 @@ inline uint64_t PackOpOperands(const DecodedInstruction& op) {
     }
 
     const auto aux = op.kind == Kind::Multiply || op.kind == Kind::LoadStoreExclusive ? op.ra : op.shift;
-    const bool transfer = op.kind >= Kind::LoadStoreRegister && op.kind <= Kind::LoadLiteral;
-    // Bitfield decoding reuses rm for the mask endpoint, which can be 0..63.
-    const auto mode = op.kind == Kind::Bitfield ? op.rm >> 5 : op.mode;
+    const bool transfer = op.kind == Kind::LoadStoreRegister;
     const uint32_t packed = op.rd | (op.rn << 5) | ((op.rm & 31) << 10) | (aux << 15) | (op.operation << 21) |
-                            (transfer ? vector << 25 : 0) | (mode << 26) | (uint32_t(width) << 29);
+                            (transfer ? vector << 25 : 0) | (op.mode << 26) | (uint32_t(width) << 29);
     if (op.kind == Kind::LoadStoreExclusive || op.kind == Kind::LoadStoreAtomic)
         return packed | (uint64_t{Field(op.word, 15, 1)} << 32) | (uint64_t{Field(op.word, 22, 2)} << 33);
     return packed;
@@ -66,25 +97,56 @@ inline uint64_t PackOpOperands(const DecodedInstruction& op) {
 #define A64_OPERANDS_INLINE inline __attribute__((always_inline))
 #endif
 
-template <int operation = -1>
-A64_OPERANDS_INLINE uint64_t GetAddressTarget(const DecodedOp& slot) {
-    if constexpr (operation == 0) return GetExtraOperands(slot).primary;
-    const auto bits = slot.Operands();
-    if constexpr (operation < 0) {
-        if (!Field(bits, 5, 1)) return GetExtraOperands(slot).primary;
+template <Kind kind>
+A64_OPERANDS_INLINE uint64_t GetBoundTarget(const DecodedOp& slot) {
+    if constexpr (kind == Kind::Address) {
+        return SignExtend((slot.payload >> AddressTargetShift) & Ones(AddressTargetBits), AddressTargetBits);
+    } else if constexpr (kind == Kind::LoadLiteral) {
+        return SignExtend((slot.payload >> LiteralTargetShift) & Ones(LiteralTargetBits), LiteralTargetBits) << 2;
+    } else if constexpr (HasBranchTarget(kind)) {
+        return GetExtraOperands(slot).primary;
     }
-    return SignExtend(bits >> AddressPageShift, AdrpPageBits) << 12;
+    return 0;
 }
 
-template <Kind kind, int operation = -1>
+A64_OPERANDS_INLINE uint64_t GetInlineLogical64(const DecodedOp& slot) {
+    return SignExtend(slot.Operands() >> LogicalImmediateShift, LogicalImmediateBits);
+}
+
+template <Kind kind, unsigned width = 0, bool inline_logical64 = false>
 A64_OPERANDS_INLINE DecodedInstruction GetOpOperands(const DecodedOp& slot) {
     const auto bits = slot.Operands();
     DecodedInstruction op;
     op.kind = kind;
     if constexpr (kind == Kind::Address) {
         op.rd = Field(bits, 0, 5);
-        op.operation = operation < 0 ? Field(bits, 5, 1) : operation;
-        op.target_pc = GetAddressTarget<operation>(slot);
+        op.operation = Field(bits, 5, 1);
+        op.target_pc = GetBoundTarget<kind>(slot);
+    } else if constexpr (kind == Kind::LoadLiteral) {
+        op.rd = Field(bits, 0, 5);
+        op.width = 32 << Field(bits, 5, 2);
+        op.operation = Field(bits, 7, 2) + 1;
+        op.word = Field(bits, 9, 1) << 26;
+        op.target_pc = GetBoundTarget<kind>(slot);
+    } else if constexpr (kind == Kind::LogicalImmediate) {
+        op.rd = Field(bits, 0, 5);
+        op.rn = Field(bits, 5, 5);
+        op.operation = Field(bits, 10, 2);
+        op.width = width ? width : (Field(bits, 12, 1) ? 64 : 32);
+        const bool wide = width == 0 ? slot.Has(HasDataSlot) : width == 64 && !inline_logical64;
+        if (wide)
+            op.immediate = GetExtraOperands(slot).primary;
+        else
+            op.immediate = op.width == 32 ? uint32_t(slot.payload >> LogicalImmediateShift) : GetInlineLogical64(slot);
+    } else if constexpr (kind == Kind::Bitfield) {
+        op.rd = Field(bits, 0, 5);
+        op.rn = Field(bits, 5, 5);
+        op.shift = Field(bits, 10, 6);
+        op.rm = Field(bits, 16, 6);
+        op.operation = Field(bits, 22, 2);
+        op.width = Field(bits, 24, 1) ? 64 : 32;
+        // Threaded bitfields use shift counts in place of the expanded mask.
+        op.immediate = (bits >> BitfieldShiftsOffset) & Ones(BitfieldShiftsBits);
     } else if constexpr (kind == Kind::MoveWide) {
         op.rd = Field(bits, 0, 5);
         op.shift = Field(bits, 21, 2) * 16;
@@ -117,28 +179,23 @@ A64_OPERANDS_INLINE DecodedInstruction GetOpOperands(const DecodedOp& slot) {
     } else {
         op.rd = Field(bits, 0, 5);
         op.rn = Field(bits, 5, 5);
-        constexpr bool transfer = kind >= Kind::LoadStoreRegister && kind <= Kind::LoadLiteral;
+        constexpr bool transfer = kind == Kind::LoadStoreRegister;
         op.rm = Field(bits, 10, 5);
         if constexpr (kind == Kind::Multiply || kind == Kind::LoadStoreExclusive)
             op.ra = Field(bits, 15, 5);
         else
             op.shift = Field(bits, 15, 6);
         op.operation = Field(bits, 21, transfer ? 4 : 5);
-        if constexpr (kind == Kind::Bitfield)
-            op.rm |= Field(bits, 26, 1) << 5;
-        else
-            op.mode = Field(bits, 26, 3);
+        op.mode = Field(bits, 26, 3);
         op.width = 8 << Field(bits, 29, 3);
         if constexpr (transfer) op.word = Field(bits, 25, 1) << 26;
         if constexpr (kind == Kind::LoadStoreExclusive || kind == Kind::LoadStoreAtomic)
             op.word = (((bits >> 32) & 1) << 15) | (((bits >> 33) & 3) << 22);
         if constexpr (HasExtraOperandSlot(kind)) {
-            const auto& wide = GetExtraOperands(slot);
-            if constexpr (HasBlockTarget(kind))
-                op.target_pc = wide.primary;
+            if constexpr (HasBranchTarget(kind))
+                op.target_pc = GetBoundTarget<kind>(slot);
             else
-                op.immediate = wide.primary;
-            if constexpr (kind == Kind::Bitfield) op.mask = wide.secondary;
+                op.immediate = GetExtraOperands(slot).primary;
         } else if constexpr (kind == Kind::ConditionalCompare) {
             op.immediate = op.rd & 15;
         }

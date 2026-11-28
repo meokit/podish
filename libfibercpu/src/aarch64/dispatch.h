@@ -205,6 +205,7 @@ struct DispatchPolicy {
     bool may_replay = false;
     bool may_exit = false;
     DispatchBranch branch = DispatchBranch::None;
+    bool dynamic_width = false;
 };
 
 using LogicFunc = StepResult (*)(State& state, const DecodedOp*& current A64_UTLB_REF_PARAMS,
@@ -246,7 +247,11 @@ FIBERCPU_AARCH64_HANDLER_ABI int64_t DispatchWrapper(A64_HANDLER_PARAMS) {
             return ReturnFromBlock(state, current, instr_limit, flags_cache A64_HANDLER_PIN_ARGS, step, word);
         }
     }
-    A64_DISPATCH_NEXT(current->template NextOp<Policy.wide>());
+    if constexpr (Policy.dynamic_width) {
+        A64_DISPATCH_NEXT(current->NextOp());
+    } else {
+        A64_DISPATCH_NEXT(current->template NextOp<Policy.wide>());
+    }
 }
 
 constexpr HandlerFunc GetExitHandlerFallthrough() { return &OpExitBlock; }

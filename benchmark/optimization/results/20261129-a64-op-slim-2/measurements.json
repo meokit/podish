@@ -1,0 +1,1282 @@
+{
+  "baseline_commit": "39e0bc10a56b9f4870cab206f0dcbd71de6148e5",
+  "host": "Apple M5 Max, macOS 27.2.1",
+  "selected_layout": {
+    "operands_bits": 51,
+    "conditional_branch_suffix_bits": [
+      46,
+      50
+    ],
+    "bitfield": "Three shift counts derived from immr and imms at block construction.",
+    "logical_immediate": "32-bit masks inline. 64-bit masks inline when they fit signed 38 bits, with a wide fallback.",
+    "partial_baking": "Partially baked 64-bit logical immediates use HasDataSlot for both operand recovery and the slot stride."
+  },
+  "toolchains": {
+    "native": "Homebrew Clang and LLVM 21.1.8, macOS arm64, Release ThinLTO, LLVM JIT enabled",
+    "wasm": "Emscripten 5.0.4, Release static library and standalone reactor module",
+    "managed": ".NET 11.0.100",
+    "builds": "Dual guest, stock 3m baking preset"
+  },
+  "timing_method": "Five alternating A/B pairs using nested_baking_workloads.run_workloads under the shared benchmark lock. Timings are host seconds between the guest workload markers. Every workload output was verified against the frozen SHA-256 digest in the manifest. Each workload uses the median of its five paired baseline/candidate ratios. Panel and overall geomeans weight workloads equally.",
+  "timing": {
+    "manifest": "benchmark/optimization/results/20261126-default-3m/measurements.json",
+    "native_sha256": {
+      "baseline": "0d5e103acdb95e795610ca2974d531fb78d7f14dd83619eaeacaab78feeb7d4a",
+      "candidate": "db8f12c1c64c4007512d59711795055956c6c35c9fadf09273d57d01da83a781"
+    },
+    "managed_cli_sha256": "4a264aae389159667eb5b26999cc0566ac628af69dd5c8842835242f5c02e1e5",
+    "guest_jit": "off",
+    "block_cache_mib": 64,
+    "guest_memory_gib": 1,
+    "host_dotnet_tiered_compilation": false,
+    "verified_outputs": 170,
+    "rounds": [
+      {
+        "round": 1,
+        "order": [
+          "baseline",
+          "candidate"
+        ],
+        "baseline": {
+          "gzip": 0.20828145899577066,
+          "gunzip": 0.0893970420002006,
+          "sed": 0.24024199997074902,
+          "sort": 0.0648090000031516,
+          "sha256": 0.08254812500672415,
+          "tar": 0.03907366702333093,
+          "du": 0.21112995798466727,
+          "ls": 0.08606020803563297,
+          "grep-fixed": 0.050013958010822535,
+          "grep-regex": 0.06668791599804536,
+          "node-minify": 1.3074130000313744,
+          "mawk-aggregate": 0.31909987499238923,
+          "diff-revisions": 0.15501966699957848,
+          "blind-perl-groups": 0.5685122500290163,
+          "blind-rev-lines": 0.6544364580186084,
+          "codegen-gzip-o1": 0.15054891596082598,
+          "codegen-gzip-o3": 0.1468315829988569
+        },
+        "candidate": {
+          "gzip": 0.20804179197875783,
+          "gunzip": 0.08646537503227592,
+          "sed": 0.24198841699399054,
+          "sort": 0.06338862498523667,
+          "sha256": 0.08577316597802565,
+          "tar": 0.040107208013068885,
+          "du": 0.20698508399073035,
+          "ls": 0.0865921670338139,
+          "grep-fixed": 0.04980258294381201,
+          "grep-regex": 0.06645054102409631,
+          "node-minify": 1.314747583004646,
+          "mawk-aggregate": 0.2945324170286767,
+          "diff-revisions": 0.15417454100679606,
+          "blind-perl-groups": 0.521674667019397,
+          "blind-rev-lines": 0.6533602499985136,
+          "codegen-gzip-o1": 0.14923091605305672,
+          "codegen-gzip-o3": 0.1454324169899337
+        }
+      },
+      {
+        "round": 2,
+        "order": [
+          "candidate",
+          "baseline"
+        ],
+        "candidate": {
+          "gzip": 0.2101063330192119,
+          "gunzip": 0.08707970898831263,
+          "sed": 0.23694750003051013,
+          "sort": 0.0637162079801783,
+          "sha256": 0.08257837500423193,
+          "tar": 0.03901533398311585,
+          "du": 0.20666100003290921,
+          "ls": 0.08554062503390014,
+          "grep-fixed": 0.05013612500624731,
+          "grep-regex": 0.06630458298604935,
+          "node-minify": 1.3376311250030994,
+          "mawk-aggregate": 0.3032405420090072,
+          "diff-revisions": 0.15579687501303852,
+          "blind-perl-groups": 0.5213897919747978,
+          "blind-rev-lines": 0.6496234170044772,
+          "codegen-gzip-o1": 0.1495574580039829,
+          "codegen-gzip-o3": 0.15057454199995846
+        },
+        "baseline": {
+          "gzip": 0.20916462503373623,
+          "gunzip": 0.08902716700686142,
+          "sed": 0.2350963749922812,
+          "sort": 0.0633390000439249,
+          "sha256": 0.08238850004272535,
+          "tar": 0.03918854199582711,
+          "du": 0.20686979201855138,
+          "ls": 0.08647549996385351,
+          "grep-fixed": 0.05080862500471994,
+          "grep-regex": 0.06666333397151902,
+          "node-minify": 1.3053050420130603,
+          "mawk-aggregate": 0.30572054197546095,
+          "diff-revisions": 0.15759629098465666,
+          "blind-perl-groups": 0.5228644579765387,
+          "blind-rev-lines": 0.6515207919874229,
+          "codegen-gzip-o1": 0.15300087502691895,
+          "codegen-gzip-o3": 0.1496272079530172
+        }
+      },
+      {
+        "round": 3,
+        "order": [
+          "baseline",
+          "candidate"
+        ],
+        "baseline": {
+          "gzip": 0.20934208302060142,
+          "gunzip": 0.09191316697979346,
+          "sed": 0.23796408297494054,
+          "sort": 0.06492529198294505,
+          "sha256": 0.08237704198108986,
+          "tar": 0.039467542024794966,
+          "du": 0.2077687500277534,
+          "ls": 0.08594499999890104,
+          "grep-fixed": 0.05001999996602535,
+          "grep-regex": 0.06635725003434345,
+          "node-minify": 1.3051265840185806,
+          "mawk-aggregate": 0.2960038339952007,
+          "diff-revisions": 0.15270479198079556,
+          "blind-perl-groups": 0.5406118750106543,
+          "blind-rev-lines": 0.6481981669785455,
+          "codegen-gzip-o1": 0.16290375002427027,
+          "codegen-gzip-o3": 0.1475041250232607
+        },
+        "candidate": {
+          "gzip": 0.20928408298641443,
+          "gunzip": 0.085728875012137,
+          "sed": 0.23865912499604747,
+          "sort": 0.06386879202909768,
+          "sha256": 0.08277474995702505,
+          "tar": 0.038934625044930726,
+          "du": 0.20613179099746048,
+          "ls": 0.08603970904368907,
+          "grep-fixed": 0.049748792022001,
+          "grep-regex": 0.06665512500330806,
+          "node-minify": 1.3034535410115495,
+          "mawk-aggregate": 0.29818037495715544,
+          "diff-revisions": 0.15402575000189245,
+          "blind-perl-groups": 0.5311642499873415,
+          "blind-rev-lines": 0.6529372499790043,
+          "codegen-gzip-o1": 0.14258124999469146,
+          "codegen-gzip-o3": 0.14493941701948643
+        }
+      },
+      {
+        "round": 4,
+        "order": [
+          "candidate",
+          "baseline"
+        ],
+        "candidate": {
+          "gzip": 0.25758316699648276,
+          "gunzip": 0.08637483301572502,
+          "sed": 0.2376547500025481,
+          "sort": 0.06517512496793643,
+          "sha256": 0.08276833302807063,
+          "tar": 0.03902020800160244,
+          "du": 0.2061712919967249,
+          "ls": 0.085851666983217,
+          "grep-fixed": 0.04962866596179083,
+          "grep-regex": 0.06599837500834838,
+          "node-minify": 1.3080214170040563,
+          "mawk-aggregate": 0.30115320801269263,
+          "diff-revisions": 0.15369216696126387,
+          "blind-perl-groups": 0.5193296250072308,
+          "blind-rev-lines": 0.6514732079813257,
+          "codegen-gzip-o1": 0.15377050003735349,
+          "codegen-gzip-o3": 0.1524544580024667
+        },
+        "baseline": {
+          "gzip": 0.20886329200584441,
+          "gunzip": 0.08765883301384747,
+          "sed": 0.23401562497019768,
+          "sort": 0.06437237496720627,
+          "sha256": 0.08276258397381753,
+          "tar": 0.039137458021286875,
+          "du": 0.20699379197321832,
+          "ls": 0.08723841700702906,
+          "grep-fixed": 0.04949837498134002,
+          "grep-regex": 0.06553466699551791,
+          "node-minify": 1.2959325829870068,
+          "mawk-aggregate": 0.2984241250087507,
+          "diff-revisions": 0.15345733397407457,
+          "blind-perl-groups": 0.5222185839666054,
+          "blind-rev-lines": 0.667630709009245,
+          "codegen-gzip-o1": 0.14911112503614277,
+          "codegen-gzip-o3": 0.14625674998387694
+        }
+      },
+      {
+        "round": 5,
+        "order": [
+          "baseline",
+          "candidate"
+        ],
+        "baseline": {
+          "gzip": 0.20834837504662573,
+          "gunzip": 0.08761708304518834,
+          "sed": 0.23420229100156575,
+          "sort": 0.06353129097260535,
+          "sha256": 0.08246983302524313,
+          "tar": 0.03941933298483491,
+          "du": 0.2062624579994008,
+          "ls": 0.09342479199403897,
+          "grep-fixed": 0.04962054203497246,
+          "grep-regex": 0.06586991698713973,
+          "node-minify": 1.3062019170029089,
+          "mawk-aggregate": 0.30140820902306587,
+          "diff-revisions": 0.15608754201093689,
+          "blind-perl-groups": 0.5305173329543322,
+          "blind-rev-lines": 0.6492578749894165,
+          "codegen-gzip-o1": 0.1511526660178788,
+          "codegen-gzip-o3": 0.14835320902056992
+        },
+        "candidate": {
+          "gzip": 0.20823279197793454,
+          "gunzip": 0.08707154204603285,
+          "sed": 0.23362320801243186,
+          "sort": 0.06418166699586436,
+          "sha256": 0.0825687909964472,
+          "tar": 0.03894829103955999,
+          "du": 0.20621020800899714,
+          "ls": 0.08580383297521621,
+          "grep-fixed": 0.04970320803113282,
+          "grep-regex": 0.0664785000262782,
+          "node-minify": 1.3015462079783902,
+          "mawk-aggregate": 0.2973327499930747,
+          "diff-revisions": 0.15479808300733566,
+          "blind-perl-groups": 0.5198517499957234,
+          "blind-rev-lines": 0.6555329160182737,
+          "codegen-gzip-o1": 0.14583745802519843,
+          "codegen-gzip-o3": 0.14614999998593703
+        }
+      }
+    ],
+    "median_paired_speedups": {
+      "gzip": 1.0002771354293138,
+      "gunzip": 1.0223640850569466,
+      "sed": 0.992783055301011,
+      "sort": 0.9940798746785002,
+      "sha256": 0.9977006696789947,
+      "tar": 1.0044394855824177,
+      "du": 1.0039894010874535,
+      "ls": 1.0109290168219238,
+      "grep-fixed": 1.0042442591230458,
+      "grep-regex": 0.9955311017877496,
+      "node-minify": 0.994421299519327,
+      "mawk-aggregate": 1.0081783258598056,
+      "diff-revisions": 1.005481618348033,
+      "blind-perl-groups": 1.0177866357224494,
+      "blind-rev-lines": 1.0016471893110994,
+      "codegen-gzip-o1": 1.0230240408528763,
+      "codegen-gzip-o3": 1.0096207299437239
+    },
+    "panel_geomean_speedup": {
+      "training": 1.0032794675965322,
+      "regression": 1.0015559608649864,
+      "blind": 1.0096846651255982,
+      "compiler": 1.0163002897155244
+    },
+    "overall_geomean_speedup": 1.0050468363681895
+  },
+  "screen": {
+    "method": "Three locked rounds with the same workload manifest, timing, and verification settings. Variant order was reversed on round 2 and rotated on round 3. The wide-64 bitfield prototype reused the CTest-enabled native build.",
+    "variants": {
+      "bitfield-wide64": "Stage 2 with compact bitfield shifts and all 64-bit logical immediates wide.",
+      "wide-bitfield": "Stage 2 with cached bitfield masks and all 64-bit logical immediates wide.",
+      "signed38": "Stage 2 with compact bitfield shifts and signed 38-bit logical immediates with a wide fallback.",
+      "decode64": "Stage 2 with compact bitfield shifts and runtime DecodeBitMasks of the 13-bit encoding for all 64-bit logical immediates."
+    },
+    "measurements": {
+      "manifest": "benchmark/optimization/results/20261126-default-3m/measurements.json",
+      "native_sha256": {
+        "baseline": "0d5e103acdb95e795610ca2974d531fb78d7f14dd83619eaeacaab78feeb7d4a",
+        "bitfield-wide64": "fef1ece75b0a91e1f0164407926859a31201df083d6c5dc524f8fd231bf28f5c",
+        "signed38": "802727e0fdce9ef6c20d94748e865182e76a395fdb0a9e6b1b83911e4e53253d",
+        "decode64": "10b4f889aa68b14c3326863e0cb89fdfe2591dfcfcfea273ffc7c4f9e9c9fd4d",
+        "wide-bitfield": "45a364b2317669c1875308ec3d180c02b23ebb4d9b95f8c3c01fce83ac0f551a"
+      },
+      "managed_cli_sha256": "4a264aae389159667eb5b26999cc0566ac628af69dd5c8842835242f5c02e1e5",
+      "guest_jit": "off",
+      "block_cache_mib": 64,
+      "guest_memory_gib": 1,
+      "host_dotnet_tiered_compilation": false,
+      "verified_outputs": 255,
+      "rounds": [
+        {
+          "round": 1,
+          "order": [
+            "baseline",
+            "bitfield-wide64",
+            "signed38",
+            "decode64",
+            "wide-bitfield"
+          ],
+          "baseline": {
+            "gzip": 0.21057466696947813,
+            "gunzip": 0.08878150000236928,
+            "sed": 0.23882633296307176,
+            "sort": 0.06461416697129607,
+            "sha256": 0.08380491600837559,
+            "tar": 0.03968395898118615,
+            "du": 0.20940862502902746,
+            "ls": 0.08711850002873689,
+            "grep-fixed": 0.05050716700498015,
+            "grep-regex": 0.06664304196601734,
+            "node-minify": 1.327674250002019,
+            "mawk-aggregate": 0.30467612500069663,
+            "diff-revisions": 0.15680975001305342,
+            "blind-perl-groups": 0.5359946249518543,
+            "blind-rev-lines": 0.6746396669768728,
+            "codegen-gzip-o1": 0.15288045804481953,
+            "codegen-gzip-o3": 0.14936395798576996
+          },
+          "bitfield-wide64": {
+            "gzip": 0.21037587500177324,
+            "gunzip": 0.0877599170198664,
+            "sed": 0.23982895800145343,
+            "sort": 0.06847395800286904,
+            "sha256": 0.0841976249939762,
+            "tar": 0.04037366696866229,
+            "du": 0.20953291602199897,
+            "ls": 0.08760591701138765,
+            "grep-fixed": 0.05035954201593995,
+            "grep-regex": 0.06712654198054224,
+            "node-minify": 1.337227666983381,
+            "mawk-aggregate": 0.3198113330290653,
+            "diff-revisions": 0.15666091704042628,
+            "blind-perl-groups": 0.5302023339900188,
+            "blind-rev-lines": 0.6597933329758234,
+            "codegen-gzip-o1": 0.14718333299970254,
+            "codegen-gzip-o3": 0.14572833298007026
+          },
+          "signed38": {
+            "gzip": 0.2101037090178579,
+            "gunzip": 0.0878281660261564,
+            "sed": 0.24187862500548363,
+            "sort": 0.06489358399994671,
+            "sha256": 0.08322404202772304,
+            "tar": 0.03961737500503659,
+            "du": 0.21100683399708942,
+            "ls": 0.08668812498217449,
+            "grep-fixed": 0.05030337499920279,
+            "grep-regex": 0.06686279200948775,
+            "node-minify": 1.3200228749774396,
+            "mawk-aggregate": 0.30847641703439876,
+            "diff-revisions": 0.15653145796386525,
+            "blind-perl-groups": 0.5279390410287306,
+            "blind-rev-lines": 0.6695171659812331,
+            "codegen-gzip-o1": 0.14672904199687764,
+            "codegen-gzip-o3": 0.14704458299092948
+          },
+          "decode64": {
+            "gzip": 0.2101368330186233,
+            "gunzip": 0.0877711670473218,
+            "sed": 0.24939279101090506,
+            "sort": 0.06444824999198318,
+            "sha256": 0.08390204200986773,
+            "tar": 0.040244042000267655,
+            "du": 0.20872058300301433,
+            "ls": 0.08831241697771475,
+            "grep-fixed": 0.050143125001341105,
+            "grep-regex": 0.0669737079879269,
+            "node-minify": 1.3344906250131316,
+            "mawk-aggregate": 0.30223241599742323,
+            "diff-revisions": 0.15640929096844047,
+            "blind-perl-groups": 0.5203329999931157,
+            "blind-rev-lines": 0.6589604169712402,
+            "codegen-gzip-o1": 0.16672383301192895,
+            "codegen-gzip-o3": 0.1493929999996908
+          },
+          "wide-bitfield": {
+            "gzip": 0.2097386249806732,
+            "gunzip": 0.0877516670152545,
+            "sed": 0.25550037500215694,
+            "sort": 0.06392225000308827,
+            "sha256": 0.08339220896596089,
+            "tar": 0.039506791974417865,
+            "du": 0.2103058750508353,
+            "ls": 0.08641879196511582,
+            "grep-fixed": 0.04936870897654444,
+            "grep-regex": 0.06645825004670769,
+            "node-minify": 1.3116383329615928,
+            "mawk-aggregate": 0.30336729204282165,
+            "diff-revisions": 0.15649941703304648,
+            "blind-perl-groups": 0.5200341249583289,
+            "blind-rev-lines": 0.6669694160227664,
+            "codegen-gzip-o1": 0.14490704098716378,
+            "codegen-gzip-o3": 0.14539479103405029
+          }
+        },
+        {
+          "round": 2,
+          "order": [
+            "wide-bitfield",
+            "decode64",
+            "signed38",
+            "bitfield-wide64",
+            "baseline"
+          ],
+          "wide-bitfield": {
+            "gzip": 0.22100145800504833,
+            "gunzip": 0.08889837499009445,
+            "sed": 0.25462308403803036,
+            "sort": 0.07650208403356373,
+            "sha256": 0.08653600001707673,
+            "tar": 0.03985045797890052,
+            "du": 0.20902933296747506,
+            "ls": 0.08815529104322195,
+            "grep-fixed": 0.0499825410079211,
+            "grep-regex": 0.06699591700453311,
+            "node-minify": 1.3119347079773434,
+            "mawk-aggregate": 0.32824770803563297,
+            "diff-revisions": 0.15648908400908113,
+            "blind-perl-groups": 0.5752864159876481,
+            "blind-rev-lines": 0.6758608329691924,
+            "codegen-gzip-o1": 0.1467251250287518,
+            "codegen-gzip-o3": 0.1488949169870466
+          },
+          "decode64": {
+            "gzip": 0.2099644999834709,
+            "gunzip": 0.0878696670406498,
+            "sed": 0.23327408300247043,
+            "sort": 0.0668452910031192,
+            "sha256": 0.08303891698596999,
+            "tar": 0.03985041700070724,
+            "du": 0.20726808300241828,
+            "ls": 0.08633762504905462,
+            "grep-fixed": 0.050908375007566065,
+            "grep-regex": 0.06660470803035423,
+            "node-minify": 1.3180844580056146,
+            "mawk-aggregate": 0.3044615000253543,
+            "diff-revisions": 0.15579045796766877,
+            "blind-perl-groups": 0.5339139999705367,
+            "blind-rev-lines": 0.6592334169545211,
+            "codegen-gzip-o1": 0.15386883303290233,
+            "codegen-gzip-o3": 0.14893183298408985
+          },
+          "signed38": {
+            "gzip": 0.2091184999444522,
+            "gunzip": 0.08687724999617785,
+            "sed": 0.2338509580004029,
+            "sort": 0.06270404200768098,
+            "sha256": 0.08261362503981218,
+            "tar": 0.03936141700251028,
+            "du": 0.209703000029549,
+            "ls": 0.086202125006821,
+            "grep-fixed": 0.04990245797671378,
+            "grep-regex": 0.06703400000697002,
+            "node-minify": 1.3277333329897374,
+            "mawk-aggregate": 0.3063954579993151,
+            "diff-revisions": 0.15494999999646097,
+            "blind-perl-groups": 0.5394931249902584,
+            "blind-rev-lines": 0.651183084002696,
+            "codegen-gzip-o1": 0.14176166703691706,
+            "codegen-gzip-o3": 0.14616179198492318
+          },
+          "bitfield-wide64": {
+            "gzip": 0.2093778339913115,
+            "gunzip": 0.08747304102871567,
+            "sed": 0.2348167909658514,
+            "sort": 0.06488212500698864,
+            "sha256": 0.08310033299494535,
+            "tar": 0.039499042031820863,
+            "du": 0.2074597500031814,
+            "ls": 0.08640679199015722,
+            "grep-fixed": 0.04986987495794892,
+            "grep-regex": 0.0674644160317257,
+            "node-minify": 1.3294466250226833,
+            "mawk-aggregate": 0.3023636249708943,
+            "diff-revisions": 0.153876583033707,
+            "blind-perl-groups": 0.5349187920219265,
+            "blind-rev-lines": 0.6437789580086246,
+            "codegen-gzip-o1": 0.14502150000771508,
+            "codegen-gzip-o3": 0.1423369999974966
+          },
+          "baseline": {
+            "gzip": 0.20905250002397224,
+            "gunzip": 0.08796920801978558,
+            "sed": 0.234797291981522,
+            "sort": 0.06338533299276605,
+            "sha256": 0.08291741699213162,
+            "tar": 0.039545124978758395,
+            "du": 0.20712191698839888,
+            "ls": 0.08636120904702693,
+            "grep-fixed": 0.04947324999375269,
+            "grep-regex": 0.0667114169918932,
+            "node-minify": 1.3104484579525888,
+            "mawk-aggregate": 0.3010468340362422,
+            "diff-revisions": 0.15343029098585248,
+            "blind-perl-groups": 0.5227705420111306,
+            "blind-rev-lines": 0.6453477919567376,
+            "codegen-gzip-o1": 0.14751570799853653,
+            "codegen-gzip-o3": 0.14677129103802145
+          }
+        },
+        {
+          "round": 3,
+          "order": [
+            "bitfield-wide64",
+            "signed38",
+            "decode64",
+            "wide-bitfield",
+            "baseline"
+          ],
+          "bitfield-wide64": {
+            "gzip": 0.20870404201559722,
+            "gunzip": 0.08733104198472574,
+            "sed": 0.23416029202053323,
+            "sort": 0.06705779198091477,
+            "sha256": 0.08323699998436496,
+            "tar": 0.03996670799097046,
+            "du": 0.20815008302452043,
+            "ls": 0.0962244170368649,
+            "grep-fixed": 0.049848458962514997,
+            "grep-regex": 0.06672675005393103,
+            "node-minify": 1.306640749971848,
+            "mawk-aggregate": 0.3011630419641733,
+            "diff-revisions": 0.16023741598473862,
+            "blind-perl-groups": 0.5379678750177845,
+            "blind-rev-lines": 0.6459297079709359,
+            "codegen-gzip-o1": 0.1449363329447806,
+            "codegen-gzip-o3": 0.14251916599459946
+          },
+          "signed38": {
+            "gzip": 0.20837854099227116,
+            "gunzip": 0.09521045902511105,
+            "sed": 0.232962750014849,
+            "sort": 0.06445237499428913,
+            "sha256": 0.08323045901488513,
+            "tar": 0.039407707983627915,
+            "du": 0.2107033749925904,
+            "ls": 0.08641716599231586,
+            "grep-fixed": 0.04947783303214237,
+            "grep-regex": 0.06633837497793138,
+            "node-minify": 1.317550666979514,
+            "mawk-aggregate": 0.301970332977362,
+            "diff-revisions": 0.1540617499849759,
+            "blind-perl-groups": 0.5189726669923402,
+            "blind-rev-lines": 0.6523312499630265,
+            "codegen-gzip-o1": 0.14447737496811897,
+            "codegen-gzip-o3": 0.14581399998860434
+          },
+          "decode64": {
+            "gzip": 0.20939624996390194,
+            "gunzip": 0.08699641702696681,
+            "sed": 0.232384916045703,
+            "sort": 0.06395725003676489,
+            "sha256": 0.08273850003024563,
+            "tar": 0.0390037500183098,
+            "du": 0.20686854200903326,
+            "ls": 0.08637191698653623,
+            "grep-fixed": 0.05005924997385591,
+            "grep-regex": 0.0663097079959698,
+            "node-minify": 1.3081186669878662,
+            "mawk-aggregate": 0.3040881250053644,
+            "diff-revisions": 0.15481720899697393,
+            "blind-perl-groups": 0.5244374999892898,
+            "blind-rev-lines": 0.6481495840125717,
+            "codegen-gzip-o1": 0.14843800000380725,
+            "codegen-gzip-o3": 0.148483041964937
+          },
+          "wide-bitfield": {
+            "gzip": 0.20909766701515764,
+            "gunzip": 0.08798612497048452,
+            "sed": 0.2346870829933323,
+            "sort": 0.06378849997418001,
+            "sha256": 0.08262620901223272,
+            "tar": 0.03932679200079292,
+            "du": 0.20883058401523158,
+            "ls": 0.0874660830013454,
+            "grep-fixed": 0.0492233750410378,
+            "grep-regex": 0.0671909999800846,
+            "node-minify": 1.318937083997298,
+            "mawk-aggregate": 0.3022180420230143,
+            "diff-revisions": 0.15425541601143777,
+            "blind-perl-groups": 0.5288912919932045,
+            "blind-rev-lines": 0.6552316669840366,
+            "codegen-gzip-o1": 0.14443145802943036,
+            "codegen-gzip-o3": 0.14493370795389637
+          },
+          "baseline": {
+            "gzip": 0.20968600001651794,
+            "gunzip": 0.08878137497231364,
+            "sed": 0.2684380420250818,
+            "sort": 0.06434650003211573,
+            "sha256": 0.0830556660075672,
+            "tar": 0.039016916998662055,
+            "du": 0.20770037500187755,
+            "ls": 0.08634866599459201,
+            "grep-fixed": 0.049734125030227005,
+            "grep-regex": 0.06559212499996647,
+            "node-minify": 1.3086245419690385,
+            "mawk-aggregate": 0.2961012920131907,
+            "diff-revisions": 0.1542991250171326,
+            "blind-perl-groups": 0.517344125022646,
+            "blind-rev-lines": 0.6483199160429649,
+            "codegen-gzip-o1": 0.14412470802199095,
+            "codegen-gzip-o3": 0.14578716701362282
+          }
+        }
+      ],
+      "ratios": {
+        "bitfield-wide64": {
+          "median_paired_speedups": {
+            "gzip": 1.0009449370927308,
+            "gunzip": 1.0116406557480178,
+            "sed": 0.9999169608602128,
+            "sort": 0.9595678314375352,
+            "sha256": 0.9977988535518281,
+            "tar": 0.9829168852061051,
+            "du": 0.9983715732098524,
+            "ls": 0.9944362550010475,
+            "grep-fixed": 0.9977063697721534,
+            "grep-regex": 0.9888385747016857,
+            "node-minify": 0.9928558036770858,
+            "mawk-aggregate": 0.983192658973126,
+            "diff-revisions": 0.9970996753433448,
+            "blind-perl-groups": 0.9772895433998925,
+            "blind-rev-lines": 1.003700415141978,
+            "codegen-gzip-o1": 1.017198884239156,
+            "codegen-gzip-o3": 1.0249479626326123
+          },
+          "panel_geomean_speedup": {
+            "training": 0.9930889022299393,
+            "regression": 0.9919237872082713,
+            "blind": 0.9904069468780932,
+            "compiler": 1.0210660722955638
+          },
+          "overall_geomean_speedup": 0.9956793635517311
+        },
+        "signed38": {
+          "median_paired_speedups": {
+            "gzip": 1.0022415499175228,
+            "gunzip": 1.0108545358436491,
+            "sed": 1.004046739809026,
+            "sort": 0.998357314805191,
+            "sha256": 1.003677262100205,
+            "tar": 1.0016806761210477,
+            "du": 0.9876917209539853,
+            "ls": 1.0018454770133953,
+            "grep-fixed": 1.0040512591010164,
+            "grep-regex": 0.9951877701607651,
+            "node-minify": 0.9932252130910922,
+            "mawk-aggregate": 0.9825433967004665,
+            "diff-revisions": 1.0015407785006976,
+            "blind-perl-groups": 0.996861988938392,
+            "blind-rev-lines": 0.9938507714902682,
+            "codegen-gzip-o1": 1.0405895407544905,
+            "codegen-gzip-o3": 1.0041700299703573
+          },
+          "panel_geomean_speedup": {
+            "training": 1.0012806359832989,
+            "regression": 0.9952812116640527,
+            "blind": 0.9953552414970969,
+            "compiler": 1.0222176041950546
+          },
+          "overall_geomean_speedup": 1.001249389769561
+        },
+        "decode64": {
+          "median_paired_speedups": {
+            "gzip": 1.0013837404092287,
+            "gunzip": 1.0115109891896819,
+            "sed": 1.0065296965674297,
+            "sort": 1.0025744217931989,
+            "sha256": 0.9988423881092106,
+            "tar": 0.9923390507571496,
+            "du": 1.0032964742437653,
+            "ls": 0.9997308037987874,
+            "grep-fixed": 0.9935051974650297,
+            "grep-regex": 0.9950627487734564,
+            "node-minify": 0.9948921521939913,
+            "mawk-aggregate": 0.988784572141871,
+            "diff-revisions": 0.9966535762839424,
+            "blind-perl-groups": 0.9864743177846957,
+            "blind-rev-lines": 1.0002627974075655,
+            "codegen-gzip-o1": 0.9587107739160712,
+            "codegen-gzip-o3": 0.985493081614733
+          },
+          "panel_geomean_speedup": {
+            "training": 1.0020121094160424,
+            "regression": 0.9937760031683656,
+            "blind": 0.9933446333866407,
+            "compiler": 0.9720096887190963
+          },
+          "overall_geomean_speedup": 0.994996631187444
+        },
+        "wide-bitfield": {
+          "median_paired_speedups": {
+            "gzip": 1.0028136755888226,
+            "gunzip": 1.0090383569238432,
+            "sed": 0.9347396572746932,
+            "sort": 1.00874765918875,
+            "sha256": 1.004948988011376,
+            "tar": 0.9923380303357168,
+            "du": 0.9945879143197167,
+            "ls": 0.9872245678735128,
+            "grep-fixed": 1.0103761675984915,
+            "grep-regex": 0.9957534723702541,
+            "node-minify": 0.9988671311036157,
+            "mawk-aggregate": 0.9797604737001182,
+            "diff-revisions": 1.0002833547555412,
+            "blind-perl-groups": 0.9781672204754189,
+            "blind-rev-lines": 0.9894514394078575,
+            "codegen-gzip-o1": 1.0053881908066518,
+            "codegen-gzip-o3": 1.005888616746064
+          },
+          "panel_geomean_speedup": {
+            "training": 0.9915348646428798,
+            "regression": 0.9969585918215416,
+            "blind": 0.9837931511659279,
+            "compiler": 1.0056383726486031
+          },
+          "overall_geomean_speedup": 0.9938616396797718
+        }
+      }
+    }
+  },
+  "pre_tuning_confirmation": {
+    "variant": "Signed-38-bit layout with runtime bitfield shift-count calculation and page-scaled ADRP storage.",
+    "timing": {
+      "manifest": "benchmark/optimization/results/20261126-default-3m/measurements.json",
+      "native_sha256": {
+        "baseline": "0d5e103acdb95e795610ca2974d531fb78d7f14dd83619eaeacaab78feeb7d4a",
+        "candidate": "6898e0ede9513331069d22efa3eed9ccdced47db09446aa7592ed737043d94c4"
+      },
+      "managed_cli_sha256": "4a264aae389159667eb5b26999cc0566ac628af69dd5c8842835242f5c02e1e5",
+      "guest_jit": "off",
+      "block_cache_mib": 64,
+      "guest_memory_gib": 1,
+      "host_dotnet_tiered_compilation": false,
+      "verified_outputs": 170,
+      "rounds": [
+        {
+          "round": 1,
+          "order": [
+            "baseline",
+            "candidate"
+          ],
+          "baseline": {
+            "gzip": 0.2210639999830164,
+            "gunzip": 0.08871395897585899,
+            "sed": 0.24337629199726507,
+            "sort": 0.06504729203879833,
+            "sha256": 0.08367262495448813,
+            "tar": 0.04007345903664827,
+            "du": 0.2133119169739075,
+            "ls": 0.08769937499891967,
+            "grep-fixed": 0.05068154202308506,
+            "grep-regex": 0.0665915830177255,
+            "node-minify": 1.321972250007093,
+            "mawk-aggregate": 0.298691084026359,
+            "diff-revisions": 0.16295866697328165,
+            "blind-perl-groups": 0.5295983329997398,
+            "blind-rev-lines": 0.6666498749982566,
+            "codegen-gzip-o1": 0.14523837500019,
+            "codegen-gzip-o3": 0.14560629200423136
+          },
+          "candidate": {
+            "gzip": 0.21013945899903774,
+            "gunzip": 0.08750637498451397,
+            "sed": 0.24335175001760945,
+            "sort": 0.06795104203047231,
+            "sha256": 0.08379312499891967,
+            "tar": 0.04057704197475687,
+            "du": 0.21128237497759983,
+            "ls": 0.08710245799738914,
+            "grep-fixed": 0.05070645798696205,
+            "grep-regex": 0.06666908302577212,
+            "node-minify": 1.323626792000141,
+            "mawk-aggregate": 0.30798804201185703,
+            "diff-revisions": 0.16406124999048188,
+            "blind-perl-groups": 0.5272754159523174,
+            "blind-rev-lines": 0.6584973330027424,
+            "codegen-gzip-o1": 0.15277375001460314,
+            "codegen-gzip-o3": 0.1484083749819547
+          }
+        },
+        {
+          "round": 2,
+          "order": [
+            "candidate",
+            "baseline"
+          ],
+          "candidate": {
+            "gzip": 0.20996879099402577,
+            "gunzip": 0.0882071249652654,
+            "sed": 0.23353437497280538,
+            "sort": 0.06704837502911687,
+            "sha256": 0.08344687498174608,
+            "tar": 0.041273417009506375,
+            "du": 0.2095390410395339,
+            "ls": 0.08815775002585724,
+            "grep-fixed": 0.05054862500401214,
+            "grep-regex": 0.06668029201682657,
+            "node-minify": 1.3187684169970453,
+            "mawk-aggregate": 0.30765525001334026,
+            "diff-revisions": 0.15675762499449775,
+            "blind-perl-groups": 0.5244069999898784,
+            "blind-rev-lines": 0.6557464999496005,
+            "codegen-gzip-o1": 0.14767995895817876,
+            "codegen-gzip-o3": 0.1471715410007164
+          },
+          "baseline": {
+            "gzip": 0.2112283749738708,
+            "gunzip": 0.08906662499066442,
+            "sed": 0.23382491600932553,
+            "sort": 0.06396704103099182,
+            "sha256": 0.08354004198918119,
+            "tar": 0.039503457956016064,
+            "du": 0.20791591599117965,
+            "ls": 0.08765741699608043,
+            "grep-fixed": 0.05032620899146423,
+            "grep-regex": 0.06736245797947049,
+            "node-minify": 1.3269076659926213,
+            "mawk-aggregate": 0.3046164580155164,
+            "diff-revisions": 0.15490687498822808,
+            "blind-perl-groups": 0.5243924590176903,
+            "blind-rev-lines": 0.6509224580368027,
+            "codegen-gzip-o1": 0.14966908300993964,
+            "codegen-gzip-o3": 0.14820158301154152
+          }
+        },
+        {
+          "round": 3,
+          "order": [
+            "baseline",
+            "candidate"
+          ],
+          "baseline": {
+            "gzip": 0.2109063329990022,
+            "gunzip": 0.08852099999785423,
+            "sed": 0.23712266597431153,
+            "sort": 0.06406970898387954,
+            "sha256": 0.08356570795876905,
+            "tar": 0.04043350002029911,
+            "du": 0.210220750013832,
+            "ls": 0.08759162499336526,
+            "grep-fixed": 0.04987629200331867,
+            "grep-regex": 0.06565479101845995,
+            "node-minify": 1.3148466250277124,
+            "mawk-aggregate": 0.30463983298977837,
+            "diff-revisions": 0.15559895802289248,
+            "blind-perl-groups": 0.5322692499612458,
+            "blind-rev-lines": 0.6595137920230627,
+            "codegen-gzip-o1": 0.15366687503410503,
+            "codegen-gzip-o3": 0.14877429202897474
+          },
+          "candidate": {
+            "gzip": 0.20924616703996435,
+            "gunzip": 0.08849062497029081,
+            "sed": 0.23229929100489244,
+            "sort": 0.06570024997927248,
+            "sha256": 0.0838829170097597,
+            "tar": 0.0400770420092158,
+            "du": 0.21171529201092198,
+            "ls": 0.08730383298825473,
+            "grep-fixed": 0.050519582990091294,
+            "grep-regex": 0.06650933303171769,
+            "node-minify": 1.3191372079891153,
+            "mawk-aggregate": 0.30406925000716,
+            "diff-revisions": 0.15532575000543147,
+            "blind-perl-groups": 0.5231135000358336,
+            "blind-rev-lines": 0.665485790988896,
+            "codegen-gzip-o1": 0.14605808403575793,
+            "codegen-gzip-o3": 0.1471391249797307
+          }
+        },
+        {
+          "round": 4,
+          "order": [
+            "candidate",
+            "baseline"
+          ],
+          "candidate": {
+            "gzip": 0.2096696249791421,
+            "gunzip": 0.0877745000179857,
+            "sed": 0.23149799997918308,
+            "sort": 0.06396516697714105,
+            "sha256": 0.08328916702885181,
+            "tar": 0.040139209013432264,
+            "du": 0.2096045829821378,
+            "ls": 0.08742537500802428,
+            "grep-fixed": 0.05050754104740918,
+            "grep-regex": 0.06696141697466373,
+            "node-minify": 1.313350000011269,
+            "mawk-aggregate": 0.3034918330376968,
+            "diff-revisions": 0.15639166696928442,
+            "blind-perl-groups": 0.5173247090424411,
+            "blind-rev-lines": 0.6540323329973035,
+            "codegen-gzip-o1": 0.15281758300261572,
+            "codegen-gzip-o3": 0.14989120798418298
+          },
+          "baseline": {
+            "gzip": 0.21833100001094863,
+            "gunzip": 0.08923124999273568,
+            "sed": 0.23740112502127886,
+            "sort": 0.06432274996768683,
+            "sha256": 0.08319175004726276,
+            "tar": 0.040082709048874676,
+            "du": 0.20892420795280486,
+            "ls": 0.0880880419863388,
+            "grep-fixed": 0.04982808401109651,
+            "grep-regex": 0.06619229097850621,
+            "node-minify": 1.3101631670142524,
+            "mawk-aggregate": 0.3011072080116719,
+            "diff-revisions": 0.1536229579942301,
+            "blind-perl-groups": 0.5281215840368532,
+            "blind-rev-lines": 0.6584066249779426,
+            "codegen-gzip-o1": 0.147586333041545,
+            "codegen-gzip-o3": 0.14544875000137836
+          }
+        },
+        {
+          "round": 5,
+          "order": [
+            "baseline",
+            "candidate"
+          ],
+          "baseline": {
+            "gzip": 0.216942792001646,
+            "gunzip": 0.09366154100280255,
+            "sed": 0.2393017909489572,
+            "sort": 0.06548037502216175,
+            "sha256": 0.08319895900785923,
+            "tar": 0.03930908301845193,
+            "du": 0.2091060420498252,
+            "ls": 0.08683804201427847,
+            "grep-fixed": 0.050029167032334954,
+            "grep-regex": 0.06665400002384558,
+            "node-minify": 1.3142912500188686,
+            "mawk-aggregate": 0.308550291985739,
+            "diff-revisions": 0.1539354170090519,
+            "blind-perl-groups": 0.5247773340088315,
+            "blind-rev-lines": 0.6685657080379315,
+            "codegen-gzip-o1": 0.1482374159968458,
+            "codegen-gzip-o3": 0.1608221250353381
+          },
+          "candidate": {
+            "gzip": 0.21068037499208003,
+            "gunzip": 0.08708495897008106,
+            "sed": 0.23529462498845533,
+            "sort": 0.06678708299295977,
+            "sha256": 0.08337379101430997,
+            "tar": 0.03986216598423198,
+            "du": 0.2084053749567829,
+            "ls": 0.08717775001423433,
+            "grep-fixed": 0.04979183303657919,
+            "grep-regex": 0.06606479099718854,
+            "node-minify": 1.3150753749650903,
+            "mawk-aggregate": 0.30167954199714586,
+            "diff-revisions": 0.15543641697149724,
+            "blind-perl-groups": 0.5191332090180367,
+            "blind-rev-lines": 0.6567457090131938,
+            "codegen-gzip-o1": 0.15388712502317503,
+            "codegen-gzip-o3": 0.15082024998264387
+          }
+        }
+      ],
+      "ratios": {
+        "candidate": {
+          "median_paired_speedups": {
+            "gzip": 1.0297247287973614,
+            "gunzip": 1.0137999544782734,
+            "sed": 1.0170304186111285,
+            "sort": 0.975182118851795,
+            "sha256": 0.99856193399598,
+            "tar": 0.9875894615871242,
+            "du": 0.9967540069036043,
+            "ls": 1.003296441808566,
+            "grep-fixed": 0.9955999591971046,
+            "grep-regex": 0.9988375420130398,
+            "node-minify": 0.9987499935759476,
+            "mawk-aggregate": 0.9921427044604239,
+            "diff-revisions": 0.9903433185627241,
+            "blind-perl-groups": 1.0108722094690703,
+            "blind-rev-lines": 1.0066881891917983,
+            "codegen-gzip-o1": 0.9657680100791728,
+            "codegen-gzip-o3": 1.0069989211488932
+          },
+          "panel_geomean_speedup": {
+            "training": 1.0026115992197295,
+            "regression": 0.9951287814050361,
+            "blind": 1.008778030120963,
+            "compiler": 0.9861680101432212
+          },
+          "overall_geomean_speedup": 0.9991810601664548
+        }
+      }
+    }
+  },
+  "cache_allocation_method": "Separate instrumented pair using the same workloads and lock. Counts and requested bytes are cumulative over successful Mmu::try_allocate_arm_block_bytes allocations, excluding allocator padding and metadata. Wide slots are tallied from HasDataSlot on each newly cached block and grouped by the associated guest word. Total instruction slots exclude sentinels.",
+  "cache": {
+    "manifest": "benchmark/optimization/results/20261126-default-3m/measurements.json",
+    "native_sha256": {
+      "baseline": "f94dd9a49ba4ff1982f41b22760e05ffdd2530f5a83797b6c0942099e8eec4f9",
+      "candidate": "0c5ba0eec06a6205cc945392cf328015586ab2cbae2c1c256d59094bc7c5beac"
+    },
+    "managed_cli_sha256": "4a264aae389159667eb5b26999cc0566ac628af69dd5c8842835242f5c02e1e5",
+    "guest_jit": "off",
+    "block_cache_mib": 64,
+    "guest_memory_gib": 1,
+    "host_dotnet_tiered_compilation": false,
+    "verified_outputs": 34,
+    "rounds": [
+      {
+        "round": 1,
+        "order": [
+          "baseline",
+          "candidate"
+        ],
+        "baseline": {
+          "blocks": 233210,
+          "bytes": 55335744,
+          "mean_bytes": 237.27860726383946,
+          "total_slots": 2326493,
+          "wide_slots": 569044,
+          "wide_slots_by_kind": {
+            "ADR": 679,
+            "LogicalImmediate64": 22859,
+            "Bitfield": 38239,
+            "BranchImmediate": 136683,
+            "BranchRegister": 51602,
+            "BranchCondition": 152298,
+            "CompareBranch": 109924,
+            "TestBranch": 27882,
+            "LoadLiteral": 251,
+            "LogicalImmediate32": 28627
+          }
+        },
+        "candidate": {
+          "blocks": 233220,
+          "bytes": 53940592,
+          "mean_bytes": 231.2863047766058,
+          "total_slots": 2326575,
+          "wide_slots": 481743,
+          "wide_slots_by_kind": {
+            "ADR": 0,
+            "LogicalImmediate64": 3347,
+            "Bitfield": 0,
+            "BranchImmediate": 136691,
+            "BranchRegister": 51605,
+            "BranchCondition": 152294,
+            "CompareBranch": 109924,
+            "TestBranch": 27882,
+            "LoadLiteral": 0,
+            "LogicalImmediate32": 0
+          }
+        }
+      }
+    ],
+    "bytes_delta_pct": -2.5212491947338767,
+    "mean_bytes_delta_pct": -2.5254288856182416,
+    "wide_slots_delta_pct": -15.341695896978091
+  },
+  "native_text_bytes": {
+    "baseline": 4424332,
+    "candidate": 4423352,
+    "delta_pct": -0.02215023646507941
+  },
+  "wasm": {
+    "baseline": {
+      "module_bytes": 3641906,
+      "code_section_bytes": 3263383,
+      "brotli_11_bytes": 480375
+    },
+    "candidate": {
+      "module_bytes": 3635164,
+      "code_section_bytes": 3256586,
+      "brotli_11_bytes": 479491
+    },
+    "delta_pct": {
+      "module_bytes": -0.1851228450157727,
+      "code_section_bytes": -0.20828079327495086,
+      "brotli_11_bytes": -0.18402289877699207
+    },
+    "link": "Release static dual-guest archive linked as an optimized Emscripten standalone reactor with the same X86_ and AArch64_ C API exports, Wasm SIMD and tail calls for each build.",
+    "code_section_bytes_definition": "Wasm section 10 payload bytes, excluding the section header.",
+    "validation": "Node WebAssembly.Module validated both modules and checked the run and initialization exports for both guests."
+  },
+  "objdump_audit": {
+    "method": "Native llvm-objdump disassembly of the affected generic dispatch and compare-fusion handlers and all stock scalar or fused baked wrappers containing an affected opcode. Counts are wrappers containing each pattern. Calls include bl and blr, frames include stack-pointer adjustments or frame-pointer setup, and spills are stores through sp or x29.",
+    "baseline": {
+      "baked-exact": {
+        "symbols": 892,
+        "calls": 0,
+        "frames": 0,
+        "spills": 0,
+        "stack_accesses": 0
+      },
+      "baked-fused": {
+        "symbols": 2814,
+        "calls": 0,
+        "frames": 0,
+        "spills": 0,
+        "stack_accesses": 0
+      },
+      "baked-partial": {
+        "symbols": 65,
+        "calls": 0,
+        "frames": 0,
+        "spills": 0,
+        "stack_accesses": 0
+      },
+      "generic-address": {
+        "symbols": 4,
+        "calls": 0,
+        "frames": 0,
+        "spills": 0,
+        "stack_accesses": 0
+      },
+      "generic-b.cond": {
+        "symbols": 15,
+        "calls": 0,
+        "frames": 0,
+        "spills": 0,
+        "stack_accesses": 0
+      },
+      "generic-bitfield": {
+        "symbols": 14,
+        "calls": 0,
+        "frames": 0,
+        "spills": 0,
+        "stack_accesses": 0
+      },
+      "generic-compare-branch": {
+        "symbols": 10,
+        "calls": 0,
+        "frames": 0,
+        "spills": 0,
+        "stack_accesses": 0
+      },
+      "generic-compare-fusion": {
+        "symbols": 112,
+        "calls": 0,
+        "frames": 0,
+        "spills": 0,
+        "stack_accesses": 0
+      },
+      "generic-literal": {
+        "symbols": 2,
+        "calls": 0,
+        "frames": 0,
+        "spills": 0,
+        "stack_accesses": 0
+      },
+      "generic-logical-immediate": {
+        "symbols": 34,
+        "calls": 0,
+        "frames": 0,
+        "spills": 0,
+        "stack_accesses": 0
+      },
+      "generic-test-branch": {
+        "symbols": 2,
+        "calls": 0,
+        "frames": 0,
+        "spills": 0,
+        "stack_accesses": 0
+      }
+    },
+    "candidate": {
+      "baked-exact": {
+        "symbols": 892,
+        "calls": 0,
+        "frames": 0,
+        "spills": 0,
+        "stack_accesses": 0
+      },
+      "baked-fused": {
+        "symbols": 2814,
+        "calls": 0,
+        "frames": 0,
+        "spills": 0,
+        "stack_accesses": 0
+      },
+      "baked-partial": {
+        "symbols": 65,
+        "calls": 0,
+        "frames": 0,
+        "spills": 0,
+        "stack_accesses": 0
+      },
+      "generic-address": {
+        "symbols": 2,
+        "calls": 0,
+        "frames": 0,
+        "spills": 0,
+        "stack_accesses": 0
+      },
+      "generic-b.cond": {
+        "symbols": 15,
+        "calls": 0,
+        "frames": 0,
+        "spills": 0,
+        "stack_accesses": 0
+      },
+      "generic-bitfield": {
+        "symbols": 12,
+        "calls": 0,
+        "frames": 0,
+        "spills": 0,
+        "stack_accesses": 0
+      },
+      "generic-compare-branch": {
+        "symbols": 10,
+        "calls": 0,
+        "frames": 0,
+        "spills": 0,
+        "stack_accesses": 0
+      },
+      "generic-compare-fusion": {
+        "symbols": 112,
+        "calls": 0,
+        "frames": 0,
+        "spills": 0,
+        "stack_accesses": 0
+      },
+      "generic-literal": {
+        "symbols": 2,
+        "calls": 0,
+        "frames": 0,
+        "spills": 0,
+        "stack_accesses": 0
+      },
+      "generic-logical-immediate": {
+        "symbols": 48,
+        "calls": 0,
+        "frames": 0,
+        "spills": 0,
+        "stack_accesses": 0
+      },
+      "generic-test-branch": {
+        "symbols": 2,
+        "calls": 0,
+        "frames": 0,
+        "spills": 0,
+        "stack_accesses": 0
+      }
+    }
+  },
+  "tests": {
+    "native_ctest": "24/24",
+    "exhaustive_bitfield_encodings": 15360,
+    "aarch64_native_differential": "276 native encodings, 82 baked handlers, 8 invalid encodings and 22 dead-NZCV handlers",
+    "dotnet": "3276/3276",
+    "python": "83/83 with the stdlib platform.platform() cache initialized before pytest. Plain pytest has the same six macOS subprocess-mock failures on baseline.",
+    "standalone_wasm": "Validated baseline and candidate"
+  },
+  "post_format_verification": {
+    "method": "The commit hook formatted the C++ changes. The rebuild reproduced the measured native __text bytes and the entire standalone Wasm module.",
+    "native_text_sha256": "3ffdccaf82ab4cf6c350ef097ba02dbf8f25c799c51b96d60c013d231e2e3af6",
+    "native_library_sha256": "6477a50464ce42cddcbd8baf16d0a2e5c20144067c7147db40dce286469a86b9",
+    "wasm_sha256": "f0a87a185789ff7bc15cec2b1bc21bdf834ab68dbe6a6c1819b830c067bbf176",
+    "native_ctest": "24/24",
+    "dotnet": "3276/3276"
+  }
+}

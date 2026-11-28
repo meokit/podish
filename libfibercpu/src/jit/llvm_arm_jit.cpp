@@ -126,6 +126,7 @@ arm_jit::Member CaptureMember(const ArmBlock& block) {
     for (unsigned i = 0; i < block.inst_count(); ++i) {
         const auto word = block.Word(i);
         if (op != sentinel && op->GuestIndex() == i) {
+            assert(op->Has(HasDataSlot) == HasExtraOperandSlot(DecodeFields(word)));
             member.steps.push_back({word, uint8_t(1 + op->Has(HasDataSlot))});
             op = op->NextOp();
         } else {

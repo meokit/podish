@@ -2,6 +2,7 @@
 
 #include <bit>
 #include <limits>
+#include <type_traits>
 
 #include "decoder.h"
 
@@ -361,9 +362,34 @@ A64_INTEGER_INLINE uint64_t RelativeTarget(uint64_t base, uint64_t immediate, ui
     return base + immediate;
 }
 
-enum class IntegerForm { Default, Uxtb, Uxtw, RotateRight };
+enum class IntegerForm { Default, Uxtb, Uxtw, RotateRight, BitfieldShifts, InlineLogical64 };
 
 constexpr bool IsRotateImmediate(const DecodedInstruction& op) { return op.kind == Kind::Extract && op.rn == op.rm; }
+
+constexpr unsigned PackBitfieldShifts(unsigned width, unsigned r, unsigned s) {
+    // Align bit S to the top of the register, extract with a signed or
+    // unsigned shift, then move a wrapping field to its insertion position.
+    const bool wraps = s < r;
+    const auto left = width - 1 - s;
+    const auto right = left + (wraps ? 0 : r);
+    const auto position = wraps ? width - r : 0;
+    return left | (right << 6) | (position << 12);
+}
+
+template <class U, int operation>
+A64_INTEGER_INLINE U BitfieldByShifts(U source, U dest, unsigned shifts) {
+    const auto left = Field(shifts, 0, 6);
+    const auto right = Field(shifts, 6, 6);
+    const auto position = Field(shifts, 12, 6);
+    if constexpr (operation == 0) {
+        using Signed = std::make_signed_t<U>;
+        return U(Signed(source << left) >> right) << position;
+    } else {
+        const U field = ((source << left) >> right) << position;
+        if constexpr (operation == 1) return field | (dest & ~((~U{0} >> right) << position));
+        return field;
+    }
+}
 
 template <Kind kind, unsigned fixed_width = 0, int fixed_operation = -1, int fixed_shift = -1, bool write_nzcv = true,
           bool bound_pc = false, IntegerForm form = IntegerForm::Default, class Registers>
@@ -436,15 +462,23 @@ A64_INTEGER_INLINE StepResult IntegerKernel(const Registers& registers, const De
         registers.Write(op.rd, width, value);
     } else if constexpr (kind == Kind::Bitfield) {
         const auto source = registers.Read(op.rn, width);
-        const uint64_t rotated = width == 32 ? std::rotr(uint32_t(source), int(shift)) : std::rotr(source, int(shift));
-        const auto bottom = rotated & op.immediate;
-        uint64_t result = bottom & op.mask;
-        if (operation == 0 && ((source >> op.rm) & 1)) result |= ~op.mask;
-        if (operation == 1) {
-            const auto dest = registers.Read(op.rd, width);
-            result = (dest & ~op.mask) | (((dest & ~op.immediate) | bottom) & op.mask);
+        if constexpr (form == IntegerForm::BitfieldShifts) {
+            static_assert((fixed_width == 32 || fixed_width == 64) && fixed_operation >= 0 && fixed_operation <= 2);
+            using U = std::conditional_t<fixed_width == 32, uint32_t, uint64_t>;
+            const U dest = fixed_operation == 1 ? registers.Read(op.rd, width) : 0;
+            registers.Write(op.rd, width, BitfieldByShifts<U, fixed_operation>(U(source), dest, op.immediate));
+        } else {
+            const uint64_t rotated =
+                width == 32 ? std::rotr(uint32_t(source), int(shift)) : std::rotr(source, int(shift));
+            const auto bottom = rotated & op.immediate;
+            uint64_t result = bottom & op.mask;
+            if (operation == 0 && ((source >> op.rm) & 1)) result |= ~op.mask;
+            if (operation == 1) {
+                const auto dest = registers.Read(op.rd, width);
+                result = (dest & ~op.mask) | (((dest & ~op.immediate) | bottom) & op.mask);
+            }
+            registers.Write(op.rd, width, result);
         }
-        registers.Write(op.rd, width, result);
     } else if constexpr (kind == Kind::Extract) {
         const auto low = registers.Read(op.rm, width);
         if constexpr (form == IntegerForm::RotateRight) {

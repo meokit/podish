@@ -444,6 +444,29 @@ void CheckMemory(EmuState* state) {
     AArch64_MemUnmap(state, Pc, 2 * PageBytes);
 }
 
+void CheckCompactSlots(EmuState* state) {
+    alignas(PageBytes) std::array<uint8_t, PageBytes> code{};
+    Put(code.data(), std::array{0x10ffffe5u,   // adr x5, .-4
+                                0x580001e2u,   // ldr x2, Pc + 64
+                                0x32010043u,   // orr w3, w2, #0x80000000
+                                0xb25c0064u,   // orr x4, x3, #0x1000000000
+                                0xb2410086u,   // orr x6, x4, #0x8000000000000000
+                                0xd360fcc7u,   // lsr x7, x6, #32
+                                0x17fffffau}); // b Pc
+    Put(code.data() + 64, std::array{0x12345678u, 0x90abcdefu});
+    assert(AArch64_MemMapHostPage(state, Pc, code.data(), 5));
+    WaitForJit(state, Pc, 21, code.data(), 1);
+    constexpr uint64_t expected[] = {0x90ab'cdef'1234'5678, 0x9234'5678, 0x10'9234'5678, Pc - 4,
+                                     0x8000'0010'9234'5678, 0x8000'0010};
+    for (unsigned i = 0; i < std::size(expected); ++i)
+        AArch64_RegWrite(state, i + 2, 0);
+    Run(state, Pc, 7);
+    for (unsigned i = 0; i < std::size(expected); ++i)
+        assert(AArch64_RegRead(state, i + 2) == expected[i]);
+    assert(AArch64_RegRead(state, 32) == Pc);
+    AArch64_MemUnmap(state, Pc, PageBytes);
+}
+
 void CheckRegisterAndRefetch(EmuState* state, bool region) {
     alignas(PageBytes) std::array<uint8_t, PageBytes> code{};
     Put(code.data(), std::array{0xd51b4208u,   // msr nzcv, x8
@@ -661,6 +684,7 @@ int main(int argc, char**) {
     CheckBudgetModes(state, region);
     CheckConditionalFallthrough(state, region);
     CheckMemory(state);
+    CheckCompactSlots(state);
     CheckRegisterAndRefetch(state, region);
     CheckAtomicAndSystemReplay(state);
     CheckVectorStructureReplay(state);

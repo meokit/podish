@@ -71,7 +71,7 @@ constexpr GenericHandlerBinding BindMemoryHandler() {
 template <Kind kind, unsigned width, int operation, int shift, bool write_nzcv, IntegerForm form, bool TouchesPin>
 A64_FORCE_INLINE StepResult IntegerLogic(State& state, const DecodedOp*& current A64_UTLB_REF_PARAMS,
                                          uint32_t& flags_cache A64_HOT_PIN_REF) {
-    const auto op = GetOpOperands<kind, operation>(*current);
+    const auto op = GetOpOperands<kind, width, form == IntegerForm::InlineLogical64>(*current);
     uint64_t pc = 0;
     if constexpr (kind == Kind::BranchImmediate) {
         if (op.operation != 0) pc = current->GetStartPc(state);
@@ -85,7 +85,10 @@ A64_FORCE_INLINE StepResult IntegerLogic(State& state, const DecodedOp*& current
 template <Kind kind, unsigned width = 0, int operation = -1, int shift = -1, bool write_nzcv = true,
           IntegerForm form = IntegerForm::Default>
 constexpr GenericHandlerBinding BindIntegerKernel() {
-    constexpr DispatchPolicy policy{.wide = HasExtraOperandSlot(kind, operation), .branch = BranchPolicy(kind)};
+    constexpr DispatchPolicy policy{
+        .wide = HasExtraOperandSlot(kind) ||
+                (kind == Kind::LogicalImmediate && width == 64 && form != IntegerForm::InlineLogical64),
+        .branch = BranchPolicy(kind)};
     constexpr bool touches_pin = kind != Kind::BranchCondition;
     constexpr HandlerBinding binding{
         &DispatchWrapper<IntegerLogic<kind, width, operation, shift, write_nzcv, form, touches_pin>, policy>};
@@ -104,7 +107,9 @@ constexpr auto ConditionBranchVariants(std::index_sequence<condition...>) {
 constexpr auto Handlers = [] {
     std::array<GenericHandlerBinding, size_t(Kind::Count)> handlers;
     handlers.fill(BindTrapHandler<Stop::Undefined>());
-#define ARM_INTEGER(Name) handlers[size_t(Kind::Name)] = BindIntegerKernel<Kind::Name>();
+#define ARM_INTEGER(Name)                                                               \
+    if constexpr (Kind::Name != Kind::LogicalImmediate && Kind::Name != Kind::Bitfield) \
+        handlers[size_t(Kind::Name)] = BindIntegerKernel<Kind::Name>();
 #define ARM_BRANCH(Name, Form) ARM_INTEGER(Name)
 #define ARM_MEMORY(Name, FallbackWidth) handlers[size_t(Kind::Name)] = BindMemoryHandler<Kind::Name, FallbackWidth>();
 #define ARM_EXTRA(Name)
@@ -113,7 +118,6 @@ constexpr auto Handlers = [] {
 #undef ARM_MEMORY
 #undef ARM_BRANCH
 #undef ARM_INTEGER
-    handlers[size_t(Kind::Address)] = BindIntegerKernel<Kind::Address, 0, 0>();
     handlers[size_t(Kind::LoadStoreExclusive)] = BindAtomicHandler<Kind::LoadStoreExclusive>();
     handlers[size_t(Kind::LoadStoreAtomic)] = BindAtomicHandler<Kind::LoadStoreAtomic>();
     handlers[size_t(Kind::Syscall)] = BindTrapHandler<Stop::Syscall>();
@@ -133,6 +137,16 @@ GenericHandlerBinding BindInteger(const DecodedInstruction& op) {
     constexpr auto variants =
         IntegerVariants<kind, operations, shift, write_nzcv, form>(std::make_index_sequence<2 * operations>{});
     return variants[(op.width == 64 ? operations : 0) + op.operation];
+}
+
+template <bool write_nzcv>
+GenericHandlerBinding BindLogicalImmediate(const DecodedInstruction& op) {
+    constexpr auto inline64 = []<size_t... operation>(std::index_sequence<operation...>) {
+        return std::array{BindIntegerKernel<Kind::LogicalImmediate, 64, operation, -1, write_nzcv,
+                                            IntegerForm::InlineLogical64>()...};
+    }(std::make_index_sequence<4>{});
+    if (UsesInlineLogical64(op)) return inline64[op.operation];
+    return BindInteger<Kind::LogicalImmediate, 4, -1, write_nzcv>(op);
 }
 
 template <bool write_nzcv>
@@ -184,8 +198,6 @@ inline GenericHandlerBinding Lower(const DecodedInstruction& op) {
         return HandlerBinding{&DispatchWrapper<NopLogic, nop_policy>};
     }
     switch (op.kind) {
-        case Kind::Address:
-            return op.operation ? BindIntegerKernel<Kind::Address, 0, 1>() : Handlers[size_t(Kind::Address)];
         case Kind::System:
             if (auto binding = LowerSystem(op.word); binding.handler) return binding;
             break;
@@ -210,13 +222,13 @@ inline GenericHandlerBinding Lower(const DecodedInstruction& op) {
         case Kind::AddSubCarry:
             return BindInteger<Kind::AddSubCarry>(op);
         case Kind::LogicalImmediate:
-            return BindInteger<Kind::LogicalImmediate>(op);
+            return BindLogicalImmediate<true>(op);
         case Kind::LogicalShifted:
             return op.shift ? BindInteger<Kind::LogicalShifted, 8>(op) : BindInteger<Kind::LogicalShifted, 8, 0>(op);
         case Kind::MoveWide:
             return BindInteger<Kind::MoveWide>(op);
         case Kind::Bitfield:
-            return BindInteger<Kind::Bitfield, 3>(op);
+            return BindInteger<Kind::Bitfield, 3, -1, true, IntegerForm::BitfieldShifts>(op);
         case Kind::ConditionalSelect:
             return BindInteger<Kind::ConditionalSelect>(op);
         case Kind::BranchCondition: {
@@ -271,7 +283,7 @@ inline GenericHandlerBinding LowerDeadNZCV(const DecodedInstruction& op) {
         case Kind::AddSubCarry:
             return BindInteger<Kind::AddSubCarry, 4, -1, false>(op);
         case Kind::LogicalImmediate:
-            return BindInteger<Kind::LogicalImmediate, 4, -1, false>(op);
+            return BindLogicalImmediate<false>(op);
         case Kind::LogicalShifted:
             return op.shift ? BindInteger<Kind::LogicalShifted, 8, -1, false>(op)
                             : BindInteger<Kind::LogicalShifted, 8, 0, false>(op);

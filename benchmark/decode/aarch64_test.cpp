@@ -648,7 +648,7 @@ detail::HandlerFunc CountProfiledAdd(const DecodedInstruction& op, bool) {
     constexpr uint32_t Add = 0x91000400; // add x0, x0, #1
     if (op.word != Add)
         return nullptr;
-    return &detail::DispatchWrapper<CountProfiledAddLogic<Counter>, detail::BakedPolicy<Add>()>;
+    return &detail::DispatchWrapper<CountProfiledAddLogic<Counter>, detail::BakedPolicy<0, Add>()>;
 }
 
 bool ReplacedSuccessorUsesCurrentProfile() {
@@ -1337,7 +1337,8 @@ bool FusedLoadRefetch() {
         if (count < 3 || words[0] != Add1 || words[1] != Load || words[2] != Add2)
             return nullptr;
         *matched = 3;
-        return &detail::DispatchWrapper<CountingBakedLogic<Add1, Load, Add2>, detail::BakedPolicy<Add1, Load, Add2>()>;
+        return &detail::DispatchWrapper<CountingBakedLogic<Add1, Load, Add2>,
+                                        detail::BakedPolicy<0, Add1, Load, Add2>()>;
     };
     State state;
     state.pc = Start;
@@ -1845,6 +1846,65 @@ bool CompactBitfieldOperands() {
            state.x[2] == 0xffffffff'80000006;
 }
 
+bool ExhaustiveCompactBitfieldOperands() {
+    using namespace detail;
+    constexpr uint64_t values[] = {0, ~uint64_t{0}, 0x8000'0001'8000'0001, 0x5678'1234'a9bc'def0};
+    for (unsigned sf = 0; sf < 2; ++sf) {
+        const unsigned width = sf ? 64 : 32;
+        for (unsigned n = 0; n < 2; ++n)
+            for (unsigned operation = 0; operation < 4; ++operation)
+                for (unsigned r = 0; r < 64; ++r)
+                    for (unsigned s = 0; s < 64; ++s) {
+                        const uint32_t word =
+                            0x13000022 | (sf << 31) | (operation << 29) | (n << 22) | (r << 16) | (s << 10);
+                        const auto decoded = DecodeFields(word);
+                        const bool valid = sf == n && operation < 3 && r < width && s < width;
+                        if ((decoded.kind == Kind::Bitfield) != valid)
+                            return false;
+                        if (!valid)
+                            continue;
+                        auto reference = decoded;
+                        if (!DecodeBitMasks(reference, n, r, s, false) || HasExtraOperandSlot(decoded))
+                            return false;
+                        const DecodedOp slot{.payload = DecodedOp::Pack(PackOpOperands(decoded), 31, 0, 1, 0)};
+                        const auto compact = GetOpOperands<Kind::Bitfield>(slot);
+                        if (compact.width != width || compact.operation != operation || compact.shift != r ||
+                            compact.rm != s || compact.rn != 1 || compact.rd != 2)
+                            return false;
+                        for (const auto source : values)
+                            for (const auto dest : values) {
+                                State expected, actual;
+                                expected.x[1] = actual.x[1] = source;
+                                expected.x[2] = actual.x[2] = dest;
+                                IntegerKernel<Kind::Bitfield>(ScalarRegisters{expected}, reference, 0, expected.nzcv);
+                                const auto check = [&]<unsigned bit_width, int op>() {
+                                    IntegerKernel<Kind::Bitfield, bit_width, op, -1, true, false,
+                                                  IntegerForm::BitfieldShifts>(ScalarRegisters{actual}, compact, 0,
+                                                                               actual.nzcv);
+                                };
+                                if (sf) {
+                                    if (operation == 0)
+                                        check.template operator()<64, 0>();
+                                    if (operation == 1)
+                                        check.template operator()<64, 1>();
+                                    if (operation == 2)
+                                        check.template operator()<64, 2>();
+                                } else {
+                                    if (operation == 0)
+                                        check.template operator()<32, 0>();
+                                    if (operation == 1)
+                                        check.template operator()<32, 1>();
+                                    if (operation == 2)
+                                        check.template operator()<32, 2>();
+                                }
+                                if (actual.x[2] != expected.x[2])
+                                    return false;
+                            }
+                    }
+    }
+    return true;
+}
+
 struct CachedBacking : Backing {
     alignas(detail::BasicBlock) std::array<std::array<std::byte, 1024>, 4> storage;
     std::array<detail::BasicBlock*, 4> blocks{};
@@ -2001,19 +2061,207 @@ bool CompactOperandDispatch() {
     return true;
 }
 
-bool CompactAdrpPreservesFullTarget() {
+bool CompactSlotMetadata() {
+    using namespace detail;
+    constexpr auto flags = HasDataSlot | RetainsPage | HasBranchLink;
+    const DecodedOp empty{.payload = DecodedOp::Pack(0, 0, 0, 1, 0)};
+    const DecodedOp compact{.payload = DecodedOp::Pack(DecodedOp::OperandMask, 31, flags, MaxBakedFusionLength, 0)};
+    const DecodedOp branch{.payload = DecodedOp::Pack(0xffffffff, 0, flags, BlockMax, 31)};
+    return !empty.Operands() && !empty.GuestIndex() && empty.Span() == 1 && !empty.BranchSuffix() &&
+           !empty.Has(HasDataSlot) && !empty.Has(RetainsPage) && !empty.Has(HasBranchLink) &&
+           compact.Operands() == DecodedOp::OperandMask && compact.GuestIndex() == 31 &&
+           compact.Span() == MaxBakedFusionLength && compact.Has(HasDataSlot) && compact.Has(RetainsPage) &&
+           compact.Has(HasBranchLink) && branch.BranchSuffix() == 31 && uint32_t(branch.Operands()) == 0xffffffff &&
+           branch.GuestIndex() == 0 && branch.Span() == BlockMax;
+}
+
+bool CompactAddressPreservesFullTarget() {
     for (const auto pc : {uint64_t{0}, ArmTaskSize - 4}) {
-        for (const uint32_t word : {0x90800005u, 0xf07fffe5u}) {
+        for (const uint32_t word : {0x10800005u, 0x707fffe5u, 0x90800005u, 0xf07fffe5u}) {
             auto decoded = Decode(word);
             detail::BindBlockOperands(decoded, pc);
             const detail::DecodedOp slot{.payload =
                                              detail::DecodedOp::Pack(detail::PackOpOperands(decoded), 3, 0, 2, 0)};
             const auto op = detail::GetOpOperands<Kind::Address>(slot);
-            if (decoded.kind != Kind::Address || op.operation != 1 || op.rd != 5 || op.target_pc != decoded.target_pc ||
-                slot.GuestIndex() != 3 || slot.Span() != 2)
+            if (decoded.kind != Kind::Address || detail::HasExtraOperandSlot(decoded) || op.operation != (word >> 31) ||
+                op.rd != 5 || op.target_pc != decoded.target_pc || slot.GuestIndex() != 3 || slot.Span() != 2)
                 return false;
         }
     }
+    return true;
+}
+
+bool CompactLiteralOperands() {
+    using namespace detail;
+    constexpr struct {
+        uint32_t encoding;
+        unsigned width;
+        unsigned operation;
+        bool vector;
+    } shapes[] = {{0x18000000, 32, Load, false},         {0x58000000, 64, Load, false},
+                  {0x98000000, 32, LoadSigned64, false}, {0xd8000000, 32, Prefetch, false},
+                  {0x1c000000, 32, Load, true},          {0x5c000000, 64, Load, true},
+                  {0x9c000000, 128, Load, true}};
+    for (const auto& shape : shapes) {
+        for (const auto pc : {uint64_t{0}, ArmTaskSize - 4}) {
+            for (const int offset : {-(1 << 18), -1, 0, (1 << 18) - 1}) {
+                auto decoded = DecodeFields(shape.encoding | ((uint32_t(offset) & 0x7ffff) << 5) | 31);
+                BindBlockOperands(decoded, pc);
+                const DecodedOp slot{.payload = DecodedOp::Pack(PackOpOperands(decoded), 31, RetainsPage, 1, 0)};
+                const auto op = GetOpOperands<Kind::LoadLiteral>(slot);
+                if (decoded.kind != Kind::LoadLiteral || HasExtraOperandSlot(decoded) || op.rd != 31 ||
+                    op.width != shape.width || op.operation != shape.operation ||
+                    Field(op.word, 26, 1) != shape.vector || op.target_pc != pc + uint64_t(int64_t(offset) * 4))
+                    return false;
+            }
+        }
+        constexpr auto Start = Base + 32;
+        constexpr uint64_t Lo = 0x1234'5678'89ab'cdef;
+        constexpr uint64_t Hi = 0x7654'3210'fedc'ba98;
+        constexpr uint32_t Svc = 0xd4000001;
+        CachedBacking backing;
+        WriteLittle(&backing.data[0], Lo);
+        WriteLittle(&backing.data[8], Hi);
+        backing.Code(Start, {shape.encoding | (0x7fff8 << 5) | 3, Svc});
+        auto memory = backing.Callbacks();
+        fiberish::mem::SoftTlb tlb{};
+        const auto tag = ArmPageTag(Base);
+        tlb.read_tlb[tag & fiberish::mem::TLB_INDEX_MASK] = {
+            fiberish::mem::PackMicroTlbTags(tag, fiberish::mem::kInvalidMicroTlbTag),
+            reinterpret_cast<uintptr_t>(backing.data.data()) - Base,
+        };
+        memory.data_tlb = &tlb;
+        State state;
+        state.pc = Start;
+        state.x[3] = 7;
+        state.v[3] = {11, 13};
+        if (Run(state, memory, 2).reason != Stop::Syscall || backing.allocations != 1 ||
+            backing.blocks[0]->FirstOp()->Has(HasDataSlot) || backing.sizes[0] != 80)
+            return false;
+        const auto lo = shape.width == 32 ? uint32_t(Lo) : Lo;
+        if (shape.vector) {
+            if (state.v[3].lo != lo || state.v[3].hi != (shape.width == 128 ? Hi : 0) || state.x[3] != 7)
+                return false;
+        } else {
+            const auto expected =
+                shape.operation == Prefetch ? 7 : (shape.operation == LoadSigned64 ? SignExtend(lo, 32) : lo);
+            if (state.x[3] != expected || state.v[3].lo != 11 || state.v[3].hi != 13)
+                return false;
+        }
+    }
+    return true;
+}
+
+bool CompactLogicalImmediates() {
+    using namespace detail;
+    constexpr uint32_t WKey = 0x32000022; // orr w2, w1, #imm
+    constexpr uint32_t XKey = 0xb2000043; // orr x3, x2, #imm
+    constexpr uint32_t W = WKey | (1 << 16);
+    constexpr uint32_t XPositive = XKey | (1 << 22) | (28 << 16);
+    constexpr uint32_t XNegative = XKey | (1 << 22) | (61 << 16) | (60 << 10);
+    constexpr uint32_t XOutside = XKey | (1 << 22) | (1 << 16);
+    constexpr uint32_t Add = 0x91000464; // add x4, x3, #1
+    constexpr uint32_t Svc = 0xd4000001;
+
+    const Profile exact{.resolve = [](const DecodedInstruction& op, bool) -> HandlerFunc {
+        switch (op.word) {
+        case W:
+            return GetBakedHandler<W>();
+        case XPositive:
+            return GetBakedHandler<XPositive>();
+        case XNegative:
+            return GetBakedHandler<XNegative>();
+        case XOutside:
+            return GetBakedHandler<XOutside>();
+        default:
+            return nullptr;
+        }
+    }};
+    const Profile exact_pair{.resolve_pair = [](uint32_t first, uint32_t second, uint32_t dead) -> HandlerFunc {
+        if (first != W)
+            return nullptr;
+        switch (second) {
+        case XPositive:
+            return BindBakedFusion<W, XPositive>(dead);
+        case XNegative:
+            return BindBakedFusion<W, XNegative>(dead);
+        case XOutside:
+            return BindBakedFusion<W, XOutside>(dead);
+        default:
+            return nullptr;
+        }
+    }};
+    const Profile partial{.resolve = [](const DecodedInstruction& op, bool) -> HandlerFunc {
+        const auto key = op.word & ~PartialImmediateMask(op);
+        if (key == WKey)
+            return GetBakedHandler<WKey, true>();
+        if (key == XKey)
+            return GetBakedHandler<XKey, true>();
+        return nullptr;
+    }};
+    const Profile pair{.resolve_partial_pair = [](const DecodedInstruction& first, const DecodedInstruction& second,
+                                                  uint32_t dead) -> HandlerFunc {
+        if ((first.word & ~PartialImmediateMask(first)) != WKey ||
+            (second.word & ~PartialImmediateMask(second)) != XKey)
+            return nullptr;
+        return PartialBakedFusion<3, WKey, XKey>.Select(dead, 2);
+    }};
+    const Profile sequence{
+        .resolve_sequence = [](const uint32_t* words, unsigned count, unsigned* length, uint32_t dead) -> HandlerFunc {
+            if (count < 3 || (words[0] & ~(0x1fffu << 10)) != WKey || (words[1] & ~(0x1fffu << 10)) != XKey ||
+                words[2] != Add)
+                return nullptr;
+            *length = 3;
+            return PartialBakedFusion<3, WKey, XKey, Add>.Select(dead, 3);
+        }};
+    const std::array cases{std::pair{XPositive, uint64_t{1} << 36}, std::pair{XNegative, ~uint64_t{7}},
+                           std::pair{XOutside, uint64_t{1} << 63}};
+    for (const auto& [word, mask] : cases)
+        for (const auto& profile : {Profile{}, exact, exact_pair, partial, pair, sequence}) {
+            CachedBacking backing;
+            backing.Code(Base, {W, word, Add, Svc});
+            State state;
+            state.pc = Base;
+            state.x[1] = 0xabcd'1234'0000'0006;
+            const auto result = Run(state, backing.Callbacks(), 4, profile);
+            const uint64_t w = 0x80000006;
+            if (result.reason != Stop::Syscall || result.executed != 4 || state.x[2] != w || state.x[3] != (w | mask) ||
+                state.x[4] != (w | mask) + 1 || backing.allocations != 1)
+                return false;
+
+            const auto* first = backing.blocks[0]->FirstOp();
+            const auto* second = first->NextOp();
+            const bool wide = word == XOutside;
+            if (first->Has(HasDataSlot) || second->Has(HasDataSlot) != wide || second->GuestIndex() != 1 ||
+                GetOpOperands<Kind::LogicalImmediate>(*second).immediate != mask ||
+                second->NextOp()->GuestIndex() != 2 || backing.sizes[0] != 112 + 16 * wide ||
+                first->Span() != (profile.resolve_sequence                                 ? 3
+                                  : (profile.resolve_pair || profile.resolve_partial_pair) ? 2
+                                                                                           : 1))
+                return false;
+        }
+    return true;
+}
+
+bool LogicalImmediateSlotRoundTrip() {
+    using namespace detail;
+    for (unsigned sf = 0; sf < 2; ++sf)
+        for (unsigned encoding = 0; encoding < (1u << 13); ++encoding) {
+            const auto op = DecodeFields(0x32000022 | (sf << 31) | (encoding << 10));
+            if (op.kind != Kind::LogicalImmediate)
+                continue;
+            const auto immediate = std::bit_cast<int64_t>(op.immediate);
+            const bool wide = sf && (immediate < -(int64_t{1} << 37) || immediate >= (int64_t{1} << 37));
+            const auto flags = uint8_t(wide ? HasDataSlot : 0);
+            const DecodedOpWithDataSlot slot{
+                {.payload = DecodedOp::Pack(PackOpOperands(op), 31, flags, MaxBakedFusionLength, 0)},
+                wide ? op.immediate : ~op.immediate,
+            };
+            const auto decoded = GetOpOperands<Kind::LogicalImmediate>(slot.head);
+            if (HasExtraOperandSlot(op) != wide || decoded.immediate != op.immediate || decoded.width != op.width ||
+                decoded.operation != op.operation || decoded.rd != op.rd || decoded.rn != op.rn)
+                return false;
+        }
     return true;
 }
 
@@ -2114,9 +2362,16 @@ int main() {
         {"NZCV visible to faults, memory callbacks, SVC and undefined instructions", FlagElisionEvents()},
         {"FCMP FPSR effect when its NZCV is overwritten", FlagElisionFloatingCompare()},
         {"compact bitfield preserves the six-bit endpoint", CompactBitfieldOperands()},
+        {"all valid compact bitfield encodings match the architectural bit masks", ExhaustiveCompactBitfieldOperands()},
         {"compact slots, NOP folding, precise guest budgets and branch entry", CompactSlotsAndFoldedNopBudgets()},
         {"compact generic, baked and partially baked operands before a sentinel-free BL", CompactOperandDispatch()},
-        {"compact ADRP preserves results outside the guest address space", CompactAdrpPreservesFullTarget()},
+        {"decoded slot metadata preserves maximal operands, ordinals, spans and branch suffixes",
+         CompactSlotMetadata()},
+        {"compact ADR and ADRP preserve results outside the guest address space", CompactAddressPreservesFullTarget()},
+        {"all literal loads preserve their transfer type and signed target", CompactLiteralOperands()},
+        {"compact logical immediates agree across generic, baked, partial and fused dispatch",
+         CompactLogicalImmediates()},
+        {"every valid logical immediate round-trips through its compact or wide slot", LogicalImmediateSlotRoundTrip()},
         {"memory fault reports the original instruction after executable unmap", MemoryFaultAfterExecutableUnmap()},
         {"local cache refetches a modified folded NOP", RefetchChangedFoldedNop()},
     };

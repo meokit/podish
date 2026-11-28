@@ -42,11 +42,7 @@ extern "C" HandlerFunc FiberArmJitTryLink(State& state, const DecodedOp* slot, i
 template <Kind kind>
 OperationFlow RunInteger(State& state, const DecodedOp& slot, const DecodedInstruction& op, uint64_t pc, uint32_t& nzcv,
                          bool dead, uint64_t& target A64_HOT_PIN_REF) {
-    uint64_t bound_target = 0;
-    if constexpr (kind == Kind::Address)
-        bound_target = op.operation ? GetAddressTarget<1>(slot) : GetAddressTarget<0>(slot);
-    else if constexpr (HasBlockTarget(kind))
-        bound_target = GetExtraOperands(slot).primary;
+    const auto bound_target = GetBoundTarget<kind>(slot);
     if constexpr (kind == Kind::AddSubImmediate || kind == Kind::AddSubShifted || kind == Kind::AddSubExtended ||
                   kind == Kind::AddSubCarry || kind == Kind::LogicalImmediate || kind == Kind::LogicalShifted ||
                   kind == Kind::ConditionalCompare) {
@@ -71,12 +67,12 @@ OperationFlow RunInteger(State& state, const DecodedOp& slot, const DecodedInstr
         return RunInteger<Kind::Name>(state, slot, op, pc, nzcv, dead, target A64_HANDLER_PIN_ARGS); \
     }
 #define ARM_BRANCH(Name, Form) ARM_INTEGER(Name)
-#define ARM_MEMORY(Name, FallbackWidth)                                                                \
-    ARM_OPERATION_KERNEL(Name) {                                                                       \
-        const uint64_t address = Kind::Name == Kind::LoadLiteral ? GetExtraOperands(slot).primary : 0; \
-        return ProbeLoadStore<Kind::Name>(state, op, address, tlb A64_UTLB_ARGS A64_HANDLER_PIN_ARGS)  \
-                   ? OperationFlow::Continue                                                           \
-                   : OperationFlow::Replay;                                                            \
+#define ARM_MEMORY(Name, FallbackWidth)                                                               \
+    ARM_OPERATION_KERNEL(Name) {                                                                      \
+        const auto address = GetBoundTarget<Kind::Name>(slot);                                        \
+        return ProbeLoadStore<Kind::Name>(state, op, address, tlb A64_UTLB_ARGS A64_HANDLER_PIN_ARGS) \
+                   ? OperationFlow::Continue                                                          \
+                   : OperationFlow::Replay;                                                           \
     }
 #define ARM_EXTRA(Name)
 #include "aarch64/operation_catalog.def"

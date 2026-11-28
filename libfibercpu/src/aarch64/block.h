@@ -14,38 +14,54 @@ namespace fiberish::aarch64::detail {
 using ::fiberish::BlockMax;
 constexpr unsigned PageBytes = 4096;
 constexpr uint64_t PageMask = PageBytes - 1;
-static_assert(BlockMax <= 32);
+constexpr unsigned MaxBakedFusionLength = 24;
 
 enum SlotFlag : uint8_t {
     HasDataSlot = 1,
     RetainsPage = 2,
     HasBranchLink = 4,
 };
-static_assert((HasDataSlot | RetainsPage | HasBranchLink) < (1u << 3));
 
 struct alignas(16) DecodedOp {
     HandlerFunc handler = nullptr;
 #if INTPTR_MAX == INT32_MAX
     uint32_t thread_padding = 0;
 #endif
-    // Low 40 bits hold the operands. Byte 5 holds the guest ordinal, byte 6
-    // holds the fused instruction span, and byte 7 holds SlotFlag bits and
-    // the conditional branch's remaining guest instruction count.
+    // Conditional branches store their fallthrough instruction count in
+    // unused bits of the operand field.
     // The sentinel uses the entire payload for its fallthrough link.
     mutable uint64_t payload = 0;
 
-    static constexpr uint64_t OperandMask = (uint64_t{1} << 40) - 1;
+    static constexpr unsigned BranchSuffixShift = 46;
+    static constexpr unsigned SpanShift = 51;
+    static constexpr unsigned FlagsShift = 56;
+    static constexpr unsigned GuestIndexShift = 59;
+    static constexpr unsigned GuestIndexMask = (1u << (64 - GuestIndexShift)) - 1;
+    static constexpr unsigned SpanMask = (1u << (FlagsShift - SpanShift)) - 1;
+    static constexpr unsigned FlagsMask = (1u << (GuestIndexShift - FlagsShift)) - 1;
+    static constexpr unsigned BranchSuffixMask = (1u << (SpanShift - BranchSuffixShift)) - 1;
+    static constexpr uint64_t OperandMask = (uint64_t{1} << SpanShift) - 1;
+
+    static_assert(BlockMax - 1 <= GuestIndexMask && BlockMax - 1 <= BranchSuffixMask);
+    static_assert(BlockMax - 1 <= SpanMask && MaxBakedFusionLength <= BlockMax);
+    static_assert((HasDataSlot | RetainsPage | HasBranchLink) <= FlagsMask);
+    static_assert(BranchSuffixShift >= 32);
+
     static constexpr uint64_t Pack(uint64_t operands, unsigned ordinal, uint8_t flags, uint8_t span,
                                    unsigned branch_suffix) {
-        return operands | (uint64_t{ordinal} << 40) | (uint64_t{span} << 48) | (uint64_t{flags} << 56) |
-               (uint64_t{branch_suffix} << 59);
+        assert(operands <= OperandMask && ordinal <= GuestIndexMask && flags <= FlagsMask && span &&
+               span <= SpanMask + 1 && branch_suffix <= BranchSuffixMask &&
+               (!branch_suffix || operands < (uint64_t{1} << BranchSuffixShift)));
+        // Store span minus one so a profile can fuse all 32 instructions in a block.
+        return operands | (uint64_t{ordinal} << GuestIndexShift) | (uint64_t{span - 1u} << SpanShift) |
+               (uint64_t{flags} << FlagsShift) | (uint64_t{branch_suffix} << BranchSuffixShift);
     }
 
     uint64_t Operands() const { return payload & OperandMask; }
-    unsigned GuestIndex() const { return (payload >> 40) & 0xff; }
-    unsigned Span() const { return (payload >> 48) & 0xff; }
-    unsigned BranchSuffix() const { return payload >> 59; }
-    bool Has(SlotFlag flag) const { return (payload >> 56) & flag; }
+    unsigned GuestIndex() const { return payload >> GuestIndexShift; }
+    unsigned Span() const { return ((payload >> SpanShift) & SpanMask) + 1; }
+    unsigned BranchSuffix() const { return (payload >> BranchSuffixShift) & BranchSuffixMask; }
+    bool Has(SlotFlag flag) const { return (payload >> FlagsShift) & flag; }
 
     const DecodedOp* Advance(unsigned units) const {
         return reinterpret_cast<const DecodedOp*>(reinterpret_cast<const std::byte*>(this) + units * sizeof(DecodedOp));
@@ -70,7 +86,7 @@ struct alignas(16) DecodedOp {
 struct DecodedOpWithDataSlot {
     DecodedOp head;
     uint64_t primary = 0;            // Bound target, branch-register PC or immediate.
-    mutable uint64_t secondary = 0;  // Taken link for branches, mask for bitfield operations.
+    mutable uint64_t secondary = 0;  // Taken link for branches.
 };
 
 inline const DecodedOpWithDataSlot& GetExtraOperands(const DecodedOp& slot) {
