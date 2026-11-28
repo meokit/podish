@@ -1,7 +1,7 @@
 # Native build presets
 
-Standalone CMake, native Podish and Podish.Browser default to `3m` for both guests. Wasm also uses a multi-workload hot dispatch plan. The three presets
-select i386 and AArch64 instruction tables calibrated on macOS ARM64.
+Standalone CMake, native Podish and Podish.Browser default to `3m` for both guests.
+The three presets select i386 and AArch64 instruction tables calibrated on macOS ARM64.
 
 | Preset | Text growth limit per guest | Text growth limit with both guests |
 | --- | ---: | ---: |

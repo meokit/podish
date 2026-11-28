@@ -11,12 +11,7 @@
     <FibercpuResolvedWasmBakingPreset>$(FibercpuWasmBakingPreset)</FibercpuResolvedWasmBakingPreset>
     <FibercpuResolvedWasmBakingPreset Condition="'$(FibercpuWasmBakingPreset)' == '1.75m'">1.5m</FibercpuResolvedWasmBakingPreset>
     <FibercpuResolvedWasmBakingPreset Condition="'$(FibercpuWasmBakingPreset)' == '3.5m'">3m</FibercpuResolvedWasmBakingPreset>
-    <WasmHotDispatchHandlers Condition="'$(WasmHotDispatchHandlers)' == '' And '$(FiberGuestI386)' != 'true'">0</WasmHotDispatchHandlers>
-    <WasmHotDispatchHandlers Condition="'$(WasmHotDispatchHandlers)' == '' And '$(FibercpuResolvedWasmBakingPreset)' == '1.5m'">850</WasmHotDispatchHandlers>
-    <WasmHotDispatchHandlers Condition="'$(WasmHotDispatchHandlers)' == '' And '$(FibercpuResolvedWasmBakingPreset)' == '3m'">913</WasmHotDispatchHandlers>
-    <WasmHotDispatchHandlers Condition="'$(WasmHotDispatchHandlers)' == ''">0</WasmHotDispatchHandlers>
     <FibercpuWasmNativeBuildDir>build_native/browser-wasm/net11.0</FibercpuWasmNativeBuildDir>
-    <FibercpuWasmNativeBuildDir Condition="'$(WasmHotDispatchHandlers)' != '0'">$(FibercpuWasmNativeBuildDir)/hot-dispatch</FibercpuWasmNativeBuildDir>
     <FibercpuWasmNativeBuildDir Condition="'$(FibercpuResolvedWasmBakingPreset)' == '1.5m' Or '$(FibercpuResolvedWasmBakingPreset)' == '10m'">$(FibercpuWasmNativeBuildDir)/$(FibercpuResolvedWasmBakingPreset)</FibercpuWasmNativeBuildDir>
     <FibercpuWasmNativeBuildDir>$(FibercpuWasmNativeBuildDir)$(FibercpuGuestSuffix)</FibercpuWasmNativeBuildDir>
     <FibercpuResolvedBakingPreset>$(FibercpuBakingPreset)</FibercpuResolvedBakingPreset>
