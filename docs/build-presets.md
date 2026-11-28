@@ -16,17 +16,23 @@ width and flags, exact and partial scalar bindings, and SuperOpcodes.
 AArch64 tiers include exact words, partial operand shapes, pairs, and longer
 fused sequences. Both guests train against the same workloads.
 
-The macOS ARM64 Release calibration used Apple Clang 21 and LTO. Sizes
-and increases below are in bytes, measured with one guest per build.
+The i386 calibration used Apple Clang 21 and LTO. The AArch64 retraining
+used Homebrew Clang 21.1.8 and Release ThinLTO on macOS ARM64. Sizes and
+increases below are in bytes, measured with one guest per build.
 
 | Preset | i386 native text | i386 growth | AArch64 native text | AArch64 growth |
 | --- | ---: | ---: | ---: | ---: |
-| Unbaked | 531,496 | 0 | 308,812 | 0 |
-| `1.5m` | 2,057,612 | 1,526,116 | 1,841,092 | 1,532,280 |
-| `3m` | 2,269,488 | 1,737,992 | 3,317,944 | 3,009,132 |
-| `10m` | 2,269,488 | 1,737,992 | 10,446,444 | 10,137,632 |
+| Unbaked | 531,496 | 0 | 320,072 | 0 |
+| `1.5m` | 2,057,612 | 1,526,116 | 1,188,416 | 868,344 |
+| `3m` | 2,269,488 | 1,737,992 | 1,548,964 | 1,228,892 |
+| `10m` | 2,269,488 | 1,737,992 | 2,543,476 | 2,223,404 |
 
-In a fresh Release build with both guests enabled, the default `3m` shared library measured 5,518,208 B of native text. The matched unbaked build measured 771,084 B, giving 4,747,124 B of combined growth. The [default-preset workload comparison](../benchmark/optimization/results/20261126-default-3m/README.md) measures both guests with the same packaged native library.
+The compact AArch64 tiers prioritize scalar partials and dynamic-immediate
+pairs, with sequence caps of 1,850 for `1.5m` and 2,600 for `3m`. The
+`10m` tier retains the full positive-marginal Method C table. With both
+guests enabled, Homebrew Clang 21.1.8 and Release ThinLTO produced 3,763,636 B
+of native text for the default `3m`, up 2,980,776 B from the matched
+unbaked library's 782,860 B. See the [AArch64 retraining measurements](../benchmark/optimization/results/20261129-a64-retrain-presets/README.md).
 
 ## Build libfibercpu
 
