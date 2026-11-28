@@ -169,8 +169,7 @@ A64_MEMORY_INLINE void LoadRegister(State& state, const uint8_t* data, unsigned 
 
 template <Kind kind, unsigned fixed_width, int fixed_operation, int fixed_mode, int fixed_shift, int fixed_vector,
           bool probe_only, bool touches_pin = probe_only>
-A64_MEMORY_INLINE StepResult LoadStoreTransfer(State& state, const DecodedInstruction& op, uint64_t pc,
-                                               uint64_t literal_address,
+A64_MEMORY_INLINE StepResult LoadStoreTransfer(State& state, const DecodedInstruction& op, uint64_t literal_address,
                                                const mem::SoftTlb* data_tlb A64_UTLB_REF_PARAMS, const Memory* memory,
                                                const HotRegisters* pinned) {
     const unsigned width = fixed_width == 0 ? op.width : fixed_width;
@@ -201,10 +200,6 @@ A64_MEMORY_INLINE StepResult LoadStoreTransfer(State& state, const DecodedInstru
             address = base + Extend(index, mode, shift, 64);
         } else {
             update_base = mode == PostIndex || mode == PreIndex;
-            // An overlapping writeback with a general-purpose destination/source is
-            // CONSTRAINED UNPREDICTABLE. Signal an undefined instruction.
-            if (update_base && !vector && op.rn != 31 && (op.rn == op.rd || (pair && op.rn == op.ra)))
-                return Undefined(pc);
             writeback = base + op.immediate;
             address = mode == PostIndex ? base : writeback;
         }
@@ -212,9 +207,6 @@ A64_MEMORY_INLINE StepResult LoadStoreTransfer(State& state, const DecodedInstru
     if (operation == Prefetch) return {};
 
     const auto size = bytes * (pair ? 2 : 1);
-    if constexpr (pair) {
-        if (operation != Store && !vector && op.rd == op.ra) return Undefined(pc);
-    }
     bool refetch = false;
     std::array<uint8_t, pair ? 32 : 16> storage;
     auto* data = storage.data();
@@ -258,7 +250,7 @@ A64_MEMORY_INLINE StepResult LoadStore(State& state, const Memory& memory, const
     uintptr_t utlb_addend = 0;
 #endif
     return LoadStoreTransfer<kind, width, operation, mode, shift, vector, false>(
-        state, op, state.pc, literal_address, nullptr A64_UTLB_ARGS, &memory, nullptr);
+        state, op, literal_address, nullptr A64_UTLB_ARGS, &memory, nullptr);
 }
 
 // Only a TLB hit can change guest state. A miss replays the current member.
@@ -269,11 +261,11 @@ A64_MEMORY_INLINE bool ProbeLoadStore(State& state, const DecodedInstruction& op
     if constexpr (TouchesPin) {
         const HotRegisters pins{state A64_HANDLER_PIN_ARGS};
         return LoadStoreTransfer<kind, width, operation, mode, shift, vector, true>(
-                   state, op, 0, literal_address, data_tlb A64_UTLB_ARGS, nullptr, &pins)
+                   state, op, literal_address, data_tlb A64_UTLB_ARGS, nullptr, &pins)
                    .reason == Stop::Continue;
     } else {
         return LoadStoreTransfer<kind, width, operation, mode, shift, vector, true, false>(
-                   state, op, 0, literal_address, data_tlb A64_UTLB_ARGS, nullptr, nullptr)
+                   state, op, literal_address, data_tlb A64_UTLB_ARGS, nullptr, nullptr)
                    .reason == Stop::Continue;
     }
 }

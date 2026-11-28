@@ -225,13 +225,42 @@ bool PairAddressingModes(bool tlb_hit) {
             state.x[4] != First || state.x[5] != Second)
             return false;
     }
-    // The specialized path must replay an overlapping writeback as undefined.
+    // An overlapping writeback must stop before any transfer.
     backing.Code(Base, {0xa9c11463, Svc}); // ldp x3, x5, [x3, #16]!
     State state{};
     state.pc = Base;
     state.x[3] = Data;
     const auto overlap = Run(state, memory, 2);
     return overlap.reason == Stop::Undefined && overlap.executed == 0 && state.pc == Base && state.x[3] == Data;
+}
+
+bool MemoryOverlapAtDecode() {
+    constexpr std::array invalid{
+        0x38401463u, // ldrb w3, [x3], #1
+        0xf8008c63u, // str x3, [x3, #8]!
+        0xa9401064u, // ldp x4, x4, [x3]
+        0xa8c10c64u, // ldp x4, x3, [x3], #16
+    };
+    Backing backing;
+    for (const auto word : invalid) {
+        if (Decode(word).kind != Kind::Undefined)
+            return false;
+        backing.Code(Base, {word, 0xd4000001});
+        for (const bool block : {false, true}) {
+            State state{};
+            state.pc = Base;
+            state.x[3] = Base + Page;
+            state.x[4] = 42;
+            backing.observe_on_read = &state;
+            const auto result = Run(state, backing.Callbacks(block), 2);
+            if (result.reason != Stop::Undefined || result.executed != 0 || result.instruction != word ||
+                result.address != Base || state.pc != Base || state.x[3] != Base + Page || state.x[4] != 42 ||
+                backing.observed_reads != 0 || backing.writes != 0)
+                return false;
+        }
+    }
+    // SP and ZR have distinct roles even though they share the same encoding.
+    return Decode(0x384017ff).kind == Kind::LoadStoreImmediate;
 }
 
 bool ExclusivesAndAtomics() {
@@ -1813,6 +1842,7 @@ int main() {
         {"64-bit pair addressing and writeback through callbacks", PairAddressingModes(false)},
 #if FIBERCPU_AARCH64_TAIL_DISPATCH
         {"64-bit pair addressing and writeback on TLB hits", PairAddressingModes(true)},
+        {"overlapping general-purpose transfers trap at decode", MemoryOverlapAtDecode()},
 #endif
         {"exclusive monitor and atomic operations", ExclusivesAndAtomics()},
         {"direct SIMD, FP and system handlers keep live flags and pinned GPRs", RegisterOpsKeepDispatchState()},

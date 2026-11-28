@@ -72,6 +72,10 @@ constexpr void DecodeLoadStore(DecodedInstruction& op, Kind kind) {
         if (vector && op.mode == Unprivileged) return;
         op.immediate = SignExtend(Field(word, 12, 9), 9);
     }
+    // Reject constrained-unpredictable GPR writebacks before either execution path.
+    if (!vector && kind == Kind::LoadStoreImmediate && (op.mode == PostIndex || op.mode == PreIndex) && op.rn != 31 &&
+        op.rn == op.rd)
+        return;
     op.kind = kind;
 }
 
@@ -376,7 +380,12 @@ constexpr DecodedInstruction DecodeFields(uint32_t word) {
             if (size == 3 || (!vector && size == 1 && (op.operation == Store || op.mode == 0))) return op;
             op.width = vector ? 32 << size : (size == 2 ? 64 : 32);
             op.immediate = SignExtend(Field(word, 15, 7), 7) * (op.width / 8);
-            if (!vector && size == 1) op.operation = LoadSigned64;
+            if (!vector) {
+                if (op.operation == Load && op.rd == op.ra) return op;
+                const bool writeback = op.mode == PostIndex || op.mode == PreIndex;
+                if (writeback && op.rn != 31 && (op.rn == op.rd || op.rn == op.ra)) return op;
+                if (size == 1) op.operation = LoadSigned64;
+            }
             op.kind = Kind::LoadStorePair;
             return op;
         }
