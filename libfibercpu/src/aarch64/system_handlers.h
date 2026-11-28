@@ -105,24 +105,15 @@ inline void SystemRegisterOp(State& state, unsigned rd, uint32_t& flags, const R
         state.fpsr = uint32_t(registers.Read(rd, 64)) & 0xf800009fu;
 }
 
-template <SystemOp operation>
-inline StepResult SystemInstruction(State& state, const Memory& memory, const DecodedInstruction& op) {
-    if constexpr (operation == SystemOp::Undefined) {
-        return Undefined(state.pc);
-    } else if constexpr (operation == SystemOp::ZeroCacheLine) {
-        const std::array<uint8_t, ZeroBlockBytes> zero{};
-        const auto address = ReadRegister(state, op.rd, 64) & ~uint64_t{ZeroBlockBytes - 1};
-        if (!WriteMemory(state, memory, address, zero.data(), zero.size())) return Fault(address, Access::Write);
-    } else {
-        SystemRegisterOp<operation>(state, op.rd, state.nzcv, ScalarRegisters{state});
-    }
+inline StepResult ZeroCacheLineSlow(State& state, const Memory& memory, const DecodedInstruction& op) {
+    const std::array<uint8_t, ZeroBlockBytes> zero{};
+    const auto address = ReadRegister(state, op.rd, 64) & ~uint64_t{ZeroBlockBytes - 1};
+    if (!WriteMemory(state, memory, address, zero.data(), zero.size())) return Fault(address, Access::Write);
     return {};
 }
 
-#if FIBERCPU_AARCH64_TAIL_DISPATCH
-
-[[gnu::always_inline]] inline bool ProbeZeroCacheLine(State& state, unsigned rd, const HotRegisters& registers,
-                                                      const mem::SoftTlb* tlb A64_UTLB_REF_PARAMS) {
+A64_FORCE_INLINE bool ProbeZeroCacheLine(State& state, unsigned rd, const HotRegisters& registers,
+                                         const mem::SoftTlb* tlb A64_UTLB_REF_PARAMS) {
     const auto address = registers.Read(rd, 64) & ~uint64_t{ZeroBlockBytes - 1};
     uint8_t* data = nullptr;
     if (!ProbeDataTlb<true>(state, address, ZeroBlockBytes, tlb A64_UTLB_ARGS, data)) return false;
@@ -132,31 +123,31 @@ inline StepResult SystemInstruction(State& state, const Memory& memory, const De
 }
 
 template <SystemOp operation>
-FIBERCPU_AARCH64_HANDLER_ABI int64_t SystemHandler(A64_HANDLER_PARAMS) {
+A64_FORCE_INLINE StepResult SystemLogic(State& state, const DecodedOp*& current A64_UTLB_REF_PARAMS,
+                                        uint32_t& flags_cache A64_HOT_PIN_REF) {
     const auto rd = Field(uint32_t(current->Operands()), 0, 5);
     const HotRegisters registers{state A64_HANDLER_PIN_ARGS};
     if constexpr (operation == SystemOp::Refetch) {
-        return ReturnFromBlock(state, current, instr_limit, flags_cache A64_HANDLER_PIN_ARGS, {Stop::Refetch});
+        return {Stop::Refetch};
     } else if constexpr (operation == SystemOp::ZeroCacheLine) {
-        if (!ProbeZeroCacheLine(state, rd, registers, state.data_tlb A64_UTLB_ARGS)) [[unlikely]] {
-            A64_MEMORY_OP_GENERIC(current);
-        }
+        return ProbeZeroCacheLine(state, rd, registers, state.data_tlb A64_UTLB_ARGS) ? StepResult{}
+                                                                                      : StepResult{Stop::Replay};
     } else {
         SystemRegisterOp<operation>(state, rd, flags_cache, registers);
+        return {};
     }
-    A64_DISPATCH_NEXT(current->NextOp<false>());
 }
-#endif
 
 template <SystemOp operation>
 constexpr HandlerBinding BindSystemHandler() {
     // Cache maintenance and callback-based DC ZVA must retain their refetch boundary.
     constexpr bool can_follow = operation != SystemOp::Refetch && operation != SystemOp::ZeroCacheLine;
-#if FIBERCPU_AARCH64_TAIL_DISPATCH
-    return {&SystemInstruction<operation>, &SystemHandler<operation>, can_follow};
-#else
-    return {&SystemInstruction<operation>, nullptr, can_follow};
-#endif
+    constexpr DispatchPolicy policy{
+        .wide = false,
+        .may_replay = operation == SystemOp::ZeroCacheLine,
+        .may_exit = operation == SystemOp::Refetch,
+    };
+    return {&DispatchWrapper<SystemLogic<operation>, policy>, can_follow};
 }
 
 inline HandlerBinding LowerSystem(uint32_t word) {

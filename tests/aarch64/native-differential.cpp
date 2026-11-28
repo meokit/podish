@@ -23,7 +23,6 @@ struct TestCase {
     uint32_t word;
     const char* mnemonic;
     void (*reference)(State&);
-    ScalarHandlerFunc baked;
     detail::HandlerFunc handler;
     bool supports_dead_nzcv;
 };
@@ -54,8 +53,7 @@ struct TestCase {
 
 constexpr TestCase Cases[] = {
 #define A64_ENTRY(word, mnemonic, dead_nzcv)                                                                           \
-    {0x##word##u, mnemonic, Native_##word, BakedScalarHandler<0x##word##u>(), GetBakedHandler<0x##word##u>(),          \
-     dead_nzcv},
+    {0x##word##u, mnemonic, Native_##word, GetBakedHandler<0x##word##u>(), dead_nzcv},
 #define A64_CASE(word, mnemonic) A64_ENTRY(word, mnemonic, false)
 #define A64_FLAG_CASE(word, mnemonic) A64_ENTRY(word, mnemonic, true)
 #include "native-differential-cases.inc"
@@ -204,8 +202,8 @@ bool RelocatedBlockOperands() {
         std::memcpy(bytes, m.page.data() + offset, size);
         return true;
     };
-    Profile baked{.trusted_baking = true};
-    baked.resolve = [](const DecodedInstruction& op, bool dead) -> detail::HandlerBinding {
+    Profile baked{};
+    baked.resolve = [](const DecodedInstruction& op, bool dead) -> detail::HandlerFunc {
         switch (op.word) {
         case adr:
             return BakedBinding<adr>(dead);
@@ -216,15 +214,15 @@ bool RelocatedBlockOperands() {
         case call:
             return BakedBinding<call>(dead);
         default:
-            return {};
+            return nullptr;
         }
     };
-    baked.resolve_sequence = [](const uint32_t* words, unsigned count, unsigned* matched, uint32_t dead,
-                                detail::HandlerFunc& handler) -> ScalarHandlerFunc {
+    baked.resolve_sequence = [](const uint32_t* words, unsigned count, unsigned* matched,
+                                uint32_t dead) -> detail::HandlerFunc {
         if (count < 3 || words[0] != adr || words[1] != adrp || words[2] != literal)
             return nullptr;
         *matched = 3;
-        return BindBakedFusion<adr, adrp, literal>(dead, handler);
+        return BindBakedFusion<adr, adrp, literal>(dead);
     };
     constexpr std::array program{adr,         adrp,        literal,     call,       0xd4200000u,
                                  0xd4200000u, 0xaa1e03e3u, 0xd4000001u, 0xe1234567u};
@@ -255,42 +253,45 @@ int main() {
         return 1;
     }
     std::mt19937_64 random(Seed);
-    const Memory memory;
     CodePage executable_page{};
     detail::WriteLittle(executable_page.data() + 4, 0xd503201fu); // NOP
-    Memory mapped{&executable_page};
+    Memory uncached{&executable_page};
+    uncached.read = [](void* context, uint64_t address, void* bytes, size_t size, Access access) {
+        if (access != Access::Execute || address < CodeAddress || address - CodeAddress + size > sizeof(CodePage))
+            return false;
+        std::memcpy(bytes, static_cast<const CodePage*>(context)->data() + (address - CodeAddress), size);
+        return true;
+    };
+    Memory mapped = uncached;
     mapped.executable_page = [](void* context, uint64_t address) -> const uint8_t* {
         return address == CodeAddress ? static_cast<const CodePage*>(context)->data() : nullptr;
     };
-    Profile profile{.trusted_baking = true};
-    profile.resolve = [](const DecodedInstruction& op, bool omit_nzcv) -> detail::HandlerBinding {
+    Profile profile{};
+    profile.resolve = [](const DecodedInstruction& op, bool omit_nzcv) -> detail::HandlerFunc {
         const auto* test = FindCase(op.word);
         if (!test || omit_nzcv)
-            return {};
-        return {test->baked, test->handler};
+            return nullptr;
+        return test->handler;
     };
     unsigned failing = 0;
     unsigned baked_cases = 0;
     unsigned dead_nzcv_cases = 0;
     for (const auto& test : Cases) {
         const auto op = Decode(test.word);
-#if FIBERCPU_AARCH64_TAIL_DISPATCH
         const auto binding = detail::Lower(op);
-        if (!binding.handler || binding.handler == detail::GetScalarDispatchHandler()) {
+        if (!binding.handler) {
             std::fprintf(stderr, "%08" PRIx32 " %s lacks a direct handler\n", test.word, test.mnemonic);
             ++failing;
             continue;
         }
-#endif
         const auto dead_nzcv = detail::LowerDeadNZCV(op);
-        if ((dead_nzcv.scalar_handler != nullptr) != test.supports_dead_nzcv ||
-            (FIBERCPU_AARCH64_TAIL_DISPATCH && test.supports_dead_nzcv && !dead_nzcv.handler)) {
+        if ((dead_nzcv.handler != nullptr) != test.supports_dead_nzcv) {
             std::fprintf(stderr, "%08" PRIx32 " %s has the wrong dead-NZCV binding\n", test.word, test.mnemonic);
             ++failing;
             continue;
         }
-        baked_cases += test.baked != nullptr;
-        dead_nzcv_cases += dead_nzcv.scalar_handler != nullptr;
+        baked_cases += test.handler != nullptr;
+        dead_nzcv_cases += dead_nzcv.handler != nullptr;
         detail::WriteLittle(executable_page.data(), test.word);
         for (unsigned trial = 0; trial < TrialsPerCase; ++trial) {
             auto expected = MakeState(random, trial);
@@ -300,8 +301,9 @@ int main() {
             auto baked = got;
             auto block = got;
             const auto initial = got;
-            const auto step = op.scalar_handler(got, memory, op);
-            if (step.reason != Stop::Continue) {
+            got.pc = CodeAddress;
+            const auto step = Run(got, uncached, 1);
+            if (step.reason != Stop::Budget || step.executed != 1 || got.pc != CodeAddress + 4) {
                 std::fprintf(stderr, "%08" PRIx32 " %s trial %u stopped with %u\n", test.word, test.mnemonic, trial,
                              unsigned(step.reason));
                 ++failing;
@@ -311,12 +313,16 @@ int main() {
                 ++failing;
                 break;
             }
-            if (test.baked && (test.baked(baked, memory, op).reason != Stop::Continue ||
-                               !LastStateMatches(test, trial, baked, expected))) {
-                std::fprintf(stderr, "%08" PRIx32 " %s trial %u failed in the baked handler\n", test.word,
-                             test.mnemonic, trial);
-                ++failing;
-                break;
+            if (test.handler) {
+                baked.pc = CodeAddress;
+                const auto baked_step = Run(baked, uncached, 1, profile);
+                if (baked_step.reason != Stop::Budget || baked_step.executed != 1 || baked.pc != CodeAddress + 4 ||
+                    !LastStateMatches(test, trial, baked, expected)) {
+                    std::fprintf(stderr, "%08" PRIx32 " %s trial %u failed in the baked handler\n", test.word,
+                                 test.mnemonic, trial);
+                    ++failing;
+                    break;
+                }
             }
             block.pc = CodeAddress;
             const auto outcome = Run(block, mapped, 2, profile);
@@ -327,40 +333,31 @@ int main() {
                 ++failing;
                 break;
             }
-            if (dead_nzcv.scalar_handler) {
-                auto elided = initial;
+            if (dead_nzcv.handler) {
                 auto elided_expected = expected;
                 elided_expected.nzcv = initial.nzcv;
-                if (dead_nzcv.scalar_handler(elided, memory, op).reason != Stop::Continue ||
-                    !LastStateMatches(test, trial, elided, elided_expected)) {
-                    std::fprintf(stderr, "%08" PRIx32 " %s trial %u failed with dead NZCV output\n", test.word,
+                Profile dead_profile{};
+                dead_profile.resolve = [](const DecodedInstruction& instruction, bool) {
+                    return detail::LowerDeadNZCV(instruction).handler;
+                };
+                auto threaded = initial;
+                threaded.pc = CodeAddress;
+                const auto result = Run(threaded, mapped, 2, dead_profile);
+                if (result.reason != Stop::Budget || result.executed != 2 || threaded.pc != CodeAddress + 8 ||
+                    !LastStateMatches(test, trial, threaded, elided_expected)) {
+                    std::fprintf(stderr, "%08" PRIx32 " %s trial %u failed through dead-NZCV dispatch\n", test.word,
                                  test.mnemonic, trial);
                     ++failing;
                     break;
-                }
-                if (dead_nzcv.handler) {
-                    Profile dead_profile{.trusted_baking = true};
-                    dead_profile.resolve = [](const DecodedInstruction& instruction, bool) {
-                        return detail::LowerDeadNZCV(instruction);
-                    };
-                    auto threaded = initial;
-                    threaded.pc = CodeAddress;
-                    const auto result = Run(threaded, mapped, 2, dead_profile);
-                    if (result.reason != Stop::Budget || result.executed != 2 || threaded.pc != CodeAddress + 8 ||
-                        !LastStateMatches(test, trial, threaded, elided_expected)) {
-                        std::fprintf(stderr, "%08" PRIx32 " %s trial %u failed through dead-NZCV dispatch\n", test.word,
-                                     test.mnemonic, trial);
-                        ++failing;
-                        break;
-                    }
                 }
             }
         }
     }
     for (const auto& test : InvalidCases) {
-        const auto op = Decode(test.word);
+        detail::WriteLittle(executable_page.data(), test.word);
         State state;
-        if (op.scalar_handler(state, memory, op).reason == Stop::Undefined && NativeTraps(test))
+        state.pc = CodeAddress;
+        if (Run(state, uncached, 1).reason == Stop::Undefined && NativeTraps(test))
             continue;
         std::fprintf(stderr, "Undefined instruction mismatch at %08" PRIx32 "\n", test.word);
         ++failing;

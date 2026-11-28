@@ -516,13 +516,6 @@ A64_INTEGER_INLINE StepResult IntegerKernel(const Registers& registers, const De
 }
 
 template <Kind kind, unsigned fixed_width = 0, int fixed_operation = -1, int fixed_shift = -1, bool write_nzcv = true,
-          IntegerForm form = IntegerForm::Default>
-inline StepResult Integer(State& state, const Memory&, const DecodedInstruction& op) {
-    return IntegerKernel<kind, fixed_width, fixed_operation, fixed_shift, write_nzcv, false, form>(
-        ScalarRegisters{state}, op, state.pc, state.nzcv);
-}
-
-template <Kind kind, unsigned fixed_width = 0, int fixed_operation = -1, int fixed_shift = -1, bool write_nzcv = true,
           IntegerForm form = IntegerForm::Default, bool TouchesPin = true>
 A64_INTEGER_INLINE StepResult HotInteger(State& state, const DecodedInstruction& op, uint64_t pc, uint64_t bound_target,
                                          uint32_t& nzcv A64_HOT_PIN_REF) {

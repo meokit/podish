@@ -12,6 +12,7 @@ build_dir="$(mktemp -d)"
 trap 'rm -rf -- "$build_dir"' EXIT
 
 "${CXX:-clang++}" -std=c++23 -O2 -Wall -Wextra -Wpedantic \
+    -DFIBERCPU_AARCH64_UNMANAGED_CACHE=1 \
     -I"$repo_dir/libfibercpu/src" \
     "$repo_dir/libfibercpu/src/aarch64/aarch64.cpp" \
     "$source_dir/native-differential.cpp" -o "$build_dir/native-differential"

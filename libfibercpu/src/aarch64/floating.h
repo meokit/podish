@@ -606,9 +606,4 @@ inline bool FloatRegisterOp(State& state, const DecodedInstruction& op, uint32_t
     return true;
 }
 
-template <FloatFamily family>
-inline StepResult ScalarFloat(State& state, const Memory&, const DecodedInstruction& op) {
-    return FloatRegisterOp<family>(state, op, state.nzcv, ScalarRegisters{state}) ? StepResult{} : Undefined(state.pc);
-}
-
 }  // namespace fiberish::aarch64::detail

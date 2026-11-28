@@ -4,15 +4,12 @@
 #include <cassert>
 #include <cstring>
 #include <limits>
-#include <memory>
-#include <mutex>
-#include <type_traits>
-#include <unordered_map>
 #include <utility>
 
 #if FIBERCPU_AARCH64_UNMANAGED_CACHE
 #include <memory_resource>
 #include <optional>
+#include <unordered_map>
 #endif
 
 #include "compare_branch.h"
@@ -26,67 +23,65 @@ namespace detail {
 
 namespace {
 
-class ScalarHandlerTable {
-    static constexpr unsigned PageSize = 256;
-    static constexpr unsigned Capacity = std::numeric_limits<BlockHandlerIndex>::max();
-
-public:
-    BlockHandlerIndex Intern(ScalarHandlerFunc handler) {
-        struct Entry {
-            ScalarHandlerFunc handler = nullptr;
-            BlockHandlerIndex index = 0;
-        };
-        static thread_local std::array<Entry, 128> recent{};
-        const auto address = reinterpret_cast<uintptr_t>(handler) >> 2;
-        auto& entry = recent[(address ^ (address >> 7)) % recent.size()];
-        if (entry.handler == handler) return entry.index;
-
-        std::lock_guard lock(mutex);
-        if (const auto existing = indices.find(handler); existing != indices.end()) {
-            entry = {handler, existing->second};
-        } else if (indices.size() < Capacity) {
-            const auto index = static_cast<BlockHandlerIndex>(indices.size() + 1);
-            auto& page = pages[index / PageSize];
-            if (!page) page = std::make_unique<ScalarHandlerFunc[]>(PageSize);
-            indices.emplace(handler, index);
-            page[index % PageSize] = handler;
-            entry = {handler, index};
-        } else {
-            entry = {handler, 0};
+#if defined(_MSC_VER)
+__declspec(noinline)
+#elif defined(__GNUC__) || defined(__clang__)
+[[gnu::cold, gnu::noinline]]
+#endif
+StepResult ExecuteMemorySlow(State& state, const Memory& memory, uint32_t word) {
+    const auto op = DecodeFields(word);
+    switch (op.kind) {
+        case Kind::LoadStoreImmediate:
+            return LoadStore<Kind::LoadStoreImmediate>(state, memory, op);
+        case Kind::LoadStoreRegister:
+            return LoadStore<Kind::LoadStoreRegister>(state, memory, op);
+        case Kind::LoadStorePair:
+            return LoadStore<Kind::LoadStorePair>(state, memory, op);
+        case Kind::LoadLiteral:
+            return LoadStore<Kind::LoadLiteral>(state, memory, op);
+        case Kind::LoadStoreExclusive:
+            return ExclusiveMemory(state, memory, op);
+        case Kind::LoadStoreAtomic:
+            return AtomicMemory(state, memory, op);
+        case Kind::System:
+            return ZeroCacheLineSlow(state, memory, op);
+        case Kind::Vector: {
+#if FIBERCPU_AARCH64_MICRO_TLB
+            uint64_t utlb_tags = 0;
+            uintptr_t utlb_addend = 0;
+#endif
+            return VectorStructure<false>(state, &memory, op, ScalarRegisters{state}, nullptr A64_UTLB_ARGS);
         }
-        return entry.index;
+        default:
+            return Undefined(state.pc);
     }
-
-    ScalarHandlerFunc Resolve(BlockHandlerIndex index) const {
-        // A page and its entry are initialized before the index reaches a
-        // block footer. Existing entries are immutable during later inserts.
-        return pages[index / PageSize][index % PageSize];
-    }
-
-private:
-    std::mutex mutex;
-    std::unordered_map<ScalarHandlerFunc, BlockHandlerIndex> indices;
-    std::array<std::unique_ptr<ScalarHandlerFunc[]>, (Capacity + 1) / PageSize> pages;
-};
-
-ScalarHandlerTable scalar_handlers;
+}
 
 }  // namespace
 
-ScalarHandlerFunc ResolveBlockScalarHandler(BlockHandlerIndex index) { return scalar_handlers.Resolve(index); }
-
-DecodedInstruction ReadScalarOp(const BasicBlock& block, const DecodedOp& slot) {
-    const auto word = block.Word(slot.GuestIndex());
-    const bool only_base_fields = slot.Has(BaseFields);
-    auto op = only_base_fields ? BaseInstruction(word) : DecodeFields(word);
-    if (only_base_fields) op.kind = static_cast<Kind>(slot.Operands() >> 32);
-    op.scalar_handler = block.ScalarBinding(slot.GuestIndex());
-    if (!op.scalar_handler) op.scalar_handler = Lower(op).scalar_handler;
-    BindBlockOperands(op, block.start_pc() + uint64_t{slot.GuestIndex()} * 4);
-    return op;
+// Memory replay publishes all architectural state before any callback and
+// reloads it afterward. Only a callback-free access resumes the span.
+#if defined(_MSC_VER)
+__declspec(noinline)
+#elif defined(__GNUC__) || defined(__clang__)
+[[gnu::cold, gnu::noinline]]
+#endif
+FIBERCPU_AARCH64_HANDLER_ABI int64_t MemoryOpGeneric(A64_HANDLER_PARAMS) {
+    CommitDispatchState(state, current->GetStartPc(state), flags_cache A64_HANDLER_PIN_ARGS);
+    const auto& memory = state.active_run->memory;
+#ifdef ENABLE_TLB_STATS
+    if (auto* stats = memory.dispatch_stats) ++stats->memory_replays;
+#endif
+    const auto word = state.last_block->Word(current->GuestIndex());
+    auto step = CompleteStep(state, current, ExecuteMemorySlow(state, memory, word));
+    A64_UTLB_INVALIDATE();
+    flags_cache = state.nzcv;
+    ReloadDispatchPins(state A64_HANDLER_PIN_ARGS);
+    if (step.reason != Stop::Continue) {
+        return ReturnFromBlock(state, current, instr_limit, flags_cache A64_HANDLER_PIN_ARGS, step);
+    }
+    A64_DISPATCH_NEXT(current->NextOp());
 }
-
-#if FIBERCPU_AARCH64_TAIL_DISPATCH
 
 #if defined(_MSC_VER)
 __declspec(noinline)
@@ -96,6 +91,7 @@ __declspec(noinline)
 FIBERCPU_AARCH64_HANDLER_ABI int64_t ResolveBranchTargetSlow(A64_HANDLER_PARAMS) {
     auto& frame = *state.active_run;
     const auto target_pc = frame.exit_target;
+#if FIBERCPU_AARCH64_TAIL_DISPATCH
     const auto& memory = frame.memory;
     if (instr_limit + frame.budget_reserve >= 0
 #if FIBERCPU_AARCH64_UNMANAGED_CACHE
@@ -135,6 +131,7 @@ FIBERCPU_AARCH64_HANDLER_ABI int64_t ResolveBranchTargetSlow(A64_HANDLER_PARAMS)
         if (stats) ++stats->link_misses;
 #endif
     }
+#endif
     // The caller has charged only the retired prefix, including the branch.
     CommitDispatchState(state, target_pc, flags_cache A64_HANDLER_PIN_ARGS);
     frame.exit_op = current;
@@ -142,7 +139,20 @@ FIBERCPU_AARCH64_HANDLER_ABI int64_t ResolveBranchTargetSlow(A64_HANDLER_PARAMS)
     return instr_limit;
 }
 
-#endif
+FIBERCPU_AARCH64_HANDLER_ABI int64_t OpExitBlock(A64_HANDLER_PARAMS) {
+    const uint64_t target = state.last_block->end_pc();
+    A64_RESOLVE_BRANCH_TARGET_INLINE(current->payload, target);
+}
+
+FIBERCPU_AARCH64_HANDLER_ABI int64_t OpExitSingleStep(A64_HANDLER_PARAMS) {
+    (void)current;
+    CommitDispatchState(state, state.last_block->end_pc(), flags_cache A64_HANDLER_PIN_ARGS);
+    auto& frame = *state.active_run;
+    frame.exit_op = nullptr;
+    frame.exit = {};
+    return instr_limit;
+}
+
 }  // namespace detail
 
 namespace {
@@ -151,15 +161,16 @@ using namespace detail;
 
 using Resolver = decltype(Profile::resolve);
 
+constexpr bool UsesRawWordOperands(Kind kind) {
+    return kind == Kind::System || kind == Kind::ScalarFloat || kind == Kind::Vector;
+}
+
 struct DecodedOpBinding {
     DecodedInstruction op;
     HandlerFunc handler = nullptr;
-    ScalarHandlerFunc fused = nullptr;
-    BlockHandlerIndex scalar_index = 0;
     uint8_t ordinal = 0;
-    uint8_t fused_length = 1;
+    uint8_t span = 1;
     uint8_t flags = 0;
-    bool keep_scalar = false;
     bool can_follow = false;
     bool nop = false;
 
@@ -169,7 +180,6 @@ struct DecodedOpBinding {
 struct CacheEntry {
     DecodedOpBinding slot;
     Resolver resolver = nullptr;
-    bool trusted_baking = false;
 };
 
 // The cache key is the word read from executable memory, so writes, remaps,
@@ -182,42 +192,34 @@ bool IsInteger(Kind kind) { return kind > Kind::Undefined && kind <= Kind::Multi
 DecodedOpBinding BindDecodedOp(uint32_t word, const Profile& profile) {
     DecodedOpBinding slot;
     slot.op = DecodeFields(word);
-    auto binding = profile.resolve ? profile.resolve(slot.op, false) : HandlerBinding{};
     const auto kind = slot.op.kind;
-    const bool custom = binding.scalar_handler != nullptr;
-    const bool untrusted = custom && !profile.trusted_baking && !binding.handler;
+    const auto custom = profile.resolve ? profile.resolve(slot.op, false) : nullptr;
     slot.nop = !custom && word == NopWord;
-    if (!custom) binding = SelectPinHandler(Lower(slot.op), slot.op);
-    slot.op.scalar_handler = binding.scalar_handler;
+    HandlerBinding binding{};
+    if (custom) {
+        binding.handler = custom;
+    } else {
+        binding = SelectPinHandler(Lower(slot.op), slot.op);
+    }
     slot.handler = binding.handler;
-    if (custom && !slot.handler) slot.handler = GetScalarDispatchHandler();
-#if FIBERCPU_AARCH64_TAIL_DISPATCH
-    assert(slot.handler && "Builtin instructions must provide a tail-dispatch handler");
-#endif
-    slot.keep_scalar = custom;
-    if (custom) slot.scalar_index = scalar_handlers.Intern(binding.scalar_handler);
+    assert(slot.handler && "Instructions must provide a threaded handler");
 
     const bool branch = kind >= Kind::BranchImmediate && kind <= Kind::TestBranch;
     const bool data_transfer = kind >= Kind::LoadStoreImmediate && kind <= Kind::LoadLiteral;
     const bool arithmetic = kind == Kind::ScalarFloat || (kind == Kind::Vector && (word & 0xbe000000) != 0x0c000000);
-    slot.can_follow =
-        !untrusted && !branch && (IsInteger(kind) || data_transfer || arithmetic || slot.nop || binding.can_follow);
-    if (slot.can_follow || (branch && !untrusted)) slot.flags |= RetainsPage;
-    if (untrusted) slot.flags |= UntrustedScalar;
+    slot.can_follow = !branch && (IsInteger(kind) || data_transfer || arithmetic || slot.nop || binding.can_follow);
+    if (slot.can_follow || branch) slot.flags |= RetainsPage;
     if (branch) slot.flags |= HasBranchLink;
     if (HasExtraOperandSlot(kind)) slot.flags |= HasDataSlot;
-    if (kind == Kind::System || kind == Kind::ScalarFloat || kind == Kind::Vector) slot.flags |= BaseFields;
     return slot;
 }
 
 const DecodedOpBinding& DecodeOpBinding(uint32_t word, const Profile& profile) {
     const auto index = (word * 0x9e3779b1u) >> (32 - CacheBits);
     auto& entry = DecodeCache[index];
-    if (!entry.slot.op.scalar_handler || entry.slot.op.word != word || entry.resolver != profile.resolve ||
-        entry.trusted_baking != profile.trusted_baking) {
+    if (!entry.slot.handler || entry.slot.op.word != word || entry.resolver != profile.resolve) {
         entry.slot = BindDecodedOp(word, profile);
         entry.resolver = profile.resolve;
-        entry.trusted_baking = profile.trusted_baking;
     }
     return entry.slot;
 }
@@ -234,30 +236,45 @@ struct RunScope {
     State& state;
     detail::RunFrame* saved;
     const BasicBlock* saved_block;
-#if FIBERCPU_AARCH64_TAIL_DISPATCH
     const mem::SoftTlb* saved_data_tlb;
-#endif
     const bool outer = !std::exchange(active, true);
 
     RunScope(State& state, detail::RunFrame& frame)
         : state(state),
           saved(std::exchange(state.active_run, &frame)),
           saved_block(std::exchange(state.last_block, nullptr)) {
-#if FIBERCPU_AARCH64_TAIL_DISPATCH
         static const mem::SoftTlb empty_tlb;
         saved_data_tlb = std::exchange(state.data_tlb, frame.memory.data_tlb ? frame.memory.data_tlb : &empty_tlb);
-#endif
     }
 
     ~RunScope() {
         state.active_run = saved;
         state.last_block = saved_block;
-#if FIBERCPU_AARCH64_TAIL_DISPATCH
         state.data_tlb = saved_data_tlb;
-#endif
         if (outer) active = false;
     }
 };
+
+std::byte* WriteDecodedSlot(std::byte* bytes, const DecodedOpBinding& binding, uint64_t block_pc) {
+    const auto& op = binding.op;
+    const auto operands = UsesRawWordOperands(op.kind) ? uint64_t{op.word} : PackOpOperands(op);
+    const DecodedOp slot{
+        .handler = binding.handler,
+        .payload = DecodedOp::Pack(operands, binding.ordinal, binding.flags, binding.span),
+    };
+    if (slot.Has(HasDataSlot)) {
+        const auto primary = HasBlockTarget(op.kind)           ? op.target_pc
+                             : op.kind == Kind::BranchRegister ? block_pc + uint64_t{slot.GuestIndex()} * 4
+                                                               : op.immediate;
+        const auto secondary = slot.Has(HasBranchLink)     ? BlockLink(&BasicBlock::Invalid)
+                               : op.kind == Kind::Bitfield ? op.mask
+                                                           : 0;
+        new (bytes) DecodedOpWithDataSlot{slot, primary, secondary};
+        return bytes + sizeof(DecodedOpWithDataSlot);
+    }
+    new (bytes) DecodedOp(slot);
+    return bytes + sizeof(DecodedOp);
+}
 
 const BasicBlock* DecodeBlock(uint64_t pc, const uint8_t* executable, const Profile& profile, const Memory& memory
 #if FIBERCPU_AARCH64_UNMANAGED_CACHE
@@ -320,9 +337,7 @@ const BasicBlock* DecodeBlock(uint64_t pc, const uint8_t* executable, const Prof
         slot.ordinal = ordinal;
         BindBlockOperands(slot.op, pc + ordinal * 4);
         if (!slot.can_follow) {
-            if (!IsConditionalBranch(slot.op.kind) || slot.Has(UntrustedScalar) ||
-                continued_branches == fallthrough_limit)
-                break;
+            if (!IsConditionalBranch(slot.op.kind) || continued_branches == fallthrough_limit) break;
             ++continued_branches;
         }
     }
@@ -332,92 +347,51 @@ const BasicBlock* DecodeBlock(uint64_t pc, const uint8_t* executable, const Prof
     uint32_t live = FlagMask;
     for (unsigned i = slot_count; i-- > 0;) {
         const auto& slot = decoded[i];
-        if (slot.Has(UntrustedScalar))
-            live = FlagMask;
-        else if (!slot.nop && OmitNZCV(slot.op, live))
-            dead |= uint32_t{1} << i;
+        if (!slot.nop && OmitNZCV(slot.op, live)) dead |= uint32_t{1} << i;
     }
 #endif
     std::array<uint32_t, BlockMax> instructions;
     for (unsigned i = 0; i < slot_count; ++i) instructions[i] = decoded[i].op.word;
     unsigned following = 0;
     unsigned units = 0;
-    uint32_t scalar_mask = 0;
-    uint32_t fused_mask = 0;
-    std::array<BlockHandlerIndex, BlockMax> fusion_indices;
-    bool wide_bindings = false;
     for (unsigned i = slot_count; i-- > 0;) {
         auto& slot = decoded[i];
         if (i + 1 < slot_count && decoded[i + 1].ordinal != slot.ordinal + 1) following = 0;
         const uint32_t dead_from_here = dead >> i;
-        HandlerFunc handler = nullptr;
         if (slot.can_follow && following > 1 && profile.resolve_sequence) {
             unsigned length = 0;
-            const auto fusion =
-                profile.resolve_sequence(instructions.data() + i, following + 1, &length, dead_from_here, handler);
-            if (fusion && (profile.trusted_baking || handler || !dead) && length >= 3 && length <= following + 1) {
-                slot.fused = fusion;
-                slot.fused_length = length;
+            if (const auto fusion =
+                    profile.resolve_sequence(instructions.data() + i, following + 1, &length, dead_from_here);
+                fusion && length >= 3 && length <= following + 1) {
+                slot.handler = fusion;
+                slot.span = uint8_t(length);
             }
         }
-        if (!slot.fused && slot.can_follow && IsInteger(slot.op.kind) && following > 0 && profile.resolve_pair) {
-            handler = nullptr;
-            const auto fusion = profile.resolve_pair(instructions[i], instructions[i + 1], dead_from_here, handler);
-            if (fusion && (profile.trusted_baking || handler || !dead)) {
-                slot.fused = fusion;
-                slot.fused_length = 2;
+        if (slot.span == 1 && slot.can_follow && IsInteger(slot.op.kind) && following > 0 && profile.resolve_pair) {
+            if (const auto fusion = profile.resolve_pair(instructions[i], instructions[i + 1], dead_from_here)) {
+                slot.handler = fusion;
+                slot.span = 2;
             }
         }
-        if (slot.fused) {
-            if (!profile.trusted_baking && !handler) slot.flags |= UntrustedFused;
-            slot.handler = handler ? handler : GetFusedDispatchHandler();
-            if (dead_from_here & (UINT32_MAX >> (32 - slot.fused_length))) slot.flags |= OmitsFlags;
-        } else if (dead_from_here & 1) {
-            auto binding = profile.resolve ? profile.resolve(slot.op, true) : HandlerBinding{};
-            if (binding.scalar_handler && !profile.trusted_baking && !binding.handler)
-                binding = {};
-            else if (!binding.scalar_handler)
-                binding = SelectPinHandler(LowerDeadNZCV(slot.op), slot.op);
-            if (binding.scalar_handler) {
-                slot.fused = binding.scalar_handler;
-                slot.handler = binding.handler ? binding.handler : GetFusedDispatchHandler();
-                slot.flags |= OmitsFlags;
+        if (slot.span == 1) {
+            if (dead_from_here & 1) {
+                auto handler = profile.resolve ? profile.resolve(slot.op, true) : nullptr;
+                if (!handler) handler = SelectPinHandler(LowerDeadNZCV(slot.op), slot.op).handler;
+                if (handler) slot.handler = handler;
+            } else if (following == 1 && i + 1 < slot_count && slot.can_follow) {
+                if (const auto pair = LowerCompareBranch(slot.op, decoded[i + 1].op)) slot.handler = pair;
             }
-#if FIBERCPU_AARCH64_TAIL_DISPATCH
-        } else if (following == 1 && i + 1 < slot_count && slot.can_follow) {
-            const auto& branch = decoded[i + 1];
-            if (profile.trusted_baking || (!slot.keep_scalar && !branch.keep_scalar)) {
-                // Only the hot entry changes. Partial budgets still run the two scalar instructions.
-                if (const auto pair = LowerCompareBranch(slot.op, branch.op)) slot.handler = pair;
-            }
-#endif
         }
-        following = slot.Has(UntrustedScalar) ? 0 : slot.can_follow ? following + 1 : 1;
+        following = slot.can_follow ? following + 1 : 1;
         units += 1 + slot.Has(HasDataSlot);
-        if (slot.keep_scalar) {
-            scalar_mask |= uint32_t{1} << slot.ordinal;
-            wide_bindings |= slot.scalar_index == 0;
-        }
-        if (slot.fused) {
-            fusion_indices[i] = scalar_handlers.Intern(slot.fused);
-            wide_bindings |= fusion_indices[i] == 0;
-            slot.flags |= Fused;
-            fused_mask |= uint32_t{1} << slot.ordinal;
-        }
     }
 
-    const auto fusions = std::popcount(fused_mask);
-    const auto bindings = std::popcount(scalar_mask) + fusions;
 #if FIBERCPU_LLVM_JIT
     const bool retain_region_context = memory.retain_region_context;
 #else
     const bool retain_region_context = false;
 #endif
-    const auto binding_storage = !bindings       ? BlockHandlerStorage::None
-                                 : wide_bindings ? BlockHandlerStorage::Pointers
-                                                 : BlockHandlerStorage::Indexed;
-    const auto size =
-        BasicBlock::CalculateSize(units, count, bindings, fusions, binding_storage, retain_region_context);
+    const auto size = BasicBlock::CalculateSize(units, count, retain_region_context);
 #if FIBERCPU_AARCH64_UNMANAGED_CACHE
     auto* storage = memory.allocate_block ? memory.allocate_block(memory.context, size, pc)
                                           : local->pool.allocate(size, alignof(BasicBlock));
@@ -426,62 +400,15 @@ const BasicBlock* DecodeBlock(uint64_t pc, const uint8_t* executable, const Prof
 #endif
     if (!storage) return nullptr;
     auto& block = *new (storage) BasicBlock;
-    block.header.chain = BasicBlockChainPrefix::Pack(pc, count, bindings != 0, retain_region_context);
+    block.header.chain = BasicBlockChainPrefix::Pack(pc, count, retain_region_context);
     block.sentinel_slot_index = uint8_t(units);
-    block.has_wide_bindings = wide_bindings;
     block.executable_page = executable;
 
     auto* bytes = reinterpret_cast<std::byte*>(&block + 1);
-    for (unsigned i = 0; i < slot_count; ++i) {
-        const auto& binding = decoded[i];
-        const auto operands =
-            binding.Has(BaseFields) ? binding.op.word | (uint64_t(binding.op.kind) << 32) : PackOpOperands(binding.op);
-        const DecodedOp slot{
-            .handler = binding.handler,
-            .payload = DecodedOp::Pack(operands, binding.ordinal, binding.flags),
-        };
-        if (slot.Has(HasDataSlot)) {
-            const auto& op = binding.op;
-            const auto primary = HasBlockTarget(op.kind)           ? op.target_pc
-                                 : op.kind == Kind::BranchRegister ? pc + slot.GuestIndex() * 4
-                                                                   : op.immediate;
-            const auto secondary = slot.Has(HasBranchLink)     ? BlockLink(&BasicBlock::Invalid)
-                                   : op.kind == Kind::Bitfield ? op.mask
-                                                               : 0;
-            new (bytes) DecodedOpWithDataSlot{slot, primary, secondary};
-            bytes += sizeof(DecodedOpWithDataSlot);
-        } else {
-            new (bytes) DecodedOp(slot);
-            bytes += sizeof(DecodedOp);
-        }
-    }
+    for (unsigned i = 0; i < slot_count; ++i) bytes = WriteDecodedSlot(bytes, decoded[i], pc);
     new (bytes) DecodedOp{.handler = GetExitHandlerFallthrough(), .payload = BlockLink(&BasicBlock::Invalid)};
     if (retain_region_context) block.SetRegionContext(nullptr);
     std::memcpy(const_cast<uint32_t*>(block.Words()), words.data(), count * sizeof(uint32_t));
-    if (bindings) {
-        auto* masks = const_cast<uint32_t*>(block.BindingMasks());
-        new (masks) uint32_t(scalar_mask);
-        new (masks + 1) uint32_t(fused_mask);
-        const auto write_bindings = [&]<typename Entry>(Entry* scalar) {
-            auto* fused = scalar + std::popcount(scalar_mask);
-            auto* lengths = reinterpret_cast<uint8_t*>(scalar + bindings);
-            for (unsigned i = 0; i < slot_count; ++i) {
-                const auto& binding = decoded[i];
-                if constexpr (std::is_same_v<Entry, BlockHandlerIndex>) {
-                    if (binding.keep_scalar) new (scalar++) Entry(binding.scalar_index);
-                    if (binding.fused) new (fused++) Entry(fusion_indices[i]);
-                } else {
-                    if (binding.keep_scalar) new (scalar++) Entry(binding.op.scalar_handler);
-                    if (binding.fused) new (fused++) Entry(binding.fused);
-                }
-                if (binding.fused) new (lengths++) uint8_t(binding.fused_length);
-            }
-        };
-        if (binding_storage == BlockHandlerStorage::Indexed)
-            write_bindings(reinterpret_cast<BlockHandlerIndex*>(masks + 2));
-        else
-            write_bindings(reinterpret_cast<ScalarHandlerFunc*>(masks + 2));
-    }
     block.header.entry = block.FirstOp()->handler;
 #if FIBERCPU_AARCH64_UNMANAGED_CACHE
     if (memory.cache_block)
@@ -494,41 +421,52 @@ const BasicBlock* DecodeBlock(uint64_t pc, const uint8_t* executable, const Prof
     return &block;
 }
 
-StepResult DispatchSpan(State& state, const Memory& memory, const BasicBlock& block, unsigned count, bool full_block) {
-    auto* current = block.FirstOp();
-    while (current != block.Sentinel() && current->GuestIndex() < count) {
-        const auto scalar = ReadScalarOp(block, *current);
-        BasicBlock::Fusion fusion;
-        if (current->Has(Fused) && (full_block || !current->Has(OmitsFlags))) {
-            fusion = block.FusedBinding(current->GuestIndex());
-            if (fusion.length > count - current->GuestIndex()) fusion = {};
-        }
-        const auto* last = current->LastOp(fusion.length);
-        const bool untrusted = current->Has(fusion.handler ? UntrustedFused : UntrustedScalar);
-        state.pc = block.start_pc() + uint64_t{current->GuestIndex()} * 4;
-        const auto execute = fusion.handler ? fusion.handler : scalar.scalar_handler;
-        auto step = CompleteStep(state, last, execute(state, memory, scalar));
-        if (untrusted) {
-            state.active_run->executable = nullptr;
-            if (step.reason == Stop::Continue) {
-                state.pc = last->GetStartPc(state);
-                step.reason = Stop::Refetch;
-            }
-        }
-        if (step.reason != Stop::Continue) return step;
-        current = last->NextOp();
-    }
-    state.pc = block.start_pc() + uint64_t{count} * 4;
-    return {};
+struct SingleStepResult {
+    StepResult step{};
+    unsigned retired = 0;
+};
+
+// Build a stack-allocated 1-instruction BasicBlock with zero pool allocation
+// and execute it through the unified threaded handler ABI.
+SingleStepResult ExecuteSingleInstructionOnStack(State& state, RunFrame& frame, uint64_t pc, uint32_t word,
+                                                 const DecodedOpBinding& cached_binding) {
+    auto binding = cached_binding;
+    binding.ordinal = 0;
+    binding.span = 1;
+    BindBlockOperands(binding.op, pc);
+
+    const unsigned units = 1u + binding.Has(HasDataSlot);
+    alignas(BasicBlock) std::byte storage[BasicBlock::CalculateSize(2, 1, false)];
+    auto& block = *new (storage) BasicBlock;
+    // Leave Valid clear so nothing can ever link to a stack-allocated block.
+    block.header.chain = BasicBlockChainPrefix::Pack(pc, 1, false, false);
+    block.sentinel_slot_index = uint8_t(units);
+
+    auto* bytes = WriteDecodedSlot(reinterpret_cast<std::byte*>(&block + 1), binding, pc);
+    new (bytes) DecodedOp{.handler = &OpExitSingleStep, .payload = BlockLink(&BasicBlock::Invalid)};
+    auto raw_word = word;
+    if constexpr (std::endian::native == std::endian::big) raw_word = std::byteswap(raw_word);
+    std::memcpy(const_cast<uint32_t*>(block.Words()), &raw_word, sizeof(raw_word));
+
+    const auto* saved_block = std::exchange(state.last_block, &block);
+    frame.exit_link = nullptr;
+    frame.exit_op = nullptr;
+    frame.exit = {};
+    // Keep both instr_limit < 0 and instr_limit + budget_reserve < 0 so neither
+    // TryChainBlock nor ResolveBranchTargetSlow can chain out of this stack block.
+    const int64_t initial_limit = -frame.budget_reserve - 1;
+    const int64_t remaining =
+        binding.handler(state, block.FirstOp(), initial_limit A64_UTLB_INIT, state.nzcv A64_HANDLER_PIN_INIT);
+    state.last_block = saved_block;
+    frame.exit_link = nullptr;
+    frame.exit_op = nullptr;
+    const unsigned retired = unsigned((initial_limit + 1) - remaining);
+    return {frame.exit, retired};
 }
 
 }  // namespace
 
-DecodedInstruction Decode(uint32_t instruction) {
-    auto op = detail::DecodeFields(instruction);
-    op.scalar_handler = detail::Lower(op).scalar_handler;
-    return op;
-}
+DecodedInstruction Decode(uint32_t instruction) { return detail::DecodeFields(instruction); }
 
 RunResult Run(State& state, const Memory& memory, uint64_t budget, const Profile& profile, BudgetMode budget_mode) {
     constexpr int64_t MaxBatch = std::numeric_limits<int64_t>::max() - BlockMax;
@@ -551,8 +489,6 @@ RunResult Run(State& state, const Memory& memory, uint64_t budget, const Profile
         if (pc >= mem::ArmTaskSize) return {Stop::Fault, executed, pc, 0, 0, Access::Execute};
 
         const BasicBlock* block = nullptr;
-        const DecodedOpBinding* single = nullptr;
-        DecodedOpBinding local_slot;
         unsigned count = 1;
         bool full_block = false;
         if (scope.outer && memory.executable_page && !profile.record) {
@@ -583,26 +519,9 @@ RunResult Run(State& state, const Memory& memory, uint64_t budget, const Profile
             }
         }
         previous = nullptr;
-        if (!block) {
-            uint32_t word;
-            if (!detail::ReadMemory(memory, pc, &word, sizeof(word), Access::Execute))
-                return {Stop::Fault, executed, pc, 0, 0, Access::Execute};
-            if constexpr (std::endian::native == std::endian::big) word = std::byteswap(word);
-            if (scope.outer) {
-                single = &DecodeOpBinding(word, profile);
-            } else {
-                // A memory callback may reenter Run. Preserve the enclosing
-                // call's block and decode cache entries while it is suspended.
-                local_slot = BindDecodedOp(word, profile);
-                single = &local_slot;
-            }
-        }
-        state.last_block = block;
-        StepResult step;
-        const DecodedOp* stop_op = nullptr;
-        unsigned stop_ordinal = 0;
-#if FIBERCPU_AARCH64_TAIL_DISPATCH
+
         if (full_block) {
+            state.last_block = block;
             frame.exit_link = nullptr;
             const auto* slots = block->FirstOp();
 #if FIBERCPU_LLVM_JIT
@@ -613,8 +532,8 @@ RunResult Run(State& state, const Memory& memory, uint64_t budget, const Profile
             const auto remaining =
                 block->header.entry(state, slots, available - count A64_UTLB_INIT, state.nzcv A64_HANDLER_PIN_INIT);
             executed += uint64_t(available - remaining);
-            step = frame.exit;
-            stop_op = frame.exit_op;
+            const auto step = frame.exit;
+            const auto* stop_op = frame.exit_op;
             if (frame.exit_link) {
                 const auto* source = state.last_block;
                 if (source->IsValid()) {
@@ -628,43 +547,69 @@ RunResult Run(State& state, const Memory& memory, uint64_t budget, const Profile
             if (const auto* hot = std::exchange(frame.llvm_hot_block, nullptr))
                 memory.observe_hot_block(memory.context, *const_cast<BasicBlock*>(hot));
 #endif
-        } else
-#endif
-        {
-            if (block) {
-                step = DispatchSpan(state, memory, *block, count, full_block);
-            } else {
-                step = single->op.scalar_handler(state, memory, single->op);
-                if (profile.record && (step.reason == Stop::Continue || RetiresOnExit(step.reason)))
-                    profile.record(profile.context, pc, single->op.word,
-                                   single->can_follow && step.reason == Stop::Continue);
-                if (step.reason == Stop::Continue) state.pc = pc + 4;
+            switch (step.reason) {
+                case Stop::Continue:
+                    break;
+                case Stop::Refetch:
+                    frame.executable = nullptr;
+                    state.pc += 4;
+                    break;
+                case Stop::Branch:
+                    state.pc = step.address;
+                    break;
+                case Stop::Syscall:
+                    state.pc += 4;
+                    [[fallthrough]];
+                default: {
+                    const auto word = state.last_block->Word(stop_op->GuestIndex());
+                    return {step.reason, executed, step.address, word, step.immediate, step.access};
+                }
             }
-            if (step.reason == Stop::Continue) {
-                executed += count;
-                continue;
+        } else if (block) {
+            for (unsigned i = 0; i < count; ++i) {
+                const auto step_pc = block->start_pc() + uint64_t{i} * 4;
+                const auto word = block->Word(i);
+                const auto& binding = DecodeOpBinding(word, profile);
+                const auto res = ExecuteSingleInstructionOnStack(state, frame, step_pc, word, binding);
+                executed += res.retired;
+                if (res.step.reason == Stop::Continue) {
+                    if (state.pc != step_pc + 4) break;
+                    continue;
+                }
+                if (res.step.reason == Stop::Refetch) {
+                    frame.executable = nullptr;
+                    state.pc += 4;
+                    break;
+                }
+                if (res.step.reason == Stop::Syscall) state.pc += 4;
+                return {res.step.reason, executed, res.step.address, word, res.step.immediate, res.step.access};
             }
-            if (block) stop_ordinal = unsigned((state.pc - pc) / 4);
-            executed += stop_ordinal + RetiresOnExit(step.reason);
-        }
-        switch (step.reason) {
-            case Stop::Continue:
-                break;
-            case Stop::Refetch:
-                frame.executable = nullptr;
-                state.pc += 4;
-                break;
-            case Stop::Branch:
-                state.pc = step.address;
-                break;
-            case Stop::Syscall:
-                state.pc += 4;
-                [[fallthrough]];
-            default: {
-                const auto word = stop_op ? state.last_block->Word(stop_op->GuestIndex())
-                                  : block ? block->Word(stop_ordinal)
-                                          : single->op.word;
-                return {step.reason, executed, step.address, word, step.immediate, step.access};
+        } else {
+            uint32_t word;
+            if (!detail::ReadMemory(memory, pc, &word, sizeof(word), Access::Execute))
+                return {Stop::Fault, executed, pc, 0, 0, Access::Execute};
+            if constexpr (std::endian::native == std::endian::big) word = std::byteswap(word);
+            DecodedOpBinding local_slot;
+            // A memory callback may reenter Run. Preserve the enclosing
+            // call's decode cache entries while it is suspended.
+            const auto& binding =
+                scope.outer ? DecodeOpBinding(word, profile) : (local_slot = BindDecodedOp(word, profile));
+            const auto res = ExecuteSingleInstructionOnStack(state, frame, pc, word, binding);
+            executed += res.retired;
+            if (profile.record && res.retired)
+                profile.record(profile.context, pc, word, binding.can_follow && res.step.reason == Stop::Continue);
+            switch (res.step.reason) {
+                case Stop::Continue:
+                    break;
+                case Stop::Refetch:
+                    frame.executable = nullptr;
+                    state.pc += 4;
+                    break;
+                case Stop::Syscall:
+                    state.pc += 4;
+                    [[fallthrough]];
+                default:
+                    return {res.step.reason, executed, res.step.address, word, res.step.immediate, res.step.access};
             }
         }
     }

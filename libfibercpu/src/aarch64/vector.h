@@ -950,19 +950,6 @@ inline bool VectorRegisterOp(State& state, const DecodedInstruction& op, const R
     return valid;
 }
 
-template <VectorFamily family>
-inline StepResult Vector(State& state, const Memory& memory, const DecodedInstruction& op) {
-    if constexpr (family == VectorFamily::Structure) {
-#if FIBERCPU_AARCH64_MICRO_TLB
-        uint64_t utlb_tags = 0;
-        uintptr_t utlb_addend = 0;
-#endif
-        return VectorStructure<false>(state, &memory, op, ScalarRegisters{state}, nullptr A64_UTLB_ARGS);
-    } else {
-        return VectorRegisterOp<family>(state, op, ScalarRegisters{state}) ? StepResult{} : Undefined(state.pc);
-    }
-}
-
 }  // namespace fiberish::aarch64::detail
 
 #undef A64_VECTOR_INLINE

@@ -158,9 +158,7 @@ def fingerprint(build):
 
 
 UINT = re.compile(r"Lj(\d+)E")
-TAIL = re.compile(r"12BakedHandlerILj\d+ELb([01])EJ((?:Lj\d+E)+)")
-SEQUENCE = re.compile(r"22BakedSequenceWithFlagsILj\d+ELj(\d+)EJ((?:Lj\d+E)+)")
-SCALAR = re.compile(r"645BakedILj(\d+)ELb[01]ELb([01])E")
+BAKED_ARM = re.compile(r"10BakedLogicILj\d+ELb([01])EJ((?:Lj\d+E)+)")
 PROFILE = re.compile(r"13baked_operand\d+(\w+?)INS_11OperandSpec(7Profile|14PartialProfile)IXtlNS_19DecodedOperandShapeE((?:Lj\d+E)+)EELj\d+E")
 MODRM = re.compile(r'ZNS_(?:2op)?\d+(Op\w+?)EP.*?9WithModRMI\w*?9SlotBoundILj(\d+)ELb[01]EEELh(\d+)E')
 CLONE = re.compile(r"OperandClone_(\d+)_(SuperOpcode_\w+?)EP")
@@ -168,21 +166,13 @@ DYNAMIC = {1: "dynamic-disp", 2: "dynamic-imm", 3: "dynamic-both"}
 
 
 def arm_symbol(symbol):
-    m = TAIL.search(symbol)
-    if m:
-        words = tuple(map(int, UINT.findall(m[2])))
-        partial = m[1] == "1"
-    else:
-        m = SEQUENCE.search(symbol)
-        if m:
-            words = (int(m[1]), *map(int, UINT.findall(m[2])))
-            partial = False
-        else:
-            m = SCALAR.search(symbol)
-            if not m:
-                return None
-            words = (int(m[1]),)
-            partial = m[2] == "1"
+    if "DispatchWrapper" not in symbol:
+        return None
+    m = BAKED_ARM.search(symbol)
+    if not m:
+        return None
+    words = tuple(map(int, UINT.findall(m[2])))
+    partial = m[1] == "1"
     kind = "partials" if partial else {1: "entries", 2: "pairs"}.get(len(words), "sequences")
     return arm_key(kind, words)
 

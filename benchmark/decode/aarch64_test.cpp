@@ -589,7 +589,7 @@ bool Va39BlockLink() {
     State state;
     detail::BasicBlock block;
     block.header.entry = detail::GetExitHandlerFallthrough();
-    block.header.chain = detail::BasicBlockChainPrefix::Pack(Pc, Count, true, false);
+    block.header.chain = detail::BasicBlockChainPrefix::Pack(Pc, Count, false);
     block.sentinel_slot_index = 5;
     const Memory memory{};
     detail::RunFrame frame{memory};
@@ -599,23 +599,27 @@ bool Va39BlockLink() {
     if (detail::TryChainBlock(state, target, detail::BlockLink(&block), Pc & UINT32_MAX, budget) || budget != 10)
         return false;
     if (detail::TryChainBlock(state, target, detail::BlockLink(&block), Pc, budget) != block.header.entry ||
-        target != &block || budget != 10 - Count || state.last_block != &block || block.sentinel_slot_index != 5 ||
-        !block.HasBindings())
+        target != &block || budget != 10 - Count || state.last_block != &block || block.sentinel_slot_index != 5)
         return false;
 #endif
     return true;
 }
 
 template <unsigned Counter>
-detail::HandlerBinding CountProfiledAdd(const DecodedInstruction& op, bool) {
+A64_FORCE_INLINE StepResult CountProfiledAddLogic(State& state, const detail::DecodedOp*& current A64_UTLB_REF_PARAMS,
+                                                  uint32_t& flags_cache A64_HOT_PIN_REF) {
+    constexpr uint32_t Add = 0x91000400; // add x0, x0, #1
+    const detail::HotRegisters regs{state A64_HANDLER_PIN_ARGS};
+    regs.Write(Counter, 64, regs.Read(Counter, 64) + 1);
+    return detail::BakedLogic<0, false, Add>(state, current A64_UTLB_ARGS, flags_cache A64_HANDLER_PIN_ARGS);
+}
+
+template <unsigned Counter>
+detail::HandlerFunc CountProfiledAdd(const DecodedInstruction& op, bool) {
     constexpr uint32_t Add = 0x91000400; // add x0, x0, #1
     if (op.word != Add)
-        return {};
-    return {[](State& state, const Memory& memory, const DecodedInstruction& instruction) {
-                ++state.x[Counter];
-                return Baked<Add>(state, memory, instruction);
-            },
-            nullptr};
+        return nullptr;
+    return &detail::DispatchWrapper<CountProfiledAddLogic<Counter>, detail::BakedPolicy<Add>()>;
 }
 
 bool ReplacedSuccessorUsesCurrentProfile() {
@@ -648,19 +652,17 @@ bool TruncatedBlocks() {
     constexpr unsigned Words = detail::BlockMax;
     constexpr uint32_t Add = 0x91000421; // add x1, x1, #1
     Profile profile;
-    profile.trusted_baking = true;
-    profile.resolve_pair = [](uint32_t first, uint32_t second, uint32_t,
-                              detail::HandlerFunc& handler) -> ScalarHandlerFunc {
+    profile.resolve_pair = [](uint32_t first, uint32_t second, uint32_t dead) -> detail::HandlerFunc {
         if (first != Add || second != Add)
             return nullptr;
-        return BindBakedScalarFusion<BakedPairHandler<Add, Add>(), 2>(handler);
+        return BindBakedFusion<Add, Add>(dead);
     };
-    profile.resolve_sequence = [](const uint32_t* words, unsigned count, unsigned* matched, uint32_t,
-                                  detail::HandlerFunc& handler) -> ScalarHandlerFunc {
+    profile.resolve_sequence = [](const uint32_t* words, unsigned count, unsigned* matched,
+                                  uint32_t dead) -> detail::HandlerFunc {
         if (count < 4 || !std::all_of(words, words + 4, [](uint32_t word) { return word == Add; }))
             return nullptr;
         *matched = 4;
-        return BindBakedScalarFusion<BakedSequenceHandler<Add, Add, Add, Add>(), 4>(handler);
+        return BindBakedFusion<Add, Add, Add, Add>(dead);
     };
     for (const auto start : {Base, Base + Page - Words * 4}) {
         Backing backing;
@@ -720,14 +722,13 @@ bool BakedCompareBranchSuffix() {
     Backing backing;
     backing.Code(Base, {Prefix, Compare, Less, 0x91000463, 0xf94000a6}); // add x3, x3, #1; ldr x6, [x5]
     const Profile profile{
-        .resolve_sequence = [](const uint32_t* words, unsigned count, unsigned* length, uint32_t dead,
-                               detail::HandlerFunc& handler) -> ScalarHandlerFunc {
+        .resolve_sequence = [](const uint32_t* words, unsigned count, unsigned* length,
+                               uint32_t dead) -> detail::HandlerFunc {
             if (count < 3 || words[0] != Prefix || words[1] != Compare || words[2] != Less)
                 return nullptr;
             *length = 3;
-            return BindBakedFusion<Prefix, Compare, Less>(dead, handler);
+            return BindBakedFusion<Prefix, Compare, Less>(dead);
         },
-        .trusted_baking = true,
     };
 
     for (auto left : {uint64_t{1}, uint64_t{1} << 63}) {
@@ -754,7 +755,7 @@ bool BakedDispatch() {
     constexpr uint32_t Add2 = 0x91000800;
     static_assert(CanBake(Add1));
     static_assert(!CanBake(0xd4000001));
-    static_assert(BakedScalarHandler<0xd4000001>() == nullptr);
+    static_assert(GetBakedHandler<0xd4000001>() == nullptr);
     Backing backing;
     backing.Code(Base, {Add1, Add2});
     State state;
@@ -783,15 +784,15 @@ bool PartialImmediateOperands() {
         reinterpret_cast<uintptr_t>(data.data()) - Data,
     };
     memory.data_tlb = &tlb;
-    Profile profile{.trusted_baking = true};
-    profile.resolve = [](const DecodedInstruction& op, bool dead) -> detail::HandlerBinding {
+    Profile profile{};
+    profile.resolve = [](const DecodedInstruction& op, bool dead) -> detail::HandlerFunc {
         switch (op.word & ~(0xfffu << 10)) {
         case Add:
             return BakedBinding<Add, true>(dead);
         case Load:
             return BakedBinding<Load, true>(dead);
         default:
-            return {};
+            return nullptr;
         }
     };
     for (unsigned imm : {3u, 39u, 1023u}) {
@@ -825,14 +826,13 @@ bool FusedDispatch() {
     State state;
     state.pc = Base;
     Profile profile;
-    profile.trusted_baking = true;
-    profile.resolve_pair = [](uint32_t first, uint32_t second, uint32_t, detail::HandlerFunc&) -> ScalarHandlerFunc {
+    profile.resolve_pair = [](uint32_t first, uint32_t second, uint32_t dead) -> detail::HandlerFunc {
         if (first != Add)
             return nullptr;
         if (second == Load)
-            return BakedPairHandler<Add, Load>();
+            return BindBakedFusion<Add, Load>(dead);
         if (second == Branch)
-            return BakedPairHandler<Add, Branch>();
+            return BindBakedFusion<Add, Branch>(dead);
         return nullptr;
     };
     auto result = Run(state, memory, 2, profile);
@@ -988,8 +988,13 @@ bool PinFreeDispatchKeepsLivePins() {
         return false;
     if constexpr (SplitPinTouches) {
         using enum Kind;
-        constexpr auto ScalarAdd = &IntegerHandler<AddSubImmediate, 64, 0, -1, true, IntegerForm::Default, false>;
-        constexpr auto ScalarLoad = &LoadStoreHandler<LoadStoreImmediate, 64, 1, 0, -1, 0, false>;
+        constexpr DispatchPolicy AddPolicy{.wide = HasExtraOperandSlot(AddSubImmediate),
+                                           .branch = BranchPolicy(AddSubImmediate)};
+        constexpr DispatchPolicy LoadPolicy{.wide = HasExtraOperandSlot(LoadStoreImmediate), .may_replay = true};
+        constexpr auto ScalarAdd =
+            &DispatchWrapper<IntegerLogic<AddSubImmediate, 64, 0, -1, true, IntegerForm::Default, false>, AddPolicy>;
+        constexpr auto ScalarLoad =
+            &DispatchWrapper<LoadStoreLogic<LoadStoreImmediate, 64, 1, 0, -1, 0, false>, LoadPolicy>;
         const auto add_op = DecodeFields(increment_scalar);
         const auto load_op = DecodeFields(load);
         if (SelectPinHandler(Lower(add_op), add_op).handler != ScalarAdd ||
@@ -1055,20 +1060,19 @@ bool FusedPCRelativeMembers() {
     constexpr uint32_t Equal = 0x54000040;                           // b.eq +8
     constexpr uint32_t ZAndC = 0x60000000;
     const Profile profile{.resolve_sequence = [](const uint32_t* words, unsigned count, unsigned* matched,
-                                                 uint32_t dead, detail::HandlerFunc& handler) -> ScalarHandlerFunc {
-                              if (count != 3 || words[0] != Adds || words[1] != Address)
-                                  return nullptr;
-                              if (words[2] == Link) {
-                                  *matched = 3;
-                                  return BindBakedFusion<Adds, Address, Link>(dead, handler);
-                              }
-                              if (words[2] == Equal) {
-                                  *matched = 3;
-                                  return BindBakedFusion<Adds, Address, Equal>(dead, handler);
-                              }
-                              return nullptr;
-                          },
-                          .trusted_baking = true};
+                                                 uint32_t dead) -> detail::HandlerFunc {
+        if (count != 3 || words[0] != Adds || words[1] != Address)
+            return nullptr;
+        if (words[2] == Link) {
+            *matched = 3;
+            return BindBakedFusion<Adds, Address, Link>(dead);
+        }
+        if (words[2] == Equal) {
+            *matched = 3;
+            return BindBakedFusion<Adds, Address, Equal>(dead);
+        }
+        return nullptr;
+    }};
     Backing backing;
     backing.Code(Base, {Adds, Address, Link});
     backing.Code(Base + 64, {Adds, Address, Equal});
@@ -1090,38 +1094,37 @@ bool FusedPCRelativeMembers() {
     return true;
 }
 
+template <uint32_t... Words>
+A64_FORCE_INLINE StepResult CountingBakedLogic(State& state, const detail::DecodedOp*& current A64_UTLB_REF_PARAMS,
+                                               uint32_t& flags_cache A64_HOT_PIN_REF) {
+    ++static_cast<Backing*>(state.active_run->memory.context)->sequences;
+    return detail::BakedLogic<0, false, Words...>(state, current A64_UTLB_ARGS, flags_cache A64_HANDLER_PIN_ARGS);
+}
+
 bool FusedLoadRefetch() {
+    constexpr auto Start = Base + Page - 12;
     constexpr uint32_t Add1 = 0x91000421; // add x1, x1, #1
     constexpr uint32_t Load = 0xb9400062; // ldr w2, [x3]
     constexpr uint32_t Add2 = 0x91000821; // add x1, x1, #2
     Backing backing;
-    backing.Code(Base, {Add1, Load, Add2});
+    backing.Code(Start, {Add1, Load, Add2});
     Profile profile;
-    profile.resolve_sequence = [](const uint32_t* words, unsigned count, unsigned* matched, uint32_t,
-                                  detail::HandlerFunc&) -> ScalarHandlerFunc {
+    profile.resolve_sequence = [](const uint32_t* words, unsigned count, unsigned* matched,
+                                  uint32_t) -> detail::HandlerFunc {
         if (count < 3 || words[0] != Add1 || words[1] != Load || words[2] != Add2)
             return nullptr;
         *matched = 3;
-        return [](State& state, const Memory& memory, const DecodedInstruction& op) {
-            ++static_cast<Backing*>(memory.context)->sequences;
-            Baked<Add1>(state, memory, op);
-            state.pc += 4;
-            const auto load = Baked<Load>(state, memory, op);
-            if (load.reason != Stop::Continue)
-                return load;
-            state.pc += 4;
-            return Baked<Add2>(state, memory, op);
-        };
+        return &detail::DispatchWrapper<CountingBakedLogic<Add1, Load, Add2>, detail::BakedPolicy<Add1, Load, Add2>()>;
     };
     State state;
-    state.pc = Base;
+    state.pc = Start;
     auto memory = backing.Callbacks();
     auto result = Run(state, memory, 3, profile);
-    if (result.reason != Stop::Fault || result.executed != 1 || state.pc != Base + 4 || result.instruction != Load ||
+    if (result.reason != Stop::Fault || result.executed != 1 || state.pc != Start + 4 || result.instruction != Load ||
         state.x[1] != 1 || backing.sequences != 1)
         return false;
 
-    state.pc = Base;
+    state.pc = Start;
     state.x[1] = 0;
     state.x[3] = Base + Page;
     memory.read_fast = [](void* context, uint64_t address, void* destination, size_t size) {
@@ -1132,16 +1135,16 @@ bool FusedLoadRefetch() {
         return true;
     };
     result = Run(state, memory, 3, profile);
-    if (result.reason != Stop::Budget || result.executed != 3 || state.pc != Base + 12 || state.x[1] != 3 ||
+    if (result.reason != Stop::Budget || result.executed != 3 || state.pc != Start + 12 || state.x[1] != 3 ||
         backing.sequences != 2)
         return false;
 
-    state.pc = Base;
+    state.pc = Start;
     state.x[1] = 0;
-    backing.replace_after_read = Base + 8;
+    backing.replace_after_read = Start + 8;
     memory.read_fast = nullptr;
     result = Run(state, memory, 3, profile);
-    return result.reason == Stop::Budget && result.executed == 3 && state.pc == Base + 12 && state.x[1] == 4 &&
+    return result.reason == Stop::Budget && result.executed == 3 && state.pc == Start + 12 && state.x[1] == 4 &&
            backing.sequences == 3;
 }
 
@@ -1165,13 +1168,12 @@ bool FusedLoadReplay() {
     backing.Put(Data, 42);
     auto memory = backing.Callbacks();
     Profile profile;
-    profile.trusted_baking = true;
-    profile.resolve_sequence = [](const uint32_t* words, unsigned count, unsigned* matched, uint32_t dead,
-                                  detail::HandlerFunc& handler) -> ScalarHandlerFunc {
+    profile.resolve_sequence = [](const uint32_t* words, unsigned count, unsigned* matched,
+                                  uint32_t dead) -> detail::HandlerFunc {
         if (count < 3 || words[0] != Prefix || words[1] != Load || words[2] != Observe)
             return nullptr;
         *matched = 3;
-        return BindBakedFusion<Prefix, Load, Observe>(dead, handler);
+        return BindBakedFusion<Prefix, Load, Observe>(dead);
     };
 
     State state;
@@ -1263,13 +1265,12 @@ bool FusedStoreReplay() {
         return true;
     };
     Profile profile;
-    profile.trusted_baking = true;
-    profile.resolve_sequence = [](const uint32_t* words, unsigned count, unsigned* matched, uint32_t dead,
-                                  detail::HandlerFunc& handler) -> ScalarHandlerFunc {
+    profile.resolve_sequence = [](const uint32_t* words, unsigned count, unsigned* matched,
+                                  uint32_t dead) -> detail::HandlerFunc {
         if (count < 3 || words[0] != Prefix || words[1] != Store || words[2] != Suffix)
             return nullptr;
         *matched = 3;
-        return BindBakedFusion<Prefix, Store, Suffix>(dead, handler);
+        return BindBakedFusion<Prefix, Store, Suffix>(dead);
     };
     state.pc = Start;
     state.nzcv = detail::FlagMask;
@@ -1307,13 +1308,13 @@ bool FusedStorePromotesReadWriteMicroTlb() {
     tlb.read_tlb[tlb_index] = entry;
 #endif
     memory.data_tlb = &tlb;
-    Profile profile{.trusted_baking = true};
-    profile.resolve_sequence = [](const uint32_t*, unsigned count, unsigned* length, uint32_t dead,
-                                  detail::HandlerFunc& handler) -> ScalarHandlerFunc {
+    Profile profile{};
+    profile.resolve_sequence = [](const uint32_t*, unsigned count, unsigned* length,
+                                  uint32_t dead) -> detail::HandlerFunc {
         if (count != 3)
             return nullptr;
         *length = 3;
-        return BindBakedFusion<Store, Load, Branch>(dead, handler);
+        return BindBakedFusion<Store, Load, Branch>(dead);
     };
     for (const auto& bindings : {Profile{}, profile}) {
         State state{};
@@ -1351,13 +1352,12 @@ bool BoundLiteralAddress() {
         return address == GuestPage ? static_cast<Backing*>(context)->data.data() : nullptr;
     };
     Profile fused;
-    fused.trusted_baking = true;
-    fused.resolve_sequence = [](const uint32_t* words, unsigned count, unsigned* length, uint32_t dead,
-                                detail::HandlerFunc& handler) -> ScalarHandlerFunc {
+    fused.resolve_sequence = [](const uint32_t* words, unsigned count, unsigned* length,
+                                uint32_t dead) -> detail::HandlerFunc {
         if (count < 3 || words[0] != Add || words[1] != Load || words[2] != Branch)
             return nullptr;
         *length = 3;
-        return BindBakedFusion<Add, Load, Branch>(dead, handler);
+        return BindBakedFusion<Add, Load, Branch>(dead);
     };
     for (const auto& profile : {Profile{}, fused}) {
         for (const unsigned budget : {2u, 3u}) {
@@ -1444,17 +1444,16 @@ bool FlagElisionBudgets() {
     static uint32_t fused_dead_mask = 0;
     static bool bound_fusion = false;
     Profile baked;
-    baked.trusted_baking = true;
-    baked.resolve_sequence = [](const uint32_t* words, unsigned count, unsigned* matched, uint32_t dead_mask,
-                                detail::HandlerFunc& handler) -> ScalarHandlerFunc {
+    baked.resolve_sequence = [](const uint32_t* words, unsigned count, unsigned* matched,
+                                uint32_t dead_mask) -> detail::HandlerFunc {
         constexpr std::array Prefix{AddsX0, AddX4, AdcsX1, AddsX2};
         if (count < Prefix.size() || !std::equal(Prefix.begin(), Prefix.end(), words))
             return nullptr;
         *matched = Prefix.size();
         fused_dead_mask = dead_mask & ((1u << Prefix.size()) - 1);
-        const auto scalar_handler = BindBakedFusion<AddsX0, AddX4, AdcsX1, AddsX2>(dead_mask, handler);
-        bound_fusion = scalar_handler != nullptr;
-        return scalar_handler;
+        const auto handler = BindBakedFusion<AddsX0, AddX4, AdcsX1, AddsX2>(dead_mask);
+        bound_fusion = handler != nullptr;
+        return handler;
     };
 
     for (const auto& profile : {Profile{}, baked}) {
@@ -1533,16 +1532,15 @@ bool FlagElisionEvents() {
     constexpr uint32_t Svc = 0xd4000841;  // svc #0x42
     static uint32_t fused_dead_mask = UINT32_MAX;
     const Profile baked{.resolve_sequence = [](const uint32_t* words, unsigned count, unsigned* matched,
-                                               uint32_t dead_mask, detail::HandlerFunc& handler) -> ScalarHandlerFunc {
-                            if (count < 3 || words[0] != AddsX0 || words[1] != Load || words[2] != CmpX3)
-                                return nullptr;
-                            *matched = 3;
-                            const auto scalar_handler = BindBakedFusion<AddsX0, Load, CmpX3>(dead_mask, handler);
-                            if (scalar_handler)
-                                fused_dead_mask = dead_mask & 0b111;
-                            return scalar_handler;
-                        },
-                        .trusted_baking = true};
+                                               uint32_t dead_mask) -> detail::HandlerFunc {
+        if (count < 3 || words[0] != AddsX0 || words[1] != Load || words[2] != CmpX3)
+            return nullptr;
+        *matched = 3;
+        const auto handler = BindBakedFusion<AddsX0, Load, CmpX3>(dead_mask);
+        if (handler)
+            fused_dead_mask = dead_mask & 0b111;
+        return handler;
+    }};
     const Profile generic;
     for (unsigned mode = 0; mode < 3; ++mode) {
         Backing backing;

@@ -11,7 +11,7 @@
 
 namespace fiberish::aarch64::detail {
 
-#if FIBERCPU_AARCH64_TAIL_DISPATCH && FIBERCPU_AARCH64_PIN_COUNT > 0 && FIBERCPU_AARCH64_PIN_TOUCH_SPLIT
+#if FIBERCPU_AARCH64_PIN_COUNT > 0 && FIBERCPU_AARCH64_PIN_TOUCH_SPLIT
 struct GenericHandlerBinding : HandlerBinding {
     HandlerFunc unpinned = nullptr;
 
@@ -31,63 +31,46 @@ inline HandlerBinding SelectPinHandler(GenericHandlerBinding binding, const Deco
 #endif
 
 template <Stop reason>
-inline StepResult TrapInstruction(State& state, const Memory&, const DecodedInstruction& op) {
-    return {reason, Access::Execute, reason == Stop::Undefined ? uint16_t{0} : uint16_t(op.immediate), state.pc};
-}
-
-#if FIBERCPU_AARCH64_TAIL_DISPATCH
-template <Stop reason>
-FIBERCPU_AARCH64_HANDLER_ABI int64_t TrapHandler(A64_HANDLER_PARAMS) {
+A64_FORCE_INLINE StepResult TrapLogic(State& state, const DecodedOp*& current A64_UTLB_REF_PARAMS,
+                                      uint32_t& A64_HOT_PIN_REF) {
     const uint16_t immediate = reason == Stop::Undefined ? 0 : uint16_t(current->Operands());
-    return ReturnFromBlock(state, current, instr_limit, flags_cache A64_HANDLER_PIN_ARGS,
-                           {reason, Access::Execute, immediate, current->GetStartPc(state)});
+    return {reason, Access::Execute, immediate, current->GetStartPc(state)};
 }
-#endif
 
 template <Stop reason>
 constexpr HandlerBinding BindTrapHandler() {
-#if FIBERCPU_AARCH64_TAIL_DISPATCH
-    return {&TrapInstruction<reason>, &TrapHandler<reason>};
-#else
-    return {&TrapInstruction<reason>, nullptr};
-#endif
+    constexpr DispatchPolicy policy{.wide = false, .may_exit = true};
+    return {&DispatchWrapper<TrapLogic<reason>, policy>};
 }
 
-inline StepResult NopInstruction(State&, const Memory&, const DecodedInstruction&) { return {}; }
-
-#if FIBERCPU_AARCH64_TAIL_DISPATCH
-FIBERCPU_AARCH64_HANDLER_ABI inline int64_t NopHandler(A64_HANDLER_PARAMS) {
-    A64_DISPATCH_NEXT(current->NextOp<false>());
+A64_FORCE_INLINE StepResult NopLogic(State&, const DecodedOp*& A64_UTLB_REF_PARAMS, uint32_t& A64_HOT_PIN_REF) {
+    return {};
 }
 
 template <Kind kind, unsigned width, int operation, int mode, int shift, int vector, bool TouchesPin>
-FIBERCPU_AARCH64_HANDLER_ABI int64_t LoadStoreHandler(A64_HANDLER_PARAMS) {
+A64_FORCE_INLINE StepResult LoadStoreLogic(State& state, const DecodedOp*& current A64_UTLB_REF_PARAMS,
+                                           uint32_t& A64_HOT_PIN_REF) {
     const auto op = GetOpOperands<kind>(*current);
     if (!ProbeLoadStore<kind, width, operation, mode, shift, vector, TouchesPin>(
-            state, op, BlockTarget<kind>(op), state.data_tlb A64_UTLB_ARGS A64_HANDLER_PIN_ARGS)) [[unlikely]] {
-        A64_MEMORY_OP_GENERIC(current);
-    }
-    A64_DISPATCH_NEXT(current->NextOp<HasExtraOperandSlot(kind)>());
+            state, op, BlockTarget<kind>(op), state.data_tlb A64_UTLB_ARGS A64_HANDLER_PIN_ARGS)) [[unlikely]]
+        return {Stop::Replay};
+    return {};
 }
-#endif
 
 template <Kind kind, unsigned width = 0, int operation = -1, int mode = -1, int shift = -1, int vector = -1>
 constexpr GenericHandlerBinding BindMemoryHandler() {
-    constexpr auto scalar = LoadStore<kind, width, operation, mode, shift, vector>;
-#if FIBERCPU_AARCH64_TAIL_DISPATCH
-    constexpr HandlerBinding binding{scalar, &LoadStoreHandler<kind, width, operation, mode, shift, vector, true>};
+    constexpr DispatchPolicy policy{.wide = HasExtraOperandSlot(kind), .may_replay = true};
+    constexpr HandlerBinding binding{
+        &DispatchWrapper<LoadStoreLogic<kind, width, operation, mode, shift, vector, true>, policy>};
     if constexpr (SplitPinTouches)
-        return {binding, &LoadStoreHandler<kind, width, operation, mode, shift, vector, false>};
+        return {binding, &DispatchWrapper<LoadStoreLogic<kind, width, operation, mode, shift, vector, false>, policy>};
     else
         return binding;
-#else
-    return {scalar, nullptr};
-#endif
 }
 
-#if FIBERCPU_AARCH64_TAIL_DISPATCH
 template <Kind kind, unsigned width, int operation, int shift, bool write_nzcv, IntegerForm form, bool TouchesPin>
-FIBERCPU_AARCH64_HANDLER_ABI int64_t IntegerHandler(A64_HANDLER_PARAMS) {
+A64_FORCE_INLINE StepResult IntegerLogic(State& state, const DecodedOp*& current A64_UTLB_REF_PARAMS,
+                                         uint32_t& flags_cache A64_HOT_PIN_REF) {
     const auto op = GetOpOperands<kind>(*current);
     uint64_t pc = 0;
     if constexpr (kind == Kind::BranchImmediate) {
@@ -95,36 +78,21 @@ FIBERCPU_AARCH64_HANDLER_ABI int64_t IntegerHandler(A64_HANDLER_PARAMS) {
     } else if constexpr (kind == Kind::BranchRegister) {
         pc = GetExtraOperands(*current).primary;
     }
-    const auto result = HotInteger<kind, width, operation, shift, write_nzcv, form, TouchesPin>(
-        state, op, pc, BlockTarget<kind>(op), flags_cache A64_HANDLER_PIN_ARGS);
-    if constexpr (kind >= Kind::BranchImmediate && kind <= Kind::TestBranch) {
-        if (result.reason == Stop::Branch) {
-            if constexpr (kind == Kind::BranchRegister) {
-                const auto& extra = GetExtraOperands(*current);
-                A64_RESOLVE_BRANCH_TARGET_INLINE(
-                    result.address == pc + 4 ? current->NextOp<true>()->payload : extra.secondary, result.address);
-            } else {
-                A64_RESOLVE_DIRECT_BRANCH_TARGET(kind);
-            }
-        }
-    }
-    A64_DISPATCH_NEXT(current->NextOp<HasExtraOperandSlot(kind)>());
+    return HotInteger<kind, width, operation, shift, write_nzcv, form, TouchesPin>(state, op, pc, BlockTarget<kind>(op),
+                                                                                   flags_cache A64_HANDLER_PIN_ARGS);
 }
-#endif
 
 template <Kind kind, unsigned width = 0, int operation = -1, int shift = -1, bool write_nzcv = true,
           IntegerForm form = IntegerForm::Default>
 constexpr GenericHandlerBinding BindIntegerKernel() {
-    constexpr auto scalar = Integer<kind, width, operation, shift, write_nzcv, form>;
-#if FIBERCPU_AARCH64_TAIL_DISPATCH
-    constexpr HandlerBinding binding{scalar, &IntegerHandler<kind, width, operation, shift, write_nzcv, form, true>};
+    constexpr DispatchPolicy policy{.wide = HasExtraOperandSlot(kind), .branch = BranchPolicy(kind)};
+    constexpr HandlerBinding binding{
+        &DispatchWrapper<IntegerLogic<kind, width, operation, shift, write_nzcv, form, true>, policy>};
     if constexpr (SplitPinTouches)
-        return {binding, &IntegerHandler<kind, width, operation, shift, write_nzcv, form, false>};
+        return {binding,
+                &DispatchWrapper<IntegerLogic<kind, width, operation, shift, write_nzcv, form, false>, policy>};
     else
         return binding;
-#else
-    return {scalar, nullptr};
-#endif
 }
 
 constexpr auto Handlers = [] {
@@ -205,21 +173,18 @@ constexpr auto PairMemoryVariants(std::index_sequence<index...>) {
 
 inline GenericHandlerBinding Lower(const DecodedInstruction& op) {
     if (op.word == NopWord) {
-#if FIBERCPU_AARCH64_TAIL_DISPATCH
-        return HandlerBinding{&NopInstruction, &NopHandler};
-#else
-        return HandlerBinding{&NopInstruction, nullptr};
-#endif
+        constexpr DispatchPolicy nop_policy{.wide = false};
+        return HandlerBinding{&DispatchWrapper<NopLogic, nop_policy>};
     }
     switch (op.kind) {
         case Kind::System:
-            if (auto binding = LowerSystem(op.word); binding.scalar_handler) return binding;
+            if (auto binding = LowerSystem(op.word); binding.handler) return binding;
             break;
         case Kind::ScalarFloat:
-            if (auto binding = LowerFloat(op.word); binding.scalar_handler) return binding;
+            if (auto binding = LowerFloat(op.word); binding.handler) return binding;
             break;
         case Kind::Vector:
-            if (auto binding = LowerVector(op.word); binding.scalar_handler) return binding;
+            if (auto binding = LowerVector(op.word); binding.handler) return binding;
             break;
         case Kind::AddSubImmediate:
             return BindInteger<Kind::AddSubImmediate>(op);

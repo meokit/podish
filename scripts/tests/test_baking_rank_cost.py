@@ -8,13 +8,17 @@ import baking_rank_cost as cost
 
 
 class StaticCostTests(unittest.TestCase):
-    def test_arm_dispatch_and_scalar_helpers_share_one_logical_key(self):
-        for symbol in ("645BakedILj13ELb1ELb1EE", "12BakedHandlerILj1ELb1EJLj13EEE"):
-            self.assertEqual(cost.arm_symbol(symbol), cost.binding("partials", 13)[0])
-        for symbol in ("22BakedSequenceWithFlagsILj0ELj5EJLj7ELj11EEE",
-                       "12BakedHandlerILj1ELb0EJLj5ELj7ELj11EEE"):
-            self.assertEqual(cost.arm_symbol(symbol), cost.binding("sequences", {"words": [5, 7, 11]})[0])
+    def test_arm_dispatch_wrappers_map_to_logical_keys(self):
+        self.assertEqual(
+            cost.arm_symbol("15DispatchWrapperIXadL_ZN7fiberish7aarch646detail10BakedLogicILj1ELb1EJLj13EEEE"),
+            cost.binding("partials", 13)[0],
+        )
+        self.assertEqual(
+            cost.arm_symbol("15DispatchWrapperIXadL_ZN7fiberish7aarch646detail10BakedLogicILj1ELb0EJLj5ELj7ELj11EEEE"),
+            cost.binding("sequences", {"words": [5, 7, 11]})[0],
+        )
         self.assertIsNone(cost.arm_symbol("RunBlock"))
+        self.assertIsNone(cost.arm_symbol("10BakedLogicILj1ELb1EJLj13EEE"))
 
     def test_x86_operand_abi_and_missing_fields(self):
         name = "OpMov_GvEv"

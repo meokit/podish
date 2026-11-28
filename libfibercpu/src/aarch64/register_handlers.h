@@ -4,75 +4,63 @@
 
 namespace fiberish::aarch64::detail {
 
-#if FIBERCPU_AARCH64_TAIL_DISPATCH
 template <FloatFamily family>
-FIBERCPU_AARCH64_HANDLER_ABI int64_t FloatHandler(A64_HANDLER_PARAMS) {
+A64_FORCE_INLINE StepResult FloatLogic(State& state, const DecodedOp*& current A64_UTLB_REF_PARAMS,
+                                       uint32_t& flags_cache A64_HOT_PIN_REF) {
     const auto op = BaseInstruction(uint32_t(current->Operands()));
     bool valid;
 #if defined(__clang__)
     [[clang::always_inline]]
 #endif
     valid = FloatRegisterOp<family>(state, op, flags_cache, HotRegisters{state A64_HANDLER_PIN_ARGS});
-    if (!valid) [[unlikely]]
-        return ReturnFromBlock(state, current, instr_limit, flags_cache A64_HANDLER_PIN_ARGS,
-                               Undefined(current->GetStartPc(state)));
-    A64_DISPATCH_NEXT(current->NextOp<false>());
+    return valid ? StepResult{} : Undefined(current->GetStartPc(state));
 }
 
 template <VectorFamily family>
-FIBERCPU_AARCH64_HANDLER_ABI int64_t VectorHandler(A64_HANDLER_PARAMS) {
+A64_FORCE_INLINE StepResult VectorLogic(State& state, const DecodedOp*& current A64_UTLB_REF_PARAMS,
+                                        uint32_t& A64_HOT_PIN_REF) {
     const auto op = BaseInstruction(uint32_t(current->Operands()));
     const HotRegisters registers{state A64_HANDLER_PIN_ARGS};
     if constexpr (family == VectorFamily::Structure) {
         auto step = VectorStructure<true>(state, nullptr, op, registers, state.data_tlb A64_UTLB_ARGS);
-        if (step.reason == Stop::Replay) [[unlikely]] {
-            A64_MEMORY_OP_GENERIC(current);
-        }
-        if (step.reason != Stop::Continue) [[unlikely]] {
-            if (step.reason == Stop::Undefined) step.address = current->GetStartPc(state);
-            return ReturnFromBlock(state, current, instr_limit, flags_cache A64_HANDLER_PIN_ARGS, step);
-        }
+        if (step.reason == Stop::Undefined) [[unlikely]]
+            step.address = current->GetStartPc(state);
+        return step;
     } else {
         bool valid;
 #if defined(__clang__)
         [[clang::always_inline]]
 #endif
         valid = VectorRegisterOp<family>(state, op, registers);
-        if (!valid) [[unlikely]]
-            return ReturnFromBlock(state, current, instr_limit, flags_cache A64_HANDLER_PIN_ARGS,
-                                   Undefined(current->GetStartPc(state)));
+        return valid ? StepResult{} : Undefined(current->GetStartPc(state));
     }
-    A64_DISPATCH_NEXT(current->NextOp<false>());
 }
 
 #if (defined(__aarch64__) && !defined(_MSC_VER)) || FIBERCPU_AARCH64_SIMDE
 template <ByteVectorOp op>
-FIBERCPU_AARCH64_HANDLER_ABI int64_t ByteVectorHandler(A64_HANDLER_PARAMS) {
+A64_FORCE_INLINE StepResult ByteVectorLogic(State& state, const DecodedOp*& current A64_UTLB_REF_PARAMS,
+                                            uint32_t& A64_HOT_PIN_REF) {
     ExecuteByteVector<op>(state, uint32_t(current->Operands()));
-    A64_DISPATCH_NEXT(current->NextOp<false>());
+    return {};
 }
-#endif
 #endif
 
 template <FloatFamily family>
 constexpr HandlerBinding BindFloatHandler() {
-#if FIBERCPU_AARCH64_TAIL_DISPATCH
-    return {&ScalarFloat<family>, &FloatHandler<family>};
-#else
-    return {&ScalarFloat<family>, nullptr};
-#endif
+    constexpr DispatchPolicy policy{.wide = false, .may_exit = true};
+    return {&DispatchWrapper<FloatLogic<family>, policy>};
 }
 
 template <VectorFamily family>
 constexpr HandlerBinding BindVectorHandler([[maybe_unused]] uint32_t word) {
-#if FIBERCPU_AARCH64_TAIL_DISPATCH
 #if (defined(__aarch64__) && !defined(_MSC_VER)) || FIBERCPU_AARCH64_SIMDE
+    constexpr DispatchPolicy byte_policy{.wide = false};
     switch (DecodeByteVectorOp(word, family)) {
 #define ARM_LowerFloat(Name)
 #define ARM_LowerVector(Name)
 #define ARM_LowerByteVector(Name) \
     case ByteVectorOp::Name:      \
-        return {&Vector<family>, &ByteVectorHandler<ByteVectorOp::Name>};
+        return {&DispatchWrapper<ByteVectorLogic<ByteVectorOp::Name>, byte_policy>};
 #define ARM_REGISTER(Category, Name) ARM_Lower##Category(Name)
 #include "operation_registers.def"
 #undef ARM_REGISTER
@@ -83,10 +71,12 @@ constexpr HandlerBinding BindVectorHandler([[maybe_unused]] uint32_t word) {
             break;
     }
 #endif
-    return {&Vector<family>, &VectorHandler<family>};
-#else
-    return {&Vector<family>, nullptr};
-#endif
+    constexpr DispatchPolicy policy{
+        .wide = false,
+        .may_replay = family == VectorFamily::Structure,
+        .may_exit = true,
+    };
+    return {&DispatchWrapper<VectorLogic<family>, policy>};
 }
 
 inline HandlerBinding LowerFloat(uint32_t word) {

@@ -3,7 +3,6 @@
 #include <bit>
 #include <new>
 
-#include "../block_handler_storage.h"
 #include "../block_limits.h"
 #include "../mem/types.h"
 #include "aarch64.h"
@@ -15,17 +14,10 @@ constexpr unsigned PageBytes = 4096;
 constexpr uint64_t PageMask = PageBytes - 1;
 static_assert(BlockMax <= 32);
 
-ScalarHandlerFunc ResolveBlockScalarHandler(BlockHandlerIndex index);
-
 enum SlotFlag : uint8_t {
     HasDataSlot = 1,
     RetainsPage = 2,
-    OmitsFlags = 4,
-    UntrustedScalar = 8,
-    UntrustedFused = 16,
-    BaseFields = 32,
-    Fused = 64,
-    HasBranchLink = 128,
+    HasBranchLink = 4,
 };
 
 struct alignas(16) DecodedOp {
@@ -33,17 +25,19 @@ struct alignas(16) DecodedOp {
 #if INTPTR_MAX == INT32_MAX
     uint32_t thread_padding = 0;
 #endif
-    // Low 40 bits hold the operands. The upper bytes hold the guest ordinal and flags.
+    // Low 40 bits hold the operands. Byte 5 holds the guest ordinal, byte 6
+    // holds the fused instruction span, and byte 7 holds SlotFlag bits.
     // The sentinel uses the entire payload for its fallthrough link.
     mutable uint64_t payload = 0;
 
     static constexpr uint64_t OperandMask = (uint64_t{1} << 40) - 1;
-    static constexpr uint64_t Pack(uint64_t operands, unsigned ordinal, uint8_t flags) {
-        return operands | (uint64_t{ordinal} << 40) | (uint64_t{flags} << 56);
+    static constexpr uint64_t Pack(uint64_t operands, unsigned ordinal, uint8_t flags, uint8_t span = 1) {
+        return operands | (uint64_t{ordinal} << 40) | (uint64_t{span} << 48) | (uint64_t{flags} << 56);
     }
 
     uint64_t Operands() const { return payload & OperandMask; }
     unsigned GuestIndex() const { return (payload >> 40) & 0xff; }
+    unsigned Span() const { return (payload >> 48) & 0xff; }
     bool Has(SlotFlag flag) const { return (payload >> 56) & flag; }
 
     const DecodedOp* Advance(unsigned units) const {
@@ -93,13 +87,12 @@ struct BasicBlockChainPrefix {
 
     static constexpr unsigned CountShift = 7;
     static constexpr uint16_t Valid = uint16_t{1} << 13;
-    static constexpr uint16_t HasBindings = uint16_t{1} << 14;
     static constexpr uint16_t HasRegionContext = uint16_t{1} << 15;
     static constexpr uint64_t StartPcMask = mem::ArmTaskSize - 1;
 
-    static constexpr BasicBlockChainPrefix Pack(uint64_t pc, unsigned count, bool bindings, bool region_context) {
+    static constexpr BasicBlockChainPrefix Pack(uint64_t pc, unsigned count, bool region_context, bool valid = true) {
         return {uint32_t(pc),
-                uint16_t((pc >> 32) | (count << CountShift) | Valid | (bindings ? HasBindings : 0) |
+                uint16_t((pc >> 32) | (count << CountShift) | (valid ? Valid : 0) |
                          (region_context ? HasRegionContext : 0)),
                 0};
     }
@@ -130,33 +123,26 @@ struct alignas(16) BasicBlock {
     BasicBlockHeader header;
     const uint8_t* executable_page = nullptr;
     uint8_t sentinel_slot_index = 0;
-    bool has_wide_bindings = false;
+    uint8_t reserved = 0;
     uint16_t invalidation_revision = 0;
 
     uint64_t start_pc() const { return header.start_pc(); }
     unsigned inst_count() const { return header.inst_count(); }
     uint64_t end_pc() const { return start_pc() + uint64_t{inst_count()} * 4; }
     bool IsValid() const { return header.IsValid(); }
-    bool HasBindings() const { return header.chain.metadata & BasicBlockChainPrefix::HasBindings; }
     void Invalidate() {
         if (!IsValid()) return;
         header.chain.metadata &= ~BasicBlockChainPrefix::Valid;
         ++invalidation_revision;
     }
 
-    static constexpr size_t BindingsOffset(unsigned count) { return (count * sizeof(uint32_t) + 7) & ~size_t{7}; }
-
     static constexpr size_t RegionContextOffset(unsigned units) {
         return units * sizeof(DecodedOp) + sizeof(DecodedOp);
     }
 
-    static size_t CalculateSize(unsigned units, unsigned count, unsigned bindings, unsigned fusions,
-                                BlockHandlerStorage storage, bool retain_region_context) {
-        const auto code_size =
-            sizeof(BasicBlock) + RegionContextOffset(units) + (retain_region_context ? sizeof(void*) : 0);
-        if (!bindings) return code_size + count * sizeof(uint32_t);
-        return code_size + BindingsOffset(count) + 2 * sizeof(uint32_t) +
-               bindings * BlockHandlerWidth<ScalarHandlerFunc>(storage) + fusions;
+    static constexpr size_t CalculateSize(unsigned units, unsigned count, bool retain_region_context) {
+        return sizeof(BasicBlock) + RegionContextOffset(units) + (retain_region_context ? sizeof(void*) : 0) +
+               count * sizeof(uint32_t);
     }
 
     const DecodedOp* FirstOp() const { return reinterpret_cast<const DecodedOp*>(this + 1); }
@@ -181,44 +167,6 @@ struct alignas(16) BasicBlock {
         const auto word = Words()[ordinal];
         if constexpr (std::endian::native == std::endian::big) return std::byteswap(word);
         return word;
-    }
-
-    // Scalar and fusion masks rank the handlers by guest ordinal.
-    const uint32_t* BindingMasks() const {
-        return reinterpret_cast<const uint32_t*>(reinterpret_cast<const std::byte*>(Words()) +
-                                                 BindingsOffset(inst_count()));
-    }
-
-    ScalarHandlerFunc ScalarBinding(unsigned ordinal) const {
-        if (!HasBindings()) return nullptr;
-        const auto* masks = BindingMasks();
-        const auto mask = masks[0];
-        const auto bit = uint32_t{1} << ordinal;
-        if (!(mask & bit)) return nullptr;
-        return Binding(masks + 2, std::popcount(mask & (bit - 1)));
-    }
-
-    struct Fusion {
-        ScalarHandlerFunc handler = nullptr;
-        unsigned length = 1;
-    };
-
-    Fusion FusedBinding(unsigned ordinal) const {
-        const auto* masks = BindingMasks();
-        const auto count = std::popcount(masks[0]);
-        const auto mask = masks[1];
-        const auto index = std::popcount(mask & ((uint32_t{1} << ordinal) - 1));
-        const auto* bindings = masks + 2;
-        const auto storage = has_wide_bindings ? BlockHandlerStorage::Pointers : BlockHandlerStorage::Indexed;
-        const auto* lengths = reinterpret_cast<const uint8_t*>(bindings) +
-                              (count + std::popcount(mask)) * BlockHandlerWidth<ScalarHandlerFunc>(storage);
-        return {Binding(bindings, count + index), lengths[index]};
-    }
-
-private:
-    ScalarHandlerFunc Binding(const void* bindings, unsigned index) const {
-        if (has_wide_bindings) return static_cast<const ScalarHandlerFunc*>(bindings)[index];
-        return ResolveBlockScalarHandler(static_cast<const BlockHandlerIndex*>(bindings)[index]);
     }
 };
 

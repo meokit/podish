@@ -25,6 +25,14 @@
 #define FIBERCPU_AARCH64_HANDLER_ABI ATTR_PRESERVE_NONE
 #endif
 
+#if defined(_MSC_VER)
+#define A64_FORCE_INLINE __forceinline
+#elif defined(__GNUC__) || defined(__clang__)
+#define A64_FORCE_INLINE inline __attribute__((always_inline))
+#else
+#define A64_FORCE_INLINE inline
+#endif
+
 #if __has_include("aarch64_gpr_pins.generated.h")
 #include "aarch64_gpr_pins.generated.h"
 #elif defined(FIBERCPU_AARCH64_PIN_REG) && FIBERCPU_AARCH64_PIN_REG >= 0
@@ -126,7 +134,6 @@ struct StepResult {
 };
 
 struct DecodedInstruction;
-using ScalarHandlerFunc = StepResult (*)(State&, const Memory&, const DecodedInstruction&);
 
 namespace detail {
 struct DecodedOp;
@@ -212,7 +219,6 @@ enum class Kind : uint8_t {
 };
 
 struct DecodedInstruction {
-    ScalarHandlerFunc scalar_handler = nullptr;
     uint64_t immediate = 0;
     union {
         uint64_t mask = 0;
@@ -232,7 +238,6 @@ struct DecodedInstruction {
 
 namespace detail {
 struct HandlerBinding {
-    ScalarHandlerFunc scalar_handler = nullptr;
     HandlerFunc handler = nullptr;
     bool can_follow = false;
 };
@@ -241,13 +246,10 @@ struct HandlerBinding {
 struct Profile {
     void* context = nullptr;
     void (*record)(void*, uint64_t pc, uint32_t word, bool can_follow) = nullptr;
-    detail::HandlerBinding (*resolve)(const DecodedInstruction&, bool omit_nzcv) = nullptr;
-    ScalarHandlerFunc (*resolve_pair)(uint32_t first, uint32_t second, uint32_t dead,
-                                      detail::HandlerFunc& handler) = nullptr;
-    ScalarHandlerFunc (*resolve_sequence)(const uint32_t* words, unsigned count, unsigned* matched, uint32_t dead,
-                                          detail::HandlerFunc& handler) = nullptr;
-    // Scalar bindings have the same callback and refetch behavior as decoded instructions.
-    bool trusted_baking = false;
+    detail::HandlerFunc (*resolve)(const DecodedInstruction&, bool omit_nzcv) = nullptr;
+    detail::HandlerFunc (*resolve_pair)(uint32_t first, uint32_t second, uint32_t dead) = nullptr;
+    detail::HandlerFunc (*resolve_sequence)(const uint32_t* words, unsigned count, unsigned* matched,
+                                            uint32_t dead) = nullptr;
 };
 
 struct RunResult {

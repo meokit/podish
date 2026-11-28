@@ -278,9 +278,7 @@ float EstimateBenefit(const ArmBlock& block) {
     const auto* op = block.FirstOp();
     const auto* sentinel = block.Sentinel();
     while (op != sentinel && op->GuestIndex() < covered) {
-        unsigned span = 1;
-        if (op->Has(Fused)) span = block.FusedBinding(op->GuestIndex()).length;
-        const auto* last = op->LastOp(span);
+        const auto* last = op->LastOp(op->Span());
         if (last->GuestIndex() >= covered) break;
         ++dispatches;
         op = last->NextOp();

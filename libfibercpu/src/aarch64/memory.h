@@ -233,17 +233,9 @@ A64_MEMORY_INLINE StepResult LoadStoreTransfer(State& state, const DecodedInstru
         ClearOverlappingExclusive(state, address, size);
     } else {
         if constexpr (!probe_only) {
-#if FIBERCPU_AARCH64_UNMANAGED_CACHE
-            const bool hit = memory->data_tlb && !memory->lookup_cached_block &&
-                             ProbeDataTlb<false>(state, address, size, memory->data_tlb A64_UTLB_ARGS, data);
-#else
-            constexpr bool hit = false;
-#endif
-            if (!hit) {
-                refetch = !mem::ArmAddressRangeValid(address, size) || !memory->read_fast ||
-                          !memory->read_fast(memory->context, address, data, size);
-                if (refetch && !ReadMemory(*memory, address, data, size)) return Fault(address, access);
-            }
+            refetch = !mem::ArmAddressRangeValid(address, size) || !memory->read_fast ||
+                      !memory->read_fast(memory->context, address, data, size);
+            if (refetch && !ReadMemory(*memory, address, data, size)) return Fault(address, access);
         }
         LoadRegister<touches_pin>(state, data, op.rd, width, vector, operation, pinned);
         if constexpr (pair) LoadRegister<touches_pin>(state, data + bytes, op.ra, width, vector, operation, pinned);

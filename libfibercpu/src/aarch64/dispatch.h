@@ -53,10 +53,7 @@ inline Word CodeWord(const uint8_t* code) {
     return word;
 }
 
-#if defined(__GNUC__) || defined(__clang__)
-[[gnu::always_inline]]
-#endif
-inline bool MatchesWords(const BasicBlock& block, const uint8_t* code) {
+A64_FORCE_INLINE bool MatchesWords(const BasicBlock& block, const uint8_t* code) {
     const auto* words = reinterpret_cast<const uint8_t*>(block.Words());
     unsigned count = block.inst_count();
     while (count >= 4) {
@@ -75,8 +72,6 @@ inline bool MatchesWords(const BasicBlock& block, const uint8_t* code) {
     return !(count & 1) || CodeWord<uint32_t>(code) == CodeWord<uint32_t>(words);
 }
 #endif
-
-#if FIBERCPU_AARCH64_TAIL_DISPATCH
 
 inline void CommitDispatchState(State& state, uint64_t pc, uint32_t flags_cache A64_HANDLER_PIN_PARAMS) {
     state.pc = pc;
@@ -102,8 +97,7 @@ inline int64_t ReturnFromBlock(State& state, const DecodedOp* current, int64_t i
 }
 
 #if FIBERCPU_LLVM_JIT
-[[gnu::always_inline]] inline void CountLLVMBlockEntry(State& state, const BasicBlock& block,
-                                                       BasicBlockChainPrefix chain) {
+A64_FORCE_INLINE void CountLLVMBlockEntry(State& state, const BasicBlock& block, BasicBlockChainPrefix chain) {
     const auto count = chain.llvm_hot_count;
     if (!count) [[likely]]
         return;
@@ -119,11 +113,16 @@ inline int64_t ReturnFromBlock(State& state, const DecodedOp* current, int64_t i
 }
 #endif
 
-#if defined(__GNUC__) || defined(__clang__)
-[[gnu::always_inline]]
-#endif
-inline HandlerFunc TryChainBlock(State& state, const BasicBlock*& target, uint64_t link, uint64_t target_pc,
-                                 int64_t& instr_limit) {
+A64_FORCE_INLINE HandlerFunc TryChainBlock(State& state, const BasicBlock*& target, uint64_t link, uint64_t target_pc,
+                                           int64_t& instr_limit) {
+#if !FIBERCPU_AARCH64_TAIL_DISPATCH
+    (void)state;
+    (void)target;
+    (void)link;
+    (void)target_pc;
+    (void)instr_limit;
+    return nullptr;
+#else
     if (instr_limit < 0) return nullptr;
     target = LoadBlockLink(link);
     const auto bits = *reinterpret_cast<const volatile __uint128_t*>(&target->header);
@@ -144,6 +143,7 @@ inline HandlerFunc TryChainBlock(State& state, const BasicBlock*& target, uint64
     __builtin_assume(header.entry != nullptr);
 #endif
     return header.entry;
+#endif
 }
 
 #define A64_DISPATCH_NEXT(next_slot)                                                       \
@@ -153,11 +153,14 @@ inline HandlerFunc TryChainBlock(State& state, const BasicBlock*& target, uint64
                                                flags_cache A64_HANDLER_PIN_ARGS);          \
     } while (false)
 
+FIBERCPU_AARCH64_HANDLER_ABI int64_t MemoryOpGeneric(A64_HANDLER_PARAMS);
+FIBERCPU_AARCH64_HANDLER_ABI int64_t ResolveBranchTargetSlow(A64_HANDLER_PARAMS);
+FIBERCPU_AARCH64_HANDLER_ABI int64_t OpExitBlock(A64_HANDLER_PARAMS);
+FIBERCPU_AARCH64_HANDLER_ABI int64_t OpExitSingleStep(A64_HANDLER_PARAMS);
+
 #define A64_MEMORY_OP_GENERIC(slot)                                                                             \
     ATTR_MUSTTAIL return ::fiberish::aarch64::detail::MemoryOpGeneric(state, (slot), instr_limit A64_UTLB_ARGS, \
                                                                       flags_cache A64_HANDLER_PIN_ARGS)
-
-FIBERCPU_AARCH64_HANDLER_ABI int64_t ResolveBranchTargetSlow(A64_HANDLER_PARAMS);
 
 #define A64_RESOLVE_BRANCH_TARGET_INLINE(link, target_pc)                                                 \
     do {                                                                                                  \
@@ -175,124 +178,76 @@ FIBERCPU_AARCH64_HANDLER_ABI int64_t ResolveBranchTargetSlow(A64_HANDLER_PARAMS)
         ATTR_MUSTTAIL return ::fiberish::aarch64::detail::ResolveBranchTargetSlow(A64_HANDLER_ARGS);      \
     } while (false)
 
-#define A64_RESOLVE_BRANCH_TARGET(target_pc)                                                           \
-    do {                                                                                               \
-        const uint64_t a64_target = (target_pc);                                                       \
-        const auto* a64_block = state.last_block;                                                      \
-        if (current->Has(::fiberish::aarch64::detail::HasBranchLink)) {                                \
-            instr_limit += a64_block->inst_count() - current->GuestIndex() - 1;                        \
-            A64_RESOLVE_BRANCH_TARGET_INLINE(GetExtraOperands(*current).secondary, a64_target);        \
-        }                                                                                              \
-        return ::fiberish::aarch64::detail::ReturnFromBlock(                                           \
-            state, current, instr_limit, flags_cache A64_HANDLER_PIN_ARGS,                             \
-            {::fiberish::aarch64::Stop::Branch, ::fiberish::aarch64::Access::Execute, 0, a64_target}); \
-    } while (false)
+enum class DispatchBranch : uint8_t {
+    None,
+    DirectUnconditional,
+    DirectConditional,
+    Indirect,
+};
 
-#define A64_RESOLVE_DIRECT_BRANCH_TARGET(kind)                                            \
-    do {                                                                                  \
-        if constexpr (::fiberish::aarch64::detail::IsConditionalBranch(kind))             \
-            instr_limit += state.last_block->inst_count() - current->GuestIndex() - 1;    \
-        const auto& a64_branch = ::fiberish::aarch64::detail::GetExtraOperands(*current); \
-        A64_RESOLVE_BRANCH_TARGET_INLINE(a64_branch.secondary, a64_branch.primary);       \
-    } while (false)
-
-// Cold dispatch reconstructs the full operation from the saved instruction word.
-DecodedInstruction ReadScalarOp(const BasicBlock& block, const DecodedOp& slot);
-
-// Scalar entry and memory replay publish all architectural state before any
-// call and reload it afterward. Only a callback-free access resumes the span.
-#if defined(_MSC_VER)
-__declspec(noinline)
-#elif defined(__GNUC__) || defined(__clang__)
-[[gnu::cold, gnu::noinline]]
-#endif
-FIBERCPU_AARCH64_HANDLER_ABI inline int64_t MemoryOpGeneric(A64_HANDLER_PARAMS) {
-    CommitDispatchState(state, current->GetStartPc(state), flags_cache A64_HANDLER_PIN_ARGS);
-    const auto& memory = state.active_run->memory;
-#ifdef ENABLE_TLB_STATS
-    if (auto* stats = memory.dispatch_stats) ++stats->memory_replays;
-#endif
-    const auto op = ReadScalarOp(*state.last_block, *current);
-    auto step = CompleteStep(state, current, op.scalar_handler(state, memory, op));
-    A64_UTLB_INVALIDATE();
-    if (current->Has(UntrustedScalar)) {
-        state.active_run->executable = nullptr;
-        if (step.reason == Stop::Continue) step.reason = Stop::Refetch;
+constexpr DispatchBranch BranchPolicy(Kind kind) {
+    switch (kind) {
+        case Kind::BranchImmediate:
+            return DispatchBranch::DirectUnconditional;
+        case Kind::BranchCondition:
+        case Kind::CompareBranch:
+        case Kind::TestBranch:
+            return DispatchBranch::DirectConditional;
+        case Kind::BranchRegister:
+            return DispatchBranch::Indirect;
+        default:
+            return DispatchBranch::None;
     }
-    flags_cache = state.nzcv;
-    ReloadDispatchPins(state A64_HANDLER_PIN_ARGS);
-    if (step.reason != Stop::Continue) {
-        return ReturnFromBlock(state, current, instr_limit, flags_cache A64_HANDLER_PIN_ARGS, step);
-    }
-    A64_DISPATCH_NEXT(current->NextOp());
 }
 
-template <ScalarHandlerFunc Execute, unsigned span = 1>
-FIBERCPU_AARCH64_HANDLER_ABI int64_t RunScalarHandler(A64_HANDLER_PARAMS) {
-    BasicBlock::Fusion fusion;
-    if constexpr (span == 0) fusion = state.last_block->FusedBinding(current->GuestIndex());
-    const unsigned length = span ? span : fusion.length;
-    const auto* last = current->LastOp(length);
-    const bool untrusted =
-        Execute == nullptr && span != 1 ? current->Has(UntrustedFused) : current->Has(UntrustedScalar);
-    CommitDispatchState(state, current->GetStartPc(state), flags_cache A64_HANDLER_PIN_ARGS);
-    const auto& memory = state.active_run->memory;
-    const auto op = ReadScalarOp(*state.last_block, *current);
+struct DispatchPolicy {
+    bool wide = false;
+    bool may_replay = false;
+    bool may_exit = false;
+    DispatchBranch branch = DispatchBranch::None;
+};
+
+using LogicFunc = StepResult (*)(State& state, const DecodedOp*& current A64_UTLB_REF_PARAMS,
+                                 uint32_t& flags_cache A64_HOT_PIN_REF);
+
+template <LogicFunc Logic, DispatchPolicy Policy>
+#if defined(__GNUC__) || defined(__clang__)
+[[gnu::visibility("hidden")]]
+#endif
+FIBERCPU_AARCH64_HANDLER_ABI int64_t DispatchWrapper(A64_HANDLER_PARAMS) {
     StepResult step;
-    if constexpr (Execute != nullptr)
-        step = Execute(state, memory, op);
-    else if constexpr (span != 1)
-        step = fusion.handler(state, memory, op);
-    else
-        step = op.scalar_handler(state, memory, op);
-    flags_cache = state.nzcv;
-    ReloadDispatchPins(state A64_HANDLER_PIN_ARGS);
-    A64_UTLB_INVALIDATE();
-    if (step.reason == Stop::Continue) {
-        step = CompleteStep(state, last, step);
-        if (step.reason == Stop::Continue && !untrusted) A64_DISPATCH_NEXT(last->NextOp());
-        // An unknown scalar fusion can invoke arbitrary memory callbacks.
-        step.reason = Stop::Refetch;
-        return ReturnFromBlock(state, last, instr_limit, flags_cache A64_HANDLER_PIN_ARGS, step);
+#if defined(__clang__)
+    [[clang::always_inline]]
+#endif
+    step = Logic(state, current A64_UTLB_ARGS, flags_cache A64_HANDLER_PIN_ARGS);
+    if constexpr (Policy.may_replay) {
+        if (step.reason == Stop::Replay) [[unlikely]] {
+            A64_MEMORY_OP_GENERIC(current);
+        }
     }
-    const auto offset = (state.pc - current->GetStartPc(state)) / 4;
-    if (offset < length) current = current->LastOp(unsigned(offset) + 1);
-    if (untrusted) {
-        state.active_run->executable = nullptr;
-    } else if (step.reason == Stop::Branch) {
-        A64_RESOLVE_BRANCH_TARGET(step.address);
+    if constexpr (Policy.branch != DispatchBranch::None) {
+        if (step.reason == Stop::Branch) {
+            if constexpr (Policy.branch == DispatchBranch::Indirect) {
+                const auto& extra = GetExtraOperands(*current);
+                A64_RESOLVE_BRANCH_TARGET_INLINE(
+                    step.address == extra.primary + 4 ? current->NextOp<true>()->payload : extra.secondary,
+                    step.address);
+            } else {
+                if constexpr (Policy.branch == DispatchBranch::DirectConditional)
+                    instr_limit += state.last_block->inst_count() - current->GuestIndex() - 1;
+                const auto& branch = GetExtraOperands(*current);
+                A64_RESOLVE_BRANCH_TARGET_INLINE(branch.secondary, branch.primary);
+            }
+        }
     }
-    return ReturnFromBlock(state, current, instr_limit, flags_cache A64_HANDLER_PIN_ARGS, step);
+    if constexpr (Policy.may_exit) {
+        if (step.reason != Stop::Continue) [[unlikely]] {
+            return ReturnFromBlock(state, current, instr_limit, flags_cache A64_HANDLER_PIN_ARGS, step);
+        }
+    }
+    A64_DISPATCH_NEXT(current->template NextOp<Policy.wide>());
 }
 
-FIBERCPU_AARCH64_HANDLER_ABI inline int64_t OpExitBlock(A64_HANDLER_PARAMS) {
-    const uint64_t target = state.last_block->end_pc();
-    A64_RESOLVE_BRANCH_TARGET_INLINE(current->payload, target);
-}
-#endif
-
-constexpr HandlerFunc GetExitHandlerFallthrough() {
-#if FIBERCPU_AARCH64_TAIL_DISPATCH
-    return &OpExitBlock;
-#else
-    return nullptr;
-#endif
-}
-
-constexpr HandlerFunc GetScalarDispatchHandler() {
-#if FIBERCPU_AARCH64_TAIL_DISPATCH
-    return &RunScalarHandler<nullptr>;
-#else
-    return nullptr;
-#endif
-}
-
-constexpr HandlerFunc GetFusedDispatchHandler() {
-#if FIBERCPU_AARCH64_TAIL_DISPATCH
-    return &RunScalarHandler<nullptr, 0>;
-#else
-    return nullptr;
-#endif
-}
+constexpr HandlerFunc GetExitHandlerFallthrough() { return &OpExitBlock; }
 
 }  // namespace fiberish::aarch64::detail

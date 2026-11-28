@@ -217,7 +217,7 @@ def generate_aarch64(plan, budget, pair_budget, sequence_budget, partial_budget=
         key = (first, second)
         pairs[key] = pairs.get(key, 0) + count
     ranked = sorted(pairs, key=lambda key: (-pairs[key], key))[:pair_budget]
-    pair_cases = [f"    case 0x{a:08x}{b:08x}ull: return aarch64::BindBakedFusion<0x{a:08x}u, 0x{b:08x}u>(dead, handler);"
+    pair_cases = [f"    case 0x{a:08x}{b:08x}ull: return aarch64::BindBakedFusion<0x{a:08x}u, 0x{b:08x}u>(dead);"
                   for a, b in sorted(ranked)]
     sequences = {}
     for row in plan.get("sequences", []):
@@ -236,16 +236,16 @@ def generate_aarch64(plan, budget, pair_budget, sequence_budget, partial_budget=
             sequence_cases.extend(["        {", f"            static constexpr std::array recipe{{{literals}}};",
                 f"            if (count >= {len(seq)} && std::equal(recipe.begin()+1, recipe.end(), words+1)) {{",
                 f"                *matched = {len(seq)};",
-                f"                return aarch64::BindBakedFusion<{literals}>(dead, handler);", "            }", "        }"])
+                f"                return aarch64::BindBakedFusion<{literals}>(dead);", "            }", "        }"])
         sequence_cases.append("        break;")
     return "\n".join(['#include <algorithm>', '#include "aarch64/baked.h"', 'namespace fiberish {',
-                      'aarch64::detail::HandlerBinding FindBakedArmHandler(const aarch64::DecodedInstruction& op, bool omit_nzcv) {',
+                      'aarch64::detail::HandlerFunc FindBakedArmHandler(const aarch64::DecodedInstruction& op, bool omit_nzcv) {',
                       '    switch (op.word) {', *cases, '    }',
-                      '    switch (op.word & ~(0xfffu << 10)) {', *partial_cases, '    }', '    return {};', '}',
-                      'aarch64::ScalarHandlerFunc FindBakedArmPair(uint32_t a, uint32_t b, uint32_t dead, aarch64::detail::HandlerFunc& handler) {',
+                      '    switch (op.word & ~(0xfffu << 10)) {', *partial_cases, '    }', '    return nullptr;', '}',
+                      'aarch64::detail::HandlerFunc FindBakedArmPair(uint32_t a, uint32_t b, uint32_t dead) {',
                       '    switch ((uint64_t{a} << 32) | b) {', *pair_cases,
                       '    default: return nullptr;', '    }', '}',
-                      'aarch64::ScalarHandlerFunc FindBakedArmSequence(const uint32_t* words, unsigned count, unsigned* matched, uint32_t dead, aarch64::detail::HandlerFunc& handler) {',
+                      'aarch64::detail::HandlerFunc FindBakedArmSequence(const uint32_t* words, unsigned count, unsigned* matched, uint32_t dead) {',
                       '    switch (words[0]) {', *sequence_cases, '    }', '    return nullptr;', '}', '}', ''])
 
 
