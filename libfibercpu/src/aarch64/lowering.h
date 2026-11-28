@@ -86,13 +86,19 @@ template <Kind kind, unsigned width = 0, int operation = -1, int shift = -1, boo
           IntegerForm form = IntegerForm::Default>
 constexpr GenericHandlerBinding BindIntegerKernel() {
     constexpr DispatchPolicy policy{.wide = HasExtraOperandSlot(kind), .branch = BranchPolicy(kind)};
+    constexpr bool touches_pin = kind != Kind::BranchCondition;
     constexpr HandlerBinding binding{
-        &DispatchWrapper<IntegerLogic<kind, width, operation, shift, write_nzcv, form, true>, policy>};
-    if constexpr (SplitPinTouches)
+        &DispatchWrapper<IntegerLogic<kind, width, operation, shift, write_nzcv, form, touches_pin>, policy>};
+    if constexpr (SplitPinTouches && touches_pin)
         return {binding,
                 &DispatchWrapper<IntegerLogic<kind, width, operation, shift, write_nzcv, form, false>, policy>};
     else
         return binding;
+}
+
+template <size_t... condition>
+constexpr auto ConditionBranchVariants(std::index_sequence<condition...>) {
+    return std::array{BindIntegerKernel<Kind::BranchCondition, 0, -1, condition>()...};
 }
 
 constexpr auto Handlers = [] {
@@ -206,8 +212,16 @@ inline GenericHandlerBinding Lower(const DecodedInstruction& op) {
             return op.shift ? BindInteger<Kind::LogicalShifted, 8>(op) : BindInteger<Kind::LogicalShifted, 8, 0>(op);
         case Kind::MoveWide:
             return BindInteger<Kind::MoveWide>(op);
+        case Kind::Bitfield:
+            return BindInteger<Kind::Bitfield, 3>(op);
         case Kind::ConditionalSelect:
             return BindInteger<Kind::ConditionalSelect>(op);
+        case Kind::BranchCondition: {
+            // The last two condition encodings are both unconditional.
+            constexpr auto variants = ConditionBranchVariants(std::make_index_sequence<14>{});
+            if (op.shift < variants.size()) return variants[op.shift];
+            break;
+        }
         case Kind::CompareBranch:
             return BindInteger<Kind::CompareBranch, 2>(op);
         case Kind::LoadStoreImmediate:

@@ -450,7 +450,8 @@ A64_INTEGER_INLINE StepResult IntegerKernel(const Registers& registers, const De
         registers.Write(op.rd, width, value);
     } else if constexpr (kind == Kind::Bitfield) {
         const auto source = registers.Read(op.rn, width);
-        const auto bottom = RotateRight(source, shift, width) & op.immediate;
+        const uint64_t rotated = width == 32 ? std::rotr(uint32_t(source), int(shift)) : std::rotr(source, int(shift));
+        const auto bottom = rotated & op.immediate;
         uint64_t result = bottom & op.mask;
         if (operation == 0 && ((source >> op.rm) & 1)) result |= ~op.mask;
         if (operation == 1) {

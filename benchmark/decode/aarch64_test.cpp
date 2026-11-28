@@ -683,6 +683,26 @@ bool TruncatedBlocks() {
     return true;
 }
 
+bool StandaloneConditionBranch() {
+    Backing backing;
+    const auto memory = backing.Callbacks();
+    for (uint32_t condition = 0; condition < 16; ++condition) {
+        backing.Code(Base, {0x54000040 | condition, 0xd4000021, 0xd4000041}); // b.cond +8; svc #1; svc #2
+        for (uint32_t flags = 0; flags < 16; ++flags) {
+            const uint32_t nzcv = flags << 28;
+            const bool taken = detail::ConditionHolds(nzcv, condition);
+            State state{};
+            state.pc = Base;
+            state.nzcv = nzcv;
+            const auto result = Run(state, memory, 3);
+            if (result.reason != Stop::Syscall || result.executed != 2 || result.immediate != (taken ? 2 : 1) ||
+                state.pc != Base + (taken ? 12 : 8) || state.nzcv != nzcv)
+                return false;
+        }
+    }
+    return true;
+}
+
 bool CompareBranchPair() {
     // Different encodings exercise both register-31 meanings and the W/X widths.
     constexpr std::array<uint32_t, 4> compares{0xf1000fff, 0x71000c1f, 0xeb01001f, 0x6b0103ff};
@@ -1747,6 +1767,7 @@ int main() {
         {"baked dispatch and profiling", BakedDispatch()},
         {"partial immediate shapes retain the decoded arithmetic value and scaled offset", PartialImmediateOperands()},
         {"fused dispatch branch, budget and fault accounting", FusedDispatch()},
+        {"standalone conditional branches test all NZCV combinations", StandaloneConditionBranch()},
         {"compare and conditional branch preserve flags and budget boundaries", CompareBranchPair()},
         {"baked compare branch suffix preserves flags at a successor fault", BakedCompareBranchSuffix()},
         {"SP remains distinct from XZR across threaded writes", StackPointerAndZeroRegisterRoles()},
