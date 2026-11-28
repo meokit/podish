@@ -10,6 +10,14 @@ endif()
 
 project(libfibercpu LANGUAGES C CXX)
 
+# Enforce C++23 and C11
+set(CMAKE_CXX_STANDARD 23)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(CMAKE_C_STANDARD 11)
+set(CMAKE_C_STANDARD_REQUIRED ON)
+set(CMAKE_C_EXTENSIONS OFF)
+
 # Single-config generators ignore --config on the build command. CMake can
 # also clear the build type when reconfiguring with a different compiler.
 if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
@@ -20,16 +28,35 @@ option(FIBERCPU_GUEST_I386 "Build the IA-32 guest interpreter" ON)
 option(FIBERCPU_AARCH64_DFE "Eliminate dead NZCV writes in complete AArch64 blocks" ON)
 option(FIBERCPU_AARCH64_NATIVE_COMPARE_BRANCH "Use host conditions inside fused AArch64 compare branches" ON)
 option(FIBERCPU_AARCH64_MICRO_TLB "Enable the register micro-TLB in the AArch64 guest engine" OFF)
+option(FIBERCPU_AARCH64_PIN_TOUCH_SPLIT "Use pin-free AArch64 handlers when decoded operands avoid pinned GPRs" ON)
 set(FIBERCPU_AARCH64_PIN_REG "-1" CACHE STRING "AArch64 guest GPR held across threaded handlers (-1 or 0..30)")
 if(NOT FIBERCPU_AARCH64_PIN_REG MATCHES "^(-1|[0-9]|[12][0-9]|30)$")
     message(FATAL_ERROR "FIBERCPU_AARCH64_PIN_REG must be -1 or a guest register number from 0 to 30")
 endif()
-set(FIBERCPU_AARCH64_PIN_REGISTERS "" CACHE STRING "AArch64 write-back GPRs: OFF or up to three of SP and X0..X30")
+set(FIBERCPU_AARCH64_PIN_REGISTERS "AUTO" CACHE STRING "AArch64 write-back GPRs: AUTO (X0,X1 on supported ARM64 Clang), OFF, or up to three of SP and X0..X30")
 string(TOUPPER "${FIBERCPU_AARCH64_PIN_REGISTERS}" _arm_pin_request)
+string(STRIP "${_arm_pin_request}" _arm_pin_request)
 set(_arm_pins "")
-if(_arm_pin_request STREQUAL "")
+if(_arm_pin_request STREQUAL "" OR _arm_pin_request STREQUAL "AUTO")
     if(FIBERCPU_AARCH64_PIN_REG GREATER_EQUAL 0)
         set(_arm_pins "X${FIBERCPU_AARCH64_PIN_REG}")
+    elseif(CMAKE_CXX_COMPILER_ID MATCHES "Clang" AND NOT EMSCRIPTEN)
+        include(CheckCXXSourceCompiles)
+        check_cxx_source_compiles([=[
+#if !(defined(__aarch64__) || defined(_M_ARM64)) || !__has_attribute(preserve_none) || !__has_cpp_attribute(clang::musttail)
+#error Automatic AArch64 guest GPR pinning is only enabled on ARM64 Clang with preserve_none and musttail
+#endif
+#pragma clang diagnostic error "-Wignored-attributes"
+using U64 = unsigned long long;
+using Handler = U64(__attribute__((preserve_none)) *)(void*, const void*, U64, unsigned, U64, U64);
+__attribute__((preserve_none)) U64 dispatch(void* state, const void* op, U64 limit, unsigned nzcv, U64 x0, U64 x1) {
+    [[clang::musttail]] return (*static_cast<const Handler*>(op))(state, op, limit, nzcv, x0, x1);
+}
+int main() { return 0; }
+]=] FIBERCPU_HAS_AARCH64_AUTO_PIN_ABI)
+        if(FIBERCPU_HAS_AARCH64_AUTO_PIN_ABI)
+            set(_arm_pins "X0;X1")
+        endif()
     endif()
 elseif(NOT _arm_pin_request STREQUAL "OFF")
     string(REPLACE "," ";" _arm_pins "${_arm_pin_request}")
@@ -65,6 +92,7 @@ file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/generated/aarch64_gpr_pins.ge
     [=[#pragma once
 #define FIBERCPU_AARCH64_PIN_COUNT @_arm_pin_count@
 #define FIBERCPU_AARCH64_FOR_EACH_PIN(X) @_arm_pin_items@
+#cmakedefine01 FIBERCPU_AARCH64_PIN_TOUCH_SPLIT
 ]=] @ONLY)
 add_compile_definitions(FIBERCPU_AARCH64_DFE=$<BOOL:${FIBERCPU_AARCH64_DFE}>
                         FIBERCPU_AARCH64_NATIVE_COMPARE_BRANCH=$<BOOL:${FIBERCPU_AARCH64_NATIVE_COMPARE_BRANCH}>
@@ -75,14 +103,6 @@ if(NOT FIBERCPU_GUEST_I386 AND NOT FIBERCPU_GUEST_AARCH64)
 endif()
 add_compile_definitions(FIBERCPU_GUEST_I386=$<BOOL:${FIBERCPU_GUEST_I386}>
                         FIBERCPU_GUEST_AARCH64=$<BOOL:${FIBERCPU_GUEST_AARCH64}>)
-
-# Enforce C++23 and C11
-set(CMAKE_CXX_STANDARD 23)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
-set(CMAKE_C_STANDARD 11)
-set(CMAKE_C_STANDARD_REQUIRED ON)
-set(CMAKE_C_EXTENSIONS OFF)
 
 # CPM Integration
 include(../cmake/CPM.cmake)
@@ -532,7 +552,7 @@ set(FIBERCPU_OPTIMIZATION_CONFIG "static=${FIBERCPU_STATIC_SPECIALIZATION};fusio
 string(APPEND FIBERCPU_OPTIMIZATION_CONFIG ";baking_preset=${FIBERCPU_BAKING_PRESET};i386=${FIBERCPU_GUEST_I386};aarch64=${FIBERCPU_GUEST_AARCH64}")
 string(APPEND FIBERCPU_OPTIMIZATION_CONFIG ";data_tlb_entries=${FIBERCPU_DATA_TLB_ENTRIES}")
 if(FIBERCPU_GUEST_AARCH64)
-    string(APPEND FIBERCPU_OPTIMIZATION_CONFIG ";a64_dfe=${FIBERCPU_AARCH64_DFE};a64_pin=${_arm_pin_config};a64_native_compare_branch=${FIBERCPU_AARCH64_NATIVE_COMPARE_BRANCH};a64_micro_tlb=${FIBERCPU_AARCH64_MICRO_TLB}")
+    string(APPEND FIBERCPU_OPTIMIZATION_CONFIG ";a64_dfe=${FIBERCPU_AARCH64_DFE};a64_pin=${_arm_pin_config};a64_pin_touch_split=${FIBERCPU_AARCH64_PIN_TOUCH_SPLIT};a64_native_compare_branch=${FIBERCPU_AARCH64_NATIVE_COMPARE_BRANCH};a64_micro_tlb=${FIBERCPU_AARCH64_MICRO_TLB}")
 endif()
 if(_static_operand_hashes)
     list(JOIN _static_operand_hashes "+" _static_operand_hash)

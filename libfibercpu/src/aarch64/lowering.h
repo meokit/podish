@@ -5,10 +5,30 @@
 #include "atomic_handlers.h"
 #include "block_operands.h"
 #include "dispatch.h"
+#include "pin_touch.h"
 #include "register_handlers.h"
 #include "system_handlers.h"
 
 namespace fiberish::aarch64::detail {
+
+#if FIBERCPU_AARCH64_TAIL_DISPATCH && FIBERCPU_AARCH64_PIN_COUNT > 0 && FIBERCPU_AARCH64_PIN_TOUCH_SPLIT
+struct GenericHandlerBinding : HandlerBinding {
+    HandlerFunc unpinned = nullptr;
+
+    constexpr GenericHandlerBinding() = default;
+    constexpr GenericHandlerBinding(HandlerBinding binding, HandlerFunc unpinned = nullptr)
+        : HandlerBinding(binding), unpinned(unpinned) {}
+};
+
+inline HandlerBinding SelectPinHandler(GenericHandlerBinding handlers, const DecodedInstruction& op) {
+    if (handlers.unpinned && !InstructionTouchesPinnedReg(op)) handlers.handler = handlers.unpinned;
+    return handlers;
+}
+#else
+using GenericHandlerBinding = HandlerBinding;
+
+inline HandlerBinding SelectPinHandler(GenericHandlerBinding binding, const DecodedInstruction&) { return binding; }
+#endif
 
 template <Stop reason>
 inline StepResult TrapInstruction(State& state, const Memory&, const DecodedInstruction& op) {
@@ -40,10 +60,10 @@ FIBERCPU_AARCH64_HANDLER_ABI inline int64_t NopHandler(A64_HANDLER_PARAMS) {
     A64_DISPATCH_NEXT(current->NextOp<false>());
 }
 
-template <Kind kind, unsigned width, int operation, int mode, int shift, int vector>
+template <Kind kind, unsigned width, int operation, int mode, int shift, int vector, bool TouchesPin>
 FIBERCPU_AARCH64_HANDLER_ABI int64_t LoadStoreHandler(A64_HANDLER_PARAMS) {
     const auto op = GetOpOperands<kind>(*current);
-    if (!ProbeLoadStore<kind, width, operation, mode, shift, vector>(
+    if (!ProbeLoadStore<kind, width, operation, mode, shift, vector, TouchesPin>(
             state, op, BlockTarget<kind>(op), state.data_tlb A64_UTLB_ARGS A64_HANDLER_PIN_ARGS)) [[unlikely]] {
         A64_MEMORY_OP_GENERIC(current);
     }
@@ -52,17 +72,21 @@ FIBERCPU_AARCH64_HANDLER_ABI int64_t LoadStoreHandler(A64_HANDLER_PARAMS) {
 #endif
 
 template <Kind kind, unsigned width = 0, int operation = -1, int mode = -1, int shift = -1, int vector = -1>
-constexpr HandlerBinding BindMemoryHandler() {
+constexpr GenericHandlerBinding BindMemoryHandler() {
     constexpr auto scalar = LoadStore<kind, width, operation, mode, shift, vector>;
 #if FIBERCPU_AARCH64_TAIL_DISPATCH
-    return {scalar, &LoadStoreHandler<kind, width, operation, mode, shift, vector>};
+    constexpr HandlerBinding binding{scalar, &LoadStoreHandler<kind, width, operation, mode, shift, vector, true>};
+    if constexpr (SplitPinTouches)
+        return {binding, &LoadStoreHandler<kind, width, operation, mode, shift, vector, false>};
+    else
+        return binding;
 #else
     return {scalar, nullptr};
 #endif
 }
 
 #if FIBERCPU_AARCH64_TAIL_DISPATCH
-template <Kind kind, unsigned width, int operation, int shift, bool write_nzcv, IntegerForm form>
+template <Kind kind, unsigned width, int operation, int shift, bool write_nzcv, IntegerForm form, bool TouchesPin>
 FIBERCPU_AARCH64_HANDLER_ABI int64_t IntegerHandler(A64_HANDLER_PARAMS) {
     const auto op = GetOpOperands<kind>(*current);
     uint64_t pc = 0;
@@ -71,7 +95,7 @@ FIBERCPU_AARCH64_HANDLER_ABI int64_t IntegerHandler(A64_HANDLER_PARAMS) {
     } else if constexpr (kind == Kind::BranchRegister) {
         pc = GetExtraOperands(*current).primary;
     }
-    const auto result = HotInteger<kind, width, operation, shift, write_nzcv, form>(
+    const auto result = HotInteger<kind, width, operation, shift, write_nzcv, form, TouchesPin>(
         state, op, pc, BlockTarget<kind>(op), flags_cache A64_HANDLER_PIN_ARGS);
     if constexpr (kind >= Kind::BranchImmediate && kind <= Kind::TestBranch) {
         if (result.reason == Stop::Branch) {
@@ -90,17 +114,21 @@ FIBERCPU_AARCH64_HANDLER_ABI int64_t IntegerHandler(A64_HANDLER_PARAMS) {
 
 template <Kind kind, unsigned width = 0, int operation = -1, int shift = -1, bool write_nzcv = true,
           IntegerForm form = IntegerForm::Default>
-constexpr HandlerBinding BindIntegerKernel() {
+constexpr GenericHandlerBinding BindIntegerKernel() {
     constexpr auto scalar = Integer<kind, width, operation, shift, write_nzcv, form>;
 #if FIBERCPU_AARCH64_TAIL_DISPATCH
-    return {scalar, &IntegerHandler<kind, width, operation, shift, write_nzcv, form>};
+    constexpr HandlerBinding binding{scalar, &IntegerHandler<kind, width, operation, shift, write_nzcv, form, true>};
+    if constexpr (SplitPinTouches)
+        return {binding, &IntegerHandler<kind, width, operation, shift, write_nzcv, form, false>};
+    else
+        return binding;
 #else
     return {scalar, nullptr};
 #endif
 }
 
 constexpr auto Handlers = [] {
-    std::array<HandlerBinding, size_t(Kind::Count)> handlers;
+    std::array<GenericHandlerBinding, size_t(Kind::Count)> handlers;
     handlers.fill(BindTrapHandler<Stop::Undefined>());
 #define ARM_INTEGER(Name) handlers[size_t(Kind::Name)] = BindIntegerKernel<Kind::Name>();
 #define ARM_BRANCH(Name, Form) ARM_INTEGER(Name)
@@ -120,20 +148,20 @@ constexpr auto Handlers = [] {
 
 template <Kind kind, unsigned operations, int shift, bool write_nzcv, IntegerForm form, size_t... index>
 constexpr auto IntegerVariants(std::index_sequence<index...>) {
-    return std::array<HandlerBinding, sizeof...(index)>{
+    return std::array<GenericHandlerBinding, sizeof...(index)>{
         BindIntegerKernel < kind, index<operations ? 32 : 64, index % operations, shift, write_nzcv, form>()...};
 }
 
 template <Kind kind, unsigned operations = 4, int shift = -1, bool write_nzcv = true,
           IntegerForm form = IntegerForm::Default>
-HandlerBinding BindInteger(const DecodedInstruction& op) {
+GenericHandlerBinding BindInteger(const DecodedInstruction& op) {
     constexpr auto variants =
         IntegerVariants<kind, operations, shift, write_nzcv, form>(std::make_index_sequence<2 * operations>{});
     return variants[(op.width == 64 ? operations : 0) + op.operation];
 }
 
 template <bool write_nzcv>
-HandlerBinding BindExtended(const DecodedInstruction& op) {
+GenericHandlerBinding BindExtended(const DecodedInstruction& op) {
     if (op.shift == 0) {
         if (op.mode == 0) return BindInteger<Kind::AddSubExtended, 4, 0, write_nzcv, IntegerForm::Uxtb>(op);
         if (op.mode == 2) return BindInteger<Kind::AddSubExtended, 4, 0, write_nzcv, IntegerForm::Uxtw>(op);
@@ -143,12 +171,12 @@ HandlerBinding BindExtended(const DecodedInstruction& op) {
 
 template <int mode, unsigned operations, size_t... index>
 constexpr auto ImmediateMemoryVariants(std::index_sequence<index...>) {
-    return std::array<HandlerBinding, sizeof...(index)>{
+    return std::array<GenericHandlerBinding, sizeof...(index)>{
         BindMemoryHandler<Kind::LoadStoreImmediate, 8u << (index / operations), index % operations, mode, -1, 0>()...};
 }
 
 template <int mode, unsigned operations>
-HandlerBinding BindImmediateMemory(const DecodedInstruction& op) {
+GenericHandlerBinding BindImmediateMemory(const DecodedInstruction& op) {
     constexpr auto variants = ImmediateMemoryVariants<mode, operations>(std::make_index_sequence<4 * operations>{});
     return variants[operations * Field(op.word, 30, 2) + op.operation];
 }
@@ -156,13 +184,13 @@ HandlerBinding BindImmediateMemory(const DecodedInstruction& op) {
 template <int extension, unsigned operations, size_t... index>
 constexpr auto RegisterMemoryVariants(std::index_sequence<index...>) {
     constexpr auto stride = 2 * operations;
-    return std::array<HandlerBinding, sizeof...(index)>{
+    return std::array<GenericHandlerBinding, sizeof...(index)>{
         BindMemoryHandler<Kind::LoadStoreRegister, 8u << (index / stride), index % operations, extension,
                           (index / operations) % 2 ? index / stride : 0, 0>()...};
 }
 
 template <int extension, unsigned operations>
-HandlerBinding BindRegisterMemory(const DecodedInstruction& op) {
+GenericHandlerBinding BindRegisterMemory(const DecodedInstruction& op) {
     constexpr auto variants = RegisterMemoryVariants<extension, operations>(std::make_index_sequence<8 * operations>{});
     return variants[operations * (2 * Field(op.word, 30, 2) + Field(op.word, 12, 1)) + op.operation];
 }
@@ -171,16 +199,16 @@ template <size_t... index>
 constexpr auto PairMemoryVariants(std::index_sequence<index...>) {
     // The non-temporal and signed-offset encodings both use the offset address path.
     constexpr std::array modes{Offset, PostIndex, Offset, PreIndex};
-    return std::array<HandlerBinding, sizeof...(index)>{
+    return std::array<GenericHandlerBinding, sizeof...(index)>{
         BindMemoryHandler<Kind::LoadStorePair, 64, index / modes.size(), modes[index % modes.size()], -1, 0>()...};
 }
 
-inline HandlerBinding Lower(const DecodedInstruction& op) {
+inline GenericHandlerBinding Lower(const DecodedInstruction& op) {
     if (op.word == NopWord) {
 #if FIBERCPU_AARCH64_TAIL_DISPATCH
-        return {&NopInstruction, &NopHandler};
+        return HandlerBinding{&NopInstruction, &NopHandler};
 #else
-        return {&NopInstruction, nullptr};
+        return HandlerBinding{&NopInstruction, nullptr};
 #endif
     }
     switch (op.kind) {
@@ -248,7 +276,7 @@ inline HandlerBinding Lower(const DecodedInstruction& op) {
     return Handlers[size_t(op.kind)];
 }
 
-inline HandlerBinding LowerDeadNZCV(const DecodedInstruction& op) {
+inline GenericHandlerBinding LowerDeadNZCV(const DecodedInstruction& op) {
     if (!WritesIntegerNZCV(op)) return {};
     switch (op.kind) {
         case Kind::AddSubImmediate:

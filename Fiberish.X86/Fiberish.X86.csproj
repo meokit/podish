@@ -27,6 +27,8 @@
         <GprPin Condition="'$(GprPin)' == '' And '$(IsBrowserWasm)' == 'true'">OFF</GprPin>
         <GprPin Condition="'$(GprPin)' == ''">AUTO</GprPin>
         <AArch64PinRegister Condition="'$(AArch64PinRegister)' == ''">-1</AArch64PinRegister>
+        <AArch64PinRegisters Condition="'$(AArch64PinRegisters)' == '' And '$(IsBrowserWasm)' == 'true'">OFF</AArch64PinRegisters>
+        <AArch64PinRegisters Condition="'$(AArch64PinRegisters)' == ''">AUTO</AArch64PinRegisters>
         <GprPinRegisters Condition="'$(GprPinRegisters)' == ''">EAX,ESP</GprPinRegisters>
         <GprWriteBack Condition="'$(GprWriteBack)' == ''">ON</GprWriteBack>
         <SuperOpcodeTop Condition="'$(SuperOpcodeTop)' == ''">128</SuperOpcodeTop>

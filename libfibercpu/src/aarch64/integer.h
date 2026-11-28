@@ -523,12 +523,17 @@ inline StepResult Integer(State& state, const Memory&, const DecodedInstruction&
 }
 
 template <Kind kind, unsigned fixed_width = 0, int fixed_operation = -1, int fixed_shift = -1, bool write_nzcv = true,
-          IntegerForm form = IntegerForm::Default>
+          IntegerForm form = IntegerForm::Default, bool TouchesPin = true>
 A64_INTEGER_INLINE StepResult HotInteger(State& state, const DecodedInstruction& op, uint64_t pc, uint64_t bound_target,
                                          uint32_t& nzcv A64_HOT_PIN_REF) {
-    const HotRegisters registers{state A64_HANDLER_PIN_ARGS};
-    return IntegerKernel<kind, fixed_width, fixed_operation, fixed_shift, write_nzcv, true, form>(registers, op, pc,
-                                                                                                  nzcv, bound_target);
+    if constexpr (TouchesPin) {
+        const HotRegisters registers{state A64_HANDLER_PIN_ARGS};
+        return IntegerKernel<kind, fixed_width, fixed_operation, fixed_shift, write_nzcv, true, form>(
+            registers, op, pc, nzcv, bound_target);
+    } else {
+        return IntegerKernel<kind, fixed_width, fixed_operation, fixed_shift, write_nzcv, true, form>(
+            ScalarRegisters{state}, op, pc, nzcv, bound_target);
+    }
 }
 
 }  // namespace fiberish::aarch64::detail

@@ -167,7 +167,7 @@ A64_MEMORY_INLINE void LoadRegister(State& state, const uint8_t* data, unsigned 
 }
 
 template <Kind kind, unsigned fixed_width, int fixed_operation, int fixed_mode, int fixed_shift, int fixed_vector,
-          bool probe_only>
+          bool probe_only, bool touches_pin = probe_only>
 A64_MEMORY_INLINE StepResult LoadStoreTransfer(State& state, const DecodedInstruction& op, uint64_t pc,
                                                uint64_t literal_address,
                                                const mem::SoftTlb* data_tlb A64_UTLB_REF_PARAMS, const Memory* memory,
@@ -188,10 +188,10 @@ A64_MEMORY_INLINE StepResult LoadStoreTransfer(State& state, const DecodedInstru
     if constexpr (literal) {
         address = literal_address;
     } else {
-        const auto base = ReadTransferRegister<probe_only>(state, op.rn, true, pinned);
+        const auto base = ReadTransferRegister<touches_pin>(state, op.rn, true, pinned);
         if (op.rn == 31 && (base & 15)) return Alignment(base, access);
         if constexpr (kind == Kind::LoadStoreRegister) {
-            const auto index = ReadTransferRegister<probe_only>(state, op.rm, false, pinned);
+            const auto index = ReadTransferRegister<touches_pin>(state, op.rm, false, pinned);
             address = base + Extend(index, mode, shift, 64);
         } else {
             update_base = mode == PostIndex || mode == PreIndex;
@@ -223,8 +223,8 @@ A64_MEMORY_INLINE StepResult LoadStoreTransfer(State& state, const DecodedInstru
         if constexpr (probe_only) __builtin_assume_separate_storage(&state, data);
 #endif
 #endif
-        StoreRegister<probe_only>(state, data, op.rd, width, vector, pinned);
-        if constexpr (pair) StoreRegister<probe_only>(state, data + bytes, op.ra, width, vector, pinned);
+        StoreRegister<touches_pin>(state, data, op.rd, width, vector, pinned);
+        if constexpr (pair) StoreRegister<touches_pin>(state, data + bytes, op.ra, width, vector, pinned);
         if constexpr (!probe_only) {
             refetch = !mem::ArmAddressRangeValid(address, size) || !memory->write_fast ||
                       !memory->write_fast(memory->context, address, data, size);
@@ -245,10 +245,10 @@ A64_MEMORY_INLINE StepResult LoadStoreTransfer(State& state, const DecodedInstru
                 if (refetch && !ReadMemory(*memory, address, data, size)) return Fault(address, access);
             }
         }
-        LoadRegister<probe_only>(state, data, op.rd, width, vector, operation, pinned);
-        if constexpr (pair) LoadRegister<probe_only>(state, data + bytes, op.ra, width, vector, operation, pinned);
+        LoadRegister<touches_pin>(state, data, op.rd, width, vector, operation, pinned);
+        if constexpr (pair) LoadRegister<touches_pin>(state, data + bytes, op.ra, width, vector, operation, pinned);
     }
-    if (update_base) WriteTransferRegister<probe_only>(state, op.rn, 64, writeback, true, pinned);
+    if (update_base) WriteTransferRegister<touches_pin>(state, op.rn, 64, writeback, true, pinned);
     return refetch ? StepResult{Stop::Refetch} : StepResult{};
 }
 
@@ -264,13 +264,20 @@ A64_MEMORY_INLINE StepResult LoadStore(State& state, const Memory& memory, const
 }
 
 // Only a TLB hit can change guest state. A miss replays the current member.
-template <Kind kind, unsigned width = 0, int operation = -1, int mode = -1, int shift = -1, int vector = -1>
+template <Kind kind, unsigned width = 0, int operation = -1, int mode = -1, int shift = -1, int vector = -1,
+          bool TouchesPin = true>
 A64_MEMORY_INLINE bool ProbeLoadStore(State& state, const DecodedInstruction& op, uint64_t literal_address,
                                       const mem::SoftTlb* data_tlb A64_UTLB_REF_PARAMS A64_HOT_PIN_REF) {
-    const HotRegisters pins{state A64_HANDLER_PIN_ARGS};
-    return LoadStoreTransfer<kind, width, operation, mode, shift, vector, true>(state, op, 0, literal_address,
-                                                                                data_tlb A64_UTLB_ARGS, nullptr, &pins)
-               .reason == Stop::Continue;
+    if constexpr (TouchesPin) {
+        const HotRegisters pins{state A64_HANDLER_PIN_ARGS};
+        return LoadStoreTransfer<kind, width, operation, mode, shift, vector, true>(
+                   state, op, 0, literal_address, data_tlb A64_UTLB_ARGS, nullptr, &pins)
+                   .reason == Stop::Continue;
+    } else {
+        return LoadStoreTransfer<kind, width, operation, mode, shift, vector, true, false>(
+                   state, op, 0, literal_address, data_tlb A64_UTLB_ARGS, nullptr, nullptr)
+                   .reason == Stop::Continue;
+    }
 }
 
 #undef A64_MEMORY_INLINE

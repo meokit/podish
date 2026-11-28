@@ -187,7 +187,7 @@ DecodedOpBinding BindDecodedOp(uint32_t word, const Profile& profile) {
     const bool custom = binding.scalar_handler != nullptr;
     const bool untrusted = custom && !profile.trusted_baking && !binding.handler;
     slot.nop = !custom && word == NopWord;
-    if (!custom) binding = Lower(slot.op);
+    if (!custom) binding = SelectPinHandler(Lower(slot.op), slot.op);
     slot.op.scalar_handler = binding.scalar_handler;
     slot.handler = binding.handler;
     if (custom && !slot.handler) slot.handler = GetScalarDispatchHandler();
@@ -377,7 +377,7 @@ const BasicBlock* DecodeBlock(uint64_t pc, const uint8_t* executable, const Prof
             if (binding.scalar_handler && !profile.trusted_baking && !binding.handler)
                 binding = {};
             else if (!binding.scalar_handler)
-                binding = LowerDeadNZCV(slot.op);
+                binding = SelectPinHandler(LowerDeadNZCV(slot.op), slot.op);
             if (binding.scalar_handler) {
                 slot.fused = binding.scalar_handler;
                 slot.handler = binding.handler ? binding.handler : GetFusedDispatchHandler();

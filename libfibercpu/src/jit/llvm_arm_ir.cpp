@@ -19,6 +19,7 @@
 #include "aarch64/dispatch.h"
 #include "aarch64/flag_liveness.h"
 #include "aarch64/operation_binding.h"
+#include "aarch64/pin_touch.h"
 #include "jit/llvm_ir_common.h"
 #include "jit/llvm_kernel_module.h"
 #include "mem/page_region.h"
@@ -86,8 +87,11 @@ void PromoteRegionGprs(llvm::Function& entry) {
     constexpr size_t kGprCount = 32;
     static_assert(offsetof(State, x) == 0 && offsetof(State, sp) == (kGprCount - 1) * kWordBytes);
     static constexpr auto kOffsets = [] {
-        std::array<size_t, kGprCount> result{};
-        for (size_t i = 0; i < kGprCount; ++i) result[i] = i * kWordBytes;
+        std::array<size_t, kGprCount - FIBERCPU_AARCH64_PIN_COUNT> result{};
+        size_t next = 0;
+        for (size_t i = 0; i < kGprCount; ++i) {
+            if (!IsPinnedGpr(i, true)) result[next++] = i * kWordBytes;
+        }
         return result;
     }();
     PromoteCyclicStateFields(entry, {

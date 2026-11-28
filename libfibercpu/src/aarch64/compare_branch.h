@@ -6,6 +6,7 @@
 
 #include "block_operands.h"
 #include "dispatch.h"
+#include "pin_touch.h"
 
 namespace fiberish::aarch64::detail {
 
@@ -26,8 +27,8 @@ constexpr unsigned ConditionalBranchCount = 14;
 #define A64_COMPARE_BRANCH_INLINE inline
 #endif
 
-template <Kind kind, unsigned width>
-A64_COMPARE_BRANCH_INLINE auto ReadCompareOperands(const HotRegisters& registers, const DecodedInstruction& op) {
+template <Kind kind, unsigned width, class Registers>
+A64_COMPARE_BRANCH_INLINE auto ReadCompareOperands(const Registers& registers, const DecodedInstruction& op) {
     using Word = std::conditional_t<width == 32, uint32_t, uint64_t>;
     const auto left = registers.Read(op.rn, width, kind == Kind::AddSubImmediate);
     const auto right = kind == Kind::AddSubImmediate ? op.immediate : registers.Read(op.rm, width);
@@ -91,10 +92,9 @@ taken:
 inline constexpr bool HasNativeCompareBranch = false;
 #endif
 
-template <Kind kind, unsigned width, unsigned condition>
-A64_COMPARE_BRANCH_INLINE bool CompareAndTest(State& state, const DecodedInstruction& compare,
-                                              uint32_t& flags_cache A64_HOT_PIN_REF) {
-    const HotRegisters registers{state A64_HANDLER_PIN_ARGS};
+template <Kind kind, unsigned width, unsigned condition, class Registers>
+A64_COMPARE_BRANCH_INLINE bool CompareAndTestRegisters(const Registers& registers, const DecodedInstruction& compare,
+                                                       uint32_t& flags_cache) {
     const auto [left, right] = ReadCompareOperands<kind, width>(registers, compare);
 #if defined(A64_USE_NATIVE_COMPARE_BRANCH)
     return NativeCompareBranch<condition>(flags_cache, left, right);
@@ -104,29 +104,50 @@ A64_COMPARE_BRANCH_INLINE bool CompareAndTest(State& state, const DecodedInstruc
 #endif
 }
 
-template <Kind kind, unsigned width, unsigned condition>
+template <Kind kind, unsigned width, unsigned condition, bool TouchesPin = true>
+A64_COMPARE_BRANCH_INLINE bool CompareAndTest(State& state, const DecodedInstruction& compare,
+                                              uint32_t& flags_cache A64_HOT_PIN_REF) {
+    if constexpr (TouchesPin) {
+        const HotRegisters registers{state A64_HANDLER_PIN_ARGS};
+        return CompareAndTestRegisters<kind, width, condition>(registers, compare, flags_cache);
+    } else {
+        return CompareAndTestRegisters<kind, width, condition>(ScalarRegisters{state}, compare, flags_cache);
+    }
+}
+
+template <Kind kind, unsigned width, unsigned condition, bool TouchesPin>
 FIBERCPU_AARCH64_HANDLER_ABI int64_t CompareBranchHandler(A64_HANDLER_PARAMS) {
     const auto compare = GetOpOperands<kind>(*current);
-    const bool taken = CompareAndTest<kind, width, condition>(state, compare, flags_cache A64_HANDLER_PIN_ARGS);
+    const bool taken =
+        CompareAndTest<kind, width, condition, TouchesPin>(state, compare, flags_cache A64_HANDLER_PIN_ARGS);
     current = current->NextOp<false>();
     if (taken) A64_RESOLVE_DIRECT_BRANCH_TARGET(Kind::BranchCondition);
     A64_DISPATCH_NEXT(current->NextOp<true>());
 }
 
-template <Kind kind, size_t... index>
+template <Kind kind, bool TouchesPin, size_t... index>
 constexpr auto CompareBranchVariants(std::index_sequence<index...>) {
     return std::array<HandlerFunc, sizeof...(index)>{
-        &CompareBranchHandler<kind, (index < ConditionalBranchCount ? 32 : 64), index % ConditionalBranchCount>...};
+        &CompareBranchHandler<kind, (index < ConditionalBranchCount ? 32 : 64), index % ConditionalBranchCount,
+                              TouchesPin>...};
+}
+
+template <bool TouchesPin>
+A64_COMPARE_BRANCH_INLINE HandlerFunc BindCompareBranch(const DecodedInstruction& first, unsigned condition) {
+    constexpr auto indices = std::make_index_sequence<2 * ConditionalBranchCount>{};
+    constexpr auto immediate = CompareBranchVariants<Kind::AddSubImmediate, TouchesPin>(indices);
+    constexpr auto reg = CompareBranchVariants<Kind::AddSubShifted, TouchesPin>(indices);
+    const auto index = (first.width == 64 ? ConditionalBranchCount : 0) + condition;
+    return (first.kind == Kind::AddSubImmediate ? immediate : reg)[index];
 }
 
 inline HandlerFunc LowerCompareBranch(const DecodedInstruction& first, const DecodedInstruction& second) {
     if (second.kind != Kind::BranchCondition || second.shift >= ConditionalBranchCount || !IsUnshiftedCompare(first))
         return nullptr;
-    constexpr auto indices = std::make_index_sequence<2 * ConditionalBranchCount>{};
-    constexpr auto immediate = CompareBranchVariants<Kind::AddSubImmediate>(indices);
-    constexpr auto reg = CompareBranchVariants<Kind::AddSubShifted>(indices);
-    const auto index = (first.width == 64 ? ConditionalBranchCount : 0) + second.shift;
-    return (first.kind == Kind::AddSubImmediate ? immediate : reg)[index];
+    if constexpr (SplitPinTouches) {
+        if (!InstructionTouchesPinnedReg(first)) return BindCompareBranch<false>(first, second.shift);
+    }
+    return BindCompareBranch<true>(first, second.shift);
 }
 
 #undef A64_USE_NATIVE_COMPARE_BRANCH

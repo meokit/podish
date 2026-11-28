@@ -866,6 +866,177 @@ bool StackPointerAndZeroRegisterRoles() {
            state.x[1] == 0x1010;
 }
 
+bool PinnedOperandClassification() {
+    using namespace fiberish::aarch64::detail;
+    uint32_t pins = 0;
+#define A64_TEST_PIN(id, slot) pins |= uint32_t{1} << id;
+    FIBERCPU_AARCH64_FOR_EACH_PIN(A64_TEST_PIN)
+#undef A64_TEST_PIN
+    constexpr auto Gpr = [](unsigned id) { return uint32_t{1} << id; };
+    constexpr auto Sp = Gpr(31);
+    constexpr auto X0 = Gpr(0);
+    constexpr auto X1 = Gpr(1);
+    constexpr auto X6 = Gpr(6);
+    constexpr auto X7 = Gpr(7);
+    constexpr auto X8 = Gpr(8);
+    constexpr auto Lr = Gpr(30);
+    const struct {
+        uint32_t word;
+        Kind kind;
+        uint32_t operands;
+    } cases[] = {
+        {0x910007e6, Kind::AddSubImmediate, X6 | Sp},        // add x6, sp, #1
+        {0x910004df, Kind::AddSubImmediate, X6 | Sp},        // add sp, x6, #1
+        {0xb10004df, Kind::AddSubImmediate, X6},             // adds xzr, x6, #1
+        {0xb10007ff, Kind::AddSubImmediate, Sp},             // adds xzr, sp, #1
+        {0x8b1f03e6, Kind::AddSubShifted, X6},               // add x6, xzr, xzr
+        {0x8b2040df, Kind::AddSubExtended, Sp | X6 | X0},    // add sp, x6, w0, uxtw
+        {0xb2401cdf, Kind::LogicalImmediate, X6 | Sp},       // orr sp, x6, #0xff
+        {0xf2401cdf, Kind::LogicalImmediate, X6},            // ands xzr, x6, #0xff
+        {0xf8410fe6, Kind::LoadStoreImmediate, Sp | X6},     // ldr x6, [sp, #16]!
+        {0xf80107e6, Kind::LoadStoreImmediate, Sp | X6},     // str x6, [sp], #16
+        {0xf8410c06, Kind::LoadStoreImmediate, X0 | X6},     // ldr x6, [x0, #16]!
+        {0xf8010406, Kind::LoadStoreImmediate, X0 | X6},     // str x6, [x0], #16
+        {0xf86068e6, Kind::LoadStoreRegister, X6 | X7 | X0}, // ldr x6, [x7, x0]
+        {0xf87f68e6, Kind::LoadStoreRegister, X6 | X7},      // ldr x6, [x7, xzr]
+        {0xf94000e0, Kind::LoadStoreImmediate, X0 | X7},     // ldr x0, [x7]
+        {0xf90000e1, Kind::LoadStoreImmediate, X1 | X7},     // str x1, [x7]
+        {0xa8c100e6, Kind::LoadStorePair, X6 | X7 | X0},     // ldp x6, x0, [x7], #16
+        {0xa9bf04e6, Kind::LoadStorePair, X6 | X7 | X1},     // stp x6, x1, [x7, #-16]!
+        {0x9b0800e6, Kind::Multiply, X6 | X7 | X8 | X0},     // madd x6, x7, x8, x0
+        {0x9b0884e6, Kind::Multiply, X6 | X7 | X8 | X1},     // msub x6, x7, x8, x1
+        {0x9b487ce6, Kind::Multiply, X6 | X7 | X8},          // smulh x6, x7, x8
+        {0xfa4008c0, Kind::ConditionalCompare, X6},          // ccmp x6, #0, #0, eq
+        {0xfa4000c0, Kind::ConditionalCompare, X6 | X0},     // ccmp x6, x0, #0, eq
+        {0x94000002, Kind::BranchImmediate, Lr},             // bl +8
+        {0x14000000, Kind::BranchImmediate, 0},              // b +0
+        {0xd63f0100, Kind::BranchRegister, Lr | X8},         // blr x8
+        {0xd63f03c0, Kind::BranchRegister, Lr},              // blr x30
+        {0xd61f03c0, Kind::BranchRegister, Lr},              // br x30
+        {0xd61f0000, Kind::BranchRegister, X0},              // br x0
+        {0x3dc000e0, Kind::LoadStoreImmediate, X7},          // ldr q0, [x7]
+        {0x3d800001, Kind::LoadStoreImmediate, X0},          // str q1, [x0]
+        {0xad4007e0, Kind::LoadStorePair, Sp},               // ldp q0, q1, [sp]
+        {0xad4000e6, Kind::LoadStorePair, X7},               // ldp q6, q0, [x7]
+        {0x58000040, Kind::LoadLiteral, X0},                 // ldr x0, +8
+        {0x9c000040, Kind::LoadLiteral, 0},                  // ldr q0, +8
+        {0xd8000040, Kind::LoadLiteral, 0},                  // prfm pldl1keep, +8
+        {0xeb0700df, Kind::AddSubShifted, X6 | X7},          // cmp x6, x7
+        {0xeb0000df, Kind::AddSubShifted, X6 | X0},          // cmp x6, x0
+        {0xf1000fff, Kind::AddSubImmediate, Sp},             // cmp sp, #3
+        {0xf1000cdf, Kind::AddSubImmediate, X6},             // cmp x6, #3
+    };
+    for (const auto& test : cases) {
+        const auto op = DecodeFields(test.word);
+        const bool touches = (pins & test.operands) != 0;
+        if (op.kind != test.kind || InstructionTouchesPinnedReg(op) != touches)
+            return false;
+#if FIBERCPU_AARCH64_TAIL_DISPATCH
+        const auto branch = DecodeFields(0x54000040); // b.eq +8
+        if (IsUnshiftedCompare(op)) {
+            const auto selected = LowerCompareBranch(op, branch);
+            const auto expected =
+                SplitPinTouches && !touches ? BindCompareBranch<false>(op, 0) : BindCompareBranch<true>(op, 0);
+            if (selected != expected)
+                return false;
+        }
+#endif
+    }
+    return true;
+}
+
+bool GenericLinkRegisterWrites() {
+    Backing backing;
+    backing.Code(Base, {
+                           0x94000002, // bl +8
+                           0xd4200000, // brk #0
+                           0x910003c7, // mov x7, x30
+                           0xd63f0100, // blr x8
+                           0xd4200000, // brk #0
+                           0x910003c9, // mov x9, x30
+                           0xd4000001, // svc #0
+                       });
+    State state;
+    state.pc = Base;
+    state.x[8] = Base + 20;
+    const auto result = Run(state, backing.Callbacks(), 8);
+    return result.reason == Stop::Syscall && result.executed == 5 && state.x[7] == Base + 4 &&
+           state.x[9] == Base + 16 && state.x[30] == Base + 16;
+}
+
+#if FIBERCPU_AARCH64_TAIL_DISPATCH
+bool PinFreeDispatchKeepsLivePins() {
+    using namespace fiberish::aarch64::detail;
+    constexpr std::array<unsigned, FIBERCPU_AARCH64_PIN_COUNT> pins{
+#define A64_TEST_PIN(id, slot) id,
+        FIBERCPU_AARCH64_FOR_EACH_PIN(A64_TEST_PIN)
+#undef A64_TEST_PIN
+    };
+    const unsigned counter = pins.empty() ? 0 : pins.front();
+    std::array<unsigned, 3> scratch{};
+    unsigned found = 0;
+    for (unsigned id = 1; found < scratch.size(); ++id) {
+        if (id != counter && std::ranges::find(pins, id) == pins.end())
+            scratch[found++] = id;
+    }
+    const auto [accumulator, base, target] = scratch;
+    const uint32_t increment_pin = 0x91000400 | (counter << 5) | counter;
+    const uint32_t increment_scalar = 0x91000400 | (accumulator << 5) | accumulator;
+    const uint32_t load = 0xf9400000 | (base << 5) | target;
+    if (InstructionTouchesPinnedReg(DecodeFields(increment_pin)) != !pins.empty() ||
+        InstructionTouchesPinnedReg(DecodeFields(increment_scalar)) || InstructionTouchesPinnedReg(DecodeFields(load)))
+        return false;
+    if constexpr (SplitPinTouches) {
+        using enum Kind;
+        constexpr auto ScalarAdd = &IntegerHandler<AddSubImmediate, 64, 0, -1, true, IntegerForm::Default, false>;
+        constexpr auto ScalarLoad = &LoadStoreHandler<LoadStoreImmediate, 64, 1, 0, -1, 0, false>;
+        const auto add_op = DecodeFields(increment_scalar);
+        const auto load_op = DecodeFields(load);
+        if (SelectPinHandler(Lower(add_op), add_op).handler != ScalarAdd ||
+            SelectPinHandler(Lower(load_op), load_op).handler != ScalarLoad)
+            return false;
+    }
+
+    Backing backing;
+    backing.Code(Base, {increment_pin, increment_scalar, load, increment_pin, 0xd4000001});
+    constexpr auto Data = Base + Page;
+    alignas(Page) std::array<uint8_t, Page> host_data{42};
+    backing.Put(Data, 42);
+    fiberish::mem::SoftTlb tlb;
+    tlb.read_tlb[(Data >> fiberish::mem::PAGE_SHIFT) & fiberish::mem::TLB_INDEX_MASK] = {
+        fiberish::mem::PackMicroTlbTags(ArmPageTag(Data), fiberish::mem::kInvalidMicroTlbTag),
+        reinterpret_cast<uintptr_t>(host_data.data()) - Data,
+    };
+    for (const auto address : {Data, Data + Page}) {
+        for (bool tlb_hit : {false, true}) {
+            auto memory = backing.Callbacks();
+            if (tlb_hit)
+                memory.data_tlb = &tlb;
+            State state;
+            state.pc = Base;
+            state.x[base] = address;
+            state.x[accumulator] = 8;
+            auto& pinned = counter == 31 ? state.sp : state.x[counter];
+            pinned = 10;
+            backing.observed_reads = 0;
+            backing.observe_on_read = &state;
+            const auto result = Run(state, memory, 5);
+            if (state.x[accumulator] != 9)
+                return false;
+            if (address == Data) {
+                if (result.reason != Stop::Syscall || result.executed != 5 || pinned != 12 || state.x[target] != 42 ||
+                    backing.observed_reads != (tlb_hit ? 0u : 1u))
+                    return false;
+            } else if (result.reason != Stop::Fault || result.executed != 2 || pinned != 11 || state.pc != Base + 8 ||
+                       state.x[target] != 0) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+#endif
+
 constexpr unsigned PinnedRegisterOr(unsigned fallback) {
 #define A64_TEST_PIN(reg, slot)                                                                                        \
     if constexpr (reg < 31)                                                                                            \
@@ -1581,6 +1752,12 @@ int main() {
         {"compare and conditional branch preserve flags and budget boundaries", CompareBranchPair()},
         {"baked compare branch suffix preserves flags at a successor fault", BakedCompareBranchSuffix()},
         {"SP remains distinct from XZR across threaded writes", StackPointerAndZeroRegisterRoles()},
+        {"decoded pin operands and compare-branch handler selection", PinnedOperandClassification()},
+        {"generic BL and BLR publish their implicit link register writes", GenericLinkRegisterWrites()},
+#if FIBERCPU_AARCH64_TAIL_DISPATCH
+        {"pin-free dispatch preserves live pins on TLB hits, scalar replay and block exits",
+         PinFreeDispatchKeepsLivePins()},
+#endif
         {"fused PC-relative address, link and conditional branch use each member PC", FusedPCRelativeMembers()},
         {"fused load fault and instruction refetch", FusedLoadRefetch()},
         {"fused load replay preserves the prefix and commits writeback once", FusedLoadReplay()},
